@@ -5,7 +5,7 @@
 // A session's Side sessions panel (#7944, lib/side-panel.ts) is the same layout over its side sessions: their strip in the
 // panel's order, and the chosen side's own conversation, landed at a search hit's message when a link asked for one.
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { sessionTitle, stateOf } from "../../lib/format";
+import { sessionTitle, activityOf, stateOf } from "../../lib/format";
 import { agentLabel } from "../../lib/mentions";
 import { STATE_LABEL, stateName } from "../../lib/state-labels";
 import { getSession, useStore } from "../../lib/store";
@@ -44,13 +44,13 @@ export function workerHint(w: Session, awaiting: boolean, finished = false): str
 
 /** A pill's state word: Awaiting your reply (#5096) and Just finished (#9751) over the seen state they stand on. */
 function pillState(w: Session, awaiting: boolean, finished: boolean): string {
-  const st = stateOf(w);
+  const st = w.view ? stateOf(w) : activityOf(w);
   if (st === "idle" && awaiting) return stateName("awaits_reply");
   if (st === "idle" && finished) return stateName("just_finished");
   return STATE_LABEL[st];
 }
 
-export function TeamPanel({ mid, sid, worker, onClose }: { mid: string; sid: string; worker?: string; onClose: () => void }) {
+export function TeamPanel({ mid, sid, worker, at, onClose }: { mid: string; sid: string; worker?: string; at?: string; onClose: () => void }) {
   const lead = useStore(() => getSession(mid, sid));
   // the lead's folded rows (lib/use-child-sessions.ts): the store's, or on a paging hub one bounded read of them
   const kids = useChildSessions(mid, sid, workerCount(lead) > 0 || Boolean(worker));
@@ -70,7 +70,7 @@ export function TeamPanel({ mid, sid, worker, onClose }: { mid: string; sid: str
     >
       {shown ? (
         // the worker's conversation: its own chat, keyed by it, so switching pills starts it at its latest message
-        <ChatView key={`${mid}/${shown.session_id}`} mid={mid} sid={shown.session_id} embedded />
+        <ChatView key={`${mid}/${shown.session_id}`} mid={mid} sid={shown.session_id} embedded landAt={shown.session_id === worker ? at : undefined} />
       ) : !kids.loaded ? (
         <div className="flex flex-1 items-center justify-center"><Loading /></div>
       ) : (
@@ -204,7 +204,7 @@ function SessionStrip({ members: workers, shown, controls, onPick, words, hint, 
       >
         {workers.map((w, i) => {
           const on = i === at;
-          const st = stateOf(w);
+          const st = w.view ? stateOf(w) : activityOf(w);
           const awaiting = awaitsReply(w, mutes);
           const finished = justFinished(w, mutes);
           return (

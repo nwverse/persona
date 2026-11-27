@@ -1,5 +1,6 @@
 package persona.android.ui
 
+import persona.feature.inbox.forPages
 import persona.android.AppText
 import persona.android.R
 import android.app.Application
@@ -49,8 +50,10 @@ class ShellSession(
     val listAdapter: persona.core.data.AgentListAdapter = persona.core.data.AgentListAdapters.create(),
     /** Launchers, "Reconnect", "Redeploy" and the engine of the hub's machines; null in demo mode. */
     val machines: MachineManagement? = null,
-    /** The hub's voice extensions (voice chat); null in demo mode. */
-    val voice: VoiceExtensions? = null,
+    /** Each carried module's part of this pairing, by module id (Modules.kt); none in demo mode. */
+    val modules: Map<String, persona.core.moduleapi.ModuleServices> = emptyMap(),
+    /** The paired hub's hello features, which switch feature-gated modules on and off; none in demo mode. */
+    val features: StateFlow<Set<String>> = MutableStateFlow(emptySet()),
     /** The phone's hub groups; a demo has none. */
     val groups: HubGroups = HubGroups.None,
     val tasks: persona.core.domain.tasks.TasksStore? = null,
@@ -59,6 +62,10 @@ class ShellSession(
     val hubAddresses: () -> List<String> = { emptyList() },
     /** "Add computer" and "Confirm computer" (docs/assistant/onboarding.md 4.2); null in demo mode. */
     val computers: ComputerPairing? = null,
+    /** The selected hub group's suffix in the merged session list; null for the primary group and demo. */
+    val knowledgeNamespace: String? = null,
+    /** Saved prompts use only the selected group's socket and transport. */
+    val savedPromptsConnection: OkHttpHubConnection? = null,
 ) {
     val agents = object : AgentsDependencies {
         override fun sessions() = this@ShellSession.sessions
@@ -114,6 +121,8 @@ class AppServices @Inject constructor(
         localize = { it.resolve(app) })
     var automation = false
         set(value) { field = value; if (value) mutableSession.value?.phone?.close() }
+    /** The core's audio broker over Android's audio focus (#13847): who owns the microphone and the speaker. */
+    val audioFocus = persona.core.moduleapi.AudioBroker(persona.android.platform.AndroidAudioFocus(app))
     /** Debug captures only: a pretend fold posture (see LaunchInput.posture). */
     val posture = androidx.compose.runtime.mutableStateOf<String?>(null)
 
@@ -131,20 +140,16 @@ class AppServices @Inject constructor(
                 val knowledgeState = MutableStateFlow<KnowledgeRepository?>(null)
                 val knowledgeConnection = object : KnowledgeConnection { override val current = knowledgeState.asStateFlow() }
                 fun current() = app.hub.value === hub
-                // Like metrics: each call follows the live route with the pairing's pinned client and token.
-                val voice = object : VoiceExtensions {
-                    private fun api(): VoiceExtensions {
-                        if (!current()) throw CancellationException("Pairing changed")
-                        val address = socket.route.value?.endpoint?.url ?: throw HubFailure(HubError.NoNetwork)
-                        return HttpVoiceExtensions(address, hub.api.token, socket.http.client, ::current,
-                            legacy = { "extensions" !in socket.serverFeatures.value })
-                    }
-                    override suspend fun voiceExtension() = api().voiceExtension()
-                    override suspend fun voices(extensionId: String, model: String?) = api().voices(extensionId, model)
-                    override suspend fun models(extensionId: String) = api().models(extensionId)
-                    override suspend fun modelChoice(extensionId: String) = api().modelChoice(extensionId)
-                    override fun connect(extensionId: String, listener: VoiceSocketListener) = api().connect(extensionId, listener)
-                }
+                // Each carried module's part of this pairing (Modules.kt); its calls follow the live route with the pairing's
+                // pinned client and token, like metrics.
+                val moduleServices = persona.android.Modules.carried.services(object : persona.core.moduleapi.ModuleHub {
+                    override val identity = data.scope.path
+                    override val features = socket.serverFeatures
+                    override val token = hub.api.token
+                    override val http = socket.http.client
+                    override fun address() = socket.route.value?.endpoint?.url
+                    override fun isCurrent() = current()
+                })
                 val phoneTransport = data.credentials.deviceId?.let { HubPhoneToolsTransport(socket) }
                 val phone = phoneTransport?.let {
                     PhoneToolsRuntime(app, data.scope, requireNotNull(data.credentials.deviceId), socket, it, data.coroutineScope,
@@ -154,21 +159,26 @@ class AppServices @Inject constructor(
                 val boundInteractions = object : InteractionCenter by interactions {
                     override suspend fun resolve(id: String, resolution: Resolution) { resolveOutcome(id, resolution) }
                     override suspend fun resolveOutcome(id: String, resolution: Resolution) =
-                        try { interactions.resolveOutcome(id, resolution) }
+                        resolveOutcome(id, resolution, handoffCard = false)
+                    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean) =
+                        try { interactions.resolveOutcome(id, resolution, handoffCard) }
                         catch (cancelled: CancellationException) { throw cancelled }
                         catch (error: Exception) { feedback.failure(error, true); throw error }
                 }
-                // Its to-dos show from the last read until the hub answers (#4533), as the group's chat bindings' do.
-                // A new hub gets a new store, so todosReady starts false and a card does not call a task gone mid-switch.
-                val tasksStore = persona.core.domain.tasks.TasksStore(persona.core.hub.HttpTasksApi(socket), runtime, data.coroutineScope,
-                    ListSnapshotStore(File(data.noBackupDirectory, "lists")).todoCache())
+                // Share the group stack's single TasksStore so shell badges, To-dos and chat cards never run
+                // duplicate concurrent /api/v1/todos reads for the same hub. A new hub builds a new GroupStack
+                // and TasksStore, so todosReady still starts false mid-switch (#5110).
+                val stack = resolveHubStack(stacks.stacks, data)
+                if (app.hub.value !== hub) return@collectLatest
+                val tasksStore = stack.tasks
                 // Files, chat actions and machine metrics go to the group of the machine they name (one group: this hub).
                 mutableSession.value = ShellSession(data.scope.path, runtime, sessions, chats, boundInteractions, sender,
                     assistant, inbox, preferences, HubTerminalTransport(socket), shell.files, mergedMetrics,
                     knowledgeConnection, shell.actions, phone, agentsWiring = agentsWiring, machines = machineManagement,
-                    voice = voice, groups = hubGroups, tasks = tasksStore, hubUpdates = hubUpdates,
+                    modules = moduleServices, features = socket.serverFeatures, groups = hubGroups, tasks = tasksStore, hubUpdates = hubUpdates,
                     hubAddresses = { listOf(data.credentials.hubAddress) + data.credentials.candidateAddresses + socket.knownAddresses() },
-                    computers = computers, listAdapter = app.agentListAdapter)
+                    computers = computers, listAdapter = app.agentListAdapter, knowledgeNamespace = stack.namespace,
+                    savedPromptsConnection = socket)
                 try {
                     coroutineScope {
                         launch {
@@ -189,6 +199,7 @@ class AppServices @Inject constructor(
                         awaitCancellation()
                     }
                 } finally {
+                    moduleServices.values.forEach { it.close() }
                     knowledgeState.value = null
                     socket.phoneMessageHandler = null
                     phone?.close()
@@ -243,7 +254,7 @@ class AppServices @Inject constructor(
         val conversations = RealAssistantRepository(demo.inboxConnection, local.sessions, scope, snapshots, localPreferences)
         mode.edit().putBoolean("demo", true).apply()
         mutableSession.value = ShellSession(demo.hubScope.path, demo, local.sessions, local.chats, local.interactions,
-            messages, conversations, localInbox, AgentsPreferences(listPreferences, localPreferences), demo = demo)
+            messages, conversations, localInbox.forPages(), AgentsPreferences(listPreferences, localPreferences), demo = demo)
         scope.launch { demo.notices.collect { feedback.notice(it) } }
         scope.launch {
             try { awaitCancellation() }
@@ -288,6 +299,12 @@ class AppServices @Inject constructor(
     }
 }
 
+/** Wait for the [persona.android.di.GroupStack] built for [data] so [AppServices] reuses its single TasksStore. */
+internal suspend fun resolveHubStack(
+    stacks: Flow<List<persona.android.di.GroupStack>>,
+    data: ScopedHubData,
+): persona.android.di.GroupStack = stacks.mapNotNull { list -> list.firstOrNull { it.data === data } }.first()
+
 /** What was built for the last route, while the connection has none (reconnecting); a new route builds anew. */
 internal fun <R : Any> Flow<HubRoute?>.followingLastRoute(build: (HubRoute) -> R): Flow<R> = filterNotNull().map(build)
 
@@ -300,6 +317,7 @@ internal class OnlyWithRoute(private val delegate: KnowledgeRepository, private 
     override suspend fun search(query: String) = routed { delegate }.search(query)
     override suspend fun entry(kind: KnowledgeKind, id: String) = routed { delegate }.entry(kind, id)
     override suspend fun update(kind: KnowledgeKind, id: String, update: KnowledgeUpdate) = routed { delegate }.update(kind, id, update)
+    override suspend fun handOff(id: String, request: MeetingHandoffRequest) = routed { delegate }.handOff(id, request)
 }
 
 @Module

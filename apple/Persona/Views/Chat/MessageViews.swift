@@ -21,18 +21,12 @@ extension MarkdownUI.Theme {
         MarkdownUI.Theme()
             .text { FontSize(Theme.Level.body.size * Theme.Font.scale) }
             .code {
-                #if os(macOS)
-                FontFamilyVariant(.monospaced)
-                FontSize(.em(ReplyMetrics.inlineCode))
-                BackgroundColor(Theme.codeBackground)
-                #else
                 // The system's monospaced face on no background (#9477), tappable to copy (#2984, `CodeCopyMarkdown`).
                 // Monospaced as the code blocks are, which holds because the blocks give their runs their fonts
                 // (`runFonts`); its ink is `InlineCodeInk`'s. A thin space where it meets a CJK letter (`InlineCodeGap`).
                 FontFamilyVariant(.monospaced)
                 FontSize(.em(ReplyMetrics.inlineCode))
                 InlineCodeInk()
-                #endif
             }
             .strong { FontWeight(.semibold) }
             .link { ForegroundColor(Theme.accent) }
@@ -74,23 +68,11 @@ extension MarkdownUI.Theme {
                     RenderedBlock(kind: kind, source: config.content.trimmingCharacters(in: .whitespacesAndNewlines)) { plainCodeBlock(config) }
                         .markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
                 } else {
-                    // The Mac is frozen (docs/apple/mac.md): its code blocks keep their hover Copy.
-                    #if os(macOS)
-                    plainCodeBlock(config).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
-                    #else
                     ReplyCodeBlock(config: config).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
-                    #endif
                 }
             }
             .blockquote { config in
-                #if os(macOS)
-                config.label
-                    .padding(.leading, Theme.Space.m)
-                    .overlay(alignment: .leading) { Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: Theme.Size.bar) }
-                    .markdownTextStyle { ForegroundColor(.secondary) }
-                #else
                 ReplyQuote(config: config)
-                #endif
             }
             .table { config in FittedTable(config: config).oneBlockInLift() } // fits the width it gets; scrolls only when it cannot
             .tableCell { config in FittedTableCell(config: config).runFonts() }
@@ -101,14 +83,10 @@ extension MarkdownUI.Theme {
 /// replaces every run's font with the system one of that design, a monospaced or named one included, so inline code was
 /// drawn in the body font. Under a block that draws words the design is cleared and given to its runs as their family
 /// instead (read from the style: SwiftUI has no public environment value for it), and inline code's monospaced variant
-/// holds. The Mac is frozen: it keeps the root's design.
+/// holds.
 struct RunFonts: ViewModifier {
     func body(content: Content) -> some View {
-        #if os(macOS)
-        content
-        #else
         content.markdownTextStyle { FontFamily(.system(StyleSpec.current.fontDesign)) }.fontDesign(nil)
-        #endif
     }
 }
 
@@ -117,7 +95,6 @@ extension View {
     func runFonts() -> some View { modifier(RunFonts()) }
 }
 
-#if os(iOS) || os(visionOS)
 /// Inline code's ink (#9477): `Theme.Reply.codeInk`, a step quieter than the words, where they are in the body's own
 /// ink. Words drawn in an ink of their own (a quote, a quieter heading, an agent's quiet words between its steps) keep it
 /// for their code too, and so does a written link: code in it is the link's. A copy link (`CodeCopyMarkdown`, what
@@ -131,7 +108,6 @@ struct InlineCodeInk: TextStyle {
         }
     }
 }
-#endif
 
 extension MarkdownUI.Theme {
     /// A fenced code block: monospaced, scrolling sideways, on the code background.
@@ -144,9 +120,6 @@ extension MarkdownUI.Theme {
         }
         .clipped() // not past the block into the safe area beside it (`ReplyCodeBlock`, #8212)
         .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-        .macHoverActions {
-            MacHoverButton(title: String(localized: "Copy Code [Message Views fa2611]"), symbol: Theme.Icon.copy) { MacHover.copy(config.content, said: String(localized: "Code copied")) }
-        }
     }
 
     /// H4–H6 (#3863): MarkdownUI's own were the bare text, so `#### Notes` read as the next paragraph's first line. A step
@@ -311,7 +284,7 @@ struct UserBubble: View, Equatable {
         }
         .lookUpFiles(d.asked)
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .messageActionBar(id: item.id, text: shown, isUser: true, date: item.ts)
+        .messageActionBar(id: item.id, text: shown, isUser: true, date: item.ts, starItem: item)
     }
 }
 
@@ -368,7 +341,7 @@ struct PeerMessage: View {
             .padding(.trailing, Theme.Space.xxl)
             .chatPinned(pinKey)
             .messageLongPress(id: item.id) { card }
-            .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, from: from)
+            .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, from: from, starItem: item)
     }
 
     /// The message in its card (also what a long press lifts).
@@ -402,9 +375,6 @@ struct PeerMessage: View {
             .environment(\.replyKey, RowMemo.key(memoScope, item.id)) // its quotes' folds, the lifted copy's too
             .selectableInLift(item.text ?? "", as: .reply(quiet: false)) // #603
             .frame(maxWidth: .infinity, alignment: .leading)
-            #if os(macOS)
-            .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
-            #endif
     }
 }
 
@@ -502,14 +472,22 @@ struct PendingBubble: View {
 /// offers Delete. Given up: why, with Retry and Delete. Shown on every device, from the chat's row.
 struct UndeliveredBubble: View {
     var message: UndeliveredMessage
+    var canManage: Bool
+    var retryDisabled = false
     var retry: () -> Void
     var discard: () -> Void
+    @State private var confirmingDelete = false
     @Environment(\.rowMemoScope) private var memoScope
     @Environment(\.chatPin) private var pin
+
+    private func requestDelete() {
+        if message.heldForComputer { confirmingDelete = true } else { discard() }
+    }
 
     var body: some View {
         let parsed = ContextRef.parse(message.text)
         let shown = AttachedFile.parse(parsed.rest).rest
+        let heldStatus = message.heldStatus
         let reason = message.error ?? String(localized: "The assistant could not start")
         VStack(alignment: .trailing, spacing: Theme.Space.sm) {
             let files = AttachedFile.parse(message.text).files
@@ -517,24 +495,33 @@ struct UndeliveredBubble: View {
             HStack(alignment: .bottom, spacing: Theme.Space.s) {
                 Spacer(minLength: 40)
                 Menu {
-                    if message.gaveUp {
+                    if message.canRetry {
                         Button(action: retry) { Label("Retry", systemImage: Theme.Icon.retry) }
+                            .disabled(retryDisabled)
                     }
-                    Button(role: .destructive, action: discard) { Label("Delete", systemImage: Theme.Icon.delete) }
+                    Button(role: .destructive, action: requestDelete) { Label("Delete", systemImage: Theme.Icon.delete) }
                 } label: {
-                    if message.gaveUp {
-                        ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
-                    } else {
-                        ThemedIcon(Theme.Icon.time).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
-                            .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
-                            .contentShape(.rect)
+                    Group {
+                        if message.gaveUp {
+                            ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
+                        } else {
+                            ThemedIcon(Theme.Icon.time).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
+                                .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
+                        }
                     }
+                    .frame(minWidth: message.heldForComputer ? Theme.Size.tapTarget : nil,
+                           minHeight: message.heldForComputer ? Theme.Size.tapTarget : nil)
+                    .contentShape(.rect)
                 }
-                .accessibilityLabel(message.gaveUp ? Text("Not delivered. Retry or delete.") : Text("Not delivered yet. It will be sent automatically."))
+                .disabled(!canManage)
+                .accessibilityLabel(heldStatus != nil || message.deleteOnly == true ? Text(verbatim: heldStatus ?? reason) :
+                    message.gaveUp ? Text("Not delivered. Retry or delete.") : Text("Not delivered yet. It will be sent automatically."))
                 // The menu's items as actions too (VoiceOver's Actions rotor, the Runtime CLI), as on PendingBubble.
                 .accessibilityActions {
-                    if message.gaveUp { Button("Retry", action: retry) }
-                    Button("Delete", action: discard)
+                    if canManage {
+                        if message.canRetry && !retryDisabled { Button("Retry", action: retry) }
+                        Button("Delete", action: requestDelete)
+                    }
                 }
                 let split = MessageComments.inBubble(shown)
                 let fold = BubbleFoldKey(id: "undelivered-" + message.id)
@@ -546,7 +533,11 @@ struct UndeliveredBubble: View {
                     }
             }
             Group {
-                if message.gaveUp {
+                if let heldStatus {
+                    Text(verbatim: heldStatus).foregroundStyle(message.gaveUp ? Theme.danger : Theme.cautionText)
+                } else if message.deleteOnly == true {
+                    Text(verbatim: reason).foregroundStyle(Theme.danger)
+                } else if message.gaveUp {
                     Text("Not delivered: \(reason)").foregroundStyle(Theme.danger)
                 } else {
                     Text("Not delivered: \(reason). It will be sent automatically.").foregroundStyle(Theme.cautionText)
@@ -561,7 +552,11 @@ struct UndeliveredBubble: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
         // Copy, and Delete, from the long-press bar as on a message only on this phone (#6427).
         .messageActionBar(id: "undelivered-" + message.id, text: shown, isUser: true, date: message.at, pending: true,
-                          delete: MessageBarDelete(title: String(localized: "Delete"), run: discard))
+                          delete: canManage ? MessageBarDelete(title: String(localized: "Delete"), run: requestDelete) : nil)
+        .alert("Delete this held message?", isPresented: $confirmingDelete) {
+            Button("Delete", role: .destructive, action: discard)
+            Button("Cancel", role: .cancel) {}
+        }
         .transition(.opacity)
     }
 }
@@ -721,10 +716,6 @@ struct AssistantText: View, Equatable {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
             answer(d)
                 .task(id: item.id) { await Self.preloadLinks(item) }
-                #if os(macOS)
-                // Drag to select and ⌘C, as on the web (#2542); iOS keeps the long-press menu's Select.
-                .textSelection(.enabled)
-                #endif
                 .contentShape(.rect)
                 // A boxed answer is lifted in its own box, a bare one on a card.
                 .messageLongPress(id: item.id, card: !boxed) { answer(d) }
@@ -738,12 +729,7 @@ struct AssistantText: View, Equatable {
         // A single line break is one, as in the terminal and Claude's web chat (#2088): not a space.
         .markdownSoftBreakMode(.lineBreak)
         .lookUpFiles(d.asked)
-        .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
-        #if os(macOS)
-        // Under an answer, while the pointer is over it: Copy, and Quote where the chat quotes (#2113). Not under an
-        // agent's words between its steps (`quiet`).
-        .modifier(AnswerHoverActions(on: !quiet, id: item.id, text: item.text ?? ""))
-        #endif
+        .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, starItem: item)
     }
 
     /// Links in a fresh answer open instantly: their pages load in the background. Only for recent answers — every
@@ -768,27 +754,6 @@ private struct QuietMarkdown: ViewModifier {
     }
 }
 
-#if os(macOS)
-private struct AnswerHoverActions: ViewModifier {
-    @Environment(MessageMenu.self) private var menu: MessageMenu?
-    var on: Bool
-    var id: String
-    var text: String
-
-    func body(content: Content) -> some View {
-        if on {
-            content.macHoverFooter {
-                MacHoverButton(title: String(localized: "Copy [Readiness Views d37380]"), symbol: Theme.Icon.copy) { MacHover.copy(text) }
-                if let quote = menu?.quote {
-                    MacHoverButton(title: String(localized: "Quote"), symbol: Theme.Icon.quote) { quote(text, id, false, nil) }
-                }
-            }
-        } else {
-            content
-        }
-    }
-}
-#endif
 
 struct CopyButton: View {
     var text: String
@@ -913,6 +878,7 @@ nonisolated enum ModeChangeWords {
     static func why(_ code: String?) -> String? {
         switch code {
         case "replaced": String(localized: "another switch took its place")
+        case "cancelled": String(localized: "the session stays in its current mode") // the mode it runs in picked again (#11089)
         case "process_exited": String(localized: "the process it was picked for has exited")
         case "process_replaced": String(localized: "the session runs in another process now")
         case "process_unknown": String(localized: "it couldn't tell which process to restart")
@@ -1351,9 +1317,7 @@ final class StreamRevealClock {
     /// Bumped when what is shown changed: the view's only dependency.
     private var revision = 0
     @ObservationIgnored private var reveal: StreamReveal?
-    #if os(iOS) || os(visionOS)
     @ObservationIgnored private var link: CADisplayLink?
-    #endif
 
     /// What of `text` to draw. `text` is the newest the view was given; `receive` takes it in right after this redraw,
     /// so until then what was shown stays (or, first time, `StreamReveal`'s start; a text that does not continue it,
@@ -1366,16 +1330,10 @@ final class StreamRevealClock {
     }
 
     func receive(_ text: String) {
-        #if os(iOS) || os(visionOS)
         let now = CACurrentMediaTime()
         if reveal == nil { reveal = StreamReveal(text) } else { reveal?.receive(text, at: now) }
         revision &+= 1
         if reveal?.caughtUp == false { start() }
-        #else
-        reveal = StreamReveal(text)
-        reveal?.finish()
-        revision &+= 1
-        #endif
     }
 
     func finish() {
@@ -1385,20 +1343,15 @@ final class StreamRevealClock {
     }
 
     func stop() {
-        #if os(iOS) || os(visionOS)
         link?.invalidate()
         link = nil
-        #endif
     }
 
     /// Back on screen: what still waits goes on (a stream that paused meanwhile sends nothing to restart it).
     func resume() {
-        #if os(iOS) || os(visionOS)
         if reveal?.caughtUp == false { start() }
-        #endif
     }
 
-    #if os(iOS) || os(visionOS)
     private func start() {
         guard link == nil else { return }
         // The link holds its target strongly: a weak hop, so a view gone without onDisappear frees this.
@@ -1428,7 +1381,6 @@ final class StreamRevealClock {
             }
         }
     }
-    #endif
 }
 
 /// The block of a streaming reply still being written, as it is drawn (#2916): made whole for the moment

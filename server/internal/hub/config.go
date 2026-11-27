@@ -61,6 +61,8 @@ type MachineConfig struct {
 	CodexServers     []proto.CodexServer `json:"codex_servers,omitempty"`
 	// Launchers adds configured wrappers or overrides the type reported by the node.
 	Launchers []assistantwire.ConfiguredLauncher `json:"launchers,omitempty"`
+	// LauncherRecovery bounds rediscovery of a missing Assistant launcher and names its only permitted substitutes.
+	LauncherRecovery *assistantwire.LauncherRecovery `json:"launcher_recovery,omitempty"`
 	// Botmux false: the machine's node does not list botmux's sessions and never runs botmux (docs/integrations/engines.md "botmux");
 	// unset lists them, as before.
 	Botmux *bool `json:"botmux,omitempty"`
@@ -259,6 +261,10 @@ func (c *Config) applyEnv() {
 		if v := identity.Getenv(e.name); v != "" {
 			*e.to(c) = v
 		}
+	}
+	if v := strings.TrimSpace(identity.Getenv("PERSONA_ALLOW_READONLY_SESSIONS")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		c.Security.AllowReadOnlySessions = err == nil && enabled
 	}
 }
 

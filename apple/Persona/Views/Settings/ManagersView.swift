@@ -176,12 +176,12 @@ struct ManagerDetailView: View {
                 .disabled(!ManagersText.validName(newName))
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("Install Elsewhere?", isPresented: $confirmMove, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Install Elsewhere?", isPresented: $confirmMove, titleVisibility: .visible) {
             Button("Install Elsewhere", role: .destructive) { if let m { Task { await page.newCode(m) } } }
         } message: {
             Text("Installing elsewhere gives you a new install code. Once it's installed with that code, the assistant where it ran before stops working right away.")
         }
-        .confirmationDialog(deleteTitle(m), isPresented: $confirmDelete, titleVisibility: .visible) {
+        .accessibleConfirmationDialog(deleteTitle(m), isPresented: $confirmDelete, titleVisibility: .visible, hasCancel: true) {
             Button(m?.installing != nil ? String(localized: "Cancel Install") : String(localized: "Delete"), role: .destructive) {
                 guard let m else { return }
                 // Back to the list: this page has nothing left to show. Only if the path is still the one this page was on
@@ -235,17 +235,7 @@ struct ManagerDetailView: View {
     @ViewBuilder private func actions(_ m: HubManager) -> some View {
         let blocked = ManagersText.deleteBlocked(m)
         Section {
-            #if os(macOS)
-            // docs/apple/mac-design.md: a detail page's buttons are regular-size and grouped, not a row each.
-            HStack(spacing: Theme.Space.s) {
-                actionButtons(m, blocked: blocked)
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                Spacer(minLength: 0)
-            }
-            #else
             actionButtons(m, blocked: blocked)
-            #endif
         } footer: {
             if let blocked { Text(blocked) }
         }
@@ -277,14 +267,6 @@ struct ManagerDetailView: View {
             .accessibilityIdentifier("manager.newCode")
         }
         let removeTitle = installing ? String(localized: "Cancel Install") : String(localized: "Delete")
-        #if os(macOS)
-        Button(role: .destructive) { confirmDelete = true } label: {
-            Label(removeTitle, systemImage: Theme.Icon.delete).lineLimit(1)
-                .foregroundStyle(blocked == nil ? Theme.danger : Theme.Hue.gray) // red says what it does
-        }
-        .disabled(blocked != nil)
-        .accessibilityIdentifier("manager.delete")
-        #else
         if blocked != nil {
             // Not a button that looks live: the footer says why it cannot go.
             Label(removeTitle, systemImage: Theme.Icon.delete)
@@ -299,7 +281,6 @@ struct ManagerDetailView: View {
             }
             .accessibilityIdentifier("manager.delete")
         }
-        #endif
     }
 
     /// The status with its dot, drawn like the other facts rows in either style.

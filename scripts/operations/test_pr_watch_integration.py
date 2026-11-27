@@ -24,10 +24,46 @@ code = 0
 if args[:1] == ["api"]:
     entry["input"] = sys.stdin.read() if "--input" in args else ""
     entry["review"] = json.loads(entry["input"]) if entry["input"] and len(args) > 1 and args[1].endswith("/reviews") else None
-if args[:1] == ["api"] and len(args) > 1 and any(args[1].endswith(suffix) for suffix in ("/comments", "/reviews", "/commits")) and "--input" not in args:
+if args[:2] == ["api", "graphql"]:
+    if os.environ.get("FAKE_EMPTY_SNAPSHOT") == "1":
+        print("")
+    else:
+        request = json.loads(entry["input"])
+        variables = request["variables"]
+        query = request["query"].lstrip()
+        assert query.startswith("query($owner: String!, $name: String!, $number: Int!")
+        assert (variables["owner"], variables["name"], variables["number"]) == ("example", "one", state["pr"]["number"])
+        pr = dict(state["pr"])
+        if "$needComments: Boolean!" in query:
+            page = {"hasNextPage": False, "endCursor": None}
+            pr = {
+                "comments": {"nodes": state.get("comments", []), "pageInfo": page} if variables["needComments"] else None,
+                "reviews": {"nodes": state.get("reviews", []), "pageInfo": page} if variables["needReviews"] else None,
+                "reviewThreads": {"nodes": [{"comments": {"nodes": [comment], "pageInfo": page}}
+                                            for comment in state.get("review_comments", [])], "pageInfo": page}
+                if variables["needThreads"] else None,
+            }
+            pr = {key: value for key, value in pr.items() if value is not None}
+        elif "baseRef { target { oid } }" in query:
+            pr["baseRef"] = {"target": {"oid": pr["baseRefOid"]}}
+        else:
+            raise AssertionError("unexpected GraphQL query")
+        print(json.dumps({"data": {"repository": {"pullRequest": pr}}}))
+    entry["returncode"] = 0
+    with open(log_path, "a") as log:
+        log.write(json.dumps(entry) + "\n")
+    sys.exit(0)
+if args[:2] == ["api", "user"]:
+    print("watcher-self")
+    entry["returncode"] = 0
+    with open(log_path, "a") as log:
+        log.write(json.dumps(entry) + "\n")
+    sys.exit(0)
+if args[:1] == ["api"] and len(args) > 1 and any(args[1].split("?", 1)[0].endswith(suffix) for suffix in ("/comments", "/reviews", "/commits")) and "--input" not in args:
+    api_path = args[1].split("?", 1)[0]
     records = {"issues/7/comments": state.get("comments", []), "pulls/7/comments": state.get("review_comments", []),
-               "pulls/7/reviews": state.get("reviews", []), "pulls/7/commits": state.get("commits", [])}[args[1].split("repos/example/one/", 1)[1]]
-    print("\n".join(json.dumps(record) for record in records))
+               "pulls/7/reviews": state.get("reviews", []), "pulls/7/commits": state.get("commits", [])}[api_path.split("repos/example/one/", 1)[1]]
+    print(json.dumps(records))
     entry["returncode"] = 0
     with open(log_path, "a") as log:
         log.write(json.dumps(entry) + "\n")
@@ -221,12 +257,57 @@ class WatcherIntegrationTests(unittest.TestCase):
         self.assertIn("Example defect", review["body"])
         self.assertFalse(any(call.get("argv", [])[:2] == ["pr", "merge"] for call in calls))
 
+    def test_empty_snapshot_fails_closed_without_review_or_merge(self):
+        self.env["FAKE_EMPTY_SNAPSHOT"] = "1"
+        calls = self.run_watch()
+        self.assertTrue(any(call.get("argv", [])[:2] == ["api", "graphql"] for call in calls))
+        self.assertFalse(any(call.get("reviewer") for call in calls))
+        self.assertFalse(any(call.get("argv", [])[:2] == ["pr", "merge"] for call in calls))
+
     def test_invalid_finding_fails_closed_without_comment_or_merge(self):
         self.env["FAKE_REVIEW_FINDINGS"] = json.dumps([{"path": "fix.py", "line": 99, "severity": "P1",
                                                         "summary": "Wrong anchor", "suggestion": "None"}])
         calls = self.run_watch()
         self.assertFalse(any(call.get("review") for call in calls))
         self.assertFalse(any(call.get("argv", [])[:2] == ["pr", "merge"] for call in calls))
+
+    def enable_human_reviews(self):
+        config = json.loads(self.config_path.read_text())
+        config["repositories"][0]["respect_human_reviews"] = True
+        self.config_path.write_text(json.dumps(config))
+
+    def put_review(self, state_name, login="maintainer", user_type="User"):
+        state = json.loads(self.state_path.read_text())
+        state["reviews"] = [{"id": 9, "state": state_name, "commit_id": self.head,
+                            "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "user": {"login": login, "type": user_type}}]
+        self.state_path.write_text(json.dumps(state))
+
+    def test_human_approval_merges_without_invoking_the_reviewer_or_posting(self):
+        self.enable_human_reviews()
+        self.put_review("APPROVED")
+        calls = self.run_watch()
+        self.assertEqual(json.loads(self.state_path.read_text())["pr"]["state"], "MERGED")
+        self.assertFalse(any("reviewer" in call for call in calls))
+        self.assertFalse(any(call.get("argv", [])[:2] in (["pr", "review"], ["pr", "comment"])
+                             for call in calls))
+
+    def test_human_change_request_does_not_review_or_merge(self):
+        self.enable_human_reviews()
+        self.put_review("CHANGES_REQUESTED")
+        calls = self.run_watch()
+        self.assertEqual(json.loads(self.state_path.read_text())["pr"]["state"], "OPEN")
+        self.assertFalse(any("reviewer" in call for call in calls))
+        self.assertFalse(any(call.get("argv", [])[:2] == ["pr", "merge"] for call in calls))
+        self.assertFalse(any(call.get("argv", [])[:2] in (["pr", "review"], ["pr", "comment"])
+                             for call in calls))
+
+    def test_bot_approval_is_ignored_and_the_normal_review_runs(self):
+        self.enable_human_reviews()
+        self.put_review("APPROVED", login="ci-bot", user_type="Bot")
+        calls = self.run_watch()
+        self.assertTrue(any("reviewer" in call for call in calls))
+        self.assertEqual(json.loads(self.state_path.read_text())["pr"]["state"], "MERGED")
 
 
 if __name__ == "__main__":

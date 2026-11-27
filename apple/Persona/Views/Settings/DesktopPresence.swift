@@ -1,6 +1,5 @@
 import SwiftUI
 
-#if os(iOS) || os(visionOS)
 /// "Persona is signed in on your Mac" over the Agents list, like WeChat's line over its chats (docs/apple/ios.md "Mac signed in"): one
 /// quiet row while a desktop app is connected or you're at a computer with Persona Link, Phone Muted beside it when on. A tap
 /// opens `DesktopPresenceSheet`.
@@ -88,7 +87,7 @@ struct DesktopPresenceSheet: View {
             .toolbar {
                 SheetClose { dismiss() }
             }
-            .confirmationDialog(signingOut.map { String(localized: "Sign out Persona on “\($0.name)”?") } ?? "",
+            .accessibleConfirmationDialog(signingOut.map { String(localized: "Sign out Persona on “\($0.name)”?") } ?? "",
                                 isPresented: Binding(get: { signingOut != nil }, set: { if !$0 { signingOut = nil } }),
                                 titleVisibility: .visible) {
                 Button("Sign Out [Desktop Presence 498e1d]", role: .destructive) {
@@ -110,4 +109,3 @@ struct DesktopPresenceSheet: View {
         return String(localized: "Persona Link · since \(at)")
     }
 }
-#endif

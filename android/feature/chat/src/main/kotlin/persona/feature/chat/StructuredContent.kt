@@ -54,7 +54,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
     var whole by remember(item.id) { mutableStateOf<String?>(null) }
     val cut = item.fullSize != null && whole == null && update?.streaming != true
     val text = (whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it })
-        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it) else it }
+        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it, complete = !cut && update?.streaming != true) else it }
     val ancillaryStream = remember(item.id, update?.streaming == true) { AssistantAncillaryStream { _, _ -> } }
     val ancillary = if (update?.streaming == true && !user && item.from.isNullOrBlank()) {
         ancillaryStream.update(text, hostnames = LocalChatPorts.current?.hostnames.orEmpty(), linkable = emptySet())
@@ -64,9 +64,9 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
     // Forward (#3901) takes the transcript's text and who wrote it when that is another session (a relay, its "From" card).
     val target = MessageTarget(item.id, model.plain, user, model.editText(), raw = text,
         from = item.from?.takeIf { it.isNotBlank() } ?: (model.parts.singleOrNull() as? MessagePart.Source)?.name?.takeIf { it.isNotBlank() },
-        time = item.ts, cut = item.id.takeIf { cut })
-    Column(Modifier.fillMaxWidth().messageMenu(target)) {
-        MessageContextGroup(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
+        time = item.ts, cut = item.id.takeIf { cut }, starItem = item)
+    PickableMessageColumn(target, Modifier.fillMaxWidth().messageMenu(target)) {
+        MessageForwardContexts(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
         AttachedFileCards(model.attached, alignEnd = user)
         // a reply still being written: its quotes do not fold yet (#2984)
         CompositionLocalProvider(LocalReplyStreaming provides (update?.streaming == true)) {
@@ -74,11 +74,12 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
             SelectableWords(target) {
                 Column(Modifier.fillMaxWidth()) {
                     MessageParts(model.parts, user, item.id, boxed = boxed, streaming = update?.streaming == true,
-                        ancillaryCards = ancillary?.cards)
+                        ancillaryCards = ancillary?.cards, ownReply = item.role == "assistant" && item.from.isNullOrBlank() && item.source == null)
                 }
             }
         }
-        if (cut) FullTextButton(item) { whole = it } else ReaderEntry(text)
+        StarredChatMark(item)
+        if (cut) FullTextButton(item) { whole = it } else ReadingContent { ReaderEntry(text) }
         if (update?.streaming == true) StreamingCursor()
         // An answer's documents as cards with their first page (iOS #1543), the rest as chips.
         if (user) FileChips(model.files, alignEnd = true)
@@ -100,7 +101,7 @@ private fun StreamingCursor() {
 
 @Composable
 private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, onLastLine: ((Int) -> Unit)? = null, boxed: Boolean = false,
-    streaming: Boolean? = null, ancillaryCards: List<persona.core.domain.views.AssistantFence>? = null) {
+    streaming: Boolean? = null, ancillaryCards: List<persona.core.domain.views.AssistantFence>? = null, ownReply: Boolean = false) {
     // Bubble padding below the last text line, so the reported extent reaches the bottom of the row.
     val bottomPadding = with(LocalDensity.current) { Tokens.Space.m.roundToPx() }
     // A reply's ```persona-view blocks are numbered across the whole text item: `<item id>/<n>`, the hub's key.
@@ -117,20 +118,24 @@ private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, on
     }
     parts.forEachIndexed { index, part ->
         when (part) {
-            is MessagePart.Text -> if (user) Text(messageLinkAnnotations(part.text), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink,
-                onTextLayout = { layout ->
-                    if (index == parts.lastIndex && layout.lineCount > 0)
-                        onLastLine?.invoke((layout.size.height - layout.getLineTop(layout.lineCount - 1)).toInt() + bottomPadding)
-                })
-                else AssistantAnswerFrame(boxed) {
-                    ChatMarkdown(part.text, "$id/$index", selectable = false,
+            is MessagePart.Text -> if (user) ReadingContent {
+                val annotated = messageLinkAnnotations(part.text)
+                val layoutState = remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+                Text(annotated, Modifier.chatLinkLongPress(annotated) { layoutState.value }, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink,
+                    onTextLayout = { layout ->
+                        layoutState.value = layout
+                        if (index == parts.lastIndex && layout.lineCount > 0)
+                            onLastLine?.invoke((layout.size.height - layout.getLineTop(layout.lineCount - 1)).toInt() + bottomPadding)
+                    })
+            } else AssistantAnswerFrame(boxed) {
+                    ReplyMarkdown(part.text, "$id/$index", ownReply,
                         viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) }, streaming = streaming)
                 }
             is MessagePart.Source -> JGroupItem(GroupPosition.Single) {
                 Column(Modifier.fillMaxWidth().padding(10.dp.dense)) {
                     Text(stringResource(R.string.chat_content_from, part.name.ifBlank { stringResource(R.string.chat_content_other_session) }), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                     // Markdown like an answer: agents write Markdown, and the hub turns a teammate's JSON notes into it.
-                    if (part.text.isNotBlank()) ChatMarkdown(keepLineBreaks(part.text), "$id/$index", selectable = false)
+                    if (part.text.isNotBlank()) ReplyMarkdown(keepLineBreaks(part.text), "$id/$index", ownReply = false)
                 }
             }
         }
@@ -156,13 +161,14 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     /** A message only in the outbox, in this state: its menu offers what fits one not sent ([MessageTarget.pending]). */
     pending: persona.core.contracts.api.DeliveryState? = null,
     /** An unsent message's look on Glass ([OutboxBubble]): its bubble faded, its state's mark before it. */
-    faded: Boolean = false, leading: (@Composable () -> Unit)? = null) {
+    faded: Boolean = false, leading: (@Composable () -> Unit)? = null, openingSource: (@Composable () -> Unit)? = null) {
     // Keyed on this bubble's own texts: [updates] is the whole chat's, and changes with every streamed chunk of a reply.
     val texts = bubbleTexts(items, updates)
     val models = remember(items, texts) { items.mapIndexed { index, item -> messageModel(texts[index], item.from, user = true) } }
     val parts = remember(models) { models.flatMap { it.parts } }
     // A forward (#3901) is a card at the top of the bubble; the other blocks fold into one row above it, as before.
-    val (forwards, contexts) = remember(models) { models.flatMap { it.contexts }.partition { it.kind == ForwardMessage.KIND } }
+    val forwards = remember(models) { models.flatMap { bubbleForwardGroups(it.contexts) } }
+    val contexts = remember(models) { models.flatMap { it.contexts }.filter { it.kind != ForwardMessage.KIND } }
     val photos = remember(models) { models.flatMap { it.images }.distinct() }
     val files = remember(models) { models.flatMap { it.files }.distinct().take(6) }
     val attached = remember(models) { models.flatMap { it.attached }.distinctBy { it.path } }
@@ -171,7 +177,8 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
             models.joinToString("\n\n") { it.editText() }.trim(), pending, items.lastOrNull()?.ts,
             raw = texts.joinToString("\n\n"),
             from = items.firstNotNullOfOrNull { it.from?.takeIf(String::isNotBlank) },
-            cut = items.singleOrNull()?.takeIf { it.fullSize != null && updates[it.id] == null }?.id)
+            cut = items.singleOrNull()?.takeIf { it.fullSize != null && updates[it.id] == null }?.id,
+            starItem = items.singleOrNull())
     }
     val timestamp = items.lastOrNull()?.ts
     val locale = currentLocale
@@ -179,12 +186,19 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     // A message that came in from a channel (WeChat, the Feishu bot…) says so under it; the app's own say nothing.
     val channels = LocalChannels.current
     val source = remember(items, channels) { items.firstNotNullOfOrNull { ChannelSources.of(it.clientMsgId, channels) } }
-    val footer: (@Composable () -> Unit)? = if (time == null && files.isEmpty() && source == null) null else ({
+    val sourceLine: (@Composable () -> Unit)? = if (source != null) ({ JChannelSource(source) }) else openingSource
+    val starredUserItem = items.singleOrNull()
+    val hasStarMark = starredUserItem != null &&
+        LocalStarredChatContext.current?.source(starredUserItem)?.let { starSource ->
+            LocalStarredMessagesStore.current?.state?.collectAsState()?.value?.mark(starSource) != null
+        } == true
+    val footer: (@Composable () -> Unit)? = if (time == null && files.isEmpty() && sourceLine == null && !hasStarMark) null else ({
         Column(horizontalAlignment = Alignment.End) {
             FileChips(files, alignEnd = true)
-            if (source == null) time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
+            if (sourceLine == null && !hasStarMark) time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
             else Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-                JChannelSource(source)
+                sourceLine?.invoke()
+                if (hasStarMark) StarredChatMark(starredUserItem)
                 time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
             }
         }
@@ -197,14 +211,14 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     val bubble = (contexts.isEmpty() && attached.isEmpty()) || parts.isNotEmpty() || photos.isNotEmpty() || images != null || streaming ||
         forwards.isNotEmpty()
     val fromCard = models.any { it.fromCard }
-    Column(Modifier.fillMaxWidth()) {
+    PickableMessageColumn(target.takeIf { menu }, Modifier.fillMaxWidth()) {
         MessageContextGroup(contexts, "${items.firstOrNull()?.id.orEmpty()}/contexts", uri::openUri)
         AttachedFileCards(attached)
         if (fromCard) Text(stringResource(R.string.chat_from_card), Modifier.align(Alignment.End).padding(bottom = Tokens.Space.xs),
             style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1)
         if (bubble) UserBubbleFrame(Modifier.messageMenu(target.takeIf { menu }), footer = footer, own = own, faded = faded, leading = leading) {
             forwards.forEachIndexed { index, forward ->
-                ForwardBubbleCard(forward, "${items.firstOrNull()?.id.orEmpty()}/forward/$index")
+                ForwardBubbleGroup(forward, "${items.firstOrNull()?.id.orEmpty()}/forward/$index")
                 if (index < forwards.lastIndex || parts.isNotEmpty() || photos.isNotEmpty() || images != null || streaming)
                     Spacer(Modifier.height(Tokens.Space.s))
             }
@@ -213,13 +227,23 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
                 AttachedPhotoRow(photos)
                 if (parts.isNotEmpty()) Spacer(Modifier.height(Tokens.Space.s))
             }
+            val foldText = remember(parts, streaming) {
+                if (streaming || parts.isEmpty() || parts.any { it !is MessagePart.Text }) ""
+                else parts.filterIsInstance<MessagePart.Text>().joinToString("\n\n") { it.text }
+            }
+            val foldKey = items.firstOrNull()?.id?.takeIf { it.isNotBlank() && foldText.isNotEmpty() }
             SelectableWords(target.takeIf { menu }) {
-                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                    MessageParts(parts, true, items.firstOrNull()?.id.orEmpty(), onLastLine)
-                    if (streaming) StreamingCursor()
+                BubbleFold(foldText, foldKey, own = own) { shownText ->
+                    val displayParts = remember(parts, foldText, shownText) {
+                        if (shownText === foldText) parts else listOf(MessagePart.Text(shownText))
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                        MessageParts(displayParts, true, items.firstOrNull()?.id.orEmpty(), onLastLine)
+                        if (streaming) StreamingCursor()
+                    }
                 }
             }
-        }
+        } else if (openingSource != null) Box(Modifier.align(Alignment.End)) { footer?.invoke() }
     }
 }
 

@@ -144,12 +144,15 @@ var migrations = map[string]subscriptions.Migration{
 	"imessage": {Connector: "imessage", Source: "imessage", Icon: "chat", Recipe: inboxRows(wire.ConnectorSubscriptionKindSubMessage)},
 	// GitHub's rows as its Collect makes them, through the generic inbox_things (#6381, #6404).
 	"github": {Connector: "github", Source: "github", Icon: "code", Recipe: inboxRows(wire.ConnectorSubscriptionKindSubNotice)},
+	// Lark's rows as its extension's Collect makes them, through the generic inbox_things (#13672): chats, documents
+	// and moments of several accounts, a conversation's batch of new messages beside its events' state (#13637).
+	"lark": {Connector: "lark", Source: "lark", Icon: "chat", Recipe: inboxRows(wire.ConnectorSubscriptionKindSubMessage)},
 }
 
 // withheld are the sources whose default subscription is not offered yet: the owner says when (decision 6 of the
-// migration). GitHub's waits for iMessage's week on the owner's hub (2026-11-13). One already switched still shows
-// its switch, to switch back.
-var withheld = map[string]bool{"github": true}
+// migration), each after the source before it has had its week there. GitHub's is offered since iMessage's week
+// (#13599); Lark's waits for GitHub's (#13672). One already switched still shows its switch, to switch back.
+var withheld = map[string]bool{"lark": true}
 
 // inboxRows is a default subscription's recipe: the source's own Inbox rows, ready-made (inbox_things), a row
 // without a kind of its own being kind.
@@ -166,11 +169,31 @@ func (b builtinSources) via(ctx context.Context, src *subscriptionsui.Builtin) {
 	via := &subscriptionsui.Via{}
 	if s, _, err := b.h.subs.Get(ctx, subscriptions.MigrationID(src.ID)); err == nil {
 		via.On, via.Subscription = s.Migrated != nil, s.ID
+		if via.On {
+			src.Read = subscriptionRead(s) // the Inbox round no longer reads it (#11762)
+		}
 	}
 	if withheld[src.ID] && !via.On {
 		return // not offered yet
 	}
 	src.Via = via
+}
+
+// subscriptionRead is a switched source's latest read as its default subscription's runs keep it, as sourceReads
+// would: the latest attempt, the latest that worked, and why the latest failed while it did. Stored, so a restart
+// keeps it. None before its first run.
+func subscriptionRead(s subscriptions.Subscription) *subscriptionsui.Read {
+	if s.LastRunAt == nil {
+		return nil
+	}
+	r := &subscriptionsui.Read{At: *s.LastRunAt, OK: s.LastOKAt}
+	if s.Error != nil {
+		r.Error = s.Error.Code
+		if r.Error == "" {
+			r.Error = assistantwire.ReadFailed
+		}
+	}
+	return r
 }
 
 // SetMigrated reads source id's Inbox feed through its default subscription (on) or as before, named as the source.

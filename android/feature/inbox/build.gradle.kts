@@ -24,6 +24,7 @@ android {
 }
 
 dependencies {
+    api(project(":core:inbox"))
     implementation(project(":core:chatlist"))
     implementation(project(":core:contracts"))
     implementation(project(":core:hub"))
@@ -31,6 +32,7 @@ dependencies {
     implementation(project(":core:designsystem"))
     implementation(project(":core:navigation"))
     implementation(libs.androidx.lifecycle.compose)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:${libs.versions.lifecycle.get()}")
     implementation(libs.androidx.activity)
     implementation(libs.coroutines.android)
     implementation(libs.serialization.json)

@@ -13,6 +13,10 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// LegacyTaskExecution is an internal assistant.send hint for unconfigured scheduled turns.
+// The devices manager consumes it against the connected node's handshake before dispatch.
+const LegacyTaskExecution = "task_execution_legacy"
+
 // Manager → hub.
 const (
 	// EventState {machines: [State], absorbed: {entry id: machine id}, entries: [Entry]}: every machine as the manager
@@ -73,6 +77,9 @@ const (
 	// MethodFileCall has NodeCall's params too, but only for a long file.copy / file.zip whose caller may cancel it.
 	// Keeping it separate leaves ordinary devices.call completion semantics unchanged when an HTTP client disconnects.
 	MethodFileCall = "devices.file_call"
+	// MethodRetireCall forwards only session.stop_if_idle and propagates cancellation.
+	// An old manager refuses it; unlike a file call, it has no unconditional fallback.
+	MethodRetireCall = "devices.retire_call"
 	// EventNotify {machine_id, event, params}: a one-way event to a node (terminal input, a port's bytes).
 	EventNotify = "devices.notify"
 	// EventConfig Config: what the hub hands the manager changed (an entry added on the admin page, the mesh, the
@@ -195,11 +202,17 @@ type Config struct {
 	WebURL string `json:"web_url,omitempty"`
 	// TailcatDERPMapURL is hub.json's tailcat.derp_map_url.
 	TailcatDERPMapURL string `json:"tailcat_derp_map_url,omitempty"`
+	// PrivateNetwork is hub.json's security.private_network_only (office network mode): the manager never dials
+	// tailcat and tells every node to stop its tailcat endpoint (node.configure private_network).
+	PrivateNetwork bool `json:"private_network,omitempty"`
 	// NodePackagesURL is where the manager fetches the node builds the hub has none of (docs/operations/node-update.md "Node
 	// packages"): a release's dl/ (hub.json's node_packages.url, else the hub build's update URL; "" none), through
 	// NodePackagesProxy (an http:// proxy, internal/netproxy; "" direct).
-	NodePackagesURL   string `json:"node_packages_url,omitempty"`
-	NodePackagesProxy string `json:"node_packages_proxy,omitempty"`
+	NodePackagesURL   string             `json:"node_packages_url,omitempty"`
+	NodePackagesProxy string             `json:"node_packages_proxy,omitempty"`
+	DevelopmentTarget *DevelopmentTarget `json:"development_target,omitempty"`
+	PublishedTarget   *DevelopmentTarget `json:"published_target,omitempty"`
+	DevelopmentHold   bool               `json:"development_hold,omitempty"`
 	// LinkPingMS / LinkPingTimeoutMS: the heartbeats of the links and streams, hub.json's link section (0: the
 	// protocol's, link.PingEvery / PingTimeout; tests shorten them). The manager tells Persona Link them too.
 	LinkPingMS        int `json:"link_ping_ms,omitempty"`
@@ -264,6 +277,10 @@ type RecMachine struct {
 
 // State is one machine as the manager has it.
 type State struct {
+	// TransportFor is an owning manager's retained transport identity. The hub
+	// validates the referenced computer belongs to that manager; it never resolves
+	// sessions or stores business mappings itself.
+	TransportFor string `json:"transport_for,omitempty"`
 	// Machine is what the apps get, but for what the hub adds (system, computer, browser).
 	Machine proto.Machine `json:"machine"`
 	// Config is the machine's entry: hub.json's, or a member's (a derived machine), as the hub gave it.
@@ -340,6 +357,8 @@ type NodeCall struct {
 	MachineID  string          `json:"machine_id"`
 	Method     string          `json:"method"`
 	Params     json.RawMessage `json:"params,omitempty"`
+	// StreamVersion is an offer for port.dial. The manager passes it into the node's params.
+	StreamVersion int `json:"stream_version,omitempty"`
 	// TimeoutMS bounds the call on the manager's side too, a little before the caller gives up: the manager's
 	// CodeDeadline answer comes back in time.
 	TimeoutMS int64 `json:"timeout_ms,omitempty"`
@@ -363,6 +382,29 @@ type NodeCall struct {
 	Ordered bool `json:"ordered,omitempty"`
 }
 
+const (
+	MethodPortDial = "port.dial"
+	// PortStreamHalfCloseV1 supports directional EOF on forwarded TCP streams.
+	PortStreamHalfCloseV1 = 1
+)
+
+// PortDial opens a stream to a port on the node. The hub offers StreamVersion only for an endpoint with CloseWrite.
+type PortDial struct {
+	ID            string `json:"id"`
+	Port          int    `json:"port"`
+	KeepAwake     bool   `json:"keep_awake,omitempty"` // keep a watched screen awake
+	Pair          string `json:"pair,omitempty"`       // ties a screen stream to screen.dial
+	Link          bool   `json:"link,omitempty"`       // use screen session framing
+	Attach        bool   `json:"attach,omitempty"`     // rejoin a live screen session
+	StreamVersion int    `json:"stream_version,omitempty"`
+}
+
+// PortDialReply confirms the stream version or the use of screen session framing.
+type PortDialReply struct {
+	Link          int `json:"link,omitempty"`
+	StreamVersion int `json:"stream_version,omitempty"`
+}
+
 // Hold is NodeCall.Hold.
 type Hold struct {
 	// Lang is the language of the words in CodeHeld's answer (the request's).
@@ -375,14 +417,9 @@ type HeldAnswer struct {
 	Undelivered *proto.UndeliveredMessage `json:"undelivered,omitempty"`
 }
 
-// Actor is who asked the hub for a call (NodeCall.Actor): the kind of token ("device", "hub" for the hub's own
-// token, "extension") and, for a device, its id and name as the hub knows them; an extension's id. Display only.
-type Actor struct {
-	Kind       string `json:"kind"`
-	DeviceID   string `json:"device_id,omitempty"`
-	DeviceName string `json:"device_name,omitempty"`
-	Extension  string `json:"extension,omitempty"`
-}
+// Actor is display-only provenance for NodeCall and plan decisions: a device, hub token, extension, or internal
+// assistant. It is shared with the node contract so a plan reports the actor supplied by its manager.
+type Actor = proto.ModeActor
 
 // RequestEnd is devices.request_end's params.
 type RequestEnd struct {
@@ -429,6 +466,7 @@ var Routes = []string{
 	"POST /api/v1/sessions/{mid}/{sid}/start/continue",
 	// Retry and Delete on a message held for an Agent while its computer was away (#10661, internal/devices held.go),
 	// from a full device.
+	HeldOutboxRoute,
 	"POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry",
 	"DELETE /api/v1/sessions/{mid}/{sid}/held/{msg}",
 	"GET /api/v1/machines/{mid}/codex/{sid}/takeover",
@@ -438,6 +476,9 @@ var Routes = []string{
 	"GET /api/v1/machines/{mid}/herdr",
 	"PUT /api/v1/machines/{mid}/herdr",
 	"POST /api/v1/machines/{mid}/herdr/start",
+	// Named herdr sessions kept out of Persona (#14898, internal/devices herdrsessions.go).
+	"GET /api/v1/machines/{mid}/herdr/sessions",
+	"PUT /api/v1/machines/{mid}/herdr/sessions/blocked",
 	"GET /api/v1/machines/{mid}/botmux",
 	"PUT /api/v1/machines/{mid}/botmux",
 	"GET /api/v1/machines/{mid}/health/reports",
@@ -449,8 +490,16 @@ var Routes = []string{
 	// A computer's diagnosis and cache cleanup (#8037, internal/devices diagnosis.go).
 	"GET /api/v1/machines/{mid}/diagnosis",
 	"POST /api/v1/machines/{mid}/cleanup",
+	// A computer's disk usage map and its guarded trash (#14576, internal/devices usagemap.go).
+	"GET /api/v1/machines/{mid}/storage/usage",
+	"POST /api/v1/machines/{mid}/storage/trash",
+	"POST /api/v1/machines/{mid}/storage/trash/undo",
+	"POST /api/v1/machines/{mid}/storage/trash/purge",
 	"GET /api/v1/machines/{mid}/claude-dirs",
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
+	// Hidden Agent folders, beside the blocked Claude config folders (internal/devices agentdirs.go).
+	"GET /api/v1/machines/{mid}/agent-dirs/hidden",
+	"PUT /api/v1/machines/{mid}/agent-dirs/hidden",
 	"GET /api/v1/machines/{mid}/claude-live-replies",
 	"PUT /api/v1/machines/{mid}/claude-live-replies",
 	// Sharing the machine's clipboard with the phone (#3064, internal/devices clipboard.go).
@@ -472,11 +521,13 @@ var TransferRoutes = []string{
 	"POST /api/v1/files/transfer",
 	"GET /api/v1/files/transfer/{id}",
 	"DELETE /api/v1/files/transfer/{id}",
+	// The audit of the Agents' file_transfer calls (internal/devices agent_transfer.go), full devices only.
+	"GET /api/v1/files/transfer-audit",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
-// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, and
-// the history: the days, the last days by the hour).
+// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, the
+// history: the days, the last days by the hour, and by project: usage_projects.go).
 var MetricsRoutes = []string{
 	"GET /api/v1/metrics",
 	"GET /api/v1/machines/{id}/metrics",
@@ -484,6 +535,8 @@ var MetricsRoutes = []string{
 	"GET /api/v1/usage",
 	"GET /api/v1/usage/days",
 	"GET /api/v1/usage/hours",
+	"GET /api/v1/usage/projects",
+	"GET /api/v1/usage/projects/detail",
 }
 
 // UsageRoutes are the subscription usage windows' routes (internal/devices usagewindows.go, docs/server/usage-windows.md),

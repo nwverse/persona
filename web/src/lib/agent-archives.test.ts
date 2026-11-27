@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
-  AGENT_ARCHIVE_CLOSE_FEATURE, AGENT_ARCHIVES_FEATURE, archiveAgent, archiveOffers, closeBusyReason, closeOffer, deleteInsteadOfArchive, restoreAgent,
+  AGENT_ARCHIVE_CLOSE_FEATURE, AGENT_ARCHIVES_FEATURE, archiveAgent, archiveOffers, closeBusyReason, closeOffer, offerSessionDelete, restoreAgent,
   type ArchiveDeps, type CloseResult,
 } from "./agent-archives";
 import { t } from "../i18n";
@@ -17,8 +17,8 @@ describe("what the menus offer", () => {
     expect(archiveOffers(open, both)).toEqual({ archive: "ok", close: "ok" });
     expect(archiveOffers(open, [AGENT_ARCHIVES_FEATURE])).toEqual({ archive: "ok", close: "no" }); // an older manager
     expect(archiveOffers(open, [])).toEqual({ archive: "no", close: "no" }); // an older hub: Delete chat stays
-    expect(deleteInsteadOfArchive([])).toBe(true);
-    expect(deleteInsteadOfArchive(both)).toBe(false);
+    expect(offerSessionDelete(open, [])).toBe(true);
+    expect(offerSessionDelete(open, both)).toBe(false);
   });
 
   it("never offers the assistant's conversations or one already archived", () => {
@@ -53,6 +53,33 @@ describe("what the menus offer", () => {
     expect(archiveOffers({ ...open, source_kind: "codex_app_server", agent: "codex" }, both)).toEqual({ archive: "ok", close: "no" });
     expect(archiveOffers({ ...open, status: "offline", state: "offline" }, both)).toEqual({ archive: "ok", close: "no" });
     expect(archiveOffers({ ...open, status: "offline", start_error: "did not start" }, both)).toEqual({ archive: "ok", close: "no" });
+  });
+});
+
+describe("Close… on an Antigravity CLI agent (#14520)", () => {
+  const pane: Session = { ...open, session_id: "agy-w1-p1", agent: "agy", pane_id: "w1:p1",
+    capabilities: { read: true, send: true, interrupt: true, approve: true, terminal: true } };
+  const conversation: Session = { ...open, session_id: "agy-11111111-2222-4333-8444-555555555555", agent: "agy", pane_id: undefined,
+    source_kind: "runtime", status: "done", state: "idle", capabilities: { read: true, send: true, interrupt: true, terminal: false, close: true } };
+
+  it("archives and closes its pane's row and its own row, so the conversation leaves the list", () => {
+    expect(closeOffer(pane, both)).toBe("archive");
+    expect(closeOffer({ ...pane, started_by_persona: true }, both)).toBe("archive");
+    expect(closeOffer(conversation, both)).toBe("archive");
+    expect(archiveOffers(conversation, both)).toEqual({ archive: "ok", close: "ok" });
+  });
+
+  it("closes a busy one without archiving it, and only closes where the hub can't archive and close", () => {
+    expect(closeOffer({ ...pane, status: "working", state: "working" }, both)).toBe("close");
+    expect(closeOffer({ ...conversation, status: "working", state: "working" }, both)).toBe("close");
+    expect(closeOffer(pane, [AGENT_ARCHIVES_FEATURE])).toBe("close"); // an older manager
+  });
+
+  it("leaves a companion row with no close, and one already closed, as they were", () => {
+    const noClose = { ...conversation, capabilities: { ...conversation.capabilities, close: false } } as Session;
+    expect(archiveOffers(noClose, both).close).toBe("no");
+    expect(closeOffer({ ...conversation, status: "offline", state: "offline" }, both)).toBe("no");
+    expect(archiveOffers({ ...conversation, agent: "pi" }, both).close).toBe("no"); // another runtime's session
   });
 });
 

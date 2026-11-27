@@ -7,6 +7,7 @@ import androidx.compose.runtime.compositionLocalOf
 import persona.core.contracts.Item
 import persona.core.contracts.Machine
 import persona.core.domain.lines.ChatLine
+import persona.core.domain.lines.EngineChanges
 import persona.core.domain.ComputerSteps
 import persona.core.domain.MessageContext
 import persona.core.domain.decodeXmlEntities
@@ -73,7 +74,9 @@ internal fun messageModel(raw: String, from: String? = null, user: Boolean = fal
     // The hub's interject note is model instructions, never a quote chip in the owner's bubble (#6595); parseContexts
     // already strips the block from the written text, so only drop it from the rendered contexts.
     val (parsedContexts, written) = parseContexts(raw)
-    val contexts = parsedContexts.filterNot(MessageContext::isInterjectContext)
+    val contexts = parsedContexts.filterNot {
+        it.isInterjectContext() || (user && EngineChanges.fromContext(it) != null)
+    }
     // Only the exact tag the hub ends a card's answer with, only on the user's own message.
     val card = if (user) persona.core.domain.views.PersonaActionTag.split(written) else null
     val (attached, text) = parseAttachedFiles(card?.first ?: written)
@@ -386,6 +389,33 @@ internal fun latestPlan(steps: List<WorkItem>): LinePlan? = steps.asReversed().f
     (step as? WorkItem.Tool)?.call?.let { call ->
         todoEntries(call.use.item)?.takeIf { it.size >= 2 }?.let { LinePlan(call.id, it, call.failed) }
     }
+}
+
+/**
+ * The chat's newest non-failed plan across all items (including collapsed work lines and hub-folded snapshots, mirroring
+ * iOS `ChatPlan.latest`), so Glass can show its floating `PlanPill` above the composer even while work lines are folded.
+ */
+internal fun latestChatPlan(items: List<Item>): LinePlan? {
+    val failed = mutableSetOf<String>()
+    for (item in items.asReversed()) {
+        val snap = item.fold?.tasks?.lastOrNull { it.replace == "todo" && it.entries.size >= 2 }
+        if (snap != null) {
+            val todos = snap.entries.mapNotNull { entry ->
+                val content = entry.subject?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val rawStatus = entry.status
+                if (rawStatus == "deleted") return@mapNotNull null
+                val status = if (rawStatus == "completed" || rawStatus == "in_progress") rawStatus else "pending"
+                TodoEntry(content, status, entry.description)
+            }
+            if (todos.size >= 2) return LinePlan(snap.sourceItemId, todos, failed = false)
+        }
+        if (item.kind == "tool_result" && item.isError == true) item.toolUseId?.let(failed::add)
+        if (item.kind == "tool_use" && item.toolName == "TodoWrite" && item.toolUseId !in failed) {
+            val todos = todoEntries(item)?.takeIf { it.size >= 2 }
+            if (todos != null) return LinePlan(item.id, todos, failed = false)
+        }
+    }
+    return null
 }
 
 /** Where the newest plan card is drawn: its line ([lineId]) and the plan. */

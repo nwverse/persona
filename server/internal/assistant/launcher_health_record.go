@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/textfmt"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -133,10 +134,16 @@ func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r 
 	key := healthKey(machine, launcher)
 	rec := b.recs[key]
 	limited := rec != nil && rec.Kind == errKindUsageLimit && rec.unusable()
+	// The raw error is what the terminal or the CLI printed, colour, prompt marks and shell startup noise included:
+	// clean it once, before anything reads its words (the classification among them).
+	cleanErr := r.err
+	if cleanErr != "" {
+		cleanErr = textfmt.LauncherErrorSummary(cleanErr, 400)
+	}
 	kind := ""
 	if !r.ok {
 		if kind = r.kind; kind == "" {
-			kind = classifyLauncherError(r.err)
+			kind = classifyLauncherError(cleanErr)
 		}
 	}
 	keep := func(changed bool) LauncherHealth {
@@ -158,7 +165,7 @@ func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r 
 		at = r.at.UTC()
 	}
 	if o := r.observed; o != nil && (rec == nil && !o.CheckedAt.IsZero() || rec != nil && (!rec.CheckedAt.Equal(o.CheckedAt) || rec.rev != o.rev)) {
-		return keep(limited && kind == errKindUsageLimit && foldLimit(rec, limitFamilies(r.err), limitResetOf(r, now)))
+		return keep(limited && kind == errKindUsageLimit && foldLimit(rec, limitFamilies(cleanErr), limitResetOf(r, now)))
 	}
 	if limited && !r.ok && kind != errKindUsageLimit {
 		return keep(false)
@@ -202,12 +209,12 @@ func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r 
 		rec.Model = r.model
 	} else {
 		rec.Fails++
-		if missingCode(r.err) == proto.CodeClaudeMissing {
+		if missingCode(cleanErr) == proto.CodeClaudeMissing {
 			rec.MissingFails++
 		} else {
 			rec.MissingFails = 0
 		}
-		rec.Error = clip(oneLine(r.err), 400)
+		rec.Error = clip(oneLine(cleanErr), 400)
 		rec.Kind = kind
 		switch {
 		case rec.Kind == errKindNotInTerminal:
@@ -220,7 +227,7 @@ func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r 
 			if limited {
 				merged = old
 			}
-			foldLimit(&merged, limitFamilies(r.err), limitResetOf(r, at))
+			foldLimit(&merged, limitFamilies(cleanErr), limitResetOf(r, at))
 			rec.LimitModels, rec.LimitResets, rec.ResetsAt = merged.LimitModels, merged.LimitResets, merged.ResetsAt
 		case rec.State == "" || rec.State == healthOK:
 			rec.State = healthFailing
@@ -254,7 +261,7 @@ func (s *Service) setHealthState(ctx context.Context, machine, launcher, state, 
 		rec.State = state
 	}
 	if state == healthBlocked {
-		rec.BlockedReason = clip(oneLine(why), 600)
+		rec.BlockedReason = clip(oneLine(textfmt.StripTerminalEscapes(why)), 600)
 	}
 	if fixed != nil {
 		f := *fixed
@@ -311,7 +318,7 @@ func (s *Service) recordStartFailure(ctx context.Context, machine, launcher stri
 		s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart, kind: errKindNotInTerminal})
 		return
 	}
-	s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart})
+	s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart, kind: codedLauncherErrorKind(err)})
 	// Reserve before launching the goroutine: a task's immediate detour must join this check, even before it runs.
 	if rc, run := s.claimHealthRecheck(ctx, machine, launcher); run {
 		go s.runHealthRecheck(context.WithoutCancel(ctx), machine, launcher, rc, true)
@@ -489,8 +496,8 @@ var startRequestErr = lazyre.New(`^directory .* does not exist$|^invalid launche
 // An engine with no provider of the launcher's kind (launcher_kind_missing, #8140) is the request's: the launcher is
 // not broken, and its check, which runs it on the command line, would pass and clear any record of it.
 var startRefusalCodes = []string{"codex_needs_prompt", "codex_resume", "codex_read_only", "orca_resume", "open_elsewhere", "runtime_session",
-	"identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeDirectoryUntypable, proto.CodeNodeOutdated,
-	proto.CodeLauncherKindMissing}
+	proto.CodeResumeUnknown, "identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeDirectoryUntypable, proto.CodeNodeOutdated,
+	proto.CodeLauncherKindMissing, proto.CodeAgyCompanionOffline}
 
 // startRefused: the start failed on the request, not the launcher: the node checked it and said no before running
 // anything (one of startRefusalCodes, or of startRequestErr).

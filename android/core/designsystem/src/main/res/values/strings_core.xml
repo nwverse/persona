@@ -73,8 +73,8 @@
     <string name="designsystem_core_field_invalid">Check what you entered and its format</string>
     <string name="designsystem_core_computer_fallback">the computer</string>
     <string name="designsystem_core_close_agent_title">Close this agent?</string>
-    <string name="designsystem_core_close_agent_message_tab">“%1$s”\n%2$s\n\nThis quits %4$s on %3$s and closes its terminal tab “%5$s” (in a split tab, only its pane). Work in progress stops; the chat is kept, and you can continue it later from History in Agents.</string>
-    <string name="designsystem_core_close_agent_message_pane">“%1$s”\n%2$s\n\nThis quits %4$s on %3$s and closes its terminal pane. Work in progress stops; the chat is kept, and you can continue it later from History in Agents.</string>
+    <string name="designsystem_core_close_agent_message_tab">“%1$s”\n%2$s\n\nThis quits %4$s on %3$s and closes its tab “%5$s”. In a split terminal, only its part closes. Work in progress stops. The session is kept, and you can resume it from History in Agents.</string>
+    <string name="designsystem_core_close_agent_message_pane">“%1$s”\n%2$s\n\nThis quits %4$s on %3$s and closes its terminal. Work in progress stops. The session is kept, and you can resume it from History in Agents.</string>
     <string name="designsystem_core_close_agent_message_runtime">“%1$s”\n%2$s\n\nThis ends the session on %3$s. Work in progress stops.</string>
     <string name="designsystem_core_delete_session_title">Delete this chat?</string>
     <string name="designsystem_core_delete_session_on_machine_command">“%1$s” will be removed from the list on every device. The chat record on %2$s is not deleted; continue it there with %3$s and it comes back.</string>
@@ -255,8 +255,10 @@
     <string name="designsystem_core_engine_herdr_app">Terminals opened in the desktop app</string>
     <string name="designsystem_core_engine_orca">Terminals in Orca</string>
     <string name="designsystem_core_engine_tern">Terminals in Tern</string>
+    <string name="designsystem_core_engine_rex">Terminals in Rex</string>
     <string name="designsystem_core_engine_paseo">Agents in Paseo</string>
     <string name="designsystem_core_engine_cindy">Agents in Cindy</string>
+    <string name="designsystem_core_engine_t3code">Agents in T3 Code</string>
     <string name="designsystem_core_engine_none">No terminal engine</string>
     <string name="designsystem_core_engine_none_detail">Sessions of the desktop apps only</string>
     <string name="designsystem_core_engine_offline">Offline, no detection info yet</string>
@@ -441,6 +443,7 @@
     <string name="designsystem_core_headline_agent_permission">%1$s wants to use %2$s</string>
     <string name="designsystem_core_headline_agent_permission_detail">%1$s wants to use %2$s: %3$s</string>
     <string name="designsystem_core_headline_secret_run">Run on %1$s with your password</string>
+    <string name="designsystem_core_headline_secret_handoff">Hand secrets to an Agent?</string>
     <string name="designsystem_core_headline_screen">Terminal needs you</string>
     <string name="designsystem_core_headline_needs_you">Needs you</string>
     <string name="designsystem_core_ask_question">Has a question</string>
@@ -583,4 +586,6 @@
     <string name="designsystem_core_always_scope_edit_directory">All file edits in this directory in this conversation</string>
     <string name="designsystem_core_always_scope_tool">All %1$s calls in this conversation</string>
     <string name="designsystem_core_always_scope_approved">The approved scope remains allowed in this conversation</string>
+    <string name="designsystem_core_api_conversation_invalid">Conversation invalid: its compacted context belongs to another account. Start a new conversation to continue.</string>
+    <string name="designsystem_core_api_conversation_invalid_label">Invalid conversation</string>
 </resources>

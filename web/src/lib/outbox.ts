@@ -50,6 +50,9 @@ export interface OutboxEntry {
   /** Its send ended with delivered "unknown" (no answer in the hub's time, the link dropped while it went): Check reads
    *  the same operation and refreshes the transcript, never another message POST. A reliable copy shows it as sent. */
   inDoubt?: boolean;
+  /** Why the computer sent the owner's message through a Claude session's message inbox (relay_reason): an uncertain
+   *  one whose session runs an older Persona plugin says what fixes it. */
+  relay?: string;
   /** Brought back after a reload: even an unconfirmed send can settle by the transcript's words. */
   restored?: boolean;
   launcher?: string;
@@ -145,8 +148,11 @@ const IN_DOUBT_REASONS: Record<string, string> = {
   peer_unconfirmed: "lib-outbox.peer_unconfirmed", // handed over, not taken: held there, or dropped as a repeat
 };
 
-/** The code's own words for an uncertain send, when it has some. */
-function inDoubtReason(code: unknown): string | undefined {
+/** The code's own words for an uncertain send, when it has some. One the inbox read and the session did not take,
+ *  relayed because the session runs a Persona plugin from before busy delivery (plugin_outdated), says that reopening
+ *  the session on the computer fixes it (docs/integrations/claude-integration.md "Owner input through the Persona plugin"). */
+function inDoubtReason(code: unknown, relay?: unknown): string | undefined {
+  if (code === "peer_unconfirmed" && relay === "plugin_outdated") return t("lib-outbox.peer_unconfirmed_old_plugin");
   const key = typeof code === "string" ? IN_DOUBT_REASONS[code] : undefined;
   return key ? t(key) : undefined;
 }
@@ -155,14 +161,14 @@ function inDoubtReason(code: unknown): string | undefined {
 export function failureText(e: unknown): string {
   if (e instanceof ApiError && e.code === "input_draft") return t("lib-outbox.input_draft");
   if (e instanceof ApiError && e.code === "dialog_open") return t("lib-outbox.dialog_open");
-  if (e instanceof ApiError && e.body.delivered === "unknown") return inDoubtReason(e.code) ?? t("lib-outbox.delivery_unknown");
+  if (e instanceof ApiError && e.body.delivered === "unknown") return inDoubtReason(e.code, e.body.relay_reason) ?? t("lib-outbox.delivery_unknown");
   return errorText(e);
 }
 
 /** What a kept entry's bubble says: an uncertain one in the page's current language from its code (one kept from
  *  before a reload, or from a page that only had the generic words), else the words it failed with. */
-export function entryReason(e: Pick<OutboxEntry, "error" | "code" | "inDoubt">): string {
-  return (e.inDoubt ? inDoubtReason(e.code) : undefined) ?? e.error ?? "";
+export function entryReason(e: Pick<OutboxEntry, "error" | "code" | "inDoubt" | "relay">): string {
+  return (e.inDoubt ? inDoubtReason(e.code, e.relay) : undefined) ?? e.error ?? "";
 }
 
 /** Held for approval on the computer (peer_held): not a failure, the owner's step there is what is left. */
@@ -217,9 +223,11 @@ export function settleOutbox(mid: string, sid: string, users: Seen[]) {
 }
 
 /** A failed entry's fields for the error its send ended with. */
-function failedWith(err: unknown): Pick<OutboxEntry, "state" | "error" | "code" | "clearable" | "newId" | "inDoubt"> {
+function failedWith(err: unknown): Pick<OutboxEntry, "state" | "error" | "code" | "clearable" | "newId" | "inDoubt" | "relay"> {
   const inDoubt = err instanceof ApiError && err.body.delivered === "unknown";
+  const relay = err instanceof ApiError && typeof err.body.relay_reason === "string" ? err.body.relay_reason : undefined;
   return {
+    relay,
     // the hub stopped waiting (delivered "unknown"): it may have gone in, and its copy in the transcript settles it (settle)
     inDoubt,
     state: "failed",
@@ -263,16 +271,35 @@ export function inSendOrder<T>(key: string, post: () => Promise<T>): Promise<T> 
 
 const KEPT_PREFIX = "outbox-msg:";
 const keptKey = (key: string, id: string) => `${KEPT_PREFIX}${key}/${id}`;
-type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId" | "inDoubt" | "error" | "code" | "state" | "wordsOnly" | "acceptedAt" | "clearable">>;
+type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId" | "inDoubt" | "error" | "code" | "state" | "wordsOnly" | "acceptedAt" | "clearable" | "relay">>;
 
-/** Keeps one message's words until its transcript copy arrives (pictures are not kept: they would fill the
- *  storage). Storage can be full or refused; the message then lasts only as long as the page. */
+// In-memory image payloads (and image-only sends that have no text to persist) kept across client-side
+// conversation switches in the same tab, keyed by keptKey(key, id). Never written to localStorage.
+const keptImages = new Map<string, OutboxImage[]>();
+const keptImageOnly = new Map<string, Outgoing>();
+const cloneImages = (images: OutboxImage[]): OutboxImage[] => images.map(({ mime, data }) => ({ mime, data }));
+
+/** Keeps one message's words until its transcript copy arrives (pictures stay in memory for same-tab navigation,
+ *  never in localStorage where they would fill the quota). Storage can be full or refused; the message then lasts
+ *  only as long as the page. */
 export function keepOutgoing(key: string, e: Outgoing) {
   if (conversationKeyDeleted(key)) return;
-  if (!e.text.trim()) return;
+  const hasText = Boolean(e.text.trim());
+  const hasImages = e.images.length > 0;
+  if (!hasText && !hasImages) return;
+  const storageKey = keptKey(key, e.id);
+  if (!hasText) {
+    keptImageOnly.set(storageKey, { ...e, images: cloneImages(e.images) });
+    keptImages.set(storageKey, cloneImages(e.images));
+    return;
+  }
+  keptImageOnly.delete(storageKey);
   try {
-    storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, inDoubt: e.inDoubt, error: e.error, code: e.code, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length }));
+    storeValue(storageKey, JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, inDoubt: e.inDoubt, error: e.error, code: e.code, relay: e.relay, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length }));
+    if (hasImages) keptImages.set(storageKey, cloneImages(e.images));
+    else keptImages.delete(storageKey);
   } catch {
+    keptImages.delete(storageKey);
     // only this page's copy then
   }
 }
@@ -287,35 +314,52 @@ export function acceptOutgoing(key: string, id: string, acceptedAt = Date.now())
   if (entries.some((e) => e.id === id && e.state !== "sent")) {
     setOutbox(key, entries.map((e) => e.id === id ? { ...e, state: "sent", acceptedAt, error: undefined, code: undefined, clearable: undefined, newId: undefined, inDoubt: undefined } : e));
   }
+  const storageKey = keptKey(key, id);
+  const mem = keptImageOnly.get(storageKey);
+  if (mem) {
+    keptImageOnly.set(storageKey, { ...mem, state: "sent", acceptedAt, error: undefined, code: undefined, clearable: undefined, newId: undefined, inDoubt: undefined });
+  }
   try {
-    const saved = storedValue(keptKey(key, id));
+    const saved = storedValue(storageKey);
     if (saved === null) return;
-    storeValue(keptKey(key, id), JSON.stringify({ ...JSON.parse(saved), state: "sent", acceptedAt, error: undefined, code: undefined, newId: undefined, inDoubt: undefined }));
+    storeValue(storageKey, JSON.stringify({ ...JSON.parse(saved), state: "sent", acceptedAt, error: undefined, code: undefined, newId: undefined, inDoubt: undefined }));
   } catch {
     // storage unavailable: keep only the current page's bubble
   }
 }
 
 export function forgetOutgoing(key: string, id: string) {
+  const storageKey = keptKey(key, id);
+  keptImages.delete(storageKey);
+  keptImageOnly.delete(storageKey);
   try {
-    removeStoredValue(keptKey(key, id));
+    removeStoredValue(storageKey);
   } catch {
     // nothing to clear
   }
 }
 
-function keptEntries(key: string): (Omit<Outgoing, "images"> & { lostImages: boolean })[] {
-  const out: (Omit<Outgoing, "images"> & { lostImages: boolean })[] = [];
+function keptEntries(key: string): (Outgoing & { lostImages: boolean })[] {
+  const out: (Outgoing & { lostImages: boolean })[] = [];
+  const seen = new Set<string>();
+  const prefix = keptKey(key, "");
   try {
-    const prefix = keptKey(key, "");
     for (let i = 0; i < localStorage.length; i++) {
       const name = localStorage.key(i);
       if (!name?.startsWith(prefix)) continue;
       const { images, ...k } = JSON.parse(storedValue(name) ?? "null") as Omit<Outgoing, "images"> & { images?: number };
-      if (k.id && typeof k.text === "string") out.push({ ...k, lostImages: Boolean(images) });
+      if (k.id && typeof k.text === "string") {
+        const kept = keptImages.get(name);
+        out.push({ ...k, images: kept ? cloneImages(kept) : [], lostImages: Boolean(images) && !kept?.length });
+        seen.add(k.id);
+      }
     }
   } catch {
-    // storage unavailable or an unreadable entry: nothing to bring back
+    // storage unavailable or an unreadable entry: nothing to bring back from localStorage
+  }
+  for (const [name, k] of keptImageOnly) {
+    if (!name.startsWith(prefix) || seen.has(k.id)) continue;
+    out.push({ ...k, images: cloneImages(k.images), lostImages: false });
   }
   return out;
 }
@@ -345,13 +389,15 @@ export function restoreOutbox(mid: string, sid: string, inFlight: string[] = [])
     return true;
   });
   if (!back.length) return;
-  const entries = back.map(({ lostImages, ...k }): OutboxEntry => ({ ...k, images: [], state: k.state === "sent" ? "sent" : "failed", code: k.state === "sent" ? undefined : k.code, restored: true, error: k.state === "sent" ? undefined : lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }));
+  const entries = back.map(({ lostImages, images, ...k }): OutboxEntry => ({ ...k, images, state: k.state === "sent" ? "sent" : "failed", code: k.state === "sent" ? undefined : k.code, restored: true, error: k.state === "sent" ? undefined : lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }));
   setOutbox(key, [...list(key), ...entries]);
 }
 
 /** A fresh page for the tests: every conversation can restore its unconfirmed messages once again. */
 export function resetRestoredForTests() {
   restored.clear();
+  keptImages.clear();
+  keptImageOnly.clear();
 }
 
 /** How the node says your own message went into a Claude outside Persona's terminals (session.send's answer). */
@@ -368,6 +414,8 @@ export function relayNotice(reply?: DeliveryReply): string | undefined {
   switch (reply.relay_reason) {
     case "busy":
       return t("lib-outbox.relayed_busy");
+    case "plugin_outdated":
+      return t("lib-outbox.relayed_old_plugin");
     case "plugin_unavailable":
     case "plugin_refused":
     case "plugin_unconfirmed":
@@ -655,5 +703,8 @@ export function adoptedConversation(sid: string): { machine: string; manager?: s
 onConversationDeleted((mid, sid) => {
   const key = outboxKey(mid, sid);
   for (const entry of keptEntries(key)) forgetOutgoing(key, entry.id);
+  const prefix = keptKey(key, "");
+  for (const name of [...keptImages.keys()]) if (name.startsWith(prefix)) keptImages.delete(name);
+  for (const name of [...keptImageOnly.keys()]) if (name.startsWith(prefix)) keptImageOnly.delete(name);
   restored.delete(key);
 });

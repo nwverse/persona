@@ -291,6 +291,53 @@ func TestProviderSkipsComputersWithTheirOwnService(t *testing.T) {
 	}
 }
 
+type blockedOwnServiceHub struct{ Hub }
+
+func (h blockedOwnServiceHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceLaunchersOwnService {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return h.Hub.DeviceCall(ctx, p)
+}
+
+func TestPickerOwnServiceKeepsTheLastAnswerWhenTimeRunsOut(t *testing.T) {
+	s, f := scopeService(t)
+	s.hub = blockedOwnServiceHub{Hub: f}
+	previous := proto.OwnServiceState{Agent: "claude", Known: true, Own: true, Via: "login"}
+	s.models.ownMu.Lock()
+	s.models.own = map[string]ownSeen{"mac/claude": {st: previous, at: time.Now().Add(-2 * ownServiceFresh)}}
+	s.models.ownMu.Unlock()
+	for _, tc := range []struct {
+		name   string
+		budget time.Duration
+	}{
+		{name: "deadline already expired", budget: -time.Second},
+		{name: "shortened probe times out", budget: 50 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.WithValue(t.Context(), pickerDiscoveryDeadline{}, time.Now().Add(tc.budget))
+			if got := s.ownService(ctx, "mac", "claude"); got != previous {
+				t.Fatalf("own service = %+v, want last answer %+v", got, previous)
+			}
+			if got, fresh := s.ownServiceCached("mac", "claude"); got != previous || fresh {
+				t.Fatalf("cached own service = %+v, fresh=%v, want the original stale answer", got, fresh)
+			}
+		})
+	}
+	current := proto.OwnServiceState{Agent: "claude", Known: true}
+	f.mu.Lock()
+	f.ownServices = map[string]proto.OwnServiceState{"mac/claude": current}
+	f.mu.Unlock()
+	s.hub = f
+	if got := s.ownService(t.Context(), "mac", "claude"); got != current {
+		t.Fatalf("own service after a successful probe = %+v, want %+v", got, current)
+	}
+	if got, fresh := s.ownServiceCached("mac", "claude"); got != current || !fresh {
+		t.Fatalf("updated own service = %+v, fresh=%v, want the new answer", got, fresh)
+	}
+}
+
 // pickerOf is GET /api/v1/machines/{machine}/launchers?purpose=purpose: what New Agent's picker lists, and what it
 // shows off with why.
 func pickerOf(t *testing.T, s *Service, machine, purpose string) picker {
@@ -383,7 +430,8 @@ func TestNewAgentPickerSaysWhyAProviderSkipsThisComputer(t *testing.T) {
 
 // A provider whose latest check failed. Where its own-service rule leaves it out anyway, that rule is the reason the
 // pickers give, the main chat's as New Agent's: with the check passing it would still not be listed. Where it would
-// run, the check alone hides it and no picker calls it skipped.
+// run, the check alone keeps it out of the launchers: New Agent lists it off for that (#14535), never as skipped for
+// its own-service rule, and the main chat's list leaves it out as before.
 func TestAFailedCheckDoesNotChangeTheOwnServiceReason(t *testing.T) {
 	s, f := scopeService(t)
 	f.launcherList = []proto.Launcher{{Name: "claude"}}
@@ -410,7 +458,8 @@ func TestAFailedCheckDoesNotChangeTheOwnServiceReason(t *testing.T) {
 			t.Fatalf("%q: mac lists %v, unavailable %+v", purpose, mac.names(), mac.Unavailable)
 		}
 		server := pickerOf(t, s, "server", purpose)
-		if _, ok := fill(server); slices.Contains(server.names(), "fill") || ok {
+		u, ok := fill(server)
+		if slices.Contains(server.names(), "fill") || (purpose == "assistant") == ok || ok && u.Code != unavailableUnhealthy {
 			t.Fatalf("%q: server lists %v, unavailable %+v", purpose, server.names(), server.Unavailable)
 		}
 	}

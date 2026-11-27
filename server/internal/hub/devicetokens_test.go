@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -35,7 +36,7 @@ func (s *tokenStore) DeviceTokenByHash(_ context.Context, hash string) (*db.Devi
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.rows[hash]
-	if !ok || s.rev[t.ID] {
+	if !ok || s.rev[t.ID] || (t.ExpiresAt != nil && !time.Now().Before(*t.ExpiresAt)) {
 		return nil, nil
 	}
 	return &t, nil
@@ -54,9 +55,12 @@ func (s *tokenStore) DeviceTokens(context.Context) ([]db.DeviceToken, error) {
 func (s *tokenStore) RevokeDeviceToken(_ context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, t := range s.rows {
+	for hash, t := range s.rows {
 		if t.ID == id && !s.rev[id] {
 			s.rev[id] = true
+			now := time.Now()
+			t.RevokedAt = &now
+			s.rows[hash] = t
 			return true, nil
 		}
 	}
@@ -64,6 +68,66 @@ func (s *tokenStore) RevokeDeviceToken(_ context.Context, id string) (bool, erro
 }
 
 func (s *tokenStore) TouchDeviceToken(context.Context, string) error { return nil }
+
+func TestDeviceRevocationReachesEveryManager(t *testing.T) {
+	h := newTestHub(t)
+	h.store = &tokenStore{rows: map[string]db.DeviceToken{
+		"first": {ID: "dev_first"},
+		"other": {ID: "dev_other"},
+	}, rev: map[string]bool{}}
+	h.bus.idents = &memIdents{}
+	mux := http.NewServeMux()
+	h.busRoutes(mux)
+	h.tokenRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	events := make(chan bus.DeviceCredential, 2)
+	for _, id := range []string{"assistant", "another-manager"} {
+		m := connectGuardManager(t, h, srv.URL, id, func(string, json.RawMessage) (any, error) { return map[string]any{}, nil })
+		m.mu.Lock()
+		m.onEvent = func(event string, raw json.RawMessage) {
+			if event == bus.EventCredentialRevoked {
+				var p bus.DeviceCredential
+				if err := json.Unmarshal(raw, &p); err != nil {
+					t.Error(err)
+				}
+				events <- p
+			}
+		}
+		m.mu.Unlock()
+	}
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/v1/auth/tokens/dev_first", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("sign out: %d %s", w.Code, w.Body)
+	}
+	for range 2 {
+		select {
+		case p := <-events:
+			if p.ID != "dev_first" {
+				t.Fatalf("revoked credential: %+v", p)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a manager missed the revocation event")
+		}
+	}
+
+	// A fresh hub has no in-memory revocation and can still answer a manager that missed the event.
+	fresh := newTestHub(t)
+	fresh.store = h.store
+	fresh.bus.idents = &memIdents{}
+	freshMux := http.NewServeMux()
+	fresh.busRoutes(freshMux)
+	freshSrv := httptest.NewServer(freshMux)
+	t.Cleanup(freshSrv.Close)
+	m := connectGuardManager(t, fresh, freshSrv.URL, "assistant", func(string, json.RawMessage) (any, error) { return map[string]any{}, nil })
+	for credential, want := range map[string]bool{"dev_first": true, "dev_other": false} {
+		var status bus.CredentialStatus
+		if err := m.call(t, bus.MethodCredentialRevoked, bus.DeviceCredential{ID: credential}, &status); err != nil || status.Revoked != want {
+			t.Fatalf("status for %s: %+v, %v", credential, status, err)
+		}
+	}
+}
 
 // pausedTokenStore returns the snapshot read before revocation only after the test releases it.
 type pausedTokenStore struct {
@@ -256,6 +320,12 @@ func TestAnswerRoleOnlyWhatTheWatchDoes(t *testing.T) {
 		method, path string
 		want         bool
 	}{
+		{"POST", "/api/v1/assistant/health/tell", true},
+		{"GET", "/api/v1/assistant/health/tell", false},
+		{"PUT", "/api/v1/assistant/health/tell", false},
+		{"POST", "/api/v1/assistant/health/tell/x", false},
+		{"POST", "/api/v1/assistant/health/workouts", false},
+		{"POST", "/api/v1/assistant/conversations", false},
 		{"GET", "/api/v1/machines", true},
 		{"GET", "/api/v1/sessions", true},
 		{"HEAD", "/api/v1/sessions", true},
@@ -498,5 +568,157 @@ func TestWebSignInReplacesItsEarlierDevice(t *testing.T) {
 	}
 	if code != 200 || kinds["web"] != 3 || kinds["phone"] != 1 {
 		t.Fatalf("kinds %v", kinds)
+	}
+}
+
+func TestSameKindReplacesAndLinkDedupAndOnlineCredentials(t *testing.T) {
+	h := newTestHub(t)
+	h.cfg.Machines = []MachineConfig{
+		{ID: "mac-a", Name: "Mac A", Kind: kindLink},
+		{ID: "mac-b", Name: "Mac B", Kind: kindLink},
+	}
+	h.store = &tokenStore{memStore: *newMemStore(), rows: map[string]db.DeviceToken{}, rev: map[string]bool{}}
+	mux := h.routes()
+	master := h.cfg.Token
+
+	// Phone replaces phone, watch replaces watch, cross-kind is ignored.
+	code, phone1 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"name":"Phone","kind":"phone"}`)
+	if code != 200 {
+		t.Fatalf("phone1: %d %v", code, phone1)
+	}
+	code, watch1 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"name":"Watch","kind":"watch"}`)
+	if code != 200 {
+		t.Fatalf("watch1: %d %v", code, watch1)
+	}
+	code, phone2 := call(t, mux, "POST", "/api/v1/auth/tokens", master,
+		`{"name":"Phone","kind":"phone","replaces":"`+phone1["id"].(string)+`"}`)
+	if code != 200 || phone2["replaced"] != phone1["id"] {
+		t.Fatalf("phone2 replace: %d %v", code, phone2)
+	}
+	if code, _ := call(t, mux, "GET", "/api/v1/machines", phone1["token"].(string), ""); code != http.StatusUnauthorized {
+		t.Fatalf("replaced phone1 still works: %d", code)
+	}
+	code, watch2 := call(t, mux, "POST", "/api/v1/auth/tokens", master,
+		`{"name":"Watch","kind":"watch","replaces":"`+watch1["id"].(string)+`"}`)
+	if code != 200 || watch2["replaced"] != watch1["id"] {
+		t.Fatalf("watch2 replace: %d %v", code, watch2)
+	}
+	if code, _ := call(t, mux, "GET", "/api/v1/machines", watch1["token"].(string), ""); code != http.StatusUnauthorized {
+		t.Fatalf("replaced watch1 still works: %d", code)
+	}
+	// Phone cannot replace watch.
+	code, phone3 := call(t, mux, "POST", "/api/v1/auth/tokens", master,
+		`{"name":"Phone","kind":"phone","replaces":"`+watch2["id"].(string)+`"}`)
+	if code != 200 || phone3["replaced"] != nil {
+		t.Fatalf("cross-kind replace should be ignored: %d %v", code, phone3)
+	}
+	if code, _ := call(t, mux, "GET", "/api/v1/machines", watch2["token"].(string), ""); code != 200 {
+		t.Fatalf("watch2 should remain valid: %d", code)
+	}
+
+	// Re-pairing a Persona Link computer revokes the earlier active link token for the same machine only.
+	code, linkA1 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"kind":"link","machine":"mac-a"}`)
+	if code != 200 {
+		t.Fatalf("linkA1: %d %v", code, linkA1)
+	}
+	code, linkB1 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"kind":"link","machine":"mac-b"}`)
+	if code != 200 {
+		t.Fatalf("linkB1: %d %v", code, linkB1)
+	}
+	code, linkA2 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"kind":"link","machine":"mac-a"}`)
+	if code != 200 {
+		t.Fatalf("linkA2: %d %v", code, linkA2)
+	}
+	if _, ok := h.authenticate(context.Background(), linkA1["token"].(string)); ok {
+		t.Fatal("superseded linkA1 token still authenticates")
+	}
+	if _, ok := h.authenticate(context.Background(), linkA2["token"].(string)); !ok {
+		t.Fatal("new linkA2 token should authenticate")
+	}
+	if _, ok := h.authenticate(context.Background(), linkB1["token"].(string)); !ok {
+		t.Fatal("unrelated machine linkB1 token should stay valid")
+	}
+
+	// GET /api/v1/auth/tokens reports active client WebSockets and Persona Links in "online".
+	wsClient := &client{device: phone2["id"].(string)}
+	rl := &relayLink{tokenID: linkA2["id"].(string)}
+	h.mu.Lock()
+	if h.clients == nil {
+		h.clients = map[*client]struct{}{}
+	}
+	h.clients[wsClient] = struct{}{}
+	h.mu.Unlock()
+	h.relay.mu.Lock()
+	if h.relay.links == nil {
+		h.relay.links = map[*relayLink]struct{}{}
+	}
+	h.relay.links[rl] = struct{}{}
+	h.relay.mu.Unlock()
+	t.Cleanup(func() {
+		h.mu.Lock()
+		delete(h.clients, wsClient)
+		h.mu.Unlock()
+		h.relay.mu.Lock()
+		delete(h.relay.links, rl)
+		h.relay.mu.Unlock()
+	})
+
+	code, listed := call(t, mux, "GET", "/api/v1/auth/tokens", master, "")
+	if code != 200 {
+		t.Fatalf("list tokens: %d %v", code, listed)
+	}
+	rawOnline, ok := listed["online"].([]any)
+	if !ok {
+		t.Fatalf("expected online array in response: %v", listed)
+	}
+	gotOnline := map[string]bool{}
+	for _, v := range rawOnline {
+		gotOnline[v.(string)] = true
+	}
+	if !gotOnline[phone2["id"].(string)] || !gotOnline[linkA2["id"].(string)] || gotOnline[linkB1["id"].(string)] {
+		t.Fatalf("unexpected online credentials: %v", rawOnline)
+	}
+}
+
+func TestLinkDedupSkipsWhileLinkSwitchUnderWay(t *testing.T) {
+	h := newTestHub(t)
+	h.cfg.Machines = []MachineConfig{
+		{ID: "mac-b", Name: "Mac B", Kind: kindLink},
+	}
+	h.store = &tokenStore{memStore: *newMemStore(), rows: map[string]db.DeviceToken{}, rev: map[string]bool{}}
+	mux := h.routes()
+	master := h.cfg.Token
+
+	if err := h.linkSwitch.claim("mac-b", &linkSwitchRun{operation: "op-1", until: time.Now().Add(time.Minute)}, time.Now()); err != nil {
+		t.Fatalf("claim link switch: %v", err)
+	}
+	code, link1 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"kind":"link","machine":"mac-b"}`)
+	if code != 200 {
+		t.Fatalf("link1: %d %v", code, link1)
+	}
+	code, link2 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"kind":"link","machine":"mac-b"}`)
+	if code != 200 {
+		t.Fatalf("link2: %d %v", code, link2)
+	}
+	if _, ok := h.authenticate(context.Background(), link1["token"].(string)); !ok {
+		t.Fatal("link1 should remain valid while link switch is under way")
+	}
+	if _, ok := h.authenticate(context.Background(), link2["token"].(string)); !ok {
+		t.Fatal("link2 should authenticate while link switch is under way")
+	}
+
+	h.linkSwitch.drop("mac-b", "op-1")
+	code, link3 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"kind":"link","machine":"mac-b"}`)
+	if code != 200 {
+		t.Fatalf("link3: %d %v", code, link3)
+	}
+	if _, ok := h.authenticate(context.Background(), link1["token"].(string)); ok {
+		t.Fatal("link1 should be revoked after link switch finishes")
+	}
+	if _, ok := h.authenticate(context.Background(), link2["token"].(string)); ok {
+		t.Fatal("link2 should be revoked after link switch finishes")
+	}
+	if _, ok := h.authenticate(context.Background(), link3["token"].(string)); !ok {
+		t.Fatal("link3 should authenticate")
 	}
 }

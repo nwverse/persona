@@ -1,12 +1,16 @@
-import type { Todo } from "./todos";
+import type { Todo, TodoCreateOptions } from "./todos";
+import { confirmTodoCreate } from "./todos";
 import { api, ApiError, credentialOwner, getToken, pastHub } from "./api";
 import { MANAGER_HEADER } from "./manager-choice";
 import { parseRepository, type RepositoryIdentity } from "./repository-identity";
 
+export type RepositoryTaskWorkflow = "isolated" | "shared_branch";
 export type RepositoryBinding = RepositoryIdentity & {
   id: string; name?: string; aliases?: string[]; purpose?: string; verified_at: string; clone_url?: string;
   /** An extension source's name when the reference was saved, so it still reads once the source is gone. */
   provider_name?: string;
+  /** Optional per-repository default task-collaboration cadence ("isolated" / unset or "shared_branch"). */
+  task_workflow?: RepositoryTaskWorkflow;
 };
 export type RepositoryLinkKind = "issue" | "pull_request";
 /** A source's own word for a link kind (MR for a pull request); the kinds stay these two. */
@@ -24,8 +28,9 @@ export type RepositorySourceSnapshot = {
   identity: RepositoryIdentity; clone_url: string; transport_origin: "catalog" | "canonical_default" | "provider"; catalog_revision: number;
   provider_name?: string;
 };
-export type RepositoryLinkInput = { url: string; kind?: never; number?: never; title?: string } | { kind: "issue" | "pull_request"; number: string; url?: never; title?: string };
-export type TaskRepositoryLink = { kind: "issue" | "pull_request"; number: string; canonical_url: string; title?: string };
+export type RepositoryLinkRole = "delivery" | "reference";
+export type RepositoryLinkInput = { url: string; kind?: never; number?: never; title?: string; role?: RepositoryLinkRole } | { kind: "issue" | "pull_request"; number: string; url?: never; title?: string; role?: RepositoryLinkRole };
+export type TaskRepositoryLink = { kind: "issue" | "pull_request"; number: string; canonical_url: string; title?: string; role?: RepositoryLinkRole };
 export type TaskRepositoryInput = { repo_id: string; directory_alias?: string; requested_ref?: RequestedRef; links?: RepositoryLinkInput[] };
 export type TaskRepository = Omit<TaskRepositoryInput, "links" | "requested_ref"> & {
   requested_ref: RequestedRef; source_snapshot: RepositorySourceSnapshot; links: TaskRepositoryLink[];
@@ -65,10 +70,61 @@ export function repositoryLinkTitle(value: unknown): string | undefined {
 }
 export function repositoryDraft(rows: TaskRepository[]): TaskRepositoryInput[] {
   return rows.map((row) => ({ repo_id: row.repo_id, directory_alias: row.directory_alias, requested_ref: { ...row.requested_ref },
-    links: row.links.map(({ kind, number, title }) => {
+    links: row.links.map(({ kind, number, title, role }) => {
       const kept = repositoryLinkTitle(title);
-      return { kind, number, ...(kept ? { title: kept } : {}) };
+      return { kind, number, ...(kept ? { title: kept } : {}), ...(role === "delivery" || role === "reference" ? { role } : {}) };
     }) }));
+}
+
+/**
+ * Delivery role of a bound repository in the multi-repo matrix (#14685):
+ * - `"target"` (Target Repo): no links or at least one gating (`delivery` or unset) link — governs delivery gate (weakest-link rule).
+ * - `"reference"` (Reference Repo): at least one link and every link is `role === "reference"` — read-only context, never blocks closure.
+ */
+export type TaskRepositoryRole = "target" | "reference";
+export type TaskRepositoryMatrixEntry = { repository: TaskRepository; role: TaskRepositoryRole };
+
+export function isReferenceRepositoryLink(link: Pick<TaskRepositoryLink, "role">): boolean {
+  return link.role === "reference";
+}
+
+export function classifyTaskRepositoryRole(repo: Pick<TaskRepository, "links">): TaskRepositoryRole {
+  const links = repo.links ?? [];
+  if (links.length === 0) return "target";
+  return links.every(isReferenceRepositoryLink) ? "reference" : "target";
+}
+
+/**
+ * Partitions bound repositories for the `todos_v2` multi-repo matrix: Target Repos first, Reference Repos second,
+ * keeping relative order stable within each group.
+ */
+export function partitionTaskRepositories(repositories: readonly TaskRepository[]): {
+  target: TaskRepository[];
+  reference: TaskRepository[];
+  ordered: TaskRepositoryMatrixEntry[];
+} {
+  const target: TaskRepository[] = [];
+  const reference: TaskRepository[] = [];
+  for (const repository of repositories) {
+    if (classifyTaskRepositoryRole(repository) === "reference") reference.push(repository);
+    else target.push(repository);
+  }
+  return {
+    target,
+    reference,
+    ordered: [
+      ...target.map((repository) => ({ repository, role: "target" as const })),
+      ...reference.map((repository) => ({ repository, role: "reference" as const })),
+    ],
+  };
+}
+
+/** Compact label for a non-default requested_ref; undefined when using the repository's default branch. */
+export function formatRequestedRef(ref?: RequestedRef): string | undefined {
+  if (!ref || ref.kind === "default") return undefined;
+  const value = ref.value.trim();
+  if (!value) return undefined;
+  return ref.kind === "commit" ? value.slice(0, 7) : value;
 }
 
 const EXTENSION_PROVIDER = /^ext:[a-z0-9][a-z0-9_-]{0,31}\/[a-z0-9][a-z0-9_-]{0,31}$/;
@@ -282,6 +338,8 @@ export function validRepositoryDraft(rows: TaskRepositoryInput[], identities?: R
 
 /** A source's name as saved beside an identity: absent, or at most 80 characters (the manifest's `name`). */
 export const validProviderName = (name: unknown): boolean => name === undefined || (typeof name === "string" && [...name].length <= 80);
+/** Optional per-repository task workflow preference: absent/empty (default isolated), "isolated", or "shared_branch". */
+export const validTaskWorkflow = (value: unknown): boolean => value === undefined || value === "" || value === "isolated" || value === "shared_branch";
 const LINK_KINDS = ["issue", "pull_request"];
 const validLinkKinds = (value: unknown): boolean => value === undefined || (Array.isArray(value) && value.length <= LINK_KINDS.length
   && value.every((entry: RepositoryLinkLabel) => !!entry && LINK_KINDS.includes(entry.kind) && typeof entry.label === "string"
@@ -344,7 +402,7 @@ export function repositoryRequestOptions(context: RepositoryRequestContext) {
 export async function loadRepositoryCatalog(context: RepositoryRequestContext): Promise<RepositoryCatalog> {
   const result = await api<RepositoryCatalog>("/assistant/repositories", repositoryRequestOptions(context));
   if (!context.isCurrent() || result.manager !== context.manager || !revision(result.catalog_revision)
-    || !Array.isArray(result.repositories) || !result.repositories.every((r) => typeof r.id === "string" && validRepositoryIdentity(r) && validProviderName(r.provider_name))) throw new Error("Invalid repository catalog response");
+    || !Array.isArray(result.repositories) || !result.repositories.every((r) => typeof r.id === "string" && validRepositoryIdentity(r) && validProviderName(r.provider_name) && validTaskWorkflow(r.task_workflow))) throw new Error("Invalid repository catalog response");
   return result;
 }
 /**
@@ -383,23 +441,26 @@ export function cleanRepositoryDraft(rows: TaskRepositoryInput[]): TaskRepositor
     .filter((link) => !("url" in link) || !!link.url?.trim())
     .map((link): RepositoryLinkInput => {
       const title = repositoryLinkTitle(link.title);
+      const role = link.role === "delivery" || link.role === "reference" ? { role: link.role } : {};
       return "url" in link
-        ? { url: link.url!.trim(), ...(title ? { title } : {}) }
-        : { kind: link.kind, number: link.number, ...(title ? { title } : {}) };
+        ? { url: link.url!.trim(), ...(title ? { title } : {}), ...role }
+        : { kind: link.kind, number: link.number, ...(title ? { title } : {}), ...role };
     }) }));
 }
 
 /** Explicit association creation stays outside the ordinary Todo client's startup path. */
-export async function createTodoWithRepositories(context: RepositoryRequestContext, title: string, notes: string, due: { due_at?: string; due_date?: string } | undefined, bindings: CreateRepositoryBindings, identities: ReadonlyMap<string, RepositoryIdentity>): Promise<Todo> {
+export async function createTodoWithRepositories(context: RepositoryRequestContext, title: string, notes: string, due: { due_at?: string; due_date?: string } | undefined, bindings: CreateRepositoryBindings, identities: ReadonlyMap<string, RepositoryIdentity>, creation?: TodoCreateOptions): Promise<Todo> {
   const repositories = bindings ? cleanRepositoryDraft(bindings.repositories) : [];
   // The form checks this too; the submit guard keeps an invalid optional draft from ever becoming a POST. A missing
   // runtime identity map must fail closed even when a JavaScript caller omits the TypeScript parameter.
   const hasIdentities = !!identities && typeof (identities as { get?: unknown }).get === "function";
   if (!bindings || !revision(bindings.catalog_revision) || !hasIdentities || !validRepositoryDraft(repositories, identities)) throw new Error("Invalid repository association draft");
-  const result = await api<{ todo: Todo }>("/todos", {
-    ...repositoryRequestOptions(context), method: "POST",
-    json: { title: title.trim(), notes: notes.trim() || undefined, ...due, repository_bindings: { ...bindings, repositories } },
+  const withImages = Boolean(creation?.images?.length);
+  const request = repositoryRequestOptions(context);
+  const result = await api<{ todo?: Todo; state?: string }>("/todos", {
+    ...request, method: "POST",
+    headers: withImages ? { ...request.headers, "X-Persona-Op-Id": creation!.operationId! } : request.headers,
+    json: { title: title.trim(), notes: notes.trim() || undefined, ...due, repository_bindings: { ...bindings, repositories }, ...(withImages ? { images: creation!.images } : {}) },
   });
-  if (!context.isCurrent() || !result.todo || typeof result.todo.id !== "string") throw new Error("Invalid Todo creation response");
-  return result.todo;
+  return confirmTodoCreate(result, creation?.images, request);
 }

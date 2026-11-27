@@ -30,19 +30,11 @@ function normalize(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
-/** Two texts are the same message once normalized, or one contains the other when both are long enough
- *  (Claude adds placeholders, the phone adds notes; a short "ok" must not match anything with "ok" in it). */
-export function sameMessage(a: string, b: string): boolean {
-  const x = normalize(a),
-    y = normalize(b);
-  if (!x || !y) return false;
-  return x === y || (Math.min([...x].length, [...y].length) >= 8 && (x.includes(y) || y.includes(x)));
-}
-
 /** A queued message read apart (#3032): Claude Code's queue holds only text, so what a message carried rides in it. */
 export interface QueuedParts {
   /** What was typed, without Claude's `[Image #n]` placeholders, the tags or the stand-in words of a message with no words. */
   text: string;
+  inlineTrailer?: string;
   /** Paths, on the session's machine, of the photos it was sent with (`<attached_images>`). */
   photos: string[];
   /** Files it carries as <persona-file> tags (a video or a file sent from the phone). */
@@ -103,9 +95,9 @@ export function parseQueued(raw: string, photosBeside = 0): QueuedParts {
     return "";
   });
   rest = rest.replace(IMAGES_BLOCK, (_, body: string) => `<attached_images>${body.replace(/^\s*path: ?/gm, "")}</attached_images>`);
-  const { text, files, photos } = parseUserText(rest);
+  const { text, files, photos, inlineTrailer } = parseUserText(rest);
   const carried = photosBeside + photos.length + files.length + contexts.length > 0;
-  return { text: carried && isStandIn(text) ? "" : text, photos, files, contexts };
+  return { text: carried && isStandIn(text) ? "" : text, photos, files, contexts, ...(inlineTrailer ? { inlineTrailer } : {}) };
 }
 
 function isStandIn(text: string): boolean {

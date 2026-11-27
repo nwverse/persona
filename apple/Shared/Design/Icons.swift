@@ -31,6 +31,9 @@ extension Theme {
         /// A status dot (online, unread).
         static let dot = "circle.fill"
         static let time = "clock"
+        /// Someday on a to-do (#10465): the owner's own "not now", put aside for some other day (its swipe and its
+        /// menu). Not `time`, which is Waiting's clock.
+        static let someday = "moon.stars.fill"
         /// An agent that only waits on background commands (Waiting in the Background, #6045): the mark in place of its dot.
         static let backgroundWaiting = "clock.fill"
         /// Agents grouped or ordered by their state (the Agents list's By Status / By Status).
@@ -46,6 +49,10 @@ extension Theme {
         /// Calls moved to the background.
         static let backgroundTask = "gearshape.2"
         static let backgroundTaskFilled = "gearshape.2.fill"
+        /// Running and recently completed background tasks in Agent chat.
+        static let backgroundTasks = taskPlan
+        /// A background command that watches an ongoing signal.
+        static let backgroundMonitor = screen
         /// A multi-agent workflow running in the background (Claude Code's Workflow tool).
         static let workflow = "flowchart"
         static let pinned = "pin.fill"
@@ -300,6 +307,8 @@ extension Theme {
         /// Archive a conversation (out of the list, kept under Archived) and bring it back.
         static let archive = "archivebox"
         static let unarchive = "tray.and.arrow.up"
+        /// Move To…: file a chat or an Agent under one of the owner's long-running matters, or on its own (#11516).
+        static let moveTo = "rectangle.stack.badge.plus"
         static let mute = "bell.slash"
         static let unmute = "bell"
         /// An Inbox rule: where a chat's, sender's or repository's items go and what the AI twin does with them.
@@ -388,6 +397,15 @@ extension Theme {
         static let contexts = "rectangle.stack"
         static let space = "square.stack.3d.up"
         static let spaceFilled = "square.stack.3d.up.fill"
+        /// A domain space (#13500, docs/assistant/health.md "Tracks and kinds"): one part of the user's life with its own
+        /// conversations and notes, the Assistant sidebar's Spaces section and its fallback mark. Not `space`, which is an
+        /// Agents engine's space of agents.
+        static let domainSpace = "square.3.layers.3d"
+        /// A domain space's own icons (the server's `layers` … `sun` tokens, `SpaceIcon`) where no meaning above has them.
+        static let spaceBook = "book.closed"
+        static let spaceFlag = "flag"
+        static let spaceSun = "sun.haze"
+        static let spaceSmile = "face.smiling.inverse"
         /// Open Space: go into a space from its menu.
         static let openSpace = "arrow.right.square"
         /// A busy space's idle agents folded into one row (N more idle).
@@ -567,6 +585,18 @@ extension Theme {
         static let phoneControl = "iphone.radiowaves.left.and.right"
         static let watch = "applewatch"
         static let storage = "internaldrive"
+        /// The disk usage map (#14576): what fills a computer's disk, as boxes sized by what they hold.
+        static let usageMap = "square.split.bottomrightquarter"
+        /// Offload an item to the cloud through an extension's `disk_offload` provider.
+        static let cloudOffload = "icloud.and.arrow.up"
+        /// Bring an offloaded item back to the computer.
+        static let cloudRestore = gitFetch
+        /// A local box holding offloaded items (its badge), and the cloud side of the map.
+        static let offloaded = gitUpstream
+        /// Not changed for over a year (the map's Last Used tint marks cold boxes with it).
+        static let cold = pluginSnow
+        /// Clean a rebuildable cache (the existing cleanup's catalog).
+        static let cleanCache = "bubbles.and.sparkles"
         static let scanCode = "qrcode.viewfinder"
         static let handoff = "iphone.and.arrow.forward"
         /// The default web browser (open a link outside the app).
@@ -592,6 +622,8 @@ extension Theme {
         /// The user's own messages.
         static let user = "person.fill"
         static let inbox = "tray.full"
+        static let starredMessage = pluginStar
+        static let starredMessageFilled = "star.fill"
         /// The conversations Persona opened by itself (the Inbox's AI twin, scheduled tasks, Lark /agent…): the sidebar's
         /// Auto Chats (#3266).
         static let autoConversations = "sparkles.rectangle.stack"
@@ -638,12 +670,8 @@ extension Theme {
         static let pairing = "link.badge.plus"
         /// Settings › Connectors: the data sources Persona reads and acts in (this device, mail, Lark).
         static let connectors = "point.3.connected.trianglepath.dotted"
-        /// This device as a connector (its contacts, calendar, photos…): iPhone, iPad or Mac.
-        #if os(macOS)
-        static let thisDevice = laptop
-        #else
+        /// This device as a connector (its contacts, calendar, photos…): iPhone or iPad.
         static let thisDevice = "iphone.gen3"
-        #endif
         /// AI Draft Reply: a reply drafted in the user's voice.
         static let draftReply = "pencil.and.scribble"
         /// A drafted reply that will not go out: its message was handled elsewhere first (a message card, #4797).
@@ -656,6 +684,9 @@ extension Theme {
         static let quickCommands = "slash.circle"
         /// The day's Today card at the top of the assistant's conversation (docs/assistant/unified-entry.md).
         static let today = "sun.max.fill"
+        /// To-dos' Today place (#10465, DESIGN_SYSTEM 3.5 "To-dos places"): an outline among the sidebar's outlined
+        /// places, and its empty state.
+        static let todoToday = "sun.min"
         /// Something done on the phone from the conversation: an event added to its calendar, a reminder.
         static let addedEvent = "calendar.badge.plus"
         static let addedReminder = "checklist.checked"
@@ -715,6 +746,8 @@ extension Theme {
         static let memory = "brain"
         /// Search (a list's, the sidebar's).
         static let search = "magnifyingglass"
+        /// A session's title as what a search reads (the Agents list's Search In › Title, #7443).
+        static let sessionTitle = "textformat"
         /// The knowledge base (~/.persona/data).
         static let knowledge = "books.vertical"
         /// A knowledge-base topic (#7251): what Persona learned on one subject.
@@ -724,6 +757,10 @@ extension Theme {
         /// Health: the health space (docs/assistant/health.md), its entry and its conversations' mark.
         static let health = "heart"
         static let healthFilled = "heart.fill"
+        /// Health intake and the iPhone's Activity summary.
+        static let water = pluginDroplet
+        static let protein = "fork.knife"
+        static let fitness = "figure.run"
         /// What stays private (Health's note on where its conversations and memory are kept).
         static let privacy = "checkmark.shield"
         /// A tool the app has no symbol for.
@@ -841,6 +878,11 @@ extension Theme {
         static let fileOther = "doc.fill"
         /// A Feishu Base (bitable) as a file.
         static let baseFilled = "square.grid.3x2.fill"
+        /// Interactive extension maps and travel modes (UI version 12).
+        static let map = knowledgeMap
+        static let travelWalk = "figure.walk"
+        static let travelTransit = "tram"
+        static let travelCycle = "bicycle"
     }
 
     /// Other products' own marks, in the asset catalog's Brands folder (sources and terms in THIRD_PARTY_NOTICES.md).
@@ -851,6 +893,15 @@ extension Theme {
         static let openAI = "brand-openai"
         /// TRAE's mark (Simple Icons' trae.svg), a template image: it takes the foreground color.
         static let trae = "brand-trae"
+        static let opencode = "brand-opencode"
+        static let pi = "brand-pi"
+        static let gemini = "brand-gemini"
+        static let cursor = "brand-cursor"
+        static let grok = "brand-grok"
+        static let agy = "brand-agy"
+        static let dsh = "brand-dsh"
+        static let kimi = "brand-kimi"
+        static let copilot = "brand-copilot"
         static let lark = "brand-lark"
         /// GitHub's mark (primer/octicons mark-github), a template image: it takes the foreground color.
         static let github = "brand-github"
@@ -874,7 +925,11 @@ extension Theme {
         /// they fit the box: a round or wide mark fills it (1), a full square looks bigger than a circle of the same
         /// width, so it is drawn smaller, as on Material's keyline grid (18 of 24 for a square, 20 for a circle).
         static func optical(_ asset: String) -> CGFloat {
-            asset == microsoft ? 0.88 : 1
+            switch asset {
+            case microsoft, opencode, pi, kimi: 0.88
+            case cursor: 0.92
+            default: 1
+            }
         }
 
         /// Marks whose artwork is a circle: they fill a round badge (`BrandBadge`); any other shape is drawn at

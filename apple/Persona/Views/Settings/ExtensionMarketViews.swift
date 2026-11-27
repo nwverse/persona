@@ -13,12 +13,8 @@ struct ExtensionMarketView: View {
             // Laid out as Knowledge's kind chips under its search field: a compact section whose row has no inset of its own,
             // so the chips sit right under the search field and line up with the cards below.
             if page.markets.count > 1 {
-                #if os(macOS)
-                marketChips
-                #else
                 Section { marketChips }
                     .listSectionSpacing(.compact)
-                #endif
             }
             ForEach(page.markets.filter { $0.error?.isEmpty == false }) { m in
                 Section {
@@ -77,18 +73,6 @@ struct ExtensionMarketView: View {
                     Button { Task { await page.load() } } label: { Text("Retry [Components b8784c]").lineLimit(1) }
                 }
             }
-            #if os(macOS)
-            // In the page, as the Mac's settings panes have their buttons (#1223): the window's toolbar put it over the
-            // settings list's column.
-            if !page.markets.isEmpty {
-                Section {
-                    NavigationLink(value: SettingsPage.pluginMarkets) {
-                        Label { Text("Manage Markets").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.pluginMarket) }
-                    }
-                    .accessibilityIdentifier("market-manage")
-                }
-            }
-            #endif
         }
         .themedPage()
         #if os(iOS) || os(visionOS)
@@ -259,9 +243,9 @@ struct MarketExtensionDetailView: View {
         .overlay { if page.item == nil && page.error == nil { ProgressView() } }
         .detailTitle(page.item?.name ?? String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("Turn Off Dependent Extensions and Uninstall?", isPresented: Binding(
+        .accessibleConfirmationDialog("Turn Off Dependent Extensions and Uninstall?", isPresented: Binding(
             get: { page.uninstallConfirmation != nil }, set: { if !$0 { page.uninstallConfirmation = nil } }),
-            titleVisibility: .visible) {
+            titleVisibility: .visible, hasCancel: true) {
             Button(role: .destructive) {
                 Task {
                     if await page.uninstall(cascade: true, members: page.removingMembers) { done(.uninstall) }
@@ -372,7 +356,7 @@ struct MarketExtensionDetailView: View {
                 .tint(Theme.danger) // a Mac form draws a button in the accent whatever its role (#1512)
                 .disabled(page.working)
                 .accessibilityIdentifier("market-uninstall")
-                .confirmationDialog("Uninstall “\(p.name)”?", isPresented: $confirmRemove, titleVisibility: .visible) {
+                .accessibleConfirmationDialog("Uninstall “\(p.name)”?", isPresented: $confirmRemove, titleVisibility: .visible, hasCancel: true) {
                     Button(role: .destructive) {
                         Task { if await page.uninstall() { done(.uninstall) } }
                     } label: { Text(page.isPack ? String(localized: "Pack Only") : String(localized: "Uninstall")).lineLimit(1) }
@@ -602,9 +586,6 @@ struct ExtensionInstallSheet: View {
                 }
             }
         }
-        #if os(macOS)
-        .macSheet()
-        #endif
     }
 }
 
@@ -651,15 +632,6 @@ struct ExtensionMarketsView: View {
             if let e = page.error {
                 Section { LoadProblem(text: e) }
             }
-            #if os(macOS)
-            Section {
-                HStack {
-                    Spacer(minLength: 0)
-                    Button("Add Market…") { adding = true }.lineLimit(1).formButton()
-                        .accessibilityIdentifier("market-add")
-                }
-            }
-            #endif
         }
         .themedPage()
         .overlay { if page.markets.isEmpty && page.loading { ProgressView() } }
@@ -744,7 +716,7 @@ private struct MarketRow: View {
             .buttonStyle(.borderless)
             .foregroundStyle(Theme.danger) // a Mac borderless button draws its role in the accent
             .accessibilityIdentifier("market-remove-\(market.id)")
-            .confirmationDialog("Delete market “\(market.title)”?", isPresented: $confirmRemove, titleVisibility: .visible) {
+            .accessibleConfirmationDialog("Delete market “\(market.title)”?", isPresented: $confirmRemove, titleVisibility: .visible, hasCancel: true) {
                 Button(role: .destructive) { act(.remove) } label: { Text("Delete").lineLimit(1) }
                     .accessibilityIdentifier("market-remove-confirm")
                 Button("Cancel", role: .cancel) {}
@@ -802,9 +774,6 @@ private struct ExtensionRemovalNoticeSheet: View {
         }
         .interactiveDismissDisabled()
         .presentationDetents([.medium, .large])
-        #if os(macOS)
-        .macSheet()
-        #endif
     }
 }
 
@@ -883,9 +852,6 @@ private struct MarketTokenSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-        #if os(macOS)
-        .macSheet()
-        #endif
     }
 
     private func submit(clearing: Bool) {

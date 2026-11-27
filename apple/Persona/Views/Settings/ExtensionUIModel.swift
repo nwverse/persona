@@ -27,21 +27,19 @@ nonisolated extension ExtensionUIPlace: Identifiable {
 }
 
 nonisolated extension ExtensionUIContext {
-    #if os(macOS)
-    /// The frozen Mac app (docs/apple/mac.md) keeps the versions it reported before #827: new features skip it, so the
-    /// hub goes on turning newer components into ones it has always drawn.
-    static let pageVersion = 4
-    static let cardVersion = version
-    #else
-    /// The UI version a whole page of the app draws (`ExtensionPageView`): 4's code hosting (#2961), 5's code review
-    /// (#3136), 6's pictures, controls, row actions, charts, tiles, fields and styles (#827), 7's section keys (nothing
-    /// to draw) and 8's columns layout, section icons, links and rows side by side (#9158, `ExtensionColumns.swift`).
-    static let pageVersion = 8
+    #if os(iOS)
+    /// The UI version a whole page of the app draws (`ExtensionPageView`): 8's columns (#9158), 9's gauge rings
+    /// (`ExtensionTiles.swift`), 10's native graph canvas (`ExtensionGraph.swift`, #9727), 11's 3D scene
+    /// (`ExtensionScene.swift`, #12544) and 12's interactive map (`ExtensionMap.swift`).
+    static let pageVersion = 12
 
-    /// The UI version the app's cards and sections draw (the Settings home's cards, a launcher's or a computer's
-    /// sections, an Inbox item's, the assistant's `persona-view`): 8 too, version 4–5's code components read-only
-    /// (`ExtensionCodeSummary`), a columns view as a stack. Widgets, the watch and the system extensions keep
-    /// `version` (Shared, 3): they draw none of it.
+    /// The UI version the app's cards and sections draw: the same components, with code components read-only and a
+    /// graph, 3D scene or map as a still preview which opens full screen. Widgets, the watch and the system extensions
+    /// keep `version` (Shared, 3): they draw none of it.
+    static let cardVersion = 12
+    #else
+    /// Other older surfaces keep the version they can actually draw.
+    static let pageVersion = 8
     static let cardVersion = 8
     #endif
 
@@ -104,6 +102,9 @@ nonisolated extension ExtensionComponent {
         case .image(let c): c.key
         case .grid(let c): c.key
         case .carousel(let c): c.key
+        case .graph(let c): c.key
+        case .scene(let c): c.key
+        case .map(let c): c.key
         case .unknown: nil
         }
     }
@@ -138,6 +139,19 @@ nonisolated enum ExtensionSettingsLink {
     }
 }
 
+/// Manager-owned pages use HTTP rather than negotiating an extension stream.
+nonisolated enum ReservedExtensionUI {
+    static let paths = [SubscriptionsUI.id: SubscriptionsUI.path, HealthIntakeUI.id: HealthIntakeUI.path]
+
+    /// Whether `ext`'s pages are drawn over HTTP only, never the native page stream: the reserved pages above, and every
+    /// id that starts with "-", which no installed extension can have and a manager answers for (Dashboards' `-pages`,
+    /// #15017). The hub refuses the stream for them.
+    static func httpOnly(_ ext: String) -> Bool { paths[ext] != nil || reserved(ext) }
+
+    /// Whether `ext` is a reserved id: one that starts with "-", which no installed extension can have.
+    static func reserved(_ ext: String) -> Bool { ext.hasPrefix("-") }
+}
+
 extension APIClient {
     /// What enabled extensions draw at a placement (a launcher's section: only the extensions whose gateway it is).
     /// No placement: every slot's but launchers' sections (docs/extensions/extensions.md「UI slots」). Placements this app does not
@@ -153,11 +167,13 @@ extension APIClient {
                   values: [String: String]? = nil, manager: String? = nil, assistant: String? = nil) async throws -> ExtensionActionResult {
         let body = ExtensionUIRequest(context: context, state: state, action: action, values: values)
         let query = manager.map { ["manager": $0] } ?? [:]
-        // The source subscription pages (#2041) are the manager's own, drawn and pressed as an extension page; only they are
-        // told the assistant's name (#5278).
-        if ext == SubscriptionsUI.id {
-            let sent = SubscriptionsUI.Request(request: body, assistant: assistant)
-            return try JSON.decoder.decode(ExtensionActionResult.self, from: try await request("POST", SubscriptionsUI.path, query: query, body: sent))
+        if let path = ReservedExtensionUI.paths[ext] {
+            // Health belongs to the default manager even when the client explicitly names another one.
+            let client = ext == HealthIntakeUI.id ? self.manager(nil) : self
+            let scope = ext == HealthIntakeUI.id ? ["space": Session.healthSpace] : query
+            // Only subscriptions receive the assistant's name and their app-owned link capabilities.
+            let sent: any Encodable = ext == SubscriptionsUI.id ? SubscriptionsUI.Request(request: body, assistant: assistant) : body
+            return try JSON.decoder.decode(ExtensionActionResult.self, from: try await client.request("POST", path, query: scope, body: sent))
         }
         let path = extensionPath("/\(ext)/-/ui/\(ui)")
         return try JSON.decoder.decode(ExtensionActionResult.self, from: try await request("POST", path, query: query, body: body))
@@ -300,6 +316,11 @@ extension APIClient {
     /// A refresh held back while busy is retried once the current operation ends; starting a request does not change the task key.
     private(set) var completedOperations = 0
     var group: String { deps.api()?.group ?? "" }
+    /// The page identity beneath a graph's component key. The graph hashes this before using it as a persistence key.
+    var graphPersistenceNamespace: String {
+        [deps.api()?.config.url.absoluteString ?? "", group, selectedManager ?? "", plugin, ui,
+         context.launcher ?? "", context.machine ?? "", context.item ?? "", initialState ?? ""].joined(separator: "\n")
+    }
 
     func invalidate() {
         invalidationVersion += 1
@@ -337,9 +358,9 @@ extension APIClient {
         self.depth = depth
         self.deps = deps
         ExtensionUIRegistry.shared.add(self)
-        #if os(iOS) || os(macOS)
-        // The source subscription pages (#2041) are the manager's, drawn over HTTP only.
-        if isPage, plugin != SubscriptionsUI.id, let connection = deps.connection() {
+        #if os(iOS)
+        // Reserved pages belong to the manager and are drawn over HTTP only.
+        if isPage, !ReservedExtensionUI.httpOnly(plugin), let connection = deps.connection() {
             let stream = ExtensionPageStream(connection: connection, owner: plugin, contribution: ui,
                                              context: context, state: state ?? "", manager: manager)
             self.stream = stream
@@ -841,6 +862,7 @@ extension APIClient {
     /// (`InboxSourceLink`), never another item's.
     static func opens(_ url: URL, item: String?, owner: String? = nil) -> Bool {
         if url.scheme?.lowercased() == "https" { return url.host()?.isEmpty == false && url.user == nil && url.password == nil }
+        if owner == "space-conversations" && ExtensionConversationLink.session(url) != nil { return true }
         // the subscription pages' Set Up with … (#5278): their text to the assistant, never an extension's
         if SubscriptionsUI.askText(url) != nil || SubscriptionsUI.isGraph(url) { return owner == SubscriptionsUI.id }
         if let settings = ExtensionSettingsLink.extensionID(url) { return owner != nil && settings == owner }
@@ -877,7 +899,7 @@ extension APIClient {
     struct Entry: Identifiable {
         var place: ExtensionUIPlace
         var model: ExtensionViewModel
-        var id: String { place.owner + "/" + place.id }
+        var id: String { place.scopedID }
     }
 
     /// The sections to draw: a plugin that said 404 unsupported is left out.
@@ -885,5 +907,5 @@ extension APIClient {
         places.compactMap { p in models[key(p)].flatMap { $0.unsupported ? nil : Entry(place: p, model: $0) } }
     }
 
-    private func key(_ p: ExtensionUIPlace) -> String { p.owner + "/" + p.id }
+    private func key(_ p: ExtensionUIPlace) -> String { p.scopedID }
 }

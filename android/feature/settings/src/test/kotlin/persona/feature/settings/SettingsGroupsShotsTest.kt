@@ -42,6 +42,7 @@ import persona.core.contracts.ServerEvent
 import persona.core.contracts.Session
 import persona.core.contracts.api.*
 import persona.core.designsystem.AppStyle
+import persona.core.designsystem.InterfaceFontScaleCap
 import persona.core.designsystem.LocalAssistantWaiting
 import persona.core.designsystem.LocalManagerRoster
 import persona.core.designsystem.PersonaTheme
@@ -128,13 +129,15 @@ class SettingsGroupsShotsTest {
                      page: String = "settings") {
         val services = services()
         rule.setContent {
-            PersonaTheme(darkTheme = dark(), reduceMotion = true, style = style()) {
-                val density = LocalDensity.current
-                val fontScale = androidx.compose.ui.platform.LocalConfiguration.current.fontScale
-                CompositionLocalProvider(LocalManagerRoster provides roster, LocalAssistantWaiting provides mapOf("m-3fa21c" to 3),
-                    LocalDensity provides Density(density.density, fontScale)) {
-                    Box(Modifier.testTag("shot").fillMaxSize().background(PersonaTheme.palette.background)) {
-                        SettingsScreen(services, initialPage = page, onNavigate = {})
+            val density = LocalDensity.current
+            val fontScale = androidx.compose.ui.platform.LocalConfiguration.current.fontScale
+            // The app supplies the system density outside the theme; an inner override would bypass its interface cap.
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+                PersonaTheme(darkTheme = dark(), reduceMotion = true, style = style()) {
+                    CompositionLocalProvider(LocalManagerRoster provides roster, LocalAssistantWaiting provides mapOf("m-3fa21c" to 3)) {
+                        Box(Modifier.testTag("shot").fillMaxSize().background(PersonaTheme.palette.background)) {
+                            SettingsScreen(services, initialPage = page, onNavigate = {})
+                        }
                     }
                 }
             }
@@ -154,7 +157,7 @@ class SettingsGroupsShotsTest {
         first.zipWithNext().forEach { (a, b) -> assertTrue("$a before $b", top(a) < top(b)) }
         // 2. This device's, then 3. the hub's, with the footnote that says neither is an assistant's.
         assertTrue(top("Agent") < top("这台设备"))
-        val device = listOf("这台设备", "界面风格", "通知与后台", "翻译", "存储空间", "关于与更新")
+        val device = listOf("这台设备", "外观", "通知与后台", "翻译", "存储空间", "关于与更新")
         device.zipWithNext().forEach { (a, b) -> assertTrue("$a before $b", top(a) < top(b)) }
         assertTrue(top("存储空间") < top("Hub"))
         val hub = listOf("Hub", "连接", "Hub 连接", "Hub 版本", "助手", "形象", "设备")
@@ -308,7 +311,12 @@ class SettingsGroupsShotsTest {
     }
 
     @Config(qualifiers = "zh-w400dp-h4000dp-xhdpi", fontScale = 2f) // tall enough for the whole page at 200 %
-    @Test fun atTheLargestTextSize() {
+    @Test fun atTheLargestTextSize() = textSizeMatrix("large")
+
+    @Config(qualifiers = "zh-w400dp-h4000dp-xhdpi", fontScale = InterfaceFontScaleCap)
+    @Test fun atTheInterfaceTextCap() = textSizeMatrix("cap")
+
+    private fun textSizeMatrix(size: String) {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
         AssistantManagerChoice.choose("hub", null, "assistant")
@@ -317,9 +325,9 @@ class SettingsGroupsShotsTest {
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             rule.onNode(hasSetTextAction()).performTextClearance()
-            capture("settings-${s.key}-${if (d) "dark" else "light"}-large")
+            capture("settings-${s.key}-${if (d) "dark" else "light"}-$size")
             rule.onNode(hasSetTextAction()).performTextInput("Codex")
-            capture("settings-search-${s.key}-${if (d) "dark" else "light"}-large")
+            capture("settings-search-${s.key}-${if (d) "dark" else "light"}-$size")
         }
     }
 }

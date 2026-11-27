@@ -83,19 +83,25 @@ const (
 
 // Capabilities are what a channel can do (docs/extensions/channels.md "Capabilities"). Taking text is a given.
 type Capabilities struct {
-	ImagesIn bool   `json:"images_in,omitempty"`
-	FilesIn  bool   `json:"files_in,omitempty"`
-	VoiceIn  bool   `json:"voice_in,omitempty"`
-	Format   Format `json:"format,omitempty"`
+	ImagesIn bool `json:"images_in,omitempty"`
+	// ImagesOut: it can send pictures; an answer's pictures go in SendParams.Images (at most ImagesMost of ImageMost).
+	ImagesOut bool   `json:"images_out,omitempty"`
+	FilesIn   bool   `json:"files_in,omitempty"`
+	VoiceIn   bool   `json:"voice_in,omitempty"`
+	Format    Format `json:"format,omitempty"`
 	// MaxText is how many characters one message holds (0: no limit): the hub splits an answer to fit.
 	MaxText int  `json:"max_text,omitempty"`
 	Asks    Asks `json:"asks,omitempty"`
 	// Push: it can send to the owner unprompted (pushes, sync, what is asked).
-	Push   bool `json:"push,omitempty"`
-	Typing bool `json:"typing,omitempty"`
+	Push bool `json:"push,omitempty"`
+	// ReplyOnly: it only replies to incoming messages or triggers and never sends unsolicited proactive messages
+	// (without reply_to); testing checks connectivity instead of calling channel.send.
+	ReplyOnly bool `json:"reply_only,omitempty"`
+	Typing    bool `json:"typing,omitempty"`
 	// Progress: it can post a message and change it (a progress card the answer goes into).
 	Progress bool `json:"progress,omitempty"`
-	// Threads: a reply to one of the bot's messages goes to that message's conversation.
+	// Threads: a reply to one of the bot's messages goes to that message's conversation (the Feishu bot); an
+	// extension channel's message carrying Thread goes to that thread's own conversation.
 	Threads bool `json:"threads,omitempty"`
 }
 
@@ -103,6 +109,69 @@ type Capabilities struct {
 type Account struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name"`
+}
+
+// ChatKind is what kind of chat a channel message came from.
+type ChatKind string
+
+const (
+	ChatKindDirect ChatKind = "direct"
+	ChatKindGroup  ChatKind = "group"
+	ChatKindTopic  ChatKind = "topic"
+)
+
+// Known returns the supported chat kind, or empty for an unclassified message.
+func (k ChatKind) Known() ChatKind {
+	switch kind := ChatKind(strings.TrimSpace(string(k))); kind {
+	case ChatKindDirect, ChatKindGroup, ChatKindTopic:
+		return kind
+	default:
+		return ""
+	}
+}
+
+// ThreadMode controls how a channel maps IM chats and topics to Persona conversations when integrations_v2 is enabled.
+type ThreadMode string
+
+const (
+	ThreadModeChannelDefault   ThreadMode = "channel_default"
+	ThreadModePerGroupAndTopic ThreadMode = "per_group_and_topic"
+	ThreadModePerTopic         ThreadMode = "per_topic"
+)
+
+// MaxThreadIdleHours bounds thread_idle_hours so time.Duration conversion never overflows (10 years).
+const MaxThreadIdleHours = 3650 * 24
+
+// Check validates an explicit thread_mode setting value.
+func (m ThreadMode) Check() error {
+	switch m {
+	case ThreadModeChannelDefault, ThreadModePerGroupAndTopic, ThreadModePerTopic:
+		return nil
+	default:
+		return fmt.Errorf("thread_mode %q: channel_default, per_group_and_topic or per_topic", m)
+	}
+}
+
+// Effective preserves an explicit choice. Thread-capable plugins inherit topic routing in the experiment.
+func (m ThreadMode) Effective(inheritTopics bool) ThreadMode {
+	if m == "" && inheritTopics {
+		return ThreadModePerTopic
+	}
+	if m == "" {
+		return ThreadModeChannelDefault
+	}
+	return m
+}
+
+// CheckThreadIdleHours validates a channel's thread_idle_hours setting (0 means the default 30-day timeout).
+func CheckThreadIdleHours(hours int) error {
+	if hours < 0 {
+		return errors.New("thread_idle_hours must be 0 or greater")
+	}
+	if hours > MaxThreadIdleHours {
+		return fmt.Errorf("thread_idle_hours must be at most %d", MaxThreadIdleHours)
+	}
+	return nil
 }
 
 // Target is where a channel's messages go.
@@ -165,7 +234,7 @@ func PluginFeatures(l i18n.Lang, c Capabilities, on map[string]bool) []Feature {
 		add(FeatureAsks)
 		add(FeatureAllAsks)
 	}
-	if c.Push {
+	if c.Push && !c.ReplyOnly {
 		add(FeaturePushes)
 		add(FeatureSync)
 	}
@@ -177,27 +246,45 @@ var DefaultFeatures = map[string]bool{FeatureAsks: true}
 
 // View is a channel as the app sees it (GET /api/v1/channels).
 type View struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Kind         Kind         `json:"kind"`
-	Source       Source       `json:"source"`
-	Plugin       string       `json:"plugin,omitempty"`
-	Market       string       `json:"market,omitempty"` // for a market's: the market's id
-	Installed    bool         `json:"installed"`
-	Enabled      bool         `json:"enabled"`
-	State        State        `json:"state"`
-	Error        string       `json:"error,omitempty"`
-	Account      *Account     `json:"account,omitempty"`
-	Description  string       `json:"description,omitempty"`
-	Capabilities Capabilities `json:"capabilities"`
-	Target       *Target      `json:"target,omitempty"`
-	Features     []Feature    `json:"features,omitempty"`
-	Bind         Bind         `json:"bind"`
+	ID              string       `json:"id"`
+	Name            string       `json:"name"`
+	Kind            Kind         `json:"kind"`
+	Source          Source       `json:"source"`
+	Plugin          string       `json:"plugin,omitempty"`
+	Market          string       `json:"market,omitempty"` // for a market's: the market's id
+	Installed       bool         `json:"installed"`
+	Enabled         bool         `json:"enabled"`
+	State           State        `json:"state"`
+	Error           string       `json:"error,omitempty"`
+	Account         *Account     `json:"account,omitempty"`
+	Description     string       `json:"description,omitempty"`
+	Capabilities    Capabilities `json:"capabilities"`
+	Target          *Target      `json:"target,omitempty"`
+	ThreadMode      ThreadMode   `json:"thread_mode,omitempty"`
+	ThreadIdleHours int          `json:"thread_idle_hours,omitempty"`
+	Features        []Feature    `json:"features,omitempty"`
+	Bind            Bind         `json:"bind"`
 	// Surfaces are the app channel's ends (iOS, Mac, …), for people.
 	Surfaces    []string  `json:"surfaces,omitempty"`
 	LastEventAt time.Time `json:"last_event_at,omitzero"`
 	// ReadOnly: its settings are elsewhere (hub.json, the plugin's page): the app shows them and links there.
 	ReadOnly bool `json:"read_only,omitempty"`
+}
+
+// TargetOverride modes describe why incoming messages bypass the channel's default target.
+const (
+	// TargetOverrideTopics: group topic routing sends each topic to its own conversation.
+	TargetOverrideTopics = "topics"
+	// TargetOverrideGroupsAndTopics: each group and each topic has its own conversation.
+	TargetOverrideGroupsAndTopics = "groups_and_topics"
+	// TargetOverrideThreads: per-thread routing sends each thread to its own conversation.
+	TargetOverrideThreads = "threads"
+)
+
+// TargetOverride explains that threaded or topic messages currently route to dedicated conversations ahead of the
+// channel's default target, so the default target only applies to messages outside those threads or topics.
+type TargetOverride struct {
+	Mode string `json:"mode"`
 }
 
 // Detail is one channel's page (GET /api/v1/channels/{id}).
@@ -208,6 +295,9 @@ type Detail struct {
 	// SettingsURL: the channel has a full page of its own (the Feishu bot's), linked from this one — an app route
 	// ("settings/connectors/feishu-bot"), not a web address.
 	SettingsURL string `json:"settings_url,omitempty"`
+	// TargetOverride: set when topic or thread routing currently takes precedence over the channel's default target;
+	// omitted when inactive so older clients and channels without overrides are unaffected.
+	TargetOverride *TargetOverride `json:"target_override,omitempty"`
 }
 
 // Waiting is how many answers and questions a channel waits on.
@@ -280,8 +370,8 @@ func (it Item) Validate() error {
 		return fmt.Errorf("channel id %q is the hub's own", it.ID)
 	case strings.TrimSpace(it.Name) == "" || utf8.RuneCountInString(it.Name) > 40:
 		return fmt.Errorf("channel %s: name, 1 to 40 characters", it.ID)
-	case it.Kind != KindIM:
-		return fmt.Errorf("channel %s: kind is im (a plugin contributes chat app bots)", it.ID)
+	case it.Kind != KindIM && it.Kind != KindMention:
+		return fmt.Errorf("channel %s: kind is im or mention", it.ID)
 	case it.Connector != "" && !idPattern.MatchString(it.Connector):
 		return fmt.Errorf("channel %s: connector %q is not a connector id", it.ID, it.Connector)
 	case it.Bind != "" && it.Bind != BindQR && it.Bind != BindCode && it.Bind != BindFields:
@@ -309,6 +399,9 @@ func (c Capabilities) Validate() error {
 	}
 	if c.MaxText > 0 && c.MaxText < 200 {
 		return errors.New("capabilities.max_text below 200: an answer would come in too many pieces")
+	}
+	if c.ReplyOnly && c.Push {
+		return errors.New("capabilities.reply_only cannot be combined with capabilities.push")
 	}
 	return nil
 }
@@ -345,11 +438,19 @@ const CodeCannotSend = "cannot_send"
 type Message struct {
 	ID          string   `json:"id"`
 	Text        string   `json:"text,omitempty"`
+	Chat        string   `json:"chat,omitempty"`
+	Topic       string   `json:"topic,omitempty"`
+	ChatID      string   `json:"chat_id,omitempty"`
+	ChatKind    ChatKind `json:"chat_kind,omitempty"`
+	TopicID     string   `json:"topic_id,omitempty"`
+	Context     string   `json:"context,omitempty"`
+	Owner       *bool    `json:"owner,omitempty"`
 	Images      []Blob   `json:"images,omitempty"`
 	Files       []Blob   `json:"files,omitempty"`
 	Quote       string   `json:"quote,omitempty"`
 	Forward     string   `json:"forward,omitempty"`
 	ReplyTo     string   `json:"reply_to,omitempty"`
+	Thread      string   `json:"thread,omitempty"` // the chat app's thread, an opaque key (Capabilities.Threads)
 	Unsupported []string `json:"unsupported,omitempty"`
 }
 
@@ -369,8 +470,8 @@ const (
 
 // Empty says whether m has nothing to send on.
 func (m Message) Empty() bool {
-	return strings.TrimSpace(m.Text) == "" && len(m.Images) == 0 && len(m.Files) == 0 && m.Quote == "" && m.Forward == "" &&
-		len(m.Unsupported) == 0
+	return strings.TrimSpace(m.Text) == "" && strings.TrimSpace(m.Context) == "" && strings.TrimSpace(m.Chat) == "" && strings.TrimSpace(m.Topic) == "" &&
+		len(m.Images) == 0 && len(m.Files) == 0 && m.Quote == "" && m.Forward == "" && len(m.Unsupported) == 0
 }
 
 // Out kinds: what a message the hub sends is.
@@ -399,6 +500,8 @@ type (
 		Text    string `json:"text"`
 		Kind    string `json:"kind"`
 		ReplyTo string `json:"reply_to,omitempty"`
+		// Images are sent after Text, only to a channel with ImagesOut.
+		Images []Blob `json:"images,omitempty"`
 	}
 	SendResult struct {
 		MessageID string `json:"message_id,omitempty"`

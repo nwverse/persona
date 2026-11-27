@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { formatDate, t } from "../../i18n";
 import { api, enc, errorText } from "../../lib/api";
 import { blockReason } from "../../lib/launcher-health";
-import { launcherFailing, type LauncherHealthRecord } from "../../lib/machine-alerts";
+import { launcherBlockedReason, launcherErrorText, launcherFailing, type LauncherHealthRecord } from "../../lib/machine-alerts";
 import { providerTitle } from "../../lib/provider-names";
 import { relativeTime } from "../../lib/relative-time";
 import { navigate } from "../../lib/router";
@@ -24,7 +24,7 @@ export function failureKind(kind: string | undefined): string {
   return blockReason(kind ?? "");
 }
 
-export function LauncherSection({ machine, records, onRecords }: { machine: Machine; records: readonly LauncherHealthRecord[]; onRecords: (records: LauncherHealthRecord[]) => void }) {
+export function LauncherSection({ machine, records, onRecords, onReload }: { machine: Machine; records: readonly LauncherHealthRecord[]; onRecords: (records: LauncherHealthRecord[]) => void; onReload?: () => void }) {
   const mine = records.filter((r) => r.machine === machine.id);
   const failing = mine.filter(launcherFailing);
   const [list, setList] = useState<Launcher[] | null | undefined>(undefined);
@@ -50,6 +50,8 @@ export function LauncherSection({ machine, records, onRecords }: { machine: Mach
       const r = await api<{ records?: LauncherHealthRecord[] }>(`/launchers/health/check?machine=${enc(machine.id)}&launcher=${enc(launcher)}`, { method: "POST", timeout: 180_000 });
       const got = (r.records ?? []).filter((x) => x.launcher === launcher);
       onRecords(got);
+      // No record for it (#14534): the one shown may be gone or newer on the hub, so the sheet shows what it holds now.
+      if (!got.length) onReload?.();
       const now = got[0];
       setChecked((c) => ({ ...c, [launcher]: !now ? t("machines-alerts.launcher_no_result") : launcherFailing(now) ? t("machines-alerts.launcher_still_failing") : t("machines-alerts.launcher_works") }));
     } catch (e) {
@@ -72,7 +74,7 @@ export function LauncherSection({ machine, records, onRecords }: { machine: Mach
                 <span className="shrink-0 text-submeta text-ink-2">{r.state === "blocked" ? t("machines-alerts.launcher_blocked") : t("machines-alerts.launcher_failing")}</span>
               </div>
               <p className="mt-0.5 text-meta text-ink-2">{failureKind(r.kind)}</p>
-              {r.error && <p className="mt-0.5 line-clamp-3 break-words font-mono text-submeta text-ink-3" title={r.error}>{r.error}</p>}
+              {launcherErrorText(r) && <p className="mt-0.5 line-clamp-3 break-words font-mono text-submeta text-ink-3" title={launcherErrorText(r)}>{launcherErrorText(r)}</p>}
               <p className="mt-1 text-submeta text-ink-3 tabular-nums">
                 {[
                   r.checked_at && t("machines-alerts.launcher_checked", { time: relativeTime(r.checked_at) }),
@@ -80,7 +82,7 @@ export function LauncherSection({ machine, records, onRecords }: { machine: Mach
                   r.resets_at && t("machines-alerts.launcher_resets", { time: formatDate(Date.parse(r.resets_at), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }),
                 ].filter(Boolean).join(" · ")}
               </p>
-              {r.blocked_reason && <p className="mt-0.5 text-submeta text-ink-3">{r.blocked_reason}</p>}
+              {launcherBlockedReason(r) && <p className="mt-0.5 text-submeta text-ink-3">{launcherBlockedReason(r)}</p>}
               <div className="mt-1.5 flex flex-wrap items-center gap-2">
                 <Button size="sm" icon="retry" busy={checking === r.launcher} disabled={!!checking || !machine.online} onClick={() => void testAgain(r.launcher)} testId="test-again">
                   {t("machines-alerts.test_again")}

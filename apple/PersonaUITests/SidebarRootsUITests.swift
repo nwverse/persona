@@ -21,10 +21,10 @@ final class SidebarRootsUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    @MainActor private func launch() {
+    @MainActor private func launch(_ extra: [String] = []) {
         app = XCUIApplication()
         app.launchArguments = ["-demo.on", "YES", "-newAssistant", "YES", "-tab", "assistant", "-dev.openChat", "",
-                               "-app.navigation", "sidebar", "-probes", "YES"]
+                               "-app.navigation", "sidebar", "-probes", "YES"] + extra
         app.launchPinned(navigation: false)
     }
 
@@ -151,8 +151,15 @@ final class SidebarRootsUITests: XCTestCase {
             if let title { return rows.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch }
             // Found by its label, not its place in the list (an element bound by index can name another row, or none,
             // once the list has scrolled).
+            // Only rows whose middle is inside the column are asked whether they are hittable: XCTest fails the test,
+            // rather than answering no, for a row clipped at the column's edge as the list glides ("activation point invalid").
+            // The column's frame when it is the column (a phone's drawer can hand its identifier to a footer button).
+            let columnFrame = (try? column.snapshot())?.frame ?? .zero
+            let area = columnFrame.height > 200 ? columnFrame : app.windows.firstMatch.frame
             let clear = rows.allElementsBoundByIndex.first {
-                $0.exists && $0.isHittable && !underJump($0) && !underHead($0) && !(excluding.map($0.label.contains) ?? false)
+                guard $0.exists, let frame = (try? $0.snapshot())?.frame, area.insetBy(dx: 0, dy: 8).contains(CGPoint(x: frame.midX, y: frame.midY))
+                else { return false }
+                return $0.isHittable && !underJump($0) && !underHead($0) && !(excluding.map($0.label.contains) ?? false)
             }
             guard let label = (clear.flatMap { try? $0.snapshot() })?.label else { return rows.firstMatch }
             return rows.matching(NSPredicate(format: "label == %@", label)).firstMatch
@@ -194,6 +201,24 @@ final class SidebarRootsUITests: XCTestCase {
         let target = folder.appendingPathComponent(file)
         let deadline = Date.now.addingTimeInterval(15)
         while Date.now < deadline, !FileManager.default.fileExists(atPath: target.path) { Thread.sleep(forTimeInterval: 0.2) }
+    }
+
+    /// Under the open Duo's side bars (a short, wide window) the system puts a page's bar items down the right edge.
+    @MainActor private var underSideBars: Bool {
+        let w = app.windows.firstMatch.frame
+        return w.width > w.height && w.height < 700
+    }
+
+    /// A button in the side column at its top, where Back is on a sub-page (#11636): every other button in the column is
+    /// below it.
+    @MainActor private func assertTopOfSideColumn(_ button: XCUIElement, _ step: String) {
+        let edge = app.windows.firstMatch.frame.width - 80
+        XCTAssertGreaterThan(button.frame.minX, edge, "\(step): the sidebar's button \(button.frame) is not in the side column")
+        let others = app.buttons.allElementsBoundByIndex.filter {
+            $0.exists && $0.isHittable && $0.frame.minX > edge && hypot($0.frame.midX - button.frame.midX, $0.frame.midY - button.frame.midY) > 20
+        }
+        XCTAssertTrue(others.allSatisfy { $0.frame.midY > button.frame.midY },
+                      "\(step): the sidebar's button \(button.frame) is not the side column's first: \(others.map(\.frame))")
     }
 
     /// From the main conversation, Recordings and an Agent replace the root (no push, no Back); Machines → a machine pushes
@@ -482,8 +507,9 @@ final class SidebarRootsUITests: XCTestCase {
 
     /// Folding the sidebar beside an Agent's chat leaves the chat's top where it was: on the open Duo on its side the
     /// system's Show Sidebar came in a row of its own above the chat's header and pushed the header and the chat 58 pt
-    /// down. Folded, the title stays put (within 1 pt), one button brings the sidebar back, on the title's line, and an
-    /// open title still takes a tap. In the Sidebar layout and in the Separate layout's Agents tab.
+    /// down. Folded, the title stays put (within 1 pt), one button brings the sidebar back (on the title's line; under
+    /// side bars the side column's first item, #11636), and an open title still takes a tap. In the Sidebar layout and in
+    /// the Separate layout's Agents tab.
     @MainActor func testFoldingTheSidebarKeepsTheChatsTop() throws {
         for separate in [false, true] {
             app = XCUIApplication()
@@ -523,7 +549,7 @@ final class SidebarRootsUITests: XCTestCase {
             XCTAssertLessThanOrEqual(abs(folded.minY - out.minY), 1, "\(layout): folding moved the chat's title from \(out) to \(folded)")
             XCTAssertLessThanOrEqual(abs(folded.height - out.height), 1, "\(layout): folding changed the title's height: \(out) → \(folded)")
 
-            // One button brings the sidebar back (the system's, or the chat's own in its header), beside the title.
+            // One button brings the sidebar back: the chat's own, in its header or (under side bars) the side column.
             let openers = app.buttons.matching(NSPredicate(format: "identifier IN %@ OR label IN %@",
                                                            ["ToggleSidebar", "chat-sidebar-button", "sidebar-show-button"],
                                                            ["Show Sidebar", "显示边栏", "显示侧边栏"]))
@@ -534,8 +560,13 @@ final class SidebarRootsUITests: XCTestCase {
             // A bar button is two elements, the button and its glass: one place.
             let apart = openers.filter { hypot($0.frame.midX - first.frame.midX, $0.frame.midY - first.frame.midY) > 44 }
             XCTAssertTrue(apart.isEmpty, "\(layout): \(openers.count) buttons bring the sidebar back, at \(openers.map(\.frame)):\n\(app.debugDescription)")
-            XCTAssertTrue(folded.minY <= first.frame.midY && first.frame.midY <= folded.maxY,
-                          "\(layout): the sidebar's button \(first.frame) is not on the title's line \(folded)")
+            if underSideBars {
+                // Under side bars the chat's actions are down the side column, the sidebar's button first (#11636).
+                assertTopOfSideColumn(first, layout)
+            } else {
+                XCTAssertTrue(folded.minY <= first.frame.midY && first.frame.midY <= folded.maxY,
+                              "\(layout): the sidebar's button \(first.frame) is not on the title's line \(folded)")
+            }
 
             // The open title takes a tap where the system's bar now has a row: Session Info comes up over the chat.
             guard title == open else { app.terminate(); continue }
@@ -545,6 +576,83 @@ final class SidebarRootsUITests: XCTestCase {
                            "\(layout): a tap on the folded chat's title opened nothing:\n\(app.debugDescription)")
             app.terminate()
         }
+    }
+
+    /// Every root brings its folded sidebar back with one visible button (#11636): the main conversation, a place, an
+    /// Agent's chat, and a place whose drill-down was popped. On the open Duo on its side the system's Show Sidebar was
+    /// missing on an Agent's chat (it is drawn in the bar's title row, which the chat removes) and on a place after a pop,
+    /// which left them with no way back to the sidebar. There a place's and an Agent's button is the side column's first
+    /// item; everywhere else (and the conversation's own bar) it is at the top leading corner. Where the column lies over
+    /// the page (the open Duo upright) or is a phone's drawer, a pick already put it away: the same button brings it back.
+    @MainActor func testAFoldedSidebarComesBackOnEveryRoot() {
+        continueAfterFailure = true // every root, not only the first
+        launch()
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 20))
+        _ = settled("conversation", "launch")
+        let openers = app.buttons.matching(NSPredicate(format: "identifier IN %@ OR label IN %@",
+                                                       ["ToggleSidebar", "chat-sidebar-button", "sidebar-show-button",
+                                                        "assistant-sidebar-button", "sidebar-drawer-button"],
+                                                       ["Show Sidebar", "显示边栏", "显示侧边栏"]))
+        func check(_ root: String) {
+            let main = element("sidebar-main")
+            let fold = element("sidebar-fold-column")
+            if fold.exists && fold.isHittable {
+                fold.tap()
+                let deadline = Date.now.addingTimeInterval(5)
+                while Date.now < deadline, main.exists && main.isHittable { Thread.sleep(forTimeInterval: 0.2) }
+                Thread.sleep(forTimeInterval: 1.0) // the column's slide
+            }
+            XCTAssertFalse(main.exists && main.isHittable, "\(root): the sidebar is still out")
+            shot("11636-\(root)-folded")
+            guard let opener = openers.allElementsBoundByIndex.first(where: { $0.exists && $0.isHittable }) else {
+                return XCTFail("\(root): no button brings the folded sidebar back:\n\(app.debugDescription)")
+            }
+            if underSideBars && root != "conversation" {
+                // A page's bar items are down the side column: the button is its first, where Back is on a sub-page.
+                assertTopOfSideColumn(opener, root)
+            } else {
+                // The top leading corner, where a root's button is on every other device (and the conversation's own bar).
+                XCTAssertTrue(opener.frame.minX < 100 && opener.frame.midY < 120,
+                              "\(root): the sidebar's button \(opener.frame) is not at the top leading corner")
+            }
+            let frame = opener.frame
+            window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
+            XCTAssertTrue(main.waitForExistence(timeout: 5) && main.isHittable,
+                          "\(root): its button did not bring the sidebar back:\n\(app.debugDescription)")
+            _ = settled(root, "\(root) with the sidebar brought back")
+        }
+
+        check("conversation")
+        pick("sidebar-meeting-recording", "Recordings")
+        _ = settled("recordings", "Recordings")
+        check("recordings")
+        _ = pickAgent("an Agent")
+        check("agent")
+
+        // A place whose drill-down was popped: UIKit did not draw its toggle again there (#8603).
+        pick("sidebar-machines", "Machines")
+        let machines = settled("machines", "Machines")
+        let cards = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'MacBook'"))
+        _ = cards.firstMatch.waitForExistence(timeout: 10)
+        let pageStart = column.exists && column.isHittable ? column.frame.maxX : 0
+        func onPage() -> XCUIElement? {
+            cards.allElementsBoundByIndex.first { $0.exists && $0.isHittable && $0.frame.minX >= pageStart }
+        }
+        for _ in 0..<6 where onPage() == nil {
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.7))
+                .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.4)))
+        }
+        guard let card = onPage() else { return XCTFail("no MacBook card on the page:\n\(app.debugDescription)") }
+        card.tap()
+        let machine = settled("machines", "a machine")
+        XCTAssertEqual(machine.path, 1, "the machine's page was not pushed: \(machines) → \(machine)")
+        let back = app.buttons.matching(identifier: "BackButton").allElementsBoundByIndex.first { $0.exists && $0.isHittable }
+        XCTAssertNotNil(back, "no Back on the machine's page:\n\(app.debugDescription)")
+        back?.tap()
+        let popped = settled("machines", "Machines after Back")
+        XCTAssertEqual(popped.path, 0, "Back did not pop the machine's page: \(popped)")
+        check("machines")
     }
 
     /// The Separate layout's Agents tab (#8603): an Agent picked in its list is the page's root, put in place with no push,
@@ -595,5 +703,93 @@ final class SidebarRootsUITests: XCTestCase {
         XCTAssertTrue(fold.waitForExistence(timeout: 5) && fold.isHittable, "the column did not come back:\n\(app.debugDescription)")
         let shown = settled("agent", "the column brought back")
         XCTAssertEqual(shown.transitions, second.transitions, "bringing the column back moved the page: \(second) → \(shown)")
+    }
+
+    /// Exactly one row of the sidebar is selected, `id` (whose label holds `text`), with the column brought out first.
+    @MainActor private func assertOneSelected(_ id: String, containing text: String? = nil, _ step: String) {
+        bringOut()
+        app.assertOneSelectedSidebarRow(id, containing: text, step)
+    }
+
+    /// The column brought out after a pick or a launch: a pick slides a column laid over the page (or a drawer) away, and
+    /// the conversation's sidebar button can read as not hittable under the page's top for a moment, so it is tapped at
+    /// its frame once that has passed.
+    @MainActor private func bringOut() {
+        let main = element("sidebar-main")
+        if !(main.exists && main.isHittable) || app.windows.firstMatch.frame.width < 900 { Thread.sleep(forTimeInterval: 1.0) }
+        let button = element("assistant-sidebar-button")
+        if !(main.exists && main.isHittable), button.exists, let frame = (try? button.snapshot())?.frame, !frame.isEmpty {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
+            _ = main.waitForExistence(timeout: 3)
+        }
+        reveal(main)
+    }
+
+    /// One row of the whole sidebar is selected at a time, and it is the page's root (#11032): Main Chat picked; an Agent
+    /// picked in the Agents list (its row, no longer Main Chat's), also after the column is folded and brought back; a
+    /// place (Recordings); a Persona chat; Main Chat again. The column beside the page, laid over it (the open Duo
+    /// upright) and a phone's drawer; By State, then an Agent By Repository. An Agent pushed from inside the main
+    /// conversation: `SecondaryPageBackTests.testAnAgentPushedFromTheMainConversationLeavesItSelected`.
+    @MainActor func testOneRowIsSelectedAndItFollowsTheRoot() {
+        // By State, as the owner's list: before #11032 only By Repository shaded the open Agent (checked below).
+        launch(["-dev.grouping", "state"])
+        _ = settled("conversation", "launch")
+        // The app can come up on a new chat's page, which no row stands for: Main Chat picked first.
+        pick("sidebar-main", "Main Chat")
+        _ = settled("conversation", "Main Chat")
+        assertOneSelected("sidebar-main", "Main Chat picked")
+        shot("11032-0-main")
+
+        _ = pickAgent("an Agent")
+        let title = chatTitle()
+        let name = title.components(separatedBy: CharacterSet(charactersIn: ",，")).first ?? title
+        XCTAssertFalse(name.isEmpty, "the Agent's chat has no title")
+        assertOneSelected("agents.row", containing: name, "an Agent picked in the sidebar")
+        shot("11032-1-agent")
+
+        // Folded beside the page and brought back: the same row.
+        let fold = element("sidebar-fold-column")
+        if fold.exists && fold.isHittable {
+            fold.tap()
+            let main = element("sidebar-main")
+            let deadline = Date.now.addingTimeInterval(5)
+            while Date.now < deadline, main.exists && main.isHittable { Thread.sleep(forTimeInterval: 0.2) }
+            Thread.sleep(forTimeInterval: 0.8) // the column's slide
+            let openers = app.buttons.matching(NSPredicate(format: "identifier IN %@ OR label IN %@",
+                                                           ["chat-sidebar-button", "ToggleSidebar", "sidebar-show-button", "assistant-sidebar-button"],
+                                                           ["Show Sidebar", "显示边栏", "显示侧边栏"]))
+            let opener = openers.allElementsBoundByIndex.first { $0.exists && $0.isHittable }
+            XCTAssertNotNil(opener, "no button brings the folded column back over the Agent:\n\(app.debugDescription)")
+            opener?.tap()
+            assertOneSelected("agents.row", containing: name, "the column folded and brought back over the Agent")
+        }
+
+        pick("sidebar-meeting-recording", "Recordings")
+        _ = settled("recordings", "Recordings from the Agent")
+        assertOneSelected("sidebar-meeting-recording", "a place picked")
+        shot("11032-2-place")
+
+        // A Persona chat: the conversation is the root again, its row (not Main Chat's) the selected one.
+        pick("sidebar-conversation", "a Persona chat")
+        _ = settled("conversation", "a Persona chat from Recordings")
+        assertOneSelected("sidebar-conversation", "a Persona chat picked")
+        shot("11032-3-persona-chat")
+
+        pick("sidebar-main", "the main conversation")
+        _ = settled("conversation", "the main conversation from a Persona chat")
+        assertOneSelected("sidebar-main", "the main conversation picked again")
+        shot("11032-4-main-again")
+        // An Agent pushed from inside the main conversation keeps it selected: SecondaryPageBackTests (a task's card).
+
+        // By Repository: the same one row, in the same shade as the others (no longer the tree's own wash).
+        app.terminate()
+        launch(["-dev.grouping", "repo"])
+        _ = settled("conversation", "launch By Repository")
+        bringOut()
+        _ = pickAgent("an Agent By Repository")
+        let repoTitle = chatTitle()
+        let repoName = repoTitle.components(separatedBy: CharacterSet(charactersIn: ",，")).first ?? repoTitle
+        assertOneSelected("agents.row", containing: repoName, "an Agent picked By Repository")
+        shot("11032-5-agent-by-repository")
     }
 }

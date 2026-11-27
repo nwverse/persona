@@ -69,6 +69,10 @@ class AssistantSettingsStateTest {
                 mainSupervisesOwnTasks = update.mainSupervisesOwnTasks ?: config.mainSupervisesOwnTasks,
                 closeEndedTerminals = update.closeEndedTerminals ?: config.closeEndedTerminals,
                 defaultPermissionMode = update.defaultPermissionMode ?: config.defaultPermissionMode,
+                ownerReplyApproval = update.ownerReplyApproval ?: config.ownerReplyApproval,
+                persistentOwnerActionCards = update.persistentOwnerActionCards ?: config.persistentOwnerActionCards,
+                ownerReplyApprovalPhrases = update.ownerReplyApprovalPhrases ?: config.ownerReplyApprovalPhrases,
+                dashboards = update.dashboards ?: config.dashboards,
             )
             return updateAnswer?.invoke(update) ?: config
         }
@@ -135,6 +139,24 @@ class AssistantSettingsStateTest {
         api.fail = true
         state.setMainTasksQuiet(true)
         assertEquals(false, state.state.value.config?.mainTasksQuiet)
+        assertTrue(state.state.value.notice?.error == true)
+    }
+
+    /** Dashboards (#15017): off when the hub leaves the field out; only `dashboards` is written; a failure puts it back. */
+    @Test fun dashboardsSwitchSavesOnlyItsFieldAndComesBackOnFailure() = runTest {
+        val api = FakeApi()
+        val state = AssistantSettingsState(api, Zone())
+        state.load()
+        assertNull(state.state.value.config?.dashboards)
+        // Absent is off: turning it off again writes nothing.
+        state.setDashboards(false)
+        assertTrue(api.updates.isEmpty())
+        state.setDashboards(true)
+        assertEquals(AssistantConfigUpdate(dashboards = true), api.updates.single())
+        assertEquals(true, state.state.value.config?.dashboards)
+        api.fail = true
+        state.setDashboards(false)
+        assertEquals(true, state.state.value.config?.dashboards)
         assertTrue(state.state.value.notice?.error == true)
     }
 
@@ -646,5 +668,55 @@ class AssistantSettingsStateTest {
             assertFalse("a failed reload keeps the list", empty)
             assertFalse(loading)
         }
+    }
+
+    @Test fun exactApprovalSettingsDefaultOffPersistAndReverse() = runTest {
+        val api = FakeApi().apply {
+            config = config.copy(ownerReplyApproval = false, persistentOwnerActionCards = false,
+                ownerReplyApprovalPhrases = listOf("发", "同意"))
+        }
+        val state = AssistantSettingsState(api, Zone())
+        state.load()
+        assertEquals(false, state.state.value.config?.ownerReplyApproval)
+        assertEquals(false, state.state.value.config?.persistentOwnerActionCards)
+
+        state.setOwnerReplyApproval(true)
+        state.setPersistentOwnerActionCards(true)
+        state.setOwnerApprovalPhrases(listOf("发", "Agree"))
+        assertEquals(AssistantConfigUpdate(ownerReplyApproval = true), api.updates[0])
+        assertEquals(AssistantConfigUpdate(persistentOwnerActionCards = true), api.updates[1])
+        assertEquals(AssistantConfigUpdate(ownerReplyApprovalPhrases = listOf("发", "Agree")), api.updates[2])
+        assertEquals(listOf("发", "Agree"), state.state.value.config?.ownerReplyApprovalPhrases)
+
+        state.setOwnerReplyApproval(false)
+        state.setPersistentOwnerActionCards(false)
+        assertEquals(false, api.config.ownerReplyApproval)
+        assertEquals(false, api.config.persistentOwnerActionCards)
+        assertEquals(listOf("发", "Agree"), api.config.ownerReplyApprovalPhrases)
+    }
+
+    @Test fun exactApprovalSettingsRejectStaleEchoAndHideOnOlderHubs() = runTest {
+        val old = FakeApi()
+        val oldState = AssistantSettingsState(old, Zone())
+        oldState.load()
+        oldState.setOwnerReplyApproval(true)
+        oldState.setPersistentOwnerActionCards(true)
+        oldState.setOwnerApprovalPhrases(listOf("发"))
+        assertTrue(old.updates.isEmpty())
+
+        val api = FakeApi().apply {
+            config = config.copy(ownerReplyApproval = false, persistentOwnerActionCards = false,
+                ownerReplyApprovalPhrases = listOf("发", "同意"))
+        }
+        val state = AssistantSettingsState(api, Zone())
+        state.load()
+        api.updateAnswer = { api.config.copy(ownerReplyApproval = false) }
+        state.setOwnerReplyApproval(true)
+        assertEquals(false, state.state.value.config?.ownerReplyApproval)
+        assertTrue(state.state.value.notice?.error == true)
+
+        api.updateAnswer = null
+        state.setOwnerApprovalPhrases(listOf("发", "Agree"))
+        assertEquals(listOf("发", "Agree"), state.state.value.config?.ownerReplyApprovalPhrases)
     }
 }

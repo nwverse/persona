@@ -4,11 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,18 +23,35 @@ import (
 // The To-dos view across managers (todo_view.go, #10226): the hub adds the managers' counts up and joins their places,
 // lists the features only while every manager whose to-dos it merges names them, and never computes a view itself.
 
-// todoReplies is what a test manager answers GET /api/v1/todos and GET /api/v1/todos/places with.
+// todoReplies is what a test manager answers GET /api/v1/todos and GET /api/v1/todos/places with, and any other path
+// it is given a body for (items).
 type todoReplies struct {
-	mu     sync.Mutex
-	list   string // the list's body
-	places string // the places' body; "" answers placesStatus (405 when 0: an older manager's mux)
-	status int
+	mu            sync.Mutex
+	list          string // the list's body
+	places        string // the places' body; "" answers placesStatus (405 when 0: an older manager's mux)
+	status        int
+	items         map[string]string
+	revision      string // X-Persona-Todos-Revision on the list and revision route; "": an older manager
+	fullReads     int
+	revisionReads int
 }
 
 func (r *todoReplies) set(list, places string, status int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.list, r.places, r.status = list, places, status
+}
+
+func (r *todoReplies) setRevision(revision string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.revision = revision
+}
+
+func (r *todoReplies) reads() (full, revision int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fullReads, r.revisionReads
 }
 
 func (r *todoReplies) answer(method string, params json.RawMessage) (any, error) {
@@ -49,9 +69,21 @@ func (r *todoReplies) answer(method string, params json.RawMessage) (any, error)
 	}
 	switch {
 	case req.Path == "/api/v1/todos":
-		return json200(r.list), nil
+		r.fullReads++
+		resp := json200(r.list)
+		if r.revision != "" {
+			resp.Header["X-Persona-Todos-Revision"] = []string{r.revision}
+		}
+		return resp, nil
+	case req.Path == "/api/v1/todos/revision" && r.revision != "":
+		r.revisionReads++
+		resp := json200(`{"revision":` + strconv.Quote(r.revision) + `}`)
+		resp.Header["X-Persona-Todos-Revision"] = []string{r.revision}
+		return resp, nil
 	case req.Path == "/api/v1/todos/places" && r.places != "":
 		return json200(r.places), nil
+	case r.items[req.Path] != "":
+		return json200(r.items[req.Path]), nil
 	case req.Path == "/api/v1/todos/places":
 		status := r.status
 		if status == 0 {
@@ -148,15 +180,46 @@ func TestTodoViewFeaturesWhileEveryManagerNamesThem(t *testing.T) {
 	}
 }
 
+// todo_timeline (#10465) is listed only while every manager whose to-dos the list merges is connected and names it,
+// whatever the other To-dos features.
+func TestTodoTimelineFeatureWhileEveryManagerNamesIt(t *testing.T) {
+	h, _, a, b, _, _ := todoViewHub(t)
+	listed := func() bool { return slices.Contains(h.features(), featureTodoTimeline) }
+	todoViewCapabilities(t, a, assistantwire.CapabilityTodoView, assistantwire.CapabilityTodoTimeline)
+	todoViewCapabilities(t, b, assistantwire.CapabilityTodoView)
+	if listed() {
+		t.Fatal("listed while m-0c0c0c does not name it")
+	}
+	todoViewCapabilities(t, b, assistantwire.CapabilityTodoTimeline)
+	if !listed() {
+		t.Fatal("not listed with every manager naming it")
+	}
+	if f := h.features(); slices.Contains(f, featureTodoView) {
+		t.Fatalf("todo_view listed with m-0c0c0c not naming it: %v", f)
+	}
+	if err := h.busConnOf(b.id).ws.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, "m-0c0c0c offline", func() bool { return h.busConnOf(b.id) == nil })
+	if !listed() {
+		t.Fatal("not listed with only the default left, naming it") // an offline manager other than the default leaves the list
+	}
+	todoViewCapabilities(t, a, assistantwire.CapabilityTodoView)
+	if listed() {
+		t.Fatal("listed after the default stopped naming it")
+	}
+}
+
 // An extension's report cannot add the To-dos view's features: only the managers' hellos promise them.
 func TestTodoViewFeaturesNotFromAReport(t *testing.T) {
 	h := newTestHub(t)
-	h.keepExtReport(assistantwire.AssistantID, &extwire.Report{Features: []string{featureTodoView, featureTodoPlaces, "fa"}})
+	h.keepExtReport(assistantwire.AssistantID, &extwire.Report{Features: []string{featureTodoView, featureTodoPlaces,
+		featureTodoTimeline, "fa"}})
 	features := h.features()
 	if !slices.Contains(features, "fa") {
 		t.Fatalf("the report's own feature is missing: %v", features)
 	}
-	for _, f := range []string{featureTodoView, featureTodoPlaces} {
+	for _, f := range []string{featureTodoView, featureTodoPlaces, featureTodoTimeline} {
 		if slices.Contains(features, f) {
 			t.Errorf("a report added %s", f)
 		}
@@ -231,6 +294,50 @@ func TestTodosListCountsAddedUp(t *testing.T) {
 	}
 }
 
+func TestTodosCompleteListKeepsAllRowsAndItsETag(t *testing.T) {
+	h, srv, _, _, ra, rb := todoViewHub(t)
+	rows := make([]string, 60)
+	for i := range rows {
+		rows[i] = fmt.Sprintf(`{"id":"todo_complete_%02d","title":"Done %d","created_at":"2026-10-01T09:%02d:00Z","updated_at":"2026-10-01T10:00:00Z","done_at":"2026-10-01T10:00:00Z"}`, i, i, i)
+	}
+	board := `{"status_groups":[],"direction_groups":[],"sidebar_tree":[],"counts":{"needs_you":0,"in_progress":0,"pending_review":0,"waiting":0,"someday":0,"done":60,"open_total":0}}`
+	ra.set(`{"todos":[`+strings.Join(rows, ",")+`],"counts":`+todoCountsJSON(0, 0, 0, map[string]int{"done": 60})+`,"board":`+board+`}`, "", 0)
+	rb.set(`{"todos":[]}`, "", 0)
+
+	resp, body := todoViewGet(t, h, srv, "/api/v1/todos", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("complete list: %d %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Todos []map[string]any `json:"todos"`
+		Board *struct {
+			Counts struct {
+				Done int `json:"done"`
+			} `json:"counts"`
+		} `json:"board"`
+		ClosedNextCursor string         `json:"closed_next_cursor"`
+		ClosedHasMore    bool           `json:"closed_has_more"`
+		ClosedCursors    map[string]any `json:"closed_cursors"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Todos) != 60 || out.Board == nil || out.Board.Counts.Done != 60 {
+		t.Fatalf("complete response: %d rows, board %+v", len(out.Todos), out.Board)
+	}
+	if out.ClosedNextCursor != "" || out.ClosedHasMore || len(out.ClosedCursors) != 0 {
+		t.Fatalf("complete response has closed pagination fields: %+v", out)
+	}
+	tag := resp.Header.Get("ETag")
+	if tag == "" {
+		t.Fatal("complete response has no ETag")
+	}
+	again, againBody := todoViewGet(t, h, srv, "/api/v1/todos", map[string]string{"If-None-Match": tag})
+	if again.StatusCode != http.StatusNotModified || len(againBody) != 0 {
+		t.Fatalf("same complete response: %d %s, want 304 with no body", again.StatusCode, againBody)
+	}
+}
+
 // The merge writes the added-up counts byte for byte as decoding every answer and encoding the merge again does, on
 // every shape the scan meets.
 func TestTodoCountsMergeMatchesDecoding(t *testing.T) {
@@ -280,6 +387,14 @@ func TestTodoCountsMergeMatchesDecoding(t *testing.T) {
 		listOf("m-b", 200, `{"todos":[],"counts":{"open":2,"sections":{"later":1,"todo":2},"assistant_needs":4,"note":"b","x":1}}`)})
 	if got, want := string(sums["counts"]), `{"open":3,"needs_you":1,"in_progress":0,"sections":{"needs_you":1,"later":3,"todo":2},"assistant_needs":7,"note":"a","x":1}`; !sameJSONValue(got, want) {
 		t.Fatalf("two newer managers' %s, want %s", got, want)
+	}
+	sums = todoListSums([]listAnswer{
+		listOf("assistant", 200, `{"todos":[],"closed_next_cursor":"ca","closed_has_more":true}`),
+		listOf("m-b", 200, `{"todos":[],"closed_next_cursor":"cb","closed_has_more":true}`),
+		listOf("m-c", 200, `{"todos":[]}`),
+	})
+	if got, want := string(sums["closed_cursors"]), `{"assistant":{"next_cursor":"ca","has_more":true},"m-b":{"next_cursor":"cb","has_more":true}}`; !sameJSONValue(got, want) {
+		t.Fatalf("closed cursors %s, want %s", got, want)
 	}
 }
 
@@ -395,17 +510,148 @@ func TestTodoPlacesKeepWhatTheHubDoesNotKnow(t *testing.T) {
 		`"counts":{"open":5,"needs_you":3,"in_progress":1,"sections":{"needs_you":3,"todo":1,"working":1},"assistant_needs":3}}`)
 }
 
-// One to-do is relayed to the manager that listed it (byTodo), as the other to-do routes are.
+// One to-do, and its timeline, is relayed to the manager that listed it (byTodo), as the other to-do routes are, with
+// no hub code: the to-do's answer is passed on as its manager wrote it, an older manager's (the row alone) and a newer
+// one's (with the paper's rounds, #10465) alike, and so is an older manager's answer to the timeline (its mux has no
+// such route: 404).
 func TestTodoItemRelayedToItsManager(t *testing.T) {
 	h, srv, _, b, ra, rb := todoViewHub(t)
 	ra.set(`{"todos":[{"id":"todo_a1"}]}`, "", 0)
-	rb.set(`{"todos":[{"id":"todo_b1"}]}`, "", 0)
+	rb.set(`{"todos":[{"id":"todo_b1"},{"id":"todo_b2"}]}`, "", 0)
+	older, newer := `{"todo":{"id":"todo_b1","title":"Water the roses"}}`,
+		`{"todo":{"id":"todo_b2","title":"Prune the hedge"},"rounds":[],"rounds_total":0}`
+	rb.mu.Lock()
+	rb.items = map[string]string{"/api/v1/todos/todo_b1": older, "/api/v1/todos/todo_b2": newer}
+	rb.mu.Unlock()
 	if resp, body := todoViewGet(t, h, srv, "/api/v1/todos", nil); resp.StatusCode != http.StatusOK {
 		t.Fatalf("list: %d %s", resp.StatusCode, body)
 	}
-	todoViewGet(t, h, srv, "/api/v1/todos/todo_b1", nil)
-	calls := archiveHTTPCalls(t, b)
-	if last := calls[len(calls)-1]; last.Method != http.MethodGet || last.Path != "/api/v1/todos/todo_b1" {
-		t.Fatalf("m-0c0c0c got %+v", last)
+	for _, path := range []string{"/api/v1/todos/todo_b1", "/api/v1/todos/todo_b1/timeline?before=r%3Afeed%3Af1&limit=5"} {
+		resp, body := todoViewGet(t, h, srv, path, nil)
+		calls := archiveHTTPCalls(t, b)
+		last := calls[len(calls)-1]
+		if want, query, _ := strings.Cut(path, "?"); last.Method != http.MethodGet || last.Path != want || last.Query != query {
+			t.Fatalf("m-0c0c0c got %+v for %s", last, path) // the page asked for (before, limit) reaches the manager
+		}
+		if strings.Contains(path, "/timeline") && (resp.StatusCode != http.StatusNotFound || !strings.Contains(string(body), "Not Found")) {
+			t.Fatalf("an older manager's timeline: %d %s", resp.StatusCode, body)
+		}
+	}
+	for path, want := range map[string]string{"/api/v1/todos/todo_b1": older, "/api/v1/todos/todo_b2": newer} {
+		if resp, body := todoViewGet(t, h, srv, path, nil); resp.StatusCode != http.StatusOK || !sameJSONValue(string(body), want) {
+			t.Errorf("%s: %d %s, want %s", path, resp.StatusCode, body, want)
+		}
+	}
+}
+
+// A hub from before #10465 has no GET /api/v1/todos/{id}/timeline: it answers 404 to any method there itself, which
+// clients take as "not there", while the to-do still goes to its manager. Built as such a hub is, without the route.
+func TestTodoTimelineOnAnOlderHub(t *testing.T) {
+	// The hub reads the route list when it is built; the hub's tests run one at a time (none calls t.Parallel), so
+	// swapping the list for this one hub reaches no other.
+	routes := assistantwire.Routes
+	t.Cleanup(func() { assistantwire.Routes = routes })
+	assistantwire.Routes = slices.DeleteFunc(slices.Clone(routes), func(p string) bool { return p == "GET /api/v1/todos/{id}/timeline" })
+	h, srv, a, _, ra, _ := todoViewHub(t)
+	ra.set(`{"todos":[{"id":"todo_a1"}]}`, "", 0)
+	if resp, body := todoViewGet(t, h, srv, "/api/v1/todos", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("list: %d %s", resp.StatusCode, body)
+	}
+	before := len(archiveHTTPCalls(t, a))
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		req, _ := http.NewRequest(method, srv.URL+"/api/v1/todos/todo_a1/timeline", nil)
+		req.Header.Set("Authorization", "Bearer "+h.cfg.Token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s on an older hub: %d %s", method, resp.StatusCode, body)
+		}
+	}
+	if calls := archiveHTTPCalls(t, a)[before:]; len(calls) != 0 {
+		t.Fatalf("an older hub relayed the timeline: %+v", calls)
+	}
+	todoViewGet(t, h, srv, "/api/v1/todos/todo_a1", nil)
+	if calls := archiveHTTPCalls(t, a)[before:]; len(calls) != 1 || calls[0].Path != "/api/v1/todos/todo_a1" {
+		t.Fatalf("the to-do itself: %+v", calls)
+	}
+}
+
+// The pushed web read checks the merged managers' revisions, not their full lists (#13804). An unchanged conditional
+// read is a 304 without one manager rebuilding /todos; a change returns a new hub-wide token; an older manager fails the
+// cheap route closed so the web falls back to the original full read rather than trusting a partial answer.
+func TestTodoRevisionMergedWithoutFullReads(t *testing.T) {
+	h, srv, _, _, ra, rb := todoViewHub(t)
+	ra.set(`{"todos":[{"id":"todo_a1"}]}`, "", 0)
+	rb.set(`{"todos":[{"id":"todo_b1"}]}`, "", 0)
+	ra.setRevision(`W/"manager-a1"`)
+	rb.setRevision(`W/"manager-b1"`)
+
+	full, body := todoViewGet(t, h, srv, "/api/v1/todos", nil)
+	tag := full.Header.Get("X-Persona-Todos-Revision")
+	if full.StatusCode != http.StatusOK || tag == "" {
+		t.Fatalf("full list: %d, revision %q, %s", full.StatusCode, tag, body)
+	}
+	aFull, _ := ra.reads()
+	bFull, _ := rb.reads()
+
+	same, body := todoViewGet(t, h, srv, "/api/v1/todos/revision", map[string]string{"If-None-Match": tag})
+	if same.StatusCode != http.StatusNotModified || len(body) != 0 || same.Header.Get("ETag") != tag {
+		t.Fatalf("unchanged: %d %q %s", same.StatusCode, same.Header.Get("ETag"), body)
+	}
+	for name, r := range map[string]*todoReplies{"default": ra, "other": rb} {
+		fullReads, revisionReads := r.reads()
+		wantFull := aFull
+		if name == "other" {
+			wantFull = bFull
+		}
+		if fullReads != wantFull || revisionReads != 1 {
+			t.Errorf("%s reads: full %d→%d, revision %d", name, wantFull, fullReads, revisionReads)
+		}
+	}
+
+	rb.setRevision(`W/"manager-b2"`)
+	changed, body := todoViewGet(t, h, srv, "/api/v1/todos/revision", map[string]string{"If-None-Match": tag})
+	if changed.StatusCode != http.StatusOK || changed.Header.Get("ETag") == "" || changed.Header.Get("ETag") == tag {
+		t.Fatalf("changed: %d %q %s", changed.StatusCode, changed.Header.Get("ETag"), body)
+	}
+	if a, _ := ra.reads(); a != aFull {
+		t.Fatalf("a changed revision read built the default's full list: %d→%d", aFull, a)
+	}
+	if b, _ := rb.reads(); b != bFull {
+		t.Fatalf("a changed revision read built the other full list: %d→%d", bFull, b)
+	}
+
+	rb.setRevision("") // rolling upgrade: one old manager means no trustworthy merged revision
+	unsupported, _ := todoViewGet(t, h, srv, "/api/v1/todos/revision", map[string]string{"If-None-Match": tag})
+	if unsupported.StatusCode != http.StatusConflict {
+		t.Fatalf("mixed managers: %d, want 409 so the client falls back", unsupported.StatusCode)
+	}
+	mixed, _ := todoViewGet(t, h, srv, "/api/v1/todos", nil)
+	if got := mixed.Header.Get("X-Persona-Todos-Revision"); got != "" {
+		t.Fatalf("mixed full list passed off the base manager's token as hub-wide: %q", got)
+	}
+}
+
+func TestTodoRevisionFeatureNeedsEveryManager(t *testing.T) {
+	h, _, a, b, _, _ := todoViewHub(t)
+	listed := func() bool { return slices.Contains(h.features(), "todo_revision") }
+	if listed() {
+		t.Fatal("listed before either manager named todo_revision")
+	}
+	todoViewCapabilities(t, a, "todo_revision")
+	if listed() {
+		t.Fatal("listed while the other manager is old")
+	}
+	todoViewCapabilities(t, b, "todo_revision")
+	if !listed() {
+		t.Fatal("not listed with every manager capable")
+	}
+	todoViewCapabilities(t, b)
+	if listed() {
+		t.Fatal("still listed after one manager stopped naming it")
 	}
 }

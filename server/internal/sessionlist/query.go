@@ -56,7 +56,7 @@ func (i *Index) Query(options Options) (Page, error) {
 		}
 	}
 	end := min(offset+o.Limit, len(r.events))
-	p := Page{Sessions: make([]any, 0, end-offset), Remove: make([]string, 0), Revision: r.counts.Revision, Total: r.counts.Total, HasMore: end < len(r.events)}
+	p := Page{Sessions: make([]any, 0, end-offset), Remove: make([]string, 0), Added: make([]string, 0), Revision: r.counts.Revision, Total: r.counts.Total, HasMore: end < len(r.events)}
 	if o.Search != "" {
 		p.SearchHits = make(map[string]SearchHit, end-offset)
 	}
@@ -70,6 +70,9 @@ func (i *Index) Query(options Options) (Page, error) {
 			value = e.value.item.Summary
 		}
 		p.Sessions = append(p.Sessions, clone(value))
+		if e.added {
+			p.Added = append(p.Added, e.id)
+		}
 		if o.Search != "" {
 			ranked := r.searchHits[e.id]
 			hit := ranked.SearchHit
@@ -115,6 +118,49 @@ func (i *Index) Counts(options Options) (Counts, error) {
 	return copyCounts(i.countsResult(o.filters()).counts), nil
 }
 
+// CountMatchingState counts distinct items named by ids matching options whose state (under Roots) equals state.
+func (i *Index) CountMatchingState(options Options, state string, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if options.Search != "" {
+		return 0, failure("invalid_query", "search does not support counts")
+	}
+	o, err := validate(options)
+	if err != nil {
+		return 0, err
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.initialize()
+	i.pruneSnapshots()
+	f := o.filters()
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	if o.Cursor != "" {
+		s, _, _, err := i.cursorSnapshot(o)
+		if err != nil {
+			return 0, err
+		}
+		n := 0
+		for _, e := range s.result.events {
+			if e.value != nil && want[e.value.item.ID] && f.matches(e.value) && stateOf(e.value.item, f.Roots, f.CrossMachineHierarchy) == state {
+				n++
+			}
+		}
+		return n, nil
+	}
+	n := 0
+	for id := range want {
+		if r := i.items[id]; r != nil && f.matches(r) && stateOf(r.item, f.Roots, f.CrossMachineHierarchy) == state {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func copyCounts(c Counts) Counts {
 	c.Machine = maps.Clone(c.Machine)
 	c.ActiveAgentsByMachine = maps.Clone(c.ActiveAgentsByMachine)
@@ -132,22 +178,25 @@ func (f filters) matches(r *record) bool {
 	}
 	v := r.item
 	todo := v.todo()
-	return (f.ID == "" || f.ID == v.ID) && (!f.NoPrivate || !v.Private) &&
+	paneSource := f.paneSource(v)
+	return (f.ID != "" || f.IncludeHidden || !v.HiddenByDirectory) && (f.ID == "" || f.ID == v.ID) && (!f.NoPrivate || !v.Private) &&
 		(!f.AgentsOnly || (!v.Assistant && !v.Private)) &&
-		(!f.Roots || v.root() == "") && (f.Under == "" || f.Under == v.root()) &&
-		(f.State == "" || f.State == stateOf(v, f.Roots)) &&
+		(!f.Roots || !v.hiddenByRoots(f.CrossMachineHierarchy)) &&
+		(f.Under == "" || v.matchesUnder(f.UnderMachine, f.Under)) &&
+		(f.State == "" || f.State == stateOf(v, f.Roots, f.CrossMachineHierarchy)) &&
 		(f.Machine == "" || f.Machine == v.Machine) &&
 		(f.Project == "" || f.Project == v.Project) &&
 		(f.Places == "" || inPlaces(f.Places, v.Machine, v.Project)) &&
 		(f.Spaces == "" || inPlaces(f.Spaces, v.Machine, v.Group)) &&
 		(f.Group == "" || f.Group == v.Group) &&
 		(f.Source == "" || f.Source == v.Source) &&
-		(f.PaneSource == "" || f.PaneSource == v.PaneSource) &&
-		(f.ExcludePaneSource == "" || f.ExcludePaneSource != v.PaneSource) &&
-		(f.Waiting == "" || (f.Waiting == "1") == waitingOf(v, f.Roots)) &&
-		(f.JustFinished == "" || (f.JustFinished == "1") == justFinishedOf(v, f.Roots)) &&
+		(f.PaneSource == "" || f.PaneSource == paneSource) &&
+		(f.ExcludePaneSource == "" || f.ExcludePaneSource != paneSource) &&
+		(f.Waiting == "" || (f.Waiting == "1") == waitingOf(v, f.Roots, f.CrossMachineHierarchy)) &&
+		(f.JustFinished == "" || (f.JustFinished == "1") == justFinishedOf(v, f.Roots, f.CrossMachineHierarchy)) &&
 		(f.Manager == "" || f.Manager == r.owner) &&
 		(f.Provider == "" || f.Provider == v.Provider) &&
+		(f.Providers == "" || inProviders(f.Providers, v.Provider)) &&
 		(f.Todo == "" || f.Todo == todo || f.Todo == TodoNone && todo == "") &&
 		(f.Q == "" || strings.Contains(r.search, f.Q))
 }
@@ -195,46 +244,67 @@ func emptyCounts(revision string, roots bool) Counts {
 	return counts
 }
 
-// stateOf is the state v is filtered and counted by: its folded state for Options.Roots (Fold.State, its own state
-// when the adapter gives none).
-func stateOf(v Item, roots bool) string {
-	if roots && v.Fold != nil && v.Fold.State != "" {
-		return v.Fold.State
+// stateOf is the state v is filtered and counted by: its folded state for Options.Roots (Fold.State, or
+// Fold.LegacyState for legacy roots=1 queries without cross_machine_hierarchy=1 so cross-machine children that
+// stay listed separately are not double-counted on their parent).
+func stateOf(v Item, roots, crossMachine bool) string {
+	if roots && v.Fold != nil {
+		if !crossMachine && v.Fold.HasLegacyFold && v.Fold.LegacyState != "" {
+			return v.Fold.LegacyState
+		}
+		if v.Fold.State != "" {
+			return v.Fold.State
+		}
 	}
 	return v.State
 }
 
 // waitingOf is whether v only waits in the background, as it is filtered and counted: by its folded state for
-// Options.Roots (Fold.BackgroundWaiting), its own when it folds none.
-func waitingOf(v Item, roots bool) bool {
-	return v.BackgroundWaiting && (!roots || v.Fold == nil || v.Fold.BackgroundWaiting)
+// Options.Roots (Fold.BackgroundWaiting, or Fold.LegacyBackgroundWaiting for legacy roots=1), its own when it folds none.
+func waitingOf(v Item, roots, crossMachine bool) bool {
+	if !v.BackgroundWaiting || !roots || v.Fold == nil {
+		return v.BackgroundWaiting
+	}
+	if !crossMachine && v.Fold.HasLegacyFold {
+		return v.Fold.LegacyBackgroundWaiting
+	}
+	return v.Fold.BackgroundWaiting
 }
 
 // justFinishedOf is whether v is Just finished, as it is filtered and counted: only while it shows idle (by its folded
 // state for Options.Roots: a parent whose children work is not).
-func justFinishedOf(v Item, roots bool) bool {
-	return v.JustFinished && stateOf(v, roots) == "idle"
+func justFinishedOf(v Item, roots, crossMachine bool) bool {
+	return v.JustFinished && stateOf(v, roots, crossMachine) == "idle"
 }
 
-func addCount(c *Counts, v Item, roots bool, delta int) {
+// The Agents tab filter uses current membership. A saved reference on an offline
+// session still describes its origin in general session queries.
+func (f filters) paneSource(v Item) string {
+	if f.AgentsOnly && v.PaneSource == "terminal" && stateOf(v, f.Roots, f.CrossMachineHierarchy) == "offline" {
+		return ""
+	}
+	return v.PaneSource
+}
+
+func addCount(c *Counts, v Item, f filters, delta int) {
 	c.Total += delta
-	state := stateOf(v, roots)
-	if roots && !v.Assistant && state != "offline" {
+	state := stateOf(v, f.Roots, f.CrossMachineHierarchy)
+	if f.Roots && !v.Assistant && state != "offline" {
 		c.ActiveAgentsByMachine[v.Machine] += delta
 		if c.ActiveAgentsByMachine[v.Machine] == 0 {
 			delete(c.ActiveAgentsByMachine, v.Machine)
 		}
 	}
-	if v.PaneSource != "" {
-		c.PaneSource[v.PaneSource] += delta
-		if c.PaneSource[v.PaneSource] == 0 {
-			delete(c.PaneSource, v.PaneSource)
+	if source := f.paneSource(v); source != "" {
+		c.PaneSource[source] += delta
+		if c.PaneSource[source] == 0 {
+			delete(c.PaneSource, source)
 		}
 	}
-	if waitingOf(v, roots) {
+	if waitingOf(v, f.Roots, f.CrossMachineHierarchy) {
 		c.BackgroundWaiting += delta
 	}
-	if justFinishedOf(v, roots) {
+	if justFinishedOf(v, f.Roots, f.CrossMachineHierarchy) {
 		c.JustFinished += delta
 	}
 	for _, pair := range []struct {
@@ -255,7 +325,7 @@ func addCount(c *Counts, v Item, roots bool, delta int) {
 func (i *Index) exactResult(f filters) *result {
 	r := &result{counts: emptyCounts(i.revisionToken(), f.Roots), ordered: true}
 	if item := i.items[f.ID]; f.matches(item) {
-		addCount(&r.counts, item.item, f.Roots, 1)
+		addCount(&r.counts, item.item, f, 1)
 		r.events = []event{{id: f.ID, updated: item.item.UpdatedAt, value: item}}
 	}
 	return r
@@ -279,7 +349,7 @@ func (i *Index) countsResult(f filters) *result {
 		counts = emptyCounts(i.revisionToken(), f.Roots)
 		for _, item := range i.items {
 			if f.matches(item) {
-				addCount(&counts, item.item, f.Roots, 1)
+				addCount(&counts, item.item, f, 1)
 			}
 		}
 	}
@@ -336,7 +406,7 @@ func (i *Index) queryResult(o Options) *result {
 			if before && reflect.DeepEqual(c.before.item, c.after.item) {
 				continue
 			}
-			r.events = append(r.events, event{id: id, updated: c.after.item.UpdatedAt, value: c.after})
+			r.events = append(r.events, event{id: id, updated: c.after.item.UpdatedAt, value: c.after, added: !before})
 		} else if before {
 			updated := c.before.item.UpdatedAt
 			if c.after != nil {

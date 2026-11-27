@@ -6,17 +6,33 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunStep } from "../../lib/run-step";
 import { Icon } from "../../ui/icons";
 import { FADE_OUT_MS, LINGER_MS } from "../../ui/motion";
-import { RunningStatusView, statusWords, WaitingView } from "./RunningStatusBar";
+import { formatBackgroundWhat, RunningStatusView, statusWords, WaitingView } from "./RunningStatusBar";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 afterEach(() => vi.useRealTimers());
 
 const render = (props: Parameters<typeof RunningStatusView>[0]) => renderToStaticMarkup(<RunningStatusView {...props} />);
-const statusIcon = (name: "terminal" | "sparkles") => renderToStaticMarkup(<Icon name={name} size={14} className="shrink-0 -translate-y-px" />);
+const statusIcon = (name: "terminal" | "sparkles" | "retry", tone = "text-accent-ink") => renderToStaticMarkup(<Icon name={name} size={14} className={`shrink-0 ${tone} -translate-y-px`} />);
 const tool = (name: string, spawning?: boolean): RunStep => ({ kind: "tool", tool: name, ...(spawning ? { spawning } : {}) });
 const agent = (step?: RunStep, live: Parameters<typeof statusWords>[0] = null) => statusWords(live, step).text;
 const plain = (step?: RunStep, live: Parameters<typeof statusWords>[0] = null) => statusWords(live, step, true).text;
+
+it("keeps the status content mounted across breath cycles and a real completion", () => {
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  const draw = (tokens: number, working = true) => act(() => root.render(<RunningStatusView live={{ tokens_down: tokens }} working={working} done={!working} step={tool("Bash")} />));
+  try {
+    draw(1);
+    const content = host.querySelector("[data-running-status]")!.firstElementChild!;
+    draw(2);
+    draw(3);
+    act(() => content.dispatchEvent(new Event("animationend", { bubbles: true })));
+    expect(host.querySelector("[data-running-status]")?.firstElementChild).toBe(content);
+    draw(3, false);
+    expect(host.querySelector("[data-running-done]")).toBe(content);
+  } finally { act(() => root.unmount()); }
+});
 
 describe("the Agent session's state words (cindy's, #5312)", () => {
   it("says what the turn does: thinking, writing, editing, searching, a subagent, a tool", () => {
@@ -72,7 +88,10 @@ describe("RunningStatusView", () => {
     expect(html).toContain("data-running-tokens");
     expect(html).not.toContain("tok/s");
     expect(html).not.toContain("data-running-speed");
-    expect(html).toContain("text-status-accent");
+    expect(html).toContain("text-ink-2");
+    expect(html).toContain(statusIcon("sparkles"));
+    expect(html).toContain("text-accent-ink");
+    expect(html).not.toContain("text-status-accent");
     expect(html).toContain('data-running-status="on"');
   });
 
@@ -122,10 +141,34 @@ describe("RunningStatusView", () => {
     expect(html).not.toContain("4m 5s");
     expect(html).not.toContain("tok");
     expect(html).not.toContain("data-running-speed");
-    expect(html).toContain("text-status-accent");
+    expect(html).toContain("text-ink-2");
+    expect(html).toContain("text-accent-ink");
+    expect(html).not.toContain("text-status-accent");
     expect(html).not.toContain("text-status-waiting");
     expect(html).toContain(statusIcon("terminal"));
     expect(html).not.toContain(statusIcon("sparkles"));
+  });
+
+  it("cleans raw Cron/Prompt strings in background task summaries", () => {
+    expect(formatBackgroundWhat("Cron: */30 * * * *, Prompt: Check PR status")).toBe("每 30 分钟 · Check PR status");
+    expect(formatBackgroundWhat("Cron: 0 * * * *, Prompt: Sync workspace")).toBe("每小时 · Sync workspace");
+    expect(formatBackgroundWhat("Cron: 0 */2 * * *, Prompt: Poll build")).toBe("每 2 小时 · Poll build");
+    expect(formatBackgroundWhat("Cron: 0 9 * * *, Prompt: Daily digest")).toBe("每天 09:00 · Daily digest");
+    expect(formatBackgroundWhat("Cron: 15 10 * * 1-5, Prompt: Weekday standup")).toBe("Weekday standup");
+    expect(formatBackgroundWhat("Build release")).toBe("Build release");
+    const html = render({ live: null, working: true, command: { what: "Cron: */30 * * * *, Prompt: Check PR status", more: 0 } });
+    expect(html).toContain("每 30 分钟 · Check PR status");
+    expect(html).not.toContain("Cron:");
+    expect(html).not.toContain("Prompt:");
+  });
+
+  it("shows the task prompt when the Cron fields contain comma-separated lists", () => {
+    const what = "Cron: 0,15,30 * * * 1,5, Prompt: Check deploys, then report";
+    expect(formatBackgroundWhat(what)).toBe("Check deploys, then report");
+    const html = render({ live: null, working: true, command: { what, more: 0 } });
+    expect(html).toContain("Check deploys, then report");
+    expect(html).not.toContain("Cron:");
+    expect(html).not.toContain("Prompt:");
   });
 
   it("a finished background command keeps its terminal line while it lingers, then fades without becoming Done", () => {
@@ -197,6 +240,14 @@ describe("RunningStatusView", () => {
   it("is not there while nothing works", () => {
     expect(render({ live: null, working: false })).toBe("");
   });
+
+  it("renders a subtle stop button with Esc hint when onStop is provided", () => {
+    const html = render({ live: { verb: "Frosting", elapsed_s: 5 }, working: true, onStop: () => {} });
+    expect(html).toContain("中断");
+    expect(html).toContain("<kbd");
+    expect(html).toContain("Esc</kbd>");
+    expect(html).toContain("sm:inline-flex");
+  });
 });
 
 describe("model request retries (#887)", () => {
@@ -221,12 +272,16 @@ describe("model request retries (#887)", () => {
     expect(text).not.toContain("模型服务暂时不可用");
   };
 
-  it("shows the observed error, its known classification and the current/max attempt while working", () => {
+  it("shows the retry and its classification on one warm line with the observed error as detail", () => {
     const html = render({ live: retryLive(rateLimited, 5, 10, 0), working: true });
-    expect(html).toContain(rateLimited);
+    expect(html).toContain(`title="${rateLimited}"`);
+    expect(html).toMatch(/data-running-verb="true" title="[^"]*">[^<]*5\/10[^<]*<\/span>/);
+    expect(html).toContain("text-orange");
     expect(html).toContain("5/10");
     expect(html).toContain("请求太多，被限流了");
     expect(html).toContain("重试");
+    expect(html).toContain("text-status-working");
+    expect(html).toContain(statusIcon("retry", "text-status-working"));
   });
 
   it("upgrades a generic API Error with the classifier, renders attempt updates and clears on normal work", () => {
@@ -234,15 +289,18 @@ describe("model request retries (#887)", () => {
     document.body.append(host);
     const root = createRoot(host);
     const text = () => host.textContent ?? "";
+    const detail = () => host.querySelector("[data-running-verb]")?.getAttribute("title");
     try {
       act(() => root.render(bar(retryLive("API Error", 1, 10))));
-      expect(text()).toContain("API Error");
+      expect(detail()).toBe("API Error");
+      expect(text()).not.toContain("API Error");
       expect(text()).toContain("1/10");
       expect(text()).toContain("模型请求失败");
       expect(text()).not.toContain("请求太多，被限流了");
 
       act(() => root.render(bar(retryLive(rateLimited, 5, 10))));
-      expect(text()).toContain(rateLimited);
+      expect(detail()).toBe(rateLimited);
+      expect(text()).not.toContain(rateLimited);
       expect(text()).toContain("5/10");
       expect(text()).toContain("请求太多，被限流了");
       expect(text()).not.toContain("模型请求失败");
@@ -253,6 +311,7 @@ describe("model request retries (#887)", () => {
 
       act(() => root.render(bar({ verb: "Frosting", elapsed_s: 30 })));
       expect(text()).toContain("Bash 运行中…");
+      expect(detail()).toBeNull();
       expectNoRetry(text());
       expect(text()).not.toContain("6/10");
     } finally {
@@ -268,10 +327,11 @@ describe("model request retries (#887)", () => {
     const text = () => host.textContent ?? "";
     try {
       act(() => root.render(bar(retryLive(rateLimited, 5, 10))));
-      expect(text()).toContain(rateLimited);
+      expect(host.querySelector("[data-running-verb]")?.getAttribute("title")).toBe(rateLimited);
       act(() => root.render(bar(null)));
       expect(text()).toContain("Bash 运行中…");
       expectNoRetry(text());
+      expect(host.querySelector("[data-running-verb]")?.hasAttribute("title")).toBe(false);
       expect(text()).not.toContain("5/10");
     } finally {
       act(() => root.unmount());
@@ -288,13 +348,14 @@ describe("model request retries (#887)", () => {
     const text = () => host.textContent ?? "";
     try {
       act(() => root.render(bar(retryLive(upstream, 4, 10))));
-      expect(text()).toContain(upstream);
+      expect(host.querySelector("[data-running-verb]")?.getAttribute("title")).toBe(upstream);
       expect(text()).toContain("4/10");
       expect(text()).toContain("模型服务暂时不可用");
 
       act(() => root.render(bar(null, false)));
       expect(host.querySelector('[data-running-status="linger"]')).not.toBeNull();
       expectNoRetry(text());
+      expect(host.querySelector("[data-running-verb]")?.hasAttribute("title")).toBe(false);
       expect(text()).not.toContain("4/10");
 
       act(() => { vi.advanceTimersByTime(LINGER_MS); });
@@ -319,6 +380,16 @@ describe("model request retries (#887)", () => {
     expect(html).toContain(rateLimited);
     expect(html).toContain("5/10");
     expect(html).not.toContain('data-running-background="workflow"');
+  });
+
+  it("uses the foreground retry and its clock when background work is also listed", () => {
+    const html = render({
+      live: retryLive(upstream, 4, 10, 12), working: true,
+      command: { what: "Build release", more: 0 },
+    });
+    expect(html).toContain("4/10");
+    expect(html).toMatch(/data-running-elapsed[^>]*>12s</);
+    expect(html).not.toContain("Build release");
   });
 
   it("never infers a retry from elapsed time or attempt numbers without an observed error", () => {

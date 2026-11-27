@@ -48,10 +48,13 @@ type claudeProc struct {
 	// busy, idle, shell (idle with background commands running) or waiting (claudebg.go).
 	Kind   string `json:"kind"`
 	Status string `json:"status"`
+	// StatusUpdatedAt is when Status was last written, in Unix milliseconds (0 from a Claude Code that writes none).
+	StatusUpdatedAt int64 `json:"statusUpdatedAt"`
 	// ParkedJobID is set while an interactive claude has sent its own session to the background (claudebg.go).
 	ParkedJobID string `json:"parkedJobId"`
 	JobID       string `json:"jobId"` // a background session's job (claudebg.go)
 	Spare       bool   `json:"spare"` // a warm background process no session has claimed yet
+	StartedAt   int64  `json:"startedAt"`
 	// ProcStart is when that process started, as Claude Code writes it (on Linux the starttime of /proc/<pid>/stat): a
 	// file left by a claude that exited names a pid that may belong to another program by now.
 	ProcStart string `json:"procStart"`
@@ -72,10 +75,17 @@ func literalGlobPath(path string) string {
 
 func literalGlobPathForOS(path, goos string) string {
 	if goos == "windows" {
-		return strings.NewReplacer("[", "[[]", "*", "[*]", "?", "[?]").Replace(path)
+		return windowsGlobEscapes.Replace(path)
 	}
-	return strings.NewReplacer(`\`, `\\`, "[", `\[`, "*", `\*`, "?", `\?`).Replace(path)
+	return globEscapes.Replace(path)
 }
+
+// Made once: the session list escapes every config directory on each rebuild, and a Replacer builds its table anew
+// each time it is made (#2826's allocation bound).
+var (
+	windowsGlobEscapes = strings.NewReplacer("[", "[[]", "*", "[*]", "?", "[?]")
+	globEscapes        = strings.NewReplacer(`\`, `\\`, "[", `\[`, "*", `\*`, "?", `\?`)
+)
 
 // liveClaudes reads the sessions/<pid>.json of every claude still running, in every config directory, once per pid.
 // The list calls it on every rebuild (once a second): a file is read again only once it changed (claudefiles.go).
@@ -83,7 +93,7 @@ func (n *Node) liveClaudes() []claudeProc {
 	var out []claudeProc
 	seen := map[int]bool{}
 	var dirs []string
-	for _, dir := range n.claudeConfigDirs() {
+	for _, dir := range n.existingClaudeDirs() {
 		dirs = append(dirs, filepath.Join(dir, "sessions"))
 	}
 	listed := map[string]bool{}
@@ -95,7 +105,7 @@ func (n *Node) liveClaudes() []claudeProc {
 				continue
 			}
 			st, err := os.Stat(f)
-			if err != nil || st.Size() > 64<<10 {
+			if err != nil || st.Size() > claudeFileMaxBytes {
 				continue
 			}
 			listed[f] = true

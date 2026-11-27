@@ -175,15 +175,8 @@ func (h *Hub) browserIssue(w http.ResponseWriter, r *http.Request, f *browserLog
 		f.Issued = true
 		h.logf("device token %s for %q (web, full) by browser sign-in, approved by device %s %q", f.DeviceID, f.Name, approver.ID, approver.Name)
 		// Only a web credential, as in POST /auth/tokens: an id a browser kept cannot take a phone, a watch or a link off.
-		if old := f.Replaces; old != "" && old != f.DeviceID {
-			if ok, err := h.revokeWebToken(r.Context(), old); err != nil {
-				h.logf("device token %s: replacing %s: %v", f.DeviceID, old, err)
-			} else if ok {
-				f.Replaced = old
-				h.revoked(old)
-				h.sendRevocations(newlyReachable(nil, h.meshView()))
-				h.logf("device token %s replaces %s", f.DeviceID, old)
-			}
+		if replaced := h.replaceDeviceToken(r.Context(), f.DeviceID, "web", f.Replaces); replaced != "" {
+			f.Replaced = replaced
 		}
 		h.notifyPairing(f.Name, f.DeviceID)
 	}
@@ -381,6 +374,15 @@ func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 		if code, err := adminWriteCheck(r); err != nil {
 			writeErrCode(w, http.StatusForbidden, code, err)
 			return
+		}
+		// Approving a sign-in writes a device token in the hub's database: a
+		// snapshot must not see it, and the sign-in works again after the update.
+		if isWriteRequest(r) {
+			if !h.quiesce.begin() {
+				writeErr(w, http.StatusServiceUnavailable, i18n.Err("hub-selfupdate.err_quiesced"))
+				return
+			}
+			defer h.quiesce.end()
 		}
 		if h.store == nil {
 			writeErrCode(w, http.StatusServiceUnavailable, "unavailable", i18n.Err("hub-browser_login.unavailable"))

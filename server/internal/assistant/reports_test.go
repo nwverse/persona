@@ -55,6 +55,7 @@ func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, 
 // A task's turn that ends with a merged PR is one card in the chat: the task, its stage, what was said, links to the
 // task's page, the PR and the agent; never a bare id. The todo carries the stage and the PR for the apps.
 func TestTaskDoneIsReportedInFeishu(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportService(t, true)
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
@@ -79,6 +80,7 @@ func TestTaskDoneIsReportedInFeishu(t *testing.T) {
 // A chart in the Agent's answer (persona-card, #3140) is drawn on the report card as its numbers, never cut down to
 // the title alone: the owner reads this card in Lark (#4093).
 func TestTaskReportDrawsAChartAsNumbers(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportService(t, true)
 	startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
@@ -100,6 +102,7 @@ func TestTaskReportDrawsAChartAsNumbers(t *testing.T) {
 // Changes within the delay are one card, the decision on top with its own answerable card; with reports off nothing
 // is posted.
 func TestTaskReportsMergeAndPutDecisionsFirst(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportService(t, true)
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusBlocked, "", 1)
@@ -149,8 +152,18 @@ func TestStageOf(t *testing.T) {
 			t.Errorf("stageOf(%q) = %q, want %q", text, got, want)
 		}
 	}
-	if got := stageBar("zh-Hans", ""); strings.Contains(got, "✅") || strings.Contains(got, "🔵") {
+	if got := stageBar("zh-Hans", "", false); strings.Contains(got, "✅") || strings.Contains(got, "🔵") {
 		t.Errorf("no stage: %s", got)
+	}
+	if got := stageBar("zh-Hans", "", true); strings.Contains(got, "✅") || strings.Contains(got, "完成") {
+		t.Errorf("no stage, done: %s", got) // nothing reached: the plain strip, never a Done of nothing
+	}
+	// Done after the steps taken (#11590): no current step, nothing claimed past Develop.
+	if got, want := stageBar("en", "develop", true), "✅Plan → ✅Build → ✅**Done**"; got != want {
+		t.Errorf("done at develop = %s, want %s", got, want)
+	}
+	if got := stageBar("en", "develop", false); !strings.Contains(got, "🔵**Build**") || !strings.Contains(got, "⚪Verified") {
+		t.Errorf("open at develop = %s", got)
 	}
 	_ = context.Background
 }
@@ -162,12 +175,7 @@ func TestTaskReportSkipsAskAlreadyInChat(t *testing.T) {
 	agentTurn(s, f, proto.StatusBlocked, "", 1)
 	ix := proto.Interaction{ID: "ix2", MachineID: "box", SessionID: "s1", Kind: proto.IxQuestion,
 		Questions: []proto.Question{{Question: "用哪个分支？", Options: []proto.QuestionOption{{Label: "main"}}}}}
-	s.fbot.mu.Lock()
-	if s.fbot.cards == nil {
-		s.fbot.cards = map[string]botCard{}
-	}
-	s.fbot.cards[ix.ID] = botCard{}
-	s.fbot.mu.Unlock()
+	keepChatCard(s, ix.ID, &botCard{}) // claimed: the bot is posting its card
 	s.taskReport(todo, reportNeeds, "box", [2]string{"box", "s1"}, noticeAsk(ix), &ix)
 	time.Sleep(6 * testReportDelay)
 	if got := posts(); len(got) != 0 {
@@ -208,7 +216,7 @@ func failingPosts(f *fakeHub, alwaysFail bool) (posts func() []string, reportAtt
 		_ = json.Unmarshal(p, &m)
 		mu.Lock()
 		got = append(got, m.Card)
-		isReport := strings.Contains(m.Card, `"content":"📋 `)
+		isReport := strings.Contains(m.Card, `"content":"汇报"}`)
 		if isReport {
 			attempts++
 		}
@@ -239,6 +247,7 @@ func reportsState(s *Service) (n int, timer bool) {
 // A transport failure keeps the whole batch (its terminal reports with it), schedules a retry; the second attempt
 // posts the card and only then the needs decision card; success clears pending and the timer.
 func TestTaskReportRetriesAfterTransportFailure(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.retry = testReportDelay
@@ -313,6 +322,7 @@ func TestTaskReportDroppedWhenBotNotReady(t *testing.T) {
 
 // After reportMaxRetries retries the batch is given up: the queue does not pin a dead transport forever.
 func TestTaskReportGivesUpAfterMaxRetries(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.retry = testReportDelay
@@ -337,6 +347,7 @@ func TestTaskReportGivesUpAfterMaxRetries(t *testing.T) {
 // A newer change of the same todo arriving while a failed batch waits for retry replaces the failed item; the retry
 // sends the newer state.
 func TestTaskReportRetryKeepsNewerChange(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.retry = time.Second
@@ -368,6 +379,7 @@ func TestTaskReportRetryKeepsNewerChange(t *testing.T) {
 // the superseded item is never posted, the retry carries the newer state. The first post is gated open only after the
 // newer change landed.
 func TestTaskReportMergesChangeArrivedDuringPost(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.delay = time.Second // the newer change's normal-delay timer must not fire while the post is gated
@@ -387,7 +399,7 @@ func TestTaskReportMergesChangeArrivedDuringPost(t *testing.T) {
 		_ = json.Unmarshal(p, &m)
 		mu.Lock()
 		got = append(got, m.Card)
-		firstReport := strings.Contains(m.Card, `"content":"📋 `)
+		firstReport := strings.Contains(m.Card, `"content":"汇报"}`)
 		if firstReport {
 			attempts++
 		}

@@ -124,9 +124,13 @@ func inboxTasks(t *testing.T, h *Hub) []prompts.InboxTask {
 // it that the request matches.
 func fakeScopeOpens(scopes []string, pattern, method, path string) (bool, string) {
 	if slices.Contains(extwire.Routes, pattern) {
+		relayPath := pattern
+		if _, path, qualified := strings.Cut(pattern, " "); qualified {
+			relayPath = path
+		}
 		mux := http.NewServeMux()
 		for p := range extwire.RouteScopes {
-			if _, route, _ := strings.Cut(p, " "); strings.HasPrefix(route, pattern) {
+			if _, route, _ := strings.Cut(p, " "); strings.HasPrefix(route, relayPath) {
 				mux.HandleFunc(p, func(http.ResponseWriter, *http.Request) {})
 			}
 		}
@@ -295,4 +299,11 @@ func (f *fakeExt) RecordNodeSent(context.Context, string, json.RawMessage) (any,
 
 func (f *fakeExt) MailAttachment(context.Context, proto.MailAttachmentRequest) (proto.MailAttachment, error) {
 	return proto.MailAttachment{}, errors.New("mail is not available")
+}
+
+func (f *fakeExt) WaterExtension(context.Context, bool) (*assistantwire.WaterExtension, error) {
+	return nil, nil
+}
+func (f *fakeExt) DisableWaterExtension(http.ResponseWriter, *http.Request, string) bool {
+	return false
 }

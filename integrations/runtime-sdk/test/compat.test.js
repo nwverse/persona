@@ -37,6 +37,20 @@ test('compat environment and existing root do not create an empty store', (t) =>
   assert.equal(stateDir(home, { PERSONA_HOME: legacy }), legacy)
 })
 
+test('assistant and health workspaces recognize manager IDs only under a state root', () => {
+  const home = '/example'
+  const env = { PERSONA_HOME: '~/profile' }
+  for (const name of ['assistant', 'health', 'assistant-m-01aef', 'health-m-f0']) {
+    for (const root of ['.persona', '.jarvis', 'profile']) {
+      assert.equal(isAssistantDir(join(home, root, name), home, env), true)
+    }
+    assert.equal(isAssistantDir(join(home, 'project', name), home, env), false)
+  }
+  for (const name of ['assistant-bin', 'assistant-hooks', 'assistant-m-', 'health-m-AF', 'assistant-m-0g', 'health-m-a\n']) {
+    assert.equal(isAssistantDir(join(home, '.persona', name), home, env), false)
+  }
+})
+
 test('compat websocket selects only a protocol actually offered and still checks token', () => {
   for (const protocol of ['persona-runtime.v1', 'jarvis-runtime.v1']) {
     const req = { method: 'GET', headers: { authorization: 'Bearer secret', upgrade: 'websocket', 'sec-websocket-key': 'test', 'sec-websocket-version': '13', 'sec-websocket-protocol': protocol } }
@@ -120,5 +134,13 @@ test('compat context only strips bare live snapshots and MCP aliases keep sessio
   const home = temp(t)
   const bin = join(home,'.jarvis','bin','jarvisd')
   mkdirSync(dirname(bin),{recursive:true}); writeFileSync(bin,'binary')
-  assert.equal(daemonBinary(home,{}),bin)
+  assert.equal(daemonBinary(home,{platform:'linux'}),bin)
+  const stateHome = join(home, 'fixture-state')
+  assert.equal(daemonBinary(home, { personadBin: join(home, 'no-personad'), jarvisdBin: join(home, 'no-personad'), stateHome, platform: 'linux' }), join(stateHome, 'bin', 'personad'))
+  // Windows: personad.exe, which the bare name never found, so the assistant had no Persona tools.
+  const winHome = temp(t)
+  const exe = join(winHome,'.persona','bin','personad.exe')
+  mkdirSync(dirname(exe),{recursive:true}); writeFileSync(exe,'binary')
+  assert.equal(daemonBinary(winHome,{platform:'win32'}),exe)
+  assert.equal(daemonBinary(winHome,{stateHome,platform:'win32'}),join(stateHome,'bin','personad.exe'))
 })

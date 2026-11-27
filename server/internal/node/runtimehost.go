@@ -10,12 +10,14 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -37,9 +39,16 @@ type RuntimeHost struct {
 	path    string
 	version string
 	logger  *log.Logger
+	// pipe is the named pipe runtimes the node starts dial on Windows (runtimepipe_windows.go); "" elsewhere, or
+	// when it could not be made. Set by Listen before any runtime starts, then fixed.
+	pipe string
 
-	mu   sync.Mutex
-	node *Node // the Node serving a hub connection now; nil between connections
+	mu                   sync.Mutex
+	node                 *Node                           // the Node serving a hub connection now; nil between connections
+	gp                   *gateProxy                      // last attached Node's gate proxy (resident keeper's) so disconnects between hub links release leases
+	leaseDisconnectGrace time.Duration                   // zero: runtimeLeaseDisconnectGrace (tests shorten it)
+	pendingReleases      map[string]*pendingLeaseRelease // runtime id -> deferred disconnect release while same instance may reconnect
+	closed               bool                            // Listen context ended; no new deferred timers are armed
 
 	// The daemons it dials (daemons.go), by id: their ids are reserved against runtimes on the socket.
 	dmu        sync.Mutex
@@ -55,8 +64,12 @@ type RuntimeHost struct {
 	orca orcaBridgeState
 	// cindy runs the Cindy bridge while the machine's engine is Cindy (cindybridge.go).
 	cindy cindyBridgeState
+	// t3code runs the T3 Code bridge while the machine's engine is T3 Code (t3codebridge.go).
+	t3code t3codeBridgeState
 	// agy runs the Antigravity CLI companion when agy is installed and autoCompanions is enabled (agybridge.go).
-	agy            agyBridge
+	agy agyBridge
+	// opencode runs the opencode ACP companion when opencode is installed and autoCompanions is enabled (opencodebridge.go).
+	opencode       opencodeBridge
 	autoCompanions bool
 }
 
@@ -81,12 +94,18 @@ func (rh *RuntimeHost) current() *Node {
 // attach makes n the Node serving the hub: it lists and drives the runtimes' sessions from now on. What the last hub
 // connection watched is forgotten (the new one watches afresh); runtimes hear that a hub is there.
 func (rh *RuntimeHost) attach(n *Node) {
-	rh.mu.Lock()
-	rh.node = n
-	rh.mu.Unlock()
 	n.runtimes = rh.reg
 	rh.reg.setHostOff(n.engineHostOff)
 	n.runtimeHost = rh
+	rh.mu.Lock()
+	if rh.node != n {
+		rh.reg.clearAssistantPIDs()
+	}
+	rh.node = n
+	if gp := n.existingGates(); gp != nil {
+		rh.gp = gp
+	}
+	rh.mu.Unlock()
 	rh.reg.resetWatches()
 	rh.notifyHub(true)
 }
@@ -98,10 +117,152 @@ func (rh *RuntimeHost) detach(n *Node) {
 		rh.mu.Unlock()
 		return
 	}
+	if gp := n.existingGates(); gp != nil {
+		rh.gp = gp
+	}
 	rh.node = nil
+	rh.reg.clearAssistantPIDs()
 	rh.mu.Unlock()
 	rh.reg.resetWatches()
 	rh.notifyHub(false)
+}
+
+// runtimeLeaseDisconnectGrace keeps session-scoped gate proxy leases alive across a brief non-overlapping socket
+// disconnect so a surviving companion process (runtime-sdk RETRY_PRESENT = 1s) reconnecting with the same instance
+// keeps its live Assistant workers' proxy URLs working, while still reclaiming leases if it never returns.
+const runtimeLeaseDisconnectGrace = 15 * time.Second
+
+type pendingLeaseRelease struct {
+	instance string
+	sessions []string
+	timer    *time.Timer
+}
+
+func (rh *RuntimeHost) leaseGrace() time.Duration {
+	if rh.leaseDisconnectGrace > 0 {
+		return rh.leaseDisconnectGrace
+	}
+	return runtimeLeaseDisconnectGrace
+}
+
+func (rh *RuntimeHost) releaseSessionGates(sessions []string) {
+	if len(sessions) == 0 {
+		return
+	}
+	rh.mu.Lock()
+	n, gp := rh.node, rh.gp
+	rh.mu.Unlock()
+	if cur := n.existingGates(); cur != nil {
+		cur.releaseSessions(sessions)
+	} else if gp != nil {
+		gp.releaseSessions(sessions)
+	}
+}
+
+func mergeUniqueStrings(a, b []string) []string {
+	out := make([]string, 0, len(a)+len(b))
+	seen := make(map[string]struct{}, len(a)+len(b))
+	for _, list := range [][]string{a, b} {
+		for _, s := range list {
+			if s == "" {
+				continue
+			}
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (rh *RuntimeHost) scheduleSessionGateRelease(h *runtimeConn, procID osproc.ProcIdentity, released []string) {
+	if len(released) == 0 {
+		return
+	}
+	h.mu.Lock()
+	id, instance, pid := h.hello.Runtime, h.hello.Instance, h.pid
+	h.mu.Unlock()
+	dead := pid > 0 && procID.Start != "" && !procID.StillIs(pid)
+
+	var immediate []string
+	rh.mu.Lock()
+	if id == "" || rh.closed {
+		immediate = released
+	} else if activeInst, connected := rh.reg.activeInstance(id); connected {
+		// Another connection for id is already active: same-instance reconnect preserves leases, and
+		// different-instance takeover already handled replacement in onRuntimeHello.
+		_ = activeInst
+	} else if dead {
+		immediate = released
+		if prev := rh.pendingReleases[id]; prev != nil {
+			prev.timer.Stop()
+			delete(rh.pendingReleases, id)
+			immediate = mergeUniqueStrings(prev.sessions, immediate)
+		}
+	} else {
+		if rh.pendingReleases == nil {
+			rh.pendingReleases = map[string]*pendingLeaseRelease{}
+		}
+		sessions := released
+		if prev := rh.pendingReleases[id]; prev != nil {
+			prev.timer.Stop()
+			if prev.instance != "" && instance != "" && prev.instance != instance {
+				immediate = prev.sessions
+			} else {
+				sessions = mergeUniqueStrings(prev.sessions, sessions)
+			}
+		}
+		entry := &pendingLeaseRelease{instance: instance, sessions: sessions}
+		grace := rh.leaseGrace()
+		entry.timer = time.AfterFunc(grace, func() { rh.expirePendingLeaseRelease(id, entry) })
+		rh.pendingReleases[id] = entry
+	}
+	rh.mu.Unlock()
+	rh.releaseSessionGates(immediate)
+}
+
+func (rh *RuntimeHost) expirePendingLeaseRelease(id string, entry *pendingLeaseRelease) {
+	rh.mu.Lock()
+	if rh.pendingReleases[id] != entry {
+		rh.mu.Unlock()
+		return
+	}
+	if activeInst, connected := rh.reg.activeInstance(id); connected && (activeInst == "" || entry.instance == "" || activeInst == entry.instance) {
+		delete(rh.pendingReleases, id)
+		rh.mu.Unlock()
+		return
+	}
+	delete(rh.pendingReleases, id)
+	sessions := rh.reg.unownedSessions(entry.sessions)
+	rh.mu.Unlock()
+	rh.releaseSessionGates(sessions)
+}
+
+func (rh *RuntimeHost) onRuntimeHello(id, instance string, replacedSessions []string) {
+	var toRelease []string
+	rh.mu.Lock()
+	if prev := rh.pendingReleases[id]; prev != nil {
+		prev.timer.Stop()
+		delete(rh.pendingReleases, id)
+		if prev.instance != "" && instance != "" && prev.instance != instance {
+			toRelease = append(toRelease, prev.sessions...)
+		}
+	}
+	rh.mu.Unlock()
+	toRelease = mergeUniqueStrings(toRelease, replacedSessions)
+	rh.releaseSessionGates(toRelease)
+}
+
+func (rh *RuntimeHost) cancelPendingLeaseReleases() {
+	rh.mu.Lock()
+	rh.closed = true
+	for id, entry := range rh.pendingReleases {
+		entry.timer.Stop()
+		delete(rh.pendingReleases, id)
+	}
+	rh.mu.Unlock()
 }
 
 // notifyHub tells every connected runtime whether a hub is connected.
@@ -117,10 +278,12 @@ func (rh *RuntimeHost) Listen(ctx context.Context) error {
 	if _, err := rh.listenOnce(ctx); err != nil {
 		return err
 	}
+	rh.listenPipe(ctx)
 	rh.ctx = ctx
 	rh.startDaemons(ctx)
 	if rh.autoCompanions {
 		rh.setAgyBridge(true)
+		rh.setOpencodeBridge(true)
 	}
 	go func() {
 		t := time.NewTicker(15 * time.Second)
@@ -128,6 +291,7 @@ func (rh *RuntimeHost) Listen(ctx context.Context) error {
 		for {
 			select {
 			case <-ctx.Done():
+				rh.cancelPendingLeaseReleases()
 				return
 			case <-t.C:
 			}
@@ -140,6 +304,21 @@ func (rh *RuntimeHost) Listen(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+// dialPath is where a runtime the node starts connects: the named pipe on Windows, whose Node.js cannot reach a Unix
+// socket (runtimepipe_windows.go), else the socket.
+func (rh *RuntimeHost) dialPath() string {
+	if rh.pipe != "" {
+		return rh.pipe
+	}
+	return rh.path
+}
+
+// mcpConfig is the node's mcp.json, beside the runtime socket. It follows rh.path, never dialPath: on Windows that is
+// a pipe name, whose directory is \\.\pipe.
+func (rh *RuntimeHost) mcpConfig() string {
+	return filepath.Join(filepath.Dir(rh.path), "mcp.json")
 }
 
 func (rh *RuntimeHost) listenOnce(ctx context.Context) (net.Listener, error) {
@@ -172,6 +351,7 @@ func (rh *RuntimeHost) serveConn(ctx context.Context, c io.ReadWriteCloser, daem
 	defer c.Close()
 	peer := rpc.New("r", c)
 	pid := 0
+	var procID osproc.ProcIdentity
 	if nc, ok := c.(net.Conn); ok {
 		pid, _ = peerPID(nc) // 0 for a pipe, or where the system does not tell
 	}
@@ -180,6 +360,9 @@ func (rh *RuntimeHost) serveConn(ctx context.Context, c io.ReadWriteCloser, daem
 	// runs would descend from it.
 	if pid > 0 && slices.Contains(nodeLineage(), pid) {
 		pid = 0
+	}
+	if pid > 0 {
+		procID = osproc.Identify(pid)
 	}
 	h := rh.reg.add(peer)
 	h.mu.Lock()
@@ -193,8 +376,16 @@ func (rh *RuntimeHost) serveConn(ctx context.Context, c io.ReadWriteCloser, daem
 	peer.OnEvent = func(event string, params json.RawMessage) { rh.event(h, event, params) }
 	err := peer.Serve(ctx, c)
 	peer.Close(err)
-	rh.reg.remove(h)
+	cancel()
+	released := rh.reg.remove(h)
+	rh.scheduleSessionGateRelease(h, procID, released)
 	if id := h.id(); id != "" {
+		if id == agyRuntimeID {
+			rh.wakeAgyBridge()
+		}
+		if h.isOpencodeRuntime() {
+			rh.wakeOpencodeBridge()
+		}
 		rh.logger.Printf("runtime %s #%d left: %v", id, h.serial, err)
 	}
 	if n := rh.current(); n != nil {
@@ -203,6 +394,101 @@ func (rh *RuntimeHost) serveConn(ctx context.Context, c io.ReadWriteCloser, daem
 			_ = n.peer.Notify("launchers.changed", map[string]any{})
 		}
 	}
+}
+
+func (rh *RuntimeHost) registerRuntime(ctx context.Context, h *runtimeConn, hello runtimeHello) error {
+	var preempt func(*runtimeConn, runtimeHello) bool
+	isBuiltinAgy := false
+	if hello.Runtime == agyRuntimeID && !h.isDaemon() {
+		instance := rh.builtinAgyInstance()
+		isBuiltinAgy = instance != "" && hello.Instance == instance
+		if instance != "" && hello.Instance != instance {
+			if !rh.agy.takeover.TryLock() {
+				return &rpc.Error{Code: "runtime_conflict", Message: "another agy runtime is taking over"}
+			}
+			defer rh.agy.takeover.Unlock()
+			if builtin, external := rh.agyPeers(instance); builtin != nil && !external {
+				builtin.peer.SuspendCalls()
+				defer builtin.peer.ResumeCalls()
+				grace := rh.agy.yieldGrace
+				if grace == 0 {
+					grace = agyYieldGrace
+				}
+				drain, cancel := context.WithTimeout(ctx, grace)
+				builtin.waitAgyIdle(drain)
+				cancel()
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			preempt = func(old *runtimeConn, _ runtimeHello) bool {
+				old.mu.Lock()
+				defer old.mu.Unlock()
+				return old.hello.Instance == instance
+			}
+		}
+	}
+	var yieldedOpencode *runtimeConn
+	if !h.isDaemon() && isOpencodeRuntimeHello(hello) {
+		instance := rh.builtinOpencodeInstance()
+		isBuiltinOpencode := hello.Runtime == opencodeRuntimeID && instance != "" && hello.Instance == instance
+		if instance != "" && !isBuiltinOpencode {
+			if !rh.opencode.takeover.TryLock() {
+				return &rpc.Error{Code: "runtime_conflict", Message: "another opencode runtime is taking over"}
+			}
+			defer rh.opencode.takeover.Unlock()
+			if builtin, external := rh.opencodePeers(instance); builtin != nil && !external {
+				builtin.peer.SuspendCalls()
+				defer builtin.peer.ResumeCalls()
+				grace := rh.opencode.yieldGrace
+				if grace == 0 {
+					grace = opencodeYieldGrace
+				}
+				drain, cancel := context.WithTimeout(ctx, grace)
+				builtin.waitAgyIdle(drain)
+				cancel()
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				yieldedOpencode = builtin
+			}
+			if hello.Runtime == opencodeRuntimeID {
+				preempt = func(old *runtimeConn, _ runtimeHello) bool {
+					old.mu.Lock()
+					defer old.mu.Unlock()
+					return old.hello.Instance == instance
+				}
+			}
+		}
+	}
+	stale, replacedSessions, err := rh.reg.registerHello(h, hello, rh.reservedID, preempt)
+	if err != nil {
+		return err
+	}
+	rh.onRuntimeHello(hello.Runtime, hello.Instance, replacedSessions)
+	if yieldedOpencode != nil && !slices.Contains(stale, yieldedOpencode) {
+		stale = append(stale, yieldedOpencode)
+	}
+	h.mu.Lock()
+	h.builtinAgy = isBuiltinAgy
+	h.mu.Unlock()
+	for _, old := range stale {
+		old.mu.Lock()
+		drop := old.drop
+		old.mu.Unlock()
+		old.peer.Close(errors.New("the runtime reconnected"))
+		if drop != nil {
+			drop()
+		}
+	}
+	if hello.Runtime == agyRuntimeID {
+		rh.wakeAgyBridge()
+	}
+	if !h.isDaemon() && isOpencodeRuntimeHello(hello) {
+		rh.noteOpencodeHello(hello)
+		rh.wakeOpencodeBridge()
+	}
+	return nil
 }
 
 // request answers a runtime's call.
@@ -223,21 +509,12 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		hello.Instance = strings.TrimSpace(hello.Instance)
 		hello.Launchers = cleanLaunchers(hello.Launchers)
-		stale, err := rh.reg.hello(h, hello, rh.reservedID)
-		if err != nil {
+		if err := rh.registerRuntime(ctx, h, hello); err != nil {
 			rh.logger.Printf("runtime %s #%d refused: %v", hello.Runtime, h.serial, err)
 			return nil, err
 		}
-		for _, o := range stale { // this process again, on a new connection: the old one is dead
-			o.mu.Lock()
-			drop := o.drop
-			o.mu.Unlock()
-			o.peer.Close(errors.New("the runtime reconnected"))
-			if drop != nil {
-				drop()
-			}
-		}
 		rh.logger.Printf("runtime %s %s #%d connected", hello.Runtime, hello.Version, h.serial)
+		rh.claimCodex(h, hello.CodexClaims)
 		if rh.autoCompanions && (hello.Launcher != "" || len(hello.Launchers) > 0) {
 			if n := rh.current(); n != nil && n.peer != nil {
 				_ = n.peer.Notify("launchers.changed", map[string]any{})
@@ -257,10 +534,17 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// runtime with caps.modes; resume: a runtime with caps.resume that is the machine's engine is asked to take
 		// sessions over (runtimecontrol.go). workspaces: runtime.workspaces is kept and, for a runtime with
 		// caps.workspaces that is the machine's engine, listed as its catalog and asked to make worktrees
-		// (runtimeworkspaces.go).
+		// (runtimeworkspaces.go). codex_claims: hello's codex_claims name Codex app-server instances the node leaves
+		// to the runtime (codex_instance_claims.go), a runtime on the socket's only.
 		features := []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces", "usage"}
 		if !h.isDaemon() {
-			features = append(features, "leader_tools")
+			features = append(features, "usage_windows", "leader_tools", "supervision_policy", "a2a_mcp", "remote_agent", "memory_tools", "codex_claims")
+			if hello.Caps.Assistant {
+				features = append(features, "assistant_pids")
+				if hello.Caps.AssistantEnvironment && !hello.Caps.RemoteAgent {
+					features = append(features, "assistant_command_gate")
+				}
+			}
 		}
 		res := map[string]any{"protocol": RuntimeProtocol, "node_version": rh.version, "hub": rh.current() != nil,
 			"features": features}
@@ -270,6 +554,8 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		return res, nil
 	case "runtime.package":
 		return rh.servePackage(h, params)
+	case "runtime.a2a_mcp":
+		return rh.a2aMCPToken(h, params)
 	case "interaction.create":
 		n := rh.current()
 		if n == nil { // no hub to put it in front of the phone: ask again (same id) once one is connected
@@ -277,9 +563,6 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		return n.runtimeAsk(ctx, h, params)
 	case "mcp.tools":
-		if h.isDaemon() { // its link answers these itself; a daemon gets no phone or Persona tools
-			return nil, errUnsupportedForDaemons("Persona tools")
-		}
 		n := rh.current()
 		if n == nil || n.peer == nil {
 			return map[string]any{"tools": []proto.Tool{}}, nil
@@ -292,7 +575,7 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			SessionID  string `json:"session_id"`
 		}
 		_ = json.Unmarshal(params, &p)
-		if p.SessionID != "" && !rh.reg.owns(h, p.SessionID) {
+		if p.SessionID != "" && !rh.reg.owns(h, p.SessionID) || h.isDaemon() && p.SessionID == "" {
 			return map[string]any{"tools": []proto.Tool{}}, nil
 		}
 		assistant := p.Assistant && h.assistant()
@@ -312,15 +595,22 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		if assistant && !p.LeaderOnly {
 			res.Tools = append(res.Tools, n.gateTools()...)
+			if h.remoteAgent() {
+				if p.SessionID == "" {
+					res.Tools = append(res.Tools, n.memoryTools()...)
+				} else if _, ok := n.sessionAllowsMemoryTools(p.SessionID); ok {
+					res.Tools = append(res.Tools, n.memoryTools()...)
+				}
+			}
+		}
+		if h.isDaemon() {
+			res.Tools = slices.DeleteFunc(res.Tools, func(tool proto.Tool) bool { return !assistantwire.IsA2ATool(tool.Name) })
 		}
 		if res.Tools == nil {
 			res.Tools = []proto.Tool{}
 		}
 		return res, nil
 	case "mcp.call":
-		if h.isDaemon() {
-			return nil, errUnsupportedForDaemons("Persona tools")
-		}
 		n := rh.current()
 		if n == nil || n.peer == nil {
 			return proto.TextResult("Persona hub is not connected", true), nil
@@ -334,6 +624,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("bad mcp.call: %w", err)
 		}
+		if h.isDaemon() && !assistantwire.IsA2ATool(p.Name) {
+			return nil, errUnsupportedForDaemons("non-A2A tools")
+		}
 		// As the assistant only for one of the assistant's conversations that this runtime runs.
 		assistant := p.Assistant && h.assistant() && rh.reg.owns(h, p.SessionID) && n.isAssistantSession(p.SessionID)
 		if !assistant && slices.Contains(callerTools, p.Name) && !rh.reg.owns(h, p.SessionID) {
@@ -343,7 +636,17 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			return n.saveMailAttachment(ctx, p.Args, p.SessionID, assistant, n.guestOf(p.SessionID) != nil), nil
 		}
 		if g := n.gateTool(p.Name); assistant && g != nil {
+			if h.remoteAgent() {
+				rh.reg.markRemote(p.SessionID)
+				n.gates().markRemote(p.SessionID)
+			}
 			return n.assistantGateTool(ctx, g, p.SessionID, p.Args), nil
+		}
+		if isMemoryTool(p.Name) {
+			if !h.remoteAgent() || !assistant {
+				return proto.TextResult("Memory tools require a remote assistant session", true), nil
+			}
+			return n.assistantMemoryTool(ctx, p.Name, p.SessionID, p.Args), nil
 		}
 		var res json.RawMessage
 		params := map[string]any{"name": p.Name, "args": p.Args, "session_id": p.SessionID, "assistant": assistant, "guest": n.guestOf(p.SessionID) != nil}
@@ -351,6 +654,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			params["origin"] = origin
 		}
 		err := n.peer.Call(ctx, "mcp.call", params, &res)
+		if err == nil {
+			res = n.toolViews.stripRaw(p.SessionID, p.Name, res)
+		}
 		return res, err
 	}
 	return nil, fmt.Errorf("unknown method %s", method)
@@ -364,6 +670,21 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 	h.mu.Unlock()
 	if !ready {
 		return // hello first
+	}
+	if event == "runtime.assistant_pids" {
+		var p struct {
+			PIDs map[string]int `json:"pids"`
+		}
+		if json.Unmarshal(params, &p) == nil {
+			rh.mu.Lock()
+			defer rh.mu.Unlock()
+			n := rh.node
+			if n == nil {
+				p.PIDs = nil
+			}
+			rh.reg.setAssistantPIDs(h, p.PIDs, func(id string) bool { return n != nil && n.runtimeAssistantChat(h, id) })
+		}
+		return
 	}
 	n := rh.current()
 	if event == "runtime.launchers" { // its launchers changed (runtimecontrol.go)
@@ -398,8 +719,12 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 			return
 		}
 		var moved []string
+		var agyPaneBackground map[string][]proto.BackgroundTask
 		if !h.isDaemon() { // a daemon's offline sessions are not resumed in this machine's terminal engine
 			x := runtimeRowExtras(params, len(p.Sessions))
+			if h.id() == agyRuntimeID {
+				agyPaneBackground = agyPaneBackgroundFromRows(params)
+			}
 			h.setResume(x.resume)
 			// …nor read from this machine's transcripts: a daemon names none (runtimetranscript.go).
 			ts := x.transcripts
@@ -416,7 +741,7 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		if cap(list) > 2*len(list)+8 { // the list shrank: keep no array of the old size
 			list = append(make([]proto.Session, 0, len(list)), list...)
 		}
-		rewatch, driven := rh.reg.setSessions(h, list)
+		rewatch, driven := rh.reg.setSessionList(h, list, agyPaneBackground)
 		for _, id := range driven { // started for the hub by another runtime: its cards go to the phone first here too
 			if h.peer != nil {
 				_ = h.peer.Notify("runtime.driven", map[string]any{"session_id": id})
@@ -435,7 +760,7 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 				}
 			}()
 		}
-		n.publish(n.sessionList(context.Background(), false))
+		n.publishSessionsSoon()
 		return
 	}
 	if n != nil {

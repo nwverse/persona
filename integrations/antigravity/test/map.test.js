@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { describe, it } from 'node:test'
 import { MCP_SERVER_NAMES } from '../../runtime-sdk/lib/compat.js'
+import { page } from '../../runtime-sdk/index.js'
 import {
   agyModeToPersona,
+  cleanAssistantText,
   cleanGenericOutput,
   cleanUserText,
   mapToolCall,
@@ -15,6 +20,21 @@ import {
 } from '../lib/map.js'
 
 describe('antigravity transcript and tool mapping', () => {
+  it('keeps botmux marker lines out of reply previews within the current turn', () => {
+    const marker = 'BOTMUX_NOTHING_TO_SEND'
+    const reply = (content) => ({ type: 'PLANNER_RESPONSE', content })
+    const mention = `The guide mentions ${marker}.`
+    const mixed = reply(`${mention}\n${marker}`)
+    const steps = [mixed, reply(marker)]
+    for (const summaryOnly of [false, true]) {
+      const result = stepsToItems(steps, { summaryOnly })
+      assert.equal(result.lastText, mention)
+      if (!summaryOnly) assert.deepEqual(result.items.map((item) => item.text), [mixed.content, marker])
+      const next = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'Next question' }
+      assert.equal(stepsToItems([...steps, next, reply(marker)], { summaryOnly }).lastText, '')
+    }
+  })
+
   it('keeps reply previews within the latest explicit user turn', () => {
     const question = { type: 'PLANNER_RESPONSE', content: 'Which configuration should I use?' }
     const prompt = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'What were the results?' }
@@ -48,6 +68,40 @@ describe('antigravity transcript and tool mapping', () => {
   it('extracts user request and strips persona-context', () => {
     const raw = `<USER_REQUEST>\n<persona-context>\nsnapshot\n</persona-context>\n\nHello world\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>`
     assert.equal(cleanUserText(raw), 'Hello world')
+  })
+
+  it('projects native context resources without hiding ordinary user labels', () => {
+    const user = 'Please reply OK.\nKeep this second line.'
+    const label = 'Content of persona-context:///snapshot.txt:\n'
+    const context = '<persona-context>Attached context with /compact</persona-context>'
+    const cases = [
+      ['native first request', `<USER_REQUEST>\n${label}${context}${user}\n</USER_REQUEST>\n<ADDITIONAL_METADATA>clock</ADDITIONAL_METADATA>`, user],
+      ['unwrapped resource', label + context + user, user],
+      ['another Persona URI', 'Content of persona-context:///other.txt:\r\n' + context + user, user],
+      ['successive resources', label + context + '\n' + label + context + user, user],
+      ['no prefix', user, user],
+      ['literal label', label + user, label + user],
+      ['other URI', 'Content of file:///snapshot.txt:\n' + context + user, 'Content of file:///snapshot.txt:\n' + user],
+      ['similar scheme', 'Content of persona-context-extra:///snapshot.txt:\n' + context + user, 'Content of persona-context-extra:///snapshot.txt:\n' + user],
+      ['quoted label', 'Example:\n' + label + user, 'Example:\n' + label + user],
+      ['incomplete envelope', label + '<persona-context>unfinished', label + '<persona-context>unfinished'],
+      ['leading resource with literal context tags', label + '<persona-context><persona-context>inner</persona-context>outer</persona-context>' + user, user],
+      ['leading resource with nested prose', label + '<persona-context>outer\n<persona-context>inner</persona-context>\n\nGenerated prose\n</persona-context>\n' + user, user],
+      ['trailing resource', user + '\n\n' + label + context, user],
+      ['trailing resource with literal context tags', user + '\n\n' + label + '<persona-context><persona-context>inner</persona-context>outer</persona-context>', user],
+      ['trailing resource before user prose', user + '\n\n' + label + '<persona-context>generated</persona-context>\n\nMy example: <persona-context>user</persona-context>', user + '\n\nMy example:'],
+      ['resources around user prose', user + '\n\n' + label + context + '\n\nkeep me\n\n' + label + context, user + '\n\nkeep me'],
+      ['trailing view errors', user + '\n\n<persona-view-errors>bad</persona-view-errors>', user],
+      ['malformed trailing URI', user + '\n\nContent of persona-context:// /snapshot.txt:\n' + context, user + '\n\nContent of persona-context:// /snapshot.txt:'],
+      ['quoted trailing label', 'Example: ' + label + context, 'Example: Content of persona-context:///snapshot.txt:'],
+    ]
+    for (const [name, content, expected] of cases) {
+      const steps = [{ step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', content }]
+      const { items } = stepsToItems(steps)
+      assert.equal(items[0].text, expected, name)
+      assert.equal(items[0].role, 'user', name)
+      assert.equal(steps[0].content, content, 'native content stays unchanged')
+    }
   })
 
   it('maps tool names and inputs to Persona conventions', () => {
@@ -165,6 +219,261 @@ describe('antigravity transcript and tool mapping', () => {
     assert.equal(items[4].text.trim(), 'total 0')
   })
 
+  it('uses native indices for files and client messages after projected steps move', () => {
+    const brainDir = mkdtempSync(join(tmpdir(), 'agy-native-index-'))
+    try {
+      const output = join(brainDir, '.system_generated', 'steps', '8', 'output.txt')
+      mkdirSync(dirname(output), { recursive: true })
+      writeFileSync(output, 'complete native output')
+      const { items } = stepsToItems([
+        { step_index: 8, native_step_index: 7, type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'hello' },
+        { step_index: 9, native_step_index: 8, type: 'GENERIC', content: 'truncated', truncated_fields: ['content'] },
+      ], { full: true, brainDir, clientMsgIdFor: (index) => `client-${index}` })
+      assert.equal(items[0].client_msg_id, 'client-7')
+      assert.equal(items[1].text, 'complete native output')
+    } finally {
+      rmSync(brainDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps a delivered reply and attachment outside a later native wake on pages and catch-up', () => {
+    const steps = readFileSync(new URL('./fixtures/autonomous-wake.jsonl', import.meta.url), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    const prior = stepsToItems(steps.slice(0, 3), { full: true })
+    const pending = stepsToItems(steps.slice(0, 5), { full: true })
+    const all = stepsToItems(steps, { full: true })
+    assert.deepEqual(pending.items, prior.items, 'a notification alone is not a visible wake')
+    assert.equal(pending.toSeq, 5)
+    assert.deepEqual(all.items.slice(0, 2), prior.items)
+    assert.match(prior.items[1].text, /file: \/synthetic\/chart\.png/)
+    const catchUp = page(all.items, { after_seq: pending.toSeq }, { toSeq: all.toSeq })
+    assert.deepEqual(catchUp.items.map((item) => [item.seq, item.kind, item.wake]), [
+      [6, 'notice', true], [6, 'text', undefined], [8, 'text', undefined], [9, 'text', undefined],
+    ])
+    assert.equal(catchUp.items[0].id, prior.items[1].id.replace(/#\d+$/, '#-1'))
+    assert.deepEqual(stepsToItems(steps).items.map((item) => item.id), all.items.map((item) => item.id))
+    assert.doesNotMatch(JSON.stringify(all.items), /Synthetic|housekeeping|second notification/)
+    const checkpoint = { step_index: 4, type: 'CHECKPOINT', created_at: steps[4].created_at }
+    const compacted = [...steps.slice(0, 4), checkpoint]
+    assert.deepEqual(stepsToItems(compacted).items.slice(-1).map(item => [item.kind, item.text, item.wake]), [['notice', '上下文已压缩', undefined]])
+    const afterCheckpoint = stepsToItems([...compacted, steps[5]])
+    assert.deepEqual(afterCheckpoint.items.slice(-2).map(item => item.id), catchUp.items.slice(0, 2).map(item => item.id))
+    const emptyPlanner = { step_index: 5, type: 'PLANNER_RESPONSE', status: 'RUNNING' }
+    assert.deepEqual(stepsToItems([...compacted, emptyPlanner, ...steps.slice(7)]).items.filter(item => item.wake), [])
+  })
+
+  it('does not let a call that never got a result shift the results of later calls', () => {
+    const at = '2026-11-05T10:00:00Z'
+    const step = (step_index, type, extra = {}) => ({ step_index, type, source: type === 'USER_INPUT' ? 'USER_EXPLICIT' : 'MODEL', status: 'DONE', created_at: at, ...extra })
+    const call = (name) => ({ name, args: {} })
+    const { items } = stepsToItems([
+      step(0, 'USER_INPUT', { content: 'go' }),
+      step(1, 'PLANNER_RESPONSE', { tool_calls: [call('view_file'), call('run_command')] }),
+      step(2, 'GENERIC', { content: 'first' }), // the second call was interrupted: no result
+      step(3, 'USER_INPUT', { content: 'again' }),
+      step(4, 'PLANNER_RESPONSE', { tool_calls: [call('view_file')] }),
+      step(5, 'GENERIC', { content: 'second' }),
+      step(6, 'PLANNER_RESPONSE', { thinking: 'more', tool_calls: [call('view_file'), call('grep_search')] }),
+      step(7, 'SYSTEM_MESSAGE', { content: 'a background task finished' }),
+      step(8, 'GENERIC', { content: 'third' }),
+      step(9, 'GENERIC', { content: 'fourth' }),
+    ])
+    const uses = items.filter((item) => item.kind === 'tool_use')
+    const results = new Map(items.filter((item) => item.kind === 'tool_result').map((item) => [item.tool_use_id, item.text]))
+    assert.deepEqual(uses.map((use) => results.get(use.tool_use_id)), ['first', undefined, 'second', 'third', 'fourth'])
+  })
+
+  it('opts into lazy tool media without changing Read metadata, user attachments, or turn pagination', () => {
+    const inline = { mime_type: 'image/gif', data: 'R0lGODlh' }
+    const steps = [
+      {
+        step_index: 0,
+        source: 'USER_EXPLICIT',
+        type: 'USER_INPUT',
+        status: 'DONE',
+        created_at: '2026-11-19T10:00:00Z',
+        content: '<USER_REQUEST>\nCheck this screenshot\n\n<attached_images>\n/tmp/user-upload.png\n</attached_images>\n</USER_REQUEST>',
+        media: [{ mime_type: 'image/png', uri: '/tmp/user-upload.png' }],
+      },
+      {
+        step_index: 1,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        created_at: '2026-11-19T10:00:01Z',
+        tool_calls: [
+          { name: 'read_file', args: { Path: '/work/shots/ui.png' } },
+          { name: 'view_file', args: { AbsolutePath: '/work/shots/detail.jpg' } },
+          { name: 'run_command', args: { CommandLine: 'capture-screen' } },
+        ],
+      },
+      {
+        step_index: 2,
+        source: 'MODEL',
+        type: 'GENERIC',
+        status: 'DONE',
+        created_at: '2026-11-19T10:00:02Z',
+        content: 'Read image /work/shots/ui.png',
+        media: [
+          { mime_type: 'image/png', uri: '/work/shots/ui.png' },
+          { mime_type: 'application/pdf', uri: '/work/spec.pdf' },
+          inline,
+          { mime_type: 'image/png' },
+        ],
+      },
+      {
+        step_index: 3,
+        source: 'MODEL',
+        type: 'GENERIC',
+        status: 'DONE',
+        created_at: '2026-11-19T10:00:03Z',
+        content: '',
+        media: [{ mime_type: 'image/jpeg', uri: '/work/shots/detail.jpg' }],
+      },
+      {
+        step_index: 4,
+        source: 'MODEL',
+        type: 'GENERIC',
+        status: 'DONE',
+        created_at: '2026-11-19T10:00:04Z',
+        content: 'captured',
+        media: [{ mime_type: 'image/webp', uri: 'steps/4/capture.webp' }],
+      },
+      {
+        step_index: 5,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        created_at: '2026-11-19T10:00:05Z',
+        content: 'All screenshots look aligned.',
+      },
+    ]
+
+    for (const full of [false, true]) {
+      const { items, toSeq, lastText } = stepsToItems(steps, { full })
+      assert.equal(toSeq, 6)
+      assert.equal(lastText, 'All screenshots look aligned.')
+      assert.equal(items.some((it) => it.kind === 'image'), false, `full=${full}: must not emit image items`)
+      assert.equal(items.some((it) => 'lazy' in it || Boolean(it.image?.lazy)), false, `full=${full}: must not emit lazy image placeholders`)
+
+      const userItems = items.filter((it) => it.role === 'user' && it.kind !== 'tool_result')
+      assert.equal(userItems.length, 1)
+      assert.equal(userItems[0].kind, 'text')
+      assert.equal(userItems[0].text, 'Check this screenshot\n\n<attached_images>\n/tmp/user-upload.png\n</attached_images>')
+
+      const uses = items.filter((it) => it.kind === 'tool_use')
+      const results = items.filter((it) => it.kind === 'tool_result')
+      assert.equal(uses.length, 3)
+      assert.equal(results.length, 3)
+      assert.equal(uses[0].tool_name, 'Read')
+      assert.deepEqual(uses[0].tool_input, { file_path: '/work/shots/ui.png' })
+      assert.equal(uses[1].tool_name, 'Read')
+      assert.deepEqual(uses[1].tool_input, { file_path: '/work/shots/detail.jpg' })
+      assert.equal(uses[2].tool_name, 'Bash')
+      assert.deepEqual(
+        results.map((r) => [r.tool_use_id, r.is_error, r.text]),
+        [
+          [uses[0].tool_use_id, false, 'Read image /work/shots/ui.png'],
+          [uses[1].tool_use_id, false, ''],
+          [uses[2].tool_use_id, false, 'captured'],
+        ],
+      )
+
+      // Turn pagination must stay intact: tool results with step.media must not look like extra user turns.
+      const paged = page(items, { turns: 1 }, { history: 'h', toSeq })
+      assert.equal(paged.has_more, false, `full=${full}: single turn must not be split by tool media`)
+      assert.equal(paged.items[0].id, userItems[0].id)
+
+      const mapped = stepsToItems(steps, { full, includeMedia: true })
+      const images = mapped.items.filter((item) => item.kind === 'image')
+      const expected = [[0, 0, 'png'], [0, 2, 'gif'], [1, 0, 'jpeg'], [2, 0, 'webp']]
+      assert.deepEqual(images, expected.map(([resultIndex, mediaIndex, format]) => {
+        const { id, seq, tool_use_id, ts } = results[resultIndex]
+        return { id: id.replace(/#0$/, `#media${mediaIndex}`), seq, role: 'assistant', kind: 'image', tool_use_id, ts,
+          image: { mime: `image/${format}`, data: '', lazy: true } }
+      }))
+      assert.equal(mapped.media, undefined)
+      assert.equal(stepsToItems(steps, { includeMedia: true, mediaItemId: images[1].id }).media, inline)
+      assert.equal(stepsToItems(steps, { mediaItemId: images[1].id }).media, undefined)
+      const withMedia = page(mapped.items, { turns: 1 }, { history: 'h', toSeq: mapped.toSeq })
+      assert.deepEqual({ ...withMedia, items: withMedia.items.filter((item) => item.kind !== 'image') }, paged)
+    }
+
+    // Photo-only user uploads carried via <attached_images> still produce the user text item without lazy image items.
+    const photoOnly = stepsToItems([
+      {
+        step_index: 0,
+        source: 'USER_EXPLICIT',
+        type: 'USER_INPUT',
+        status: 'DONE',
+        created_at: '2026-11-19T10:01:00Z',
+        content: '<USER_REQUEST>\n<attached_images>\n/tmp/only-photo.png\n</attached_images>\n</USER_REQUEST>',
+        media: [{ mime_type: 'image/png', uri: '/tmp/only-photo.png' }],
+      },
+    ], { includeMedia: true })
+    assert.equal(photoOnly.items.length, 1)
+    assert.equal(photoOnly.items[0].kind, 'text')
+    assert.equal(photoOnly.items[0].text, '<attached_images>\n/tmp/only-photo.png\n</attached_images>')
+  })
+
+  it('normalizes local file:// Markdown links and images in assistant replies only', () => {
+    const cases = [
+      ['unix file link', 'See [notes.md](file:///work/repo/notes.md).', 'See [notes.md](/work/repo/notes.md).'],
+      ['line fragment', 'Check [app.go](file:///work/repo/app.go#L10-L20).', 'Check [app.go](/work/repo/app.go#L10-L20).'],
+      ['localhost authority', '[doc](file://localhost/work/repo/doc.md)', '[doc](/work/repo/doc.md)'],
+      ['uppercase scheme and percent spaces', '[a](FILE:///work/My%20Notes/a.md)', '[a](/work/My%20Notes/a.md)'],
+      ['angle-bracket destination', '[a](<file:///work/My Notes/a.md> "title")', '[a](</work/My Notes/a.md> "title")'],
+      ['balanced parens and title', '[p](file:///work/photo(1).png "shot")', '[p](/work/photo(1).png "shot")'],
+      ['image destination', '![chart](file:///work/repo/chart.png)', '![chart](/work/repo/chart.png)'],
+      ['windows drive', '[win](file:///C:/work/notes.md#L5)', '[win](C:/work/notes.md#L5)'],
+      ['windows encoded colon', '[win](file:///c%3A/work/notes.md)', '[win](c:/work/notes.md)'],
+      ['reference definition', '[ref]: file:///work/repo/notes.txt "Ref"', '[ref]: /work/repo/notes.txt "Ref"'],
+      ['list continuation', '- item\n    [notes](file:///work/notes.md)', '- item\n    [notes](/work/notes.md)'],
+      ['inline code untouched', 'Use `[notes](file:///work/notes.md)` literally.', 'Use `[notes](file:///work/notes.md)` literally.'],
+      ['fenced code untouched', '```md\n[notes](file:///work/notes.md)\n```\n[live](file:///work/live.md)', '```md\n[notes](file:///work/notes.md)\n```\n[live](/work/live.md)'],
+      ['indented code untouched', 'Example:\n\n    [notes](file:///work/notes.md)\n\n[live](file:///work/live.md)', 'Example:\n\n    [notes](file:///work/notes.md)\n\n[live](/work/live.md)'],
+      ['remote host untouched', '[r](file://other-host/share/notes.md)', '[r](file://other-host/share/notes.md)'],
+      ['unc double slash untouched', '[u](file:////server/share/notes.md)', '[u](file:////server/share/notes.md)'],
+      ['percent-encoded double slash untouched', '[u](file:///%2fserver/share/notes.md)', '[u](file:///%2fserver/share/notes.md)'],
+      ['percent-encoded double slash with invalid utf8 untouched', '[u](file:///%2f%ffserver/share/notes.md)', '[u](file:///%2f%ffserver/share/notes.md)'],
+      ['hub route untouched', '[api](file:///api/v1/sessions)', '[api](file:///api/v1/sessions)'],
+      ['dot-segment hub route untouched', '[api](file:///./api/v1/sessions)', '[api](file:///./api/v1/sessions)'],
+      ['parent-segment hub route untouched', '[api](file:///work/../api/v1/sessions)', '[api](file:///work/../api/v1/sessions)'],
+      ['duplicate-slash hub route untouched', '[api](file:///api//v1/sessions)', '[api](file:///api//v1/sessions)'],
+      ['percent-encoded hub route with bad percent untouched', '[api](file:///%61pi/v1/sessions%ZZ)', '[api](file:///%61pi/v1/sessions%ZZ)'],
+      ['query string untouched', '[q](file:///work/notes.md?x=1)', '[q](file:///work/notes.md?x=1)'],
+      ['nul byte untouched', '[n](file:///work/notes%00.md)', '[n](file:///work/notes%00.md)'],
+      ['percent-encoded control char untouched', '[c](file:///work/notes%0a.md)', '[c](file:///work/notes%0a.md)'],
+      ['percent literal in filename', '[p](file:///work/100%25_done.md)', '[p](/work/100%25_done.md)'],
+      ['percent literal before 00 in filename', '[p](file:///work/%2500_note.md)', '[p](/work/%2500_note.md)'],
+      ['percent literal before 2f in leading segment', '[p](file:///%252fdir/note.md)', '[p](/%252fdir/note.md)'],
+      ['relative file scheme untouched', '[rel](file:notes.md)', '[rel](file:notes.md)'],
+      ['escaped bracket untouched', 'text \\](file:///work/notes.md)', 'text \\](file:///work/notes.md)'],
+      ['partial streaming link untouched', 'See [notes](file:///work/no', 'See [notes](file:///work/no'],
+    ]
+    for (const [name, input, expected] of cases) {
+      assert.equal(cleanAssistantText(input), expected, name)
+    }
+
+    const { items, lastText } = stepsToItems([
+      { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', content: 'Open [u](file:///work/u.md)' },
+      {
+        step_index: 1,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        thinking: 'Checking [t](file:///work/t.md)',
+        content: 'Opened [notes.md](file:///work/notes.md#L12) and ![img](file:///work/img.png).',
+        tool_calls: [{ name: 'view_file', args: { AbsolutePath: '/work/notes.md' } }],
+      },
+      { step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', content: '[out](file:///work/out.md)' },
+    ])
+    assert.equal(items[0].text, 'Open [u](file:///work/u.md)')
+    assert.equal(items[1].text, 'Checking [t](file:///work/t.md)')
+    assert.equal(items[2].text, 'Opened [notes.md](/work/notes.md#L12) and ![img](/work/img.png).')
+    assert.equal(items[4].text, '[out](file:///work/out.md)')
+    assert.equal(lastText, 'Opened [notes.md](/work/notes.md#L12) and ![img](/work/img.png).')
+  })
+
   it('maps modes between Persona and Antigravity ACP', () => {
     assert.equal(personaModeToAgy('plan'), 'plan')
     assert.equal(personaModeToAgy('acceptEdits'), 'accept-edits')
@@ -173,5 +482,213 @@ describe('antigravity transcript and tool mapping', () => {
     assert.equal(personaModeToAgy('default'), 'default')
     assert.equal(agyModeToPersona('accept-edits'), 'acceptEdits')
     assert.equal(cleanGenericOutput('Created At: 2026\nOutput:\nhello'), 'hello')
+  })
+
+  it('strips Antigravity RFC3339 Created At / Completed At headers from GENERIC tool results without altering ordinary text', () => {
+    const receipt = '{"level":"triage","summary":"All checks quiet.","visibility":"silent"}'
+    const cases = [
+      [
+        '4-line duplicate RFC3339 MCP header + silent receipt',
+        'Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\n' + receipt,
+        receipt,
+      ],
+      [
+        '2-line fractional UTC header with CRLF',
+        'Created At: 2026-11-23T09:10:40.125Z\r\nCompleted At: 2026-11-23T09:10:44.500Z\r\n{"visibility":"user"}',
+        '{"visibility":"user"}',
+      ],
+      [
+        '2-line header + immediate Output marker',
+        'Created At: 2026-11-23T09:10:40Z\nCompleted At: 2026-11-23T09:10:44Z\nOutput:\ntotal 0\n',
+        'total 0\n',
+      ],
+      [
+        '2-line header + body containing later Output marker keeps body intact',
+        'Created At: 2026-11-23T09:10:40Z\nCompleted At: 2026-11-23T09:10:44Z\nShowing lines 1-3\nOutput:\nkeep me',
+        'Showing lines 1-3\nOutput:\nkeep me',
+      ],
+      [
+        '2-line header followed by ordinary Created At text keeps ordinary text',
+        'Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nCreated At: yesterday\nNotes',
+        'Created At: yesterday\nNotes',
+      ],
+      [
+        'legacy single Created At + Output marker',
+        'Created At: 2026-11-05T10:00:02Z\nOutput:\ntotal 0\n',
+        'total 0\n',
+      ],
+      [
+        'ordinary Created At date-only text is untouched',
+        'Created At: 2026-11-23\nCompleted At: 2026-11-23\nHello',
+        'Created At: 2026-11-23\nCompleted At: 2026-11-23\nHello',
+      ],
+      [
+        'ordinary single Created At RFC3339 line without Completed At is untouched',
+        'Created At: 2026-11-23T16:10:40+08:00\nTitle: Weekly notes',
+        'Created At: 2026-11-23T16:10:40+08:00\nTitle: Weekly notes',
+      ],
+      [
+        'non-leading Created At / Completed At block is untouched',
+        'Summary:\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nBody',
+        'Summary:\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nBody',
+      ],
+      [
+        'invalid Completed At timestamp is untouched',
+        'Created At: 2026-11-23T16:10:40+08:00\nCompleted At: soon\n' + receipt,
+        'Created At: 2026-11-23T16:10:40+08:00\nCompleted At: soon\n' + receipt,
+      ],
+    ]
+    for (const [name, input, expected] of cases) {
+      assert.equal(cleanGenericOutput(input), expected, name)
+    }
+
+    const { items } = stepsToItems([
+      { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-11-23T08:10:39Z', content: 'Supervision check' },
+      {
+        step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-23T08:10:40Z',
+        tool_calls: [{ name: 'mcp_persona_supervision_finish', args: { visibility: 'silent', summary: 'All checks quiet.' } }],
+      },
+      {
+        step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-11-23T08:10:44Z',
+        content: 'Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\n' + receipt,
+      },
+      { step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-23T08:10:45Z', content: 'OK' },
+    ])
+    const use = items.find((it) => it.kind === 'tool_use')
+    const res = items.find((it) => it.kind === 'tool_result')
+    assert.equal(use.tool_name, 'mcp__persona__supervision_finish')
+    assert.equal(res.tool_use_id, use.tool_use_id)
+    assert.equal(res.text, receipt)
+    assert.deepEqual(JSON.parse(res.text), { level: 'triage', summary: 'All checks quiet.', visibility: 'silent' })
+  })
+
+  it('attaches per-step token usage and model in projected order and preserves usage across checkpoints and prefix cache reuse', () => {
+    const at = '2026-11-21T10:00:00Z'
+    const steps = [
+      { step_index: 0, type: 'PERSONA_MODE_NOTICE', created_at: at, content: 'mode fallback' },
+      { step_index: 1, native_step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: at, content: 'Inspect' },
+      {
+        step_index: 2, native_step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at,
+        model: 'claude-opus-5-5-high', thinking: 'Reading', content: 'Checking',
+        input_tokens: 1200, cache_read_tokens: 48800, cache_write_tokens: 300, cache_write_1h_tokens: 100, output_tokens: 180,
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'ls' } }],
+      },
+      { step_index: 3, native_step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: at, content: 'ok' },
+      { step_index: 4, native_step_index: 3, source: 'SYSTEM', type: 'CHECKPOINT', status: 'DONE', created_at: at, input_tokens: 3000, cache_read_tokens: 500000, output_tokens: 4000 },
+      {
+        step_index: 5, native_step_index: 4, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at,
+        model: '<synthetic>', content: 'Synthetic note', input_tokens: -5, output_tokens: -2,
+      },
+    ]
+
+    for (const full of [false, true]) {
+      const mapped = stepsToItems(steps, { full, cacheKey: `usage-prefix-${full}`, immutablePrefix: steps.length })
+      assert.deepEqual(mapped.usage, { contextTokens: 0, contextWindow: 0, outputTokens: 180, model: 'claude-opus-5-5-high' })
+      // Shifted seq 3 emitted 3 assistant items (thinking, text, tool_use): all get model, only the first gets usage.
+      const seq3 = mapped.items.filter((item) => item.seq === 3)
+      assert.equal(seq3.length, 3)
+      assert.deepEqual(seq3.map((item) => item.model), ['claude-opus-5-5-high', 'claude-opus-5-5-high', 'claude-opus-5-5-high'])
+      assert.deepEqual(seq3[0].usage, [{
+        model: 'claude-opus-5-5-high', in: 1200, out: 180, cache_read: 48800, cache_write: 300, cache_write_1h: 100,
+      }])
+      assert.equal(seq3[1].usage, undefined)
+      assert.equal(seq3[2].usage, undefined)
+      // Mode notice and synthetic/negative step stay clean.
+      assert.equal(mapped.items[0].usage, undefined)
+      assert.equal(mapped.items[0].model, undefined)
+      const seq6 = mapped.items.find((item) => item.seq === 6)
+      assert.equal(seq6.model, undefined)
+      assert.equal(seq6.usage, undefined)
+
+      // Reusing the cached prefix with a post-checkpoint reply preserves cumulative outputTokens and updates contextTokens/contextWindow.
+      const extended = [
+        ...steps,
+        {
+          step_index: 6, native_step_index: 5, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at,
+          model: 'gemini-4-neon-high', content: 'After compaction',
+          usage: { input_tokens: 12000, cache_read_input_tokens: 3000, cache_creation_input_tokens: 500, output_tokens: 220, model_context_window: 1048576 },
+        },
+      ]
+      const reused = stepsToItems(extended, { full, cacheKey: `usage-prefix-${full}`, immutablePrefix: extended.length })
+      assert.deepEqual(reused.usage, { contextTokens: 15500, contextWindow: 1048576, outputTokens: 400, model: 'gemini-4-neon-high' })
+      const seq7 = reused.items.find((item) => item.seq === 7)
+      assert.equal(seq7.model, 'gemini-4-neon-high')
+      assert.deepEqual(seq7.usage, [{
+        model: 'gemini-4-neon-high', in: 12000, out: 220, cache_read: 3000, cache_write: 500,
+      }])
+      const switched = [...extended, { step_index: 7, type: 'PLANNER_RESPONSE', model: 'custom', input_tokens: 8000 }]
+      const next = stepsToItems(switched, { full, cacheKey: `usage-prefix-${full}`, immutablePrefix: switched.length })
+      assert.equal(next.usage.contextTokens, 8000)
+      assert.equal(next.usage.contextWindow, 0)
+    }
+  })
+
+  it('emits structured agy_turn_end turn_duration items for completed turns without mutating cached prefixes', () => {
+    const at = '2026-11-25T10:00:00Z'
+    const turn1 = [
+      { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: at, content: 'Fix bug' },
+      { step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at, content: 'Fixed.' },
+    ]
+    // Omitting turnEnded preserves direct-caller behavior; turnEnded: false suppresses trailing turn_duration.
+    assert.equal(stepsToItems(turn1).items.some((it) => it.kind === 'turn_duration'), false)
+    assert.equal(stepsToItems(turn1, { turnEnded: false }).items.some((it) => it.kind === 'turn_duration'), false)
+
+    // With turnEnded: true, emits a structured turn_duration linked to the reply and opening user item.
+    const ended = stepsToItems(turn1, { turnEnded: true, cacheKey: 'turn-end-cache', immutablePrefix: turn1.length })
+    const td = ended.items.at(-1)
+    assert.equal(td.kind, 'turn_duration')
+    assert.equal(td.role, 'system')
+    assert.equal(td.seq, 2)
+    assert.equal(td.ts, at)
+    assert.equal(td.turn_duration.duration_ms, 0)
+    assert.equal(td.turn_duration.source, 'agy_turn_end')
+    assert.equal(td.turn_duration.user_item_id, ended.items[0].id)
+    assert.equal(td.id, `${td.turn_duration.parent_uuid}#turn_duration`)
+
+    // Flipping turnEnded back to false on the same cacheKey must not leak a cached turn_duration.
+    const runningAgain = stepsToItems(turn1, { turnEnded: false, cacheKey: 'turn-end-cache', immutablePrefix: turn1.length })
+    assert.equal(runningAgain.items.some((it) => it.kind === 'turn_duration'), false)
+
+    // Trailing CHECKPOINT notice stays after turn_duration to preserve monotonic seq ordering.
+    const withCheckpoint = [...turn1, { step_index: 2, type: 'CHECKPOINT', created_at: at }]
+    const cpMapped = stepsToItems(withCheckpoint, { turnEnded: true })
+    assert.deepEqual(cpMapped.items.map((it) => [it.seq, it.kind]), [[1, 'text'], [2, 'text'], [2, 'turn_duration'], [3, 'notice']])
+
+    // Open tool calls, tool results, and errors never emit turn_duration even with turnEnded: true.
+    for (const openSteps of [
+      [turn1[0], { step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at, content: 'Running', tool_calls: [{ name: 'run_command', args: {} }] }],
+      [turn1[0], { step_index: 1, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: at, content: 'Output' }],
+      [turn1[0], { step_index: 1, source: 'MODEL', type: 'ERROR_MESSAGE', status: 'DONE', created_at: at, content: 'Boom' }],
+    ]) {
+      assert.equal(stepsToItems(openSteps, { turnEnded: true }).items.some((it) => it.kind === 'turn_duration'), false)
+    }
+
+    // Starting turn 2 keeps turn 1's turn_duration stable while turn 2 stays open until turnEnded: true.
+    const turn2Open = [
+      ...turn1,
+      { step_index: 2, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: at, content: 'Second' },
+      { step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at, content: 'Second reply.' },
+    ]
+    const whileRunning = stepsToItems(turn2Open, { turnEnded: false, cacheKey: 'turn-end-cache', immutablePrefix: turn1.length })
+    assert.deepEqual(whileRunning.items.map((it) => [it.seq, it.kind]), [[1, 'text'], [2, 'text'], [2, 'turn_duration'], [3, 'text'], [4, 'text']])
+    const afterDone = stepsToItems(turn2Open, { turnEnded: true, cacheKey: 'turn-end-cache', immutablePrefix: turn2Open.length })
+    const durations = afterDone.items.filter((it) => it.kind === 'turn_duration')
+    assert.equal(durations.length, 2)
+    assert.equal(durations[0].seq, 2)
+    assert.equal(durations[0].turn_duration.user_item_id, afterDone.items[0].id)
+    assert.equal(durations[1].seq, 4)
+    assert.equal(durations[1].turn_duration.user_item_id, afterDone.items[3].id)
+
+    // Autonomous wake turn omits user_item_id while preserving turn 1's turn_duration.
+    const withWake = [
+      ...turn1,
+      { step_index: 2, type: 'SYSTEM_MESSAGE', created_at: at, content: 'Background job finished.' },
+      { step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at, content: 'Wake summary.' },
+    ]
+    const wakeDone = stepsToItems(withWake, { turnEnded: true })
+    const wakeDurations = wakeDone.items.filter((it) => it.kind === 'turn_duration')
+    assert.equal(wakeDurations.length, 2)
+    assert.equal(wakeDurations[0].turn_duration.user_item_id, wakeDone.items[0].id)
+    assert.equal(wakeDurations[1].turn_duration.user_item_id, undefined)
   })
 })

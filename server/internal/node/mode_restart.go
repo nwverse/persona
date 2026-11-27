@@ -28,8 +28,9 @@ import (
 //     while it restarts the row is listed as starting (switchShare.begin): messages and the user's Resume wait for it.
 //   - A draft in the box or a dialog in front puts it off (retried after modeRestartRetry, doubling); nothing is typed
 //     over what someone types at the computer.
-//   - Picking any other mode before it ran drops it; so does a restart that failed (the agent is resumed in the mode it
-//     had when the new start did not come up), and a pick older than modeRestartMaxAge.
+//   - Picking any other mode before it ran drops it (picking the mode it still runs in calls it off: cancelled, not
+//     replaced, #11089); so does a restart that failed (the agent is resumed in the mode it had when the new start did
+//     not come up), and a pick older than modeRestartMaxAge.
 //   - It belongs to the claude process it was picked for (#10296): the pick keeps that process' pid and start (the
 //     hooks', else its sessions/<pid>.json), and goes once that process has exited or the session runs in another one.
 //     A claude that resumes the conversation later, at the computer or by Persona's Resume, was never chosen for Allow
@@ -142,20 +143,22 @@ func (s *switchShare) takeRestart(id string, now time.Time) string {
 }
 
 // settleRestart ends a try of session id's restart in mode: done or failed drops it, errRestartLater puts it off.
-func (s *switchShare) settleRestart(id, mode string, err error, now time.Time) {
+// False means the user dropped or replaced this try meanwhile; its outcome must not be reported as a completion.
+func (s *switchShare) settleRestart(id, mode string, err error, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := s.restarts[id]
 	if r == nil || r.mode != mode {
-		return // dropped or replaced meanwhile
+		return false // dropped or replaced meanwhile
 	}
 	r.applying = false
 	if !errors.Is(err, errRestartLater) {
 		delete(s.restarts, id)
-		return
+		return true
 	}
 	r.delay = min(max(r.delay*2, modeRestartRetry), modeRestartMaxRetry)
 	r.retryAt = now.Add(r.delay)
+	return true
 }
 
 // needsModeRestart: mode can reach session id's running agent only by starting it again (Allow All for a claude whose
@@ -196,16 +199,23 @@ func (n *Node) queueModeRestart(id, mode string) error {
 	return nil
 }
 
-// dropModeRestart drops a restart session id waits for (another mode was picked).
-func (n *Node) dropModeRestart(id string) {
+// dropModeRestart drops a restart session id waits for, as a pick of another mode, picked, does, and reports whether
+// a waiting restart was dropped. A pick of the mode the session runs in now calls it off and changes nothing else
+// (cancelled, #11089); any other replaces it.
+func (n *Node) dropModeRestart(id, picked string) bool {
 	mode := n.switches().restartMode(id)
 	if mode == "" {
-		return
+		return false
+	}
+	reason := proto.ModeRestartReasonReplaced
+	if now, _ := n.modesOf(id); now == picked {
+		reason = proto.ModeRestartReasonCancelled
 	}
 	n.switches().setRestart(id, "", time.Time{}, 0, "")
-	n.logf("session %s: waiting restart in another permission mode dropped", id)
-	n.reportModeRestart(id, mode, proto.ModeRestartDropped, proto.ModeRestartReasonReplaced)
+	n.logf("session %s: waiting restart in permission mode %s dropped: %s picked (%s)", id, mode, picked, reason)
+	n.reportModeRestart(id, mode, proto.ModeRestartDropped, reason)
 	n.notifySessions()
+	return true
 }
 
 // reportModeRestart tells the manager what became of session id's restart in mode and why (a ModeRestartReason… code,
@@ -309,7 +319,9 @@ func (n *Node) tryModeRestart(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), switchProbeWait)
 	defer cancel()
 	err := n.runModeRestart(ctx, id, mode)
-	n.switches().settleRestart(id, mode, err, time.Now())
+	if !n.switches().settleRestart(id, mode, err, time.Now()) {
+		return
+	}
 	var gone restartGoneError
 	switch {
 	case err == nil:

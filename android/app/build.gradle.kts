@@ -6,6 +6,8 @@ plugins {
     id("persona.compose")
     id("persona.hilt")
     id("org.jetbrains.kotlin.plugin.serialization")
+    // :app:moduleGuard (docs/android/android.md "Modules"): no core project depends on a module.
+    id("persona.module.guard")
 }
 
 // The application id is personal (docs/operations/config.md): scripts/android.sh passes it from ~/.config/persona/config.json.
@@ -60,9 +62,12 @@ val generateLocaleConfig by tasks.registering(GenerateLocaleConfig::class) {
     languages.from(languageFiles)
     outputDirectory.set(layout.buildDirectory.dir("generated/languages/res"))
 }
+// Release unit tests (src/testRelease: Release has no answer observer) rerun the whole suite against the release variant,
+// so they are off by default; -Ppersona.releaseUnitTests=true turns them on, and scripts/ci/android.sh does.
+val releaseUnitTests = providers.gradleProperty("persona.releaseUnitTests").map(String::toBoolean).getOrElse(false)
 androidComponents {
     beforeVariants { variant ->
-        if (variant is HasUnitTestBuilder && variant.name == "release") {
+        if (releaseUnitTests && variant is HasUnitTestBuilder && variant.name == "release") {
             variant.javaClass.getMethod("setEnableUnitTest", Boolean::class.javaPrimitiveType).invoke(variant, true)
         }
     }
@@ -113,6 +118,29 @@ android {
     }
 }
 
+// The modules this build carries (docs/android/android.md "Modules"): every :module:* project, unless
+// -Ppersona.modules=<id,id…> names fewer; -Ppersona.modules= (empty) builds Persona Core alone. A module left out stays on
+// the compile classpath only, so Modules.kt still compiles, but none of its code, resources or manifest entries ship and
+// Modules.kt never loads it (BuildConfig.PERSONA_MODULES).
+val knownModules = rootProject.subprojects.filter { it.path.startsWith(":module:") && it.path.count { c -> c == ':' } == 2 }
+    .map { it.name }.sorted()
+val carriedModules = providers.gradleProperty("persona.modules").orNull
+    ?.split(',')?.map(String::trim)?.filter(String::isNotEmpty) ?: knownModules
+require(carriedModules.all { it in knownModules }) {
+    "-Ppersona.modules names unknown modules ${carriedModules - knownModules.toSet()}; known: $knownModules"
+}
+android.defaultConfig.buildConfigField("String[]", "PERSONA_MODULES",
+    carriedModules.joinToString(", ", "{", "}") { "\"$it\"" })
+// A left-out module's class is still named by Modules.kt (in an entry that never runs). R8 needs no rule for it: AGP
+// hands R8 the compile classpath, compileOnly jars included, as library classes, so the class is known but not packaged
+// (checked with -Ppersona.modules= :app:assembleRelease, #13433).
+dependencies {
+    knownModules.forEach { id ->
+        if (id in carriedModules) implementation(project(":module:$id")) else compileOnly(project(":module:$id"))
+    }
+    implementation(project(":core:moduleapi"))
+}
+
 dependencies {
     implementation(project(":core:contracts"))
     implementation(project(":core:domain"))
@@ -135,8 +163,6 @@ dependencies {
     implementation(project(":feature:terminal"))
     implementation(project(":feature:machines"))
     implementation(project(":feature:files"))
-    implementation(project(":feature:knowledge"))
-    implementation(project(":feature:voice"))
     implementation(project(":platform:phonetools"))
     implementation(project(":core:demo"))
     implementation(libs.room.runtime)
@@ -159,6 +185,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.lifecycle.navigation3)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:${libs.versions.lifecycle.get()}")
     implementation(libs.coroutines.android)
     implementation(libs.serialization.json)
     implementation(libs.okhttp)
@@ -174,17 +201,18 @@ dependencies {
 }
 
 // Only DEBUG can link the separately compiled answer observer. Release never evaluates a shadow/native dependency.
-val answerFriend = configurations.create("answerFriend")
+// Only these modules' own jars: Kotlin fingerprints friend paths relative to this build directory, so a transitive jar
+// from the Gradle cache would put the checkout's depth in the cache key (#10712).
+val answerFriend = configurations.create("answerFriend") { isTransitive = false }
 dependencies {
     add("answerFriend", project(":core:domain"))
     add("answerFriend", project(path = ":core:domain", configuration = "shadowRuntimeElements"))
     add("answerFriend", project(":core:rustcore"))
     add("answerFriend", project(path = ":core:rustcore", configuration = "shadowRuntimeElements"))
 }
+// friendPaths, not an -Xfriend-paths= argument: the argument's absolute paths would be part of the cache key (#10712).
 tasks.matching { it.name == "compileDebugKotlin" || it.name == "compileDebugUnitTestKotlin" }.configureEach {
     val compile = this as KotlinJvmCompile
     compile.dependsOn(":core:domain:domainShadowJar")
-    compile.compilerOptions.freeCompilerArgs.add(provider {
-        "-Xfriend-paths=" + answerFriend.joinToString(",") { jar -> jar.absolutePath }
-    })
+    compile.friendPaths.from(answerFriend)
 }

@@ -590,6 +590,7 @@ func TestExternalClearRetryCannotOverwriteConcurrentPick(t *testing.T) {
 	}
 	f.failAssistant = nil
 	s.work.eventWrites.Wait() // the failed send's diagnostics must finish before this fixture swaps its Store accessor
+	waitFor(t, "the backfill's read of the to-dos", s.spaceBackfillScanIdle)
 	h := s.loadHandoff(t.Context())
 	if h.For == "" {
 		t.Fatal("the first start did not reserve its ID")
@@ -619,14 +620,14 @@ func TestExternalClearRetryCannotOverwriteConcurrentPick(t *testing.T) {
 			arm.Store(true)
 		}
 	}}
-	s.store = func() Store {
+	s.setStore(func() Store {
 		if arm.CompareAndSwap(true, false) {
 			blocked.Store(true)
 			close(waiting)
 			<-releaseRetry
 		}
 		return wrapped
-	}
+	})
 	retryDone := make(chan error, 1)
 	go func() {
 		_, _, _, err := s.prepareExternalMain(context.WithValue(t.Context(), retryKey{}, true), StartParams{}, h)
@@ -1152,7 +1153,7 @@ func TestExternalHotInventoryAndOrdinaryListsDoNotRefresh(t *testing.T) {
 			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			if calls != 4 {
+			if calls != 2 {
 				t.Fatalf("hot inventory or ordinary lists made extra calls: %d", calls)
 			}
 		})
@@ -1175,7 +1176,7 @@ func TestExternalFailureDoesNotTriggerHealthChecks(t *testing.T) {
 	if _, asked := s.probeLauncherHealth(t.Context(), "server", l.Name); asked {
 		t.Fatal("external source was automatically probed")
 	}
-	list, err := s.healthLaunchers(t.Context(), "server")
+	list, _, err := s.healthLaunchers(t.Context(), "server")
 	if err != nil || slices.Contains(list, l.Name) || len(f.checked) != 0 {
 		t.Fatalf("external source entered automatic health polling: %v %v %v", list, err, f.checked)
 	}

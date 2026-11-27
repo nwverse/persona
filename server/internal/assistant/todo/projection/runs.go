@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"cmp"
 	"strings"
 	"time"
 
@@ -14,12 +15,14 @@ import (
 
 // Windows the rules use. Each is half open: the view changes at the window's end, which next_change_at names.
 const (
-	failedStartFor  = 48 * time.Hour   // row 1: a failed start needs the owner this long after the failure
-	justFinishedFor = 24 * time.Hour   // rows 6 and 9: closed work unseen, or finished work after it was seen
-	inactiveAfter   = 48 * time.Hour   // row 13: no activity this long gets the Inactive mark
-	usageLimitGrace = 10 * time.Minute // a usage limit still holds this long past its reset
-	retryGrace      = 5 * time.Minute  // a scheduled retry still counts this long past its wake_at (the hub's wakeGrace)
-	prFreshFor      = 15 * time.Minute // PR facts count this long after they were checked
+	failedStartFor             = 48 * time.Hour   // row 1: a failed start needs the owner this long after the failure
+	justFinishedFor            = 24 * time.Hour   // rows 6 and 9: closed work unseen, or finished work after it was seen
+	inactiveAfter              = 48 * time.Hour   // row 13: no activity this long gets the Inactive mark
+	usageLimitGrace            = 10 * time.Minute // a usage limit still holds this long past its reset
+	retryGrace                 = 5 * time.Minute  // a scheduled retry still counts this long past its wake_at (the hub's wakeGrace)
+	prFreshFor                 = 15 * time.Minute // PR facts count this long after they were checked
+	pendingReviewEscalateAfter = 24 * time.Hour   // todos_v2: pending_review stays in working this long, then surfaces to needs_you
+	canWaitEscalateAfter       = 48 * time.Hour   // todos_v2: non-critical can_wait decisions age into active needs_you after this long
 )
 
 // runKind is how one linked run stands, as far as the rules care; the order is the order runReading checks them in.
@@ -70,12 +73,55 @@ func (r run) since() time.Time {
 	return r.s.UpdatedAt
 }
 
+func parkEvidenceInteractionID(f *Facts) string {
+	sv := f.Supervision
+	if sv == nil || sv.State != reviewParked || sv.Parked == nil || sv.Parked.Evidence == nil || sv.Parked.Evidence.Kind != parkExternalEvent {
+		return ""
+	}
+	return sv.Parked.Evidence.InteractionID
+}
+
+func parkInteractionID(f *Facts, a Agent) string {
+	if a.DismissedAt != nil || a.StartError != "" {
+		return ""
+	}
+	return parkEvidenceInteractionID(f)
+}
+
+// cardForRun reports whether pending interaction c belongs to run a directly or via a folded child or side session.
+func cardForRun(c *proto.Interaction, a Agent) bool {
+	if c.MachineID == a.MachineID && c.SessionID == a.SessionID {
+		return true
+	}
+	if c.FoldedUnder != "" && c.FoldedUnder == a.SessionID && cmp.Or(c.FoldedUnderMachineID, c.MachineID) == a.MachineID {
+		return true
+	}
+	return c.FoldedSide != "" && c.FoldedSide == a.SessionID && c.MachineID == a.MachineID
+}
+
+// linkedParkCard is the exact pending card a current external-event park names for this worker, if it still exists.
+func linkedParkCard(f *Facts, a Agent) *proto.Interaction {
+	id := parkInteractionID(f, a)
+	if id == "" {
+		return nil
+	}
+	for i := range f.Interactions {
+		c := &f.Interactions[i]
+		if c.ID == id && cardForRun(c, a) {
+			return c
+		}
+	}
+	return nil
+}
+
 // activeRuns are the to-do's runs that still work for it (not released, not dismissed, started), in the list's order
-// (the newest link first), each read off its session.
+// (the newest link first), each read off its session. A released worker with the park's exact pending card remains,
+// because releasing the worker did not answer its owner request.
 func activeRuns(f *Facts, now time.Time) []run {
 	var out []run
 	for _, a := range f.Agents {
-		if a.ReleasedAt != nil || a.DismissedAt != nil || a.StartError != "" {
+		linked := linkedParkCard(f, a)
+		if (a.ReleasedAt != nil || a.DismissedAt != nil || a.StartError != "") && linked == nil {
 			continue // a run whose start failed counts as stopped
 		}
 		r := run{link: a, s: &noSession}
@@ -85,16 +131,42 @@ func activeRuns(f *Facts, now time.Time) []run {
 				break
 			}
 		}
+		var userCard, heldCard *proto.Interaction
 		for i := range f.Interactions {
 			c := &f.Interactions[i]
-			if c.MachineID != a.MachineID || c.SessionID != a.SessionID {
+			if !cardForRun(c, a) {
 				continue
 			}
-			if r.card == nil || asksBefore(c, r.card) {
-				r.card = c
+			if c.Delegating {
+				if heldCard == nil || asksBefore(c, heldCard) {
+					heldCard = c
+				}
+			} else if userCard == nil || asksBefore(c, userCard) {
+				userCard = c
 			}
 		}
+		if userCard != nil {
+			r.card = userCard
+		} else {
+			r.card = heldCard
+		}
+		if linked != nil {
+			r.card = linked
+		}
 		r.kind = runReading(r, now)
+		if linked != nil {
+			r.kind = runAsks
+		} else if userCard != nil && r.found && (userCard.SessionID != a.SessionID || userCard.MachineID != a.MachineID) {
+			// A folded child/side session has an un-delegated owner card while its parent session is working or idle.
+			r.kind = runAsks
+		} else if (r.kind == runAsks || r.kind == runIdle) && userCard == nil && heldCard != nil {
+			// Every pending card on this run (direct or folded) went to its supervising conversation (or Persona
+			// decides whether to answer it): Persona's work until that conversation passes it up, not the owner's.
+			r.kind = runPersona
+		} else if r.card == nil && r.kind == runAsks && r.s.Work != nil && r.s.Work.InteractionID == parkInteractionID(f, a) {
+			// The exact linked card is gone; this is its stale session state, not a new owner question.
+			r.kind = runIdle
+		}
 		out = append(out, r)
 	}
 	return out
@@ -346,6 +418,41 @@ func reviewState(f *Facts) string {
 		return ""
 	}
 	return st
+}
+
+// pendingReviewSince is when a pending_review task began waiting for supervisor review.
+func pendingReviewSince(f *Facts) time.Time {
+	if f.Supervision == nil {
+		return time.Time{}
+	}
+	if f.Supervision.PendingSince != nil {
+		return *f.Supervision.PendingSince
+	}
+	return f.Supervision.UpdatedAt
+}
+
+// pendingReviewSLADuration returns the effective pending_review quiet window under todos_v2=true.
+// ok is false when quiet sinking is disabled (surfaces immediately to needs_you).
+func pendingReviewSLADuration(f *Facts) (time.Duration, bool) {
+	if f.PendingReviewSLADisabled {
+		return 0, false
+	}
+	if f.PendingReviewSLAHours > 0 {
+		return time.Duration(f.PendingReviewSLAHours) * time.Hour, true
+	}
+	return pendingReviewEscalateAfter, true
+}
+
+// canWaitSLADuration returns the effective can_wait auto-escalation window under todos_v2=true.
+// ok is false when auto-escalation is disabled (can_wait never ages into active needs_you).
+func canWaitSLADuration(f *Facts) (time.Duration, bool) {
+	if f.CanWaitSLADisabled {
+		return 0, false
+	}
+	if f.CanWaitSLAHours > 0 {
+		return time.Duration(f.CanWaitSLAHours) * time.Hour, true
+	}
+	return canWaitEscalateAfter, true
 }
 
 // openAsk is the to-do's own ask when a whole one waits.

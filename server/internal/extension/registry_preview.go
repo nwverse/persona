@@ -59,9 +59,11 @@ type Preview struct {
 	root                  string       // the staged package
 	l10n                  Translations // its translations, for the name and description shown (In)
 	staging               string
-	// config is the upgraded extension's saved settings at preview (nil for a fresh install): the address its "config:"
-	// lines name, which the upgrade keeps (#8570).
-	config json.RawMessage
+	// config is the upgraded extension's saved settings at preview after any declared fixed-slot migration: the
+	// addresses its "config:" lines name. migrationBase and migrating make installation reject configuration drift.
+	config        json.RawMessage
+	migrationBase json.RawMessage
+	migrating     bool
 }
 
 // MarketTrust is the market address and trusted public key pinned at preview time; it adds no protocol field.
@@ -151,6 +153,12 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 			return nil, i18n.Err("extension-market_security.signature")
 		}
 		verifiedKey = e.verifiedKey
+	} else if len(mk.TrustedKeys) > 0 {
+		// A private market with owner keys: the entry must come from a catalog one of them verified, unchanged since.
+		if e.verifiedKey == "" || !slices.Contains(mk.TrustedKeys, e.verifiedKey) || e.verifiedEntry != entryFingerprint(e) {
+			return nil, i18n.Err("extension-market_security.private_signature")
+		}
+		verifiedKey = e.verifiedKey
 	}
 	pkg := e.PackageFor(Platform())
 	if pkg == nil {
@@ -179,7 +187,7 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 		}
 		return nil, fmt.Errorf("下载的包（%s %s）的完整清单和市场索引（%s %s）不一致", m.ID, m.Version, e.Parsed.ID, e.Parsed.Version)
 	}
-	pv.Market, pv.marketSpec, pv.marketKey = marketID, mk.Spec.String(), mk.TrustedKey
+	pv.Market, pv.marketSpec, pv.marketKey = marketID, mk.Spec.String(), TrustPin(mk.Spec.String(), mk.TrustedKey, mk.TrustedKeys)
 	pv.verifiedMarketKey = verifiedKey
 	pv.RenameFrom, pv.replaces = renameFrom, e.Replaces
 	return pv, nil
@@ -361,7 +369,20 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 	if upgrade != "" {
 		pv.Upgrade, pv.From = true, cur.Record.Version
 		pv.MorePermissions = MorePermissions(cur, m)
-		pv.previous, pv.config = cur.Full, slices.Clone(cur.Record.Config)
+		pv.previous = cur.Full
+		pv.migrationBase = compactConfig(cur.Record.Config)
+		sealed, err := r.store.ExtensionSecrets(ctx, cur.Record.StorageKey())
+		if err != nil {
+			return fail(err)
+		}
+		pv.config, pv.migrating, err = migrateFixedSlots(cur.Full, m, pv.migrationBase, sealed)
+		if err != nil {
+			return fail(err)
+		}
+		nextSchema, _ := ParseSchema(m.Configuration)
+		if err := checkEntrySecretNamespace(m, nextSchema, pv.config); err != nil {
+			return fail(err)
+		}
 		pv.Permissions = ExplainWith(i18n.Default, m, pv.config)
 		pv.AddedPermissions = AddedWith(i18n.Default, cur.Full, m, pv.config)
 	}

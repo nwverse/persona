@@ -62,6 +62,7 @@ type Machine struct {
 	deletedConversations map[string]proto.Session // Permanent manager tombstones, overlaid on delayed inventories; guarded by mu.
 	responseMu           sync.Mutex
 	responseFences       map[string]*conversationResponseFence
+	listedOnce           bool // a list of its sessions came since the hub started (hadList)
 	// lists decodes the manager's lists (fleet.sessions), only the sessions whose bytes changed (fleet_link.go).
 	lists proto.SessionListDecoder
 	// archived are the archived rows the manager archivedBy tells apart from its list (fleet.archived, #6836), in the
@@ -78,10 +79,11 @@ type Machine struct {
 	raws   map[string]string
 	rawsOf keptList
 	// rows are the sessions' rows as last pushed, by id (encodeKept), under rowsMu; never changed in place.
-	rowsMu   sync.Mutex
-	rows     map[string]keptRow
-	rowLen   atomic.Int64   // the average length of the rows encodeKept gave last (rowsSize)
-	watchers map[string]int // session id -> subscribed clients
+	rowsMu    sync.Mutex
+	rows      map[string]keptRow
+	rowLen    atomic.Int64                   // the average length of the rows encodeKept gave last (rowsSize)
+	watchers  map[string]int                 // session id -> subscribed clients
+	liveTools map[string]proto.LiveToolState // pending invocations for watched sessions, guarded by mu
 	// What the node was told about each session's watch (syncWatch): watchMu orders the session.watch /
 	// session.unwatch calls per session (a 1-slot channel, so a wait for it can end with the caller's ctx), nodeWatch
 	// is what the last of them left (absent: not watched). A slot goes when no call holds or waits for it and the
@@ -98,7 +100,9 @@ type Machine struct {
 	fswRunning bool
 	fswPending bool
 	fswForce   bool
-	lastSeq    map[string]int // session id -> highest item seq seen
+
+	lastSeq     map[string]int // session id -> latest cursor within its history
+	lastHistory map[string]string
 	// derived: a computer only a member hub has in hub.json; the center reaches it through that hub.
 	derived bool
 
@@ -141,6 +145,31 @@ func (m *Machine) hasCapability(c string) bool {
 	return m.info.Version == ""
 }
 
+// announces: m's node announced capability c, as its manager reported it. Unlike hasCapability, a node the hub has
+// no word of (none reported since the hub started, or a test's) has none: for a check an older node would skip.
+func (m *Machine) announces(c string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.info.Protocol > 0 && slices.Contains(m.info.Capabilities, c)
+}
+
+// nodeReported: m's manager has reported m's node (its version or protocol) since the hub started. A devices manager
+// that restarted without its warm file reports a zero node until the node connects again, and a hub that could not
+// read its machines' entries has no report until the manager's first: until then announces says nothing of the node.
+func (m *Machine) nodeReported() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.info.Protocol > 0 || m.info.Version != ""
+}
+
+// hadList: the hub has had a list of m's sessions since it started, its manager's or the one the last hub process
+// handed over (startDevices). Before, a session it does not list may be one that list will have.
+func (m *Machine) hadList() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.listedOnce
+}
+
 // ownerOrCarrier is m's owner, the carrier of hub.json's machines before one reported it; m.mu must not be held.
 func (m *Machine) ownerOrCarrier() string {
 	m.mu.Lock()
@@ -149,7 +178,7 @@ func (m *Machine) ownerOrCarrier() string {
 }
 
 func newMachine(h *Hub, cfg MachineConfig) *Machine {
-	m := &Machine{cfg: cfg, hub: h, watchers: map[string]int{}, lastSeq: map[string]int{}}
+	m := &Machine{cfg: cfg, hub: h, watchers: map[string]int{}, lastSeq: map[string]int{}, lastHistory: map[string]string{}}
 	m.setName(cfg.Name)
 	return m
 }
@@ -408,6 +437,7 @@ func (m *Machine) watcherLeft(id string) {
 	m.watchers[id]--
 	if m.watchers[id] <= 0 {
 		delete(m.watchers, id)
+		delete(m.liveTools, id)
 	}
 	m.mu.Unlock()
 }
@@ -465,7 +495,7 @@ func (m *Machine) setSessionListRaws(list []proto.Session, raws []string) {
 		list = m.overlayDeletedLocked(list)
 		raws = nil // A delayed row's original bytes must not bypass the tombstone.
 	}
-	m.sessions = list
+	m.sessions, m.listedOnce = list, true
 	m.raws, m.rawsOf = nil, keptList{}
 	if len(raws) == len(list) && len(list) > 0 {
 		byID := make(map[string]string, len(list))
@@ -494,6 +524,7 @@ func (m *Machine) setSessionListRaws(list []proto.Session, raws []string) {
 	for id := range m.lastSeq {
 		if gone(id) && !m.watchStateInUseLocked(id) {
 			delete(m.lastSeq, id)
+			delete(m.lastHistory, id)
 		}
 	}
 	var unsettled []string
@@ -557,6 +588,7 @@ func (m *Machine) settleEnded(id string) {
 	}
 	delete(m.nodeWatch, id)
 	delete(m.lastSeq, id)
+	delete(m.lastHistory, id)
 }
 
 // listsLocked reports whether the node's last list has session id, among the archived rows told apart too
@@ -670,13 +702,16 @@ func (m *Machine) syncWatchOnce(ctx context.Context, id string) bool {
 	m.mu.Lock()
 	want := m.watchers[id] > 0
 	state := m.nodeWatch[id]
-	since := m.lastSeq[id]
+	since, history := m.lastSeq[id], m.lastHistory[id]
 	m.mu.Unlock()
 	var method string
 	var params map[string]any
 	switch {
 	case want && state != nodeWatching:
 		method, params = "session.watch", map[string]any{"session_id": id, "since_seq": since}
+		if history != "" {
+			params["history"] = history
+		}
 	case !want && state != nodeUnwatched:
 		method, params = "session.unwatch", map[string]any{"session_id": id}
 		ctx = context.Background() // not the leaving app's connection
@@ -787,11 +822,16 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			last = max(last, *p.ToSeq)
 		}
 		m.mu.Lock()
-		if last > m.lastSeq[p.SessionID] {
+		reset := (p.FromSeq != nil && *p.FromSeq == 0) || (p.History != "" && p.History != m.lastHistory[p.SessionID])
+		if reset || last > m.lastSeq[p.SessionID] {
 			m.lastSeq[p.SessionID] = last
+		}
+		if p.History != "" {
+			m.lastHistory[p.SessionID] = p.History
 		}
 		m.mu.Unlock()
 		p.Items = m.hub.withInjected(p.Items)
+		m.hub.ttft.annotate(m.cfg.ID, p.SessionID, p.Items, true)
 		m.hub.itemsToSubscribers(m.cfg.ID, p.SessionID, p.Items, p.itemSpan, p.MoreAfter)
 	case "session.screen":
 		var p struct {
@@ -804,6 +844,14 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		}
 		m.hub.toSubscribers(m.cfg.ID, p.SessionID, screenPush{Type: "screen", MachineID: m.cfg.ID, SessionID: p.SessionID,
 			Text: p.Text, Status: p.Status, TS: time.Now().UTC()})
+	case "session.live_tools":
+		var p struct {
+			SessionID string `json:"session_id"`
+			proto.LiveToolState
+		}
+		if json.Unmarshal(params, &p) == nil && p.SessionID != "" && p.Tools != nil {
+			m.setLiveTools(p.SessionID, p.LiveToolState)
+		}
 	case "session.live": // a working Claude's status line as it is now: not kept, not replayed (docs/protocol/protocol.md "Live status")
 		var p struct {
 			SessionID string             `json:"session_id"`
@@ -842,6 +890,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			Text      string `json:"text"`
 		}
 		if json.Unmarshal(params, &p) == nil {
+			if p.Text != "" {
+				m.hub.ttft.firstToken(m.cfg.ID, p.SessionID, time.Now())
+			}
 			m.hub.rememberLiveText(m.cfg.ID, p.SessionID, p.Text)
 			m.hub.toSubscribers(m.cfg.ID, p.SessionID, deltaPush{Type: "delta", MachineID: m.cfg.ID, SessionID: p.SessionID, Text: p.Text})
 		}

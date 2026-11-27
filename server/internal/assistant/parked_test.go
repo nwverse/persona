@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -12,9 +13,53 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// requireParkEnded checks the one change besides its receipt that ending a park makes to review history (#10798):
+// the park that ended records park_ended_at, no earlier than the park and no later than the wake. It returns after
+// with that field reset, so the caller still compares every other field with before.
+func requireParkEnded(t *testing.T, before *Supervision, after []TaskReview, wokeBy time.Time) []TaskReview {
+	t.Helper()
+	park := before.parking()
+	if park == nil {
+		t.Fatal("no current park to end")
+	}
+	if len(after) != len(before.Reviews) {
+		t.Fatalf("review history length=%d, want unchanged %d", len(after), len(before.Reviews))
+	}
+	out := slices.Clone(after)
+	ended := 0
+	for i := range out {
+		r, was := &out[i], before.Reviews[i]
+		if r.ParkEndedAt.Equal(was.ParkEndedAt) {
+			continue
+		}
+		ended++
+		if r.Verdict != reviewParked || !r.At.Equal(park.At) || !was.ParkEndedAt.IsZero() {
+			t.Fatalf("park_ended_at changed on review %d (%s at %v, was %v), not on the park that ended (at %v)",
+				i, r.Verdict, r.At, was.ParkEndedAt, park.At)
+		}
+		if r.ParkEndedAt.Before(park.At) || r.ParkEndedAt.After(wokeBy) {
+			t.Fatalf("park_ended_at %v is outside the park: from %v to the wake by %v", r.ParkEndedAt, park.At, wokeBy)
+		}
+		r.ParkEndedAt = was.ParkEndedAt
+	}
+	if ended != 1 {
+		t.Fatalf("park_ended_at was recorded on %d reviews, want exactly the park that ended", ended)
+	}
+	return out
+}
+
+// wakeBound is the latest time a wake run at pass time now can have recorded: the pass time, or for a write that
+// takes the wall clock, the moment the wake returned.
+func wakeBound(now time.Time) time.Time {
+	if wall := time.Now(); wall.After(now) {
+		return wall
+	}
+	return now
+}
+
 // testParkEvidence is a source-backed park fixture for admission tests. Its receipt was sent before the test starts.
 func testParkEvidence(kind, target, sourceURL, wake string) map[string]any {
-	evidence := map[string]any{"kind": kind, "target": target, "wake": wake}
+	evidence := map[string]any{"kind": kind, "next_actor": "external", "target": target, "wake": wake}
 	switch kind {
 	case "person_reply":
 		evidence["contact"] = map[string]any{"channel": "GitHub discussion", "url": "https://example.com/messages/42", "sender": "task supervisor",
@@ -228,8 +273,54 @@ func TestParkedTaskIsNotInNeedsYouAndRaisesNoSignals(t *testing.T) {
 	}
 }
 
-// At its time a parked task comes back to its supervisor once: not before, not a second time, not again after a
-// restart once a message carried it, and not lost by a restart before one did.
+// Parking also silences a stop the turn ledger had not told yet. The replay must acknowledge that obsolete signal,
+// not emit it on every later sweep; without parking, the same untold ledger entry is the control and still replays.
+func TestParkedTaskDoesNotReplayAnUntoldTurnSignal(t *testing.T) {
+	for _, parked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unparked control", true: "parked before ledger replay"}[parked], func(t *testing.T) {
+			s, _, todo := newSupervisedService(t)
+			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+			g := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "stop-before-park", Detail: "在等别人或别的事：旧决定"}
+			markLeaderTurnSignalled(t, s, g)
+			last := proto.Session{MachineID: "box", SessionID: "s1", Status: proto.StatusIdle, UpdatedAt: time.Now().UTC()}
+			s.tasks.turns.mu.Lock()
+			s.tasks.turns.looked[turnRecoveryKey{Todo: todo.ID, Machine: last.MachineID, Session: last.SessionID}] = lookOf(last) // only the ledger replay is under test, not another transcript read
+			s.tasks.turns.mu.Unlock()
+			if parked {
+				_, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool {
+					v.State = reviewParked
+					v.Reviews = []TaskReview{{Verdict: reviewParked, At: time.Now().UTC(), Until: time.Now().UTC().Add(time.Hour),
+						WaitingOn: parkSomeoneElse, Reason: "The design team decides"}}
+					return true
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.watchTurn(context.Background(), todoNow(s, todo.ID), []proto.Session{last})
+			got := pendingKinds(s, todo.ID)
+			e, ok := s.turnOf(context.Background(), todo.ID)
+			if !ok || e.Signal == nil {
+				t.Fatalf("the turn signal is missing: %+v", e)
+			}
+			if parked {
+				if len(got) != 0 {
+					t.Fatalf("the pre-park turn replayed: %v", got)
+				}
+				if e.Signal.Told == nil {
+					t.Fatal("the obsolete turn signal was left for every later sweep")
+				}
+			} else {
+				if !slices.Contains(got, sigIdle) || e.Signal.Told != nil {
+					t.Fatalf("the untold control did not replay: signals=%v turn=%+v", got, e.Signal)
+				}
+			}
+		})
+	}
+}
+
+// At its time a parked task comes back to its supervisor once: not before, not a second time while the supervisor has
+// time to act on it, not again after a restart once a message carried it, and not lost by a restart before one did.
 func TestParkedDueComesOnceAtItsTimeAndAfterARestart(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	ctx := context.Background()
@@ -272,10 +363,12 @@ func TestParkedDueComesOnceAtItsTimeAndAfterARestart(t *testing.T) {
 		r := todoNow(s, todo.ID).Supervision.parking()
 		return r != nil && !r.DueAt.IsZero()
 	})
-	// Told: a manager that forgot what it told (a restart) does not tell it again, however often it looks.
+	// Told: a manager that forgot what it told (a restart) does not tell it again while the supervisor has time to
+	// act on it (an unanswered reminder is resent later: TestUnansweredParkedDueIsResentAndCapped).
 	forgetSignals(t, s)
-	for _, d := range []time.Duration{time.Hour, 24 * time.Hour, 20 * 24 * time.Hour} {
-		s.superviseWatch(ctx, due.Add(d))
+	told := todoNow(s, todo.ID).Supervision.parking().DueAt
+	for _, d := range []time.Duration{time.Minute, 30 * time.Minute, parkedDueResendAfter - time.Minute} {
+		s.superviseWatch(ctx, told.Add(d))
 	}
 	if got := pendingKinds(s, todo.ID); len(got) != 0 {
 		t.Fatalf("told a second time: %v", got)
@@ -299,6 +392,74 @@ func TestParkedDueComesOnceAtItsTimeAndAfterARestart(t *testing.T) {
 	s.superviseWatch(ctx, time.Now().Add(2*time.Hour))
 	if got := pendingKinds(s, todo.ID); !slices.Equal(got, []string{sigParkedDue}) {
 		t.Fatalf("signals at the new time: %v", got)
+	}
+}
+
+// A parked_due the supervisor never acted on (its turn ended on a model API error, a 429, and wrote no task_review) is
+// told again parkedDueResendAfter later, as a numbered resend, at most maxParkedDueResends times; a task_review that
+// parks it again stops the resends of the old park (#14048).
+func TestUnansweredParkedDueIsResentAndCapped(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	ctx := context.Background()
+	args := waitingPark()
+	args["until"] = "2h"
+	if _, err := reviewErr(s, todo.ID, args); err != nil {
+		t.Fatal(err)
+	}
+	forgetUntold(s)
+	before := len(f.notices())
+	s.superviseWatch(ctx, time.Now().Add(3*time.Hour))
+	waitFor(t, "the first parked_due message", func() bool { return len(f.notices()) > before })
+	waitFor(t, "the mark on the review", func() bool { return !todoNow(s, todo.ID).Supervision.parking().DueAt.IsZero() })
+	if n := f.notices()[before]; strings.Contains(n, "次重发") {
+		t.Fatalf("the first reminder reads as a resend:\n%s", n)
+	}
+	for n := 1; n <= maxParkedDueResends; n++ {
+		forgetSignals(t, s)
+		told := func() time.Time { r := todoNow(s, todo.ID).Supervision.parking(); return laterTime(r.DueAt, r.Until) }()
+		s.superviseWatch(ctx, told.Add(parkedDueResendAfter-time.Minute))
+		if got := pendingKinds(s, todo.ID); len(got) != 0 {
+			t.Fatalf("resend %d before its time: %v", n, got)
+		}
+		forgetUntold(s)
+		s.supervise.mu.Lock()
+		s.supervise.last = time.Time{} // the earlier reminder's watch ran at a later clock than this one
+		s.supervise.mu.Unlock()
+		before = len(f.notices())
+		s.superviseWatch(ctx, told.Add(parkedDueResendAfter+time.Minute))
+		waitFor(t, fmt.Sprintf("resend %d", n), func() bool { return len(f.notices()) > before })
+		msg := f.notices()[before]
+		for _, want := range []string{"signal=parked_due", fmt.Sprintf("第 %d 次重发", n), "The design team has to pick the icon set first"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("resend %d lacks %q:\n%s", n, want, msg)
+			}
+		}
+		waitFor(t, fmt.Sprintf("resend %d marked", n), func() bool {
+			r := todoNow(s, todo.ID).Supervision.parking()
+			return r != nil && r.DueResends == n
+		})
+	}
+	// The cap: no further reminder for this park, however long it stays unanswered.
+	forgetSignals(t, s)
+	told := func() time.Time { r := todoNow(s, todo.ID).Supervision.parking(); return laterTime(r.DueAt, r.Until) }()
+	for _, d := range []time.Duration{2 * parkedDueResendAfter, 24 * time.Hour, 20 * 24 * time.Hour} {
+		s.superviseWatch(ctx, told.Add(d))
+	}
+	if got := pendingKinds(s, todo.ID); len(got) != 0 {
+		t.Fatalf("resent past the cap: %v", got)
+	}
+	// The supervisor parks it again: the new park starts with no reminder told, and the old one's resends are over.
+	args = waitingPark()
+	args["reason"], args["until"] = "The design team moved its review to next week", "1h"
+	if _, err := reviewErr(s, todo.ID, args); err != nil {
+		t.Fatal(err)
+	}
+	if r := todoNow(s, todo.ID).Supervision.parking(); r.DueResends != 0 || !r.DueAt.IsZero() {
+		t.Fatalf("the new park inherited the old reminders: %+v", r)
+	}
+	s.superviseWatch(ctx, time.Now().Add(30*time.Minute))
+	if got := pendingKinds(s, todo.ID); len(got) != 0 {
+		t.Fatalf("signals before the new park's time: %v", got)
 	}
 }
 

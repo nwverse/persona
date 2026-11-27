@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func runJSON(t *testing.T, s *Service, self, name string, args map[string]any) (string, error) {
@@ -123,7 +124,7 @@ func TestAgentSuperviseAndReport(t *testing.T) {
 	waitFor(t, "the message", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
 	for _, want := range []string{"📋 督办", "任务「修登录页」", "Agent 主动向你汇报：要你拍板（第 2/5 步）", "A 先灰度，B 直接全量",
-		"- https://github.com/o/r/pull/901", "验收标准：PR 合并到 master；截图贴进 PR", "signal=report"} {
+		"- https://github.com/o/r/pull/901", "验收标准用 todo_get 取原文", "signal=report"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("message lacks %q:\n%s", want, n)
 		}
@@ -325,6 +326,28 @@ func TestAgentInterruptReportsOnlyAnEndedTurnAsStopped(t *testing.T) {
 	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef", "then": "先修测试"})
 	if err != nil || !strings.HasPrefix(res, "Stopped") || !strings.Contains(res, "queued") {
 		t.Fatalf("settled, queued: %s %v", res, err)
+	}
+
+	// The turn ended while the phone was asked, and only background work keeps the Agent Working: the node says so
+	// (#10828). Nothing was interrupted, so it is not said to have been stopped (#10860); the instruction still goes out.
+	turnOver := func(string, json.RawMessage) (any, error) {
+		return nil, &rpc.Error{Code: proto.CodeTurnOverBackground, Message: "the turn had already ended"}
+	}
+	queued = false
+	f.answerNode("session.interrupt", turnOver)
+	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef"})
+	if err != nil || strings.Contains(res, "Stopped") || !strings.Contains(res, "nothing was interrupted") ||
+		!strings.Contains(res, "background work is still running") || !strings.Contains(res, "Do not tell the user it stopped") {
+		t.Fatalf("turn over with background work: %s %v", res, err)
+	}
+	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef", "then": "先修测试"})
+	if err != nil || strings.Contains(res, "Stopped") || !strings.Contains(res, "nothing was interrupted") || !strings.Contains(res, "The new instruction was sent") {
+		t.Fatalf("turn over with background work, then: %s %v", res, err)
+	}
+	queued = true
+	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef", "then": "先修测试"})
+	if err != nil || strings.Contains(res, "Stopped") || !strings.Contains(res, "The new instruction is queued") {
+		t.Fatalf("turn over with background work, then queued: %s %v", res, err)
 	}
 
 	// A stop the runtime could not make happen is an error, not "Stopped".

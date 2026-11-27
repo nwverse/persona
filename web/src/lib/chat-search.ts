@@ -2,7 +2,7 @@
 // chat's lines, for going to it; paging back and fetching the folded work for the search. The matching itself is
 // chat-search-match.ts, which only the search panel loads (off the first screen).
 import type { Item } from "./types";
-import { sortItems, type ChatLine, type Step } from "./turns";
+import { sortItems, type ChatLine, type Segment, type Step } from "./turns";
 import type { WorkNode } from "./work-groups";
 
 export type SearchCategory = "text" | "quoted" | "thinking" | "tool_name" | "tool_input" | "tool_output" | "event";
@@ -32,14 +32,18 @@ export function nodeItemIds(nodes: WorkNode[]): string[] {
   return nodes.flatMap((n) => (n.kind === "group" ? nodeItemIds(n.children) : stepItemIds(n.step)));
 }
 
+/** The items an exchange can reveal, including work still folded into it. A deferred SegmentView uses the same list
+ *  as the chat's search landing, so its lightweight placeholder never hides the requested target. */
+export function segmentItemIds(s: Segment): string[] {
+  return [...(s.user ? [s.user.id, ...(s.user.rawInput ?? s.user.images).map((i) => i.id)] : []), ...s.steps.flatMap(stepItemIds), ...(s.answer ? [s.answer.id] : []), ...s.folds.map((f) => f.id)];
+}
+
 export function lineItemIds(line: ChatLine): string[] {
   switch (line.kind) {
     case "supervision":
       return line.lines.flatMap(lineItemIds);
-    case "segment": {
-      const s = line.seg;
-      return [...(s.user ? [s.user.id, ...(s.user.rawInput ?? s.user.images).map((i) => i.id)] : []), ...s.steps.flatMap(stepItemIds), ...(s.answer ? [s.answer.id] : []), ...s.folds.map((f) => f.id)];
-    }
+    case "segment":
+      return segmentItemIds(line.seg);
     case "recaps":
       return line.items.map((i) => i.id);
     default:
@@ -87,13 +91,14 @@ export async function loadEarlierForSearch(o: {
   stopped: () => boolean;
   onPage: (n: number) => void;
   pages?: number;
+  joinEarlier?: boolean;
 }): Promise<SearchLoadOutcome> {
   const pages = o.pages ?? SEARCH_PAGES;
   for (let page = 0; page < pages; page++) {
     if (o.stopped()) return "stopped";
     const now = o.get();
     if (!now.hasMore) return "start";
-    if (now.loading || now.loadingEarlier) return "busy";
+    if (now.loading || (now.loadingEarlier && !o.joinEarlier)) return "busy";
     const firstSeq = now.items[0]?.seq ?? Infinity;
     await o.load();
     await o.frame();

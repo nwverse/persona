@@ -5,14 +5,23 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.scene.Scene
+import persona.core.contracts.SessionKey
+import persona.core.navigation.AppTab
 import persona.core.navigation.AssistantRoute
+import persona.core.navigation.ChatRoute
+import persona.core.navigation.ConversationKind
 import persona.core.navigation.ExtensionUiRoute
 import persona.core.navigation.InboxRoute
+import persona.core.navigation.InteractionRoute
+import persona.core.navigation.LarkMessagesRoute
 import persona.core.navigation.MachinesRoute
+import persona.core.navigation.StarredMessagesRoute
+import persona.core.navigation.TerminalRoute
 import persona.core.navigation.TodoDetailRoute
 import persona.core.navigation.TodosRoute
 import persona.feature.assistant.AssistantSidebarShade
-import persona.feature.knowledge.KnowledgeRoute
+import persona.core.navigation.KnowledgeKindRoute
+import persona.core.navigation.KnowledgeRoute
 
 /**
  * The roots of the Assistant page beside the sidebar column, and the drill-down each was left with (#9667, iOS #8359).
@@ -61,7 +70,12 @@ internal class SidebarPageRoots {
         }
         if (path.isEmpty()) saved.remove(current) else saved[current] = path
         current = root
-        val restored = saved.remove(root) ?: emptyList()
+        val restored = if (contentChanged) {
+            saved.remove(root)
+            emptyList()
+        } else {
+            saved.remove(root) ?: emptyList()
+        }
         return Step(root, restored, Move.SwitchRoot)
     }
 
@@ -84,6 +98,13 @@ internal class SidebarPageRoots {
         return Step(AssistantRoute, emptyList(), Move.SwitchRoot)
     }
 
+    /** Forget one hidden optional place without disturbing the other retained roots. */
+    fun forgetPlace(root: NavKey) {
+        saved.remove(root)
+        openedAsRootIds.remove(sidebarHostId(root))
+        if (current == root) current = AssistantRoute
+    }
+
     /** A width change shows [root] without treating it as a pick, so saved drill-downs stay. */
     fun adoptVisible(root: NavKey) {
         current = root
@@ -98,13 +119,15 @@ internal class SidebarPageRoots {
  * is in front. iOS keeps paths, not live views (docs/design/sidebar-navigation.md).
  */
 internal fun retainsSidebarComposition(root: NavKey): Boolean = when (root) {
-    AssistantRoute, InboxRoute, TodosRoute, KnowledgeRoute, MachinesRoute -> true
+    AssistantRoute, StarredMessagesRoute, InboxRoute, TodosRoute, KnowledgeRoute, MachinesRoute, LarkMessagesRoute, SidebarScheduleRoute -> true
+    is KnowledgeKindRoute -> true
     else -> false
 }
 
 /** A sidebar place that is its own root at regular width. A pushed extension page (`depth > 0`) is a drill-down. */
 internal fun isSidebarPlaceRoot(key: NavKey): Boolean = when (key) {
-    InboxRoute, TodosRoute, KnowledgeRoute, MachinesRoute -> true
+    StarredMessagesRoute, InboxRoute, TodosRoute, KnowledgeRoute, MachinesRoute, LarkMessagesRoute, SidebarScheduleRoute -> true
+    is KnowledgeKindRoute -> true
     is TodoDetailRoute -> true
     is ExtensionUiRoute -> key.depth == 0
     else -> false
@@ -112,16 +135,44 @@ internal fun isSidebarPlaceRoot(key: NavKey): Boolean = when (key) {
 
 /**
  * The shaded row for [root] (iOS `UnifiedSidebar.shownPlace`, UnifiedSidebar.swift:39–44).
- * [AssistantSidebarShade.None] is a root with no place row (a to-do opened as its own root).
+ * [AssistantSidebarShade.None] is a root with no sidebar row (a to-do opened as its own root).
  */
 internal fun sidebarShadeKey(root: NavKey): String = when (root) {
     AssistantRoute -> AssistantSidebarShade.Conversation
+    StarredMessagesRoute -> AssistantSidebarShade.Starred
     InboxRoute -> AssistantSidebarShade.Inbox
+    LarkMessagesRoute -> AssistantSidebarShade.Messages
     TodosRoute -> AssistantSidebarShade.Todos
     KnowledgeRoute -> AssistantSidebarShade.Knowledge
+    is KnowledgeKindRoute -> AssistantSidebarShade.Knowledge
     MachinesRoute -> AssistantSidebarShade.Machines
+    SidebarScheduleRoute -> AssistantSidebarShade.Schedule
+    is ChatRoute -> if (root.kind == ConversationKind.Assistant) {
+        AssistantSidebarShade.Conversation
+    } else {
+        AssistantSidebarShade.agent(SessionKey(root.machineId, root.sessionId))
+    }
+    is InteractionRoute -> sidebarShadeKey(root.chat)
+    is TerminalRoute -> AssistantSidebarShade.agent(SessionKey(root.machineId, root.sessionId))
     is ExtensionUiRoute -> if (root.depth == 0) extensionSidebarKey(root.extensionId, root.uiId) else AssistantSidebarShade.None
     else -> AssistantSidebarShade.None
+}
+
+/**
+ * The one shade for the visible page. An Agent opened from inside Persona is a drill-down and keeps Persona's root;
+ * a direct Agents destination has its own key. Compact Persona keeps its existing conversation shading.
+ */
+internal fun visibleSidebarShade(
+    regular: Boolean,
+    selected: AppTab,
+    personaRoot: NavKey,
+    visible: NavKey?,
+    visibleSource: AppTab?,
+): String? = when {
+    selected == AppTab.Agents && visibleSource == AppTab.Persona -> sidebarShadeKey(personaRoot)
+    selected == AppTab.Agents -> visible?.let(::sidebarShadeKey) ?: AssistantSidebarShade.None
+    regular -> sidebarShadeKey(personaRoot)
+    else -> null
 }
 
 /** The same key the sidebar's extension row uses (`Root.extensionRailKey`). */
@@ -192,9 +243,12 @@ internal fun regularPromotion(stack: List<NavKey>, openedAsRoot: (NavKey) -> Boo
  * conversation is not a place route (item 6).
  */
 internal fun placeRootFor(key: NavKey): NavKey? = when {
+    key == StarredMessagesRoute -> StarredMessagesRoute
+    key == LarkMessagesRoute -> LarkMessagesRoute
     isInboxDestination(key) -> InboxRoute
     key == TodosRoute -> TodosRoute
     key == KnowledgeRoute -> KnowledgeRoute
+    key is KnowledgeKindRoute -> key
     key == MachinesRoute -> MachinesRoute
     else -> null
 }
@@ -202,10 +256,14 @@ internal fun placeRootFor(key: NavKey): NavKey? = when {
 /** Stable id for the NavDisplay that keeps [root] composed while another root is in front. */
 internal fun sidebarHostId(root: NavKey): String = when (root) {
     AssistantRoute -> SidebarRootHosts.CONVERSATION
+    StarredMessagesRoute -> "starred"
     InboxRoute -> "inbox"
+    LarkMessagesRoute -> "lark-messages"
     TodosRoute -> "todos"
     KnowledgeRoute -> "knowledge"
+    is KnowledgeKindRoute -> "knowledge:${root.kind.wire}"
     MachinesRoute -> "machines"
+    SidebarScheduleRoute -> "schedule"
     is TodoDetailRoute -> "todo:${root.todoId}"
     is ExtensionUiRoute -> "extension:${root.extensionId}/${root.uiId}"
     else -> "other:${root::class.qualifiedName ?: "route"}"

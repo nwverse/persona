@@ -6,6 +6,8 @@ import persona.core.contracts.api.AssistantSnapshot
 import persona.core.contracts.Direction
 import persona.core.contracts.DirectionCounts
 import persona.core.contracts.DirectionTree
+import persona.core.contracts.ExternalDirection
+import persona.core.contracts.SessionKey
 import persona.core.contracts.api.LeaderCounts
 import java.time.Instant
 import java.time.ZoneId
@@ -175,6 +177,43 @@ class AssistantTest {
         assertTrue(conversationGroups(snapshot.copy(backgroundSupervisor = null), "后台督办", named).others.isEmpty())
     }
 
+    @Test fun outsideDirectionsKeepHubOrderCountsAndOptionalAgentTargets() {
+        val real = Session(machineId = "demo", sessionId = "real", title = "Conversation", status = "idle")
+        val bound = ExternalDirection("work", "agent-1")
+        val targetless = ExternalDirection()
+        val tree = DirectionTree(listOf(
+            Direction("real", "Conversation", counts = DirectionCounts(needsYou = 1),
+                external = ExternalDirection("wrong", "wrong")),
+            Direction("dir-bound", "Outside release", counts = DirectionCounts(needsYou = 2), running = true, external = bound),
+            Direction("dir-watching", "Outside watch", counts = DirectionCounts(needsYou = 3), external = targetless),
+        ))
+        val snapshot = AssistantSnapshot(conversations = listOf(real), leaders = listOf("real", "dir-bound", "dir-watching", "gone"),
+            directionNames = tree.names, directionTree = tree)
+        val result = conversationGroups(snapshot, "", words)
+        assertEquals(listOf("real", "dir-bound", "dir-watching"), result.directions.map { it.sessionId })
+        assertEquals(setOf("dir-bound", "dir-watching"), result.externalDirections.keys)
+        assertEquals(SessionKey("work", "agent-1"), result.externalDirections["dir-bound"]?.target)
+        assertNull(result.externalDirections["dir-watching"]?.target)
+        assertNull("a real conversation wins over malformed external metadata", result.externalDirections["real"])
+        val archivedReal = conversationGroups(snapshot.copy(conversations = listOf(real.copy(archived = true))), "", words)
+        assertEquals(listOf("dir-bound", "dir-watching"), archivedReal.directions.map { it.sessionId })
+        assertNull("an archived real conversation is not resurrected as an outside row", archivedReal.externalDirections["real"])
+        assertEquals(LeaderCounts(needsYou = 1), result.counts["real"])
+        assertEquals(LeaderCounts(running = true, needsYou = 2), result.counts["dir-bound"])
+        assertEquals(LeaderCounts(needsYou = 3), result.counts["dir-watching"])
+        assertEquals(listOf(real), snapshot.conversations)
+        assertEquals(listOf("dir-bound"), conversationGroups(snapshot, "release", words).directions.map { it.sessionId })
+
+        // The leaders fallback carries the same metadata; an older hub without it keeps the old conversation-only list.
+        val fallback = conversationGroups(snapshot.copy(directionTree = null,
+            externalDirections = mapOf("dir-bound" to bound, "dir-watching" to targetless)), "", words)
+        assertEquals(result.directions.map { it.sessionId }, fallback.directions.map { it.sessionId })
+        assertEquals(result.externalDirections, fallback.externalDirections)
+        val old = conversationGroups(snapshot.copy(directionTree = null), "", words)
+        assertEquals(listOf(real), old.directions)
+        assertTrue(old.externalDirections.isEmpty())
+    }
+
     @Test fun archivedConversationsLeaveTheHistory() {
         val kept = Session(machineId = "demo", sessionId = "kept", title = "留着")
         val archived = Session(machineId = "demo", sessionId = "gone", title = "归档了", archived = true)
@@ -199,6 +238,8 @@ class AssistantTest {
         assertEquals(listOf("取消常驻", "拷贝会话 ID"), labels(leader = true, live = false, act = true, end = true))
         assertEquals("the main conversation is no leader", listOf("拷贝会话 ID", "结束…"), labels(leader = false, live = true, act = false, end = true))
         assertEquals(listOf("拷贝会话 ID"), labels(leader = false, live = true, act = false, end = false))
+        assertEquals(listOf("排列对话", "拷贝会话 ID"),
+            conversationActions(resources, false, true, null, {}, null, onArrange = {}).map { it.label })
         assertTrue(conversationActions(resources, false, true, null, {}, {}).last().destructive)
         // C12 (#4339): iOS's items in iOS's order (`AssistantSidebar.row`), End… last, apart and red.
         val all = conversationActions(resources, false, true, {}, {}, {}, onArchive = {}, onRename = {}, onDiagnostics = {})
@@ -263,6 +304,25 @@ class AssistantTest {
         assertTrue("All chats still lists the task chats and everyone else", groups.others.map { it.sessionId }.containsAll(listOf("a", "b", "inbox", "task", "background")))
         assertTrue("no Recent while searching", conversationGroups(snapshot, "x", words).recent.isEmpty())
         assertTrue("only the main chat: no Recent", recentConversations(AssistantSnapshot(main.key, listOf(main))).isEmpty())
+    }
+
+    @Test fun savedOrderListsLoadedChatsFirstAndKeepsNewChatsInActivityOrder() {
+        fun chat(id: String, minutes: Long) = Session(machineId = "demo", sessionId = id,
+            updatedAt = Instant.parse("2026-11-11T12:00:00Z").minusSeconds(minutes * 60).toString())
+        val main = chat("main", 0)
+        val lead = chat("lead", 1)
+        val chats = listOf(main, lead, chat("a", 2), chat("b", 3), chat("c", 4), chat("d", 5), chat("e", 6), chat("f", 7))
+        val snapshot = AssistantSnapshot(main.key, chats, leaders = listOf("lead"),
+            conversationOrder = listOf("f", "unknown", "c", "a", "main", "lead"))
+        val groups = conversationGroups(snapshot, "", words)
+        assertEquals(listOf("f", "c", "a", "b", "d"), groups.recent.map { it.sessionId })
+        assertEquals(listOf("f", "c", "a", "b", "d", "e"), groups.others.map { it.sessionId })
+        assertEquals("Main and Directions stay fixed", listOf("lead"), groups.directions.map { it.sessionId })
+        assertEquals(main, groups.main)
+        val activity = conversationGroups(snapshot.copy(conversationOrder = emptyList()), "", words)
+        assertEquals(listOf("a", "b", "c", "d", "e"), activity.recent.map { it.sessionId })
+        assertEquals(listOf("a", "b", "c", "d", "e", "f"), activity.others.map { it.sessionId })
+        assertEquals(activity, conversationGroups(snapshot.copy(conversationOrder = null), "", words))
     }
 
     @Test fun automaticConversationOriginsHaveOneAccessibleMapping() {

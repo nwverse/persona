@@ -68,8 +68,9 @@ one, is more specific).
   items, `total` all of them, `current` is the first `in_progress` item's `activeForm` (else its subject) on one line,
   clipped to 120 characters. With no item in progress `current` is empty: the next pending item is not what the agent
   is doing. A list whose items are all done stays as "N/N" until the next one; an empty list is no plan. `at` moves only
-  when done, total or current change. Subagents' calls (sidechain lines) and Codex rollouts are left out (Codex's
-  `update_plan` may follow later).
+  when done, total or current change. Subagents' sidechain calls are excluded. Codex rollout parsing also accepts a native `plan_update` event or a
+  successful `update_plan` response. It emits the same todo snapshot and coalesces the two records when they describe
+  the same revision.
 - **node**: a `TodoWrite` is often far back in a long turn, so the plan is read by the same `bgScan` as the goal. Its
   markers are the call lines (`"name":"TodoWrite"`, `"TaskCreate"`, `"TaskUpdate"`, `"TaskList"`); a result line does
   not name its tool, so the scan also parses lines holding the id of a call still waiting for its result
@@ -128,8 +129,22 @@ objectives were checked by hand. When a turn ends with the goal still active, Co
 (`task_started` with `turn_attribution.turn_trigger: "goal"`). Checked 2026-11-18 with Codex 0.169 in a herdr pane:
 `/goal` typed while the first turn ran was recorded within a second, and a goal turn followed the first turn without a
 new message. Only a Codex whose rollout names version 0.169 or later gets the command (`goals` is stable and on by
-default there); an older one, a screen not ready for it, or a goal the rollout never shows is logged and never fails the
-start. A resumed Codex thread takes no start goal: it would replace the thread's own.
+default there). A resumed Codex thread takes no start goal: it would replace the thread's own.
+
+When the command cannot set the goal — an older Codex, a screen not ready for it, a clean refusal that typed nothing,
+or a goal the rollout never confirms — the node delivers the same condition as an ordinary message instead
+(`codexTextGoal`): the goal's text on its own, after the task's first message, under the same screen checks and typing
+lock a send uses, confirmed by reading the rollout's `item_completed` / `UserMessage` lines back (a message at or after
+the send, also inside Codex's own wrapper). The task's own first message never counts, even when it has the same words
+as the goal. It is a delivery fallback, not a native goal: no `thread_goal_updated` is invented, and `Session.goal` only
+ever shows a goal Codex itself recorded. Before the text is typed the pane is checked to still hold this session (an
+engine switch leaves the goal with the old thread), and the rollout itself is read once more for a native goal, so a
+confirmation the background scan has not caught up with still suppresses the fallback; a goal that starts with `/` is
+left alone, since Codex would run it as a command. There is no text fallback when the `/goal` command may still sit in the
+input box (the two would go as one message), when the thread's rollout is unknown, or on a screenless host — those
+stay log-only, and a fallback that cannot be delivered or read back is logged too. No outcome ever fails the start.
+The confirmation recheck and the text send are not atomic: a native goal recorded in the small gap between them leaves
+both the goal and the same condition as a message, never two commands, which does not change what the Agent is asked.
 
 ## Screenshots
 

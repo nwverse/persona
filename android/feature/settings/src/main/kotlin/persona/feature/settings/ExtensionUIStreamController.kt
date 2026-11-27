@@ -17,9 +17,9 @@ class ExtensionUIStreamController(
     extension: String,
     contribution: String,
     initialState: String = "",
-    // The pages' UI version (8): the stream draws through the same renderer, a section's key (7) and all of 8.
+    // Native streams draw maps. Scene and graph components use the hub's compatible rows.
     context: ExtensionUIContext = ExtensionUIContext(uiVersion = persona.core.hub.HttpExtensionManagement.UI_VERSION, platform = "android",
-        locale = ClientLanguage.localeTag(), tz = java.util.TimeZone.getDefault().id,
+        locale = ClientLanguage.localeTag(), tz = java.util.TimeZone.getDefault().id, unsupported = listOf("scene", "graph"),
         stream = ExtensionUIStreamCapability(protocol = 1, components = NativeExtensionStreamAdapter.Components.toList())),
     dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val responseDeadlineMillis: Long = 30000,

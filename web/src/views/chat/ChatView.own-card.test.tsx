@@ -45,6 +45,12 @@ const question = {
   created_at: "2020-01-01T00:01:00Z",
 } as Interaction;
 
+// A worker folded under the chat (#5120) asks too: its cards do not hold the chat's turn (lib/turn-asks.ts).
+const workerBash = { ...bash, id: "ix_worker_bash", session_id: "w1", session_title: "Worker", folded_under: "c1", folded_as: "worker" } as Interaction;
+const workerQuestion = { ...question, id: "ix_worker_question", session_id: "w1", session_title: "Worker", folded_under: "c1", folded_as: "worker" } as Interaction;
+
+const withWorker = () => upsertSession({ machine_id: "hub", session_id: "w1", title: "Worker", status: "working", state: "needs_you", agent: "claude", folded_under: "c1", folded_as: "worker" } as Session);
+
 let host: HTMLDivElement;
 let root: Root;
 let fetcher: ReturnType<typeof vi.fn>;
@@ -171,67 +177,99 @@ describe("an assistant-owned approval question", () => {
 });
 
 describe("a Persona conversation's own approval card (#4883)", () => {
+  it("keeps a promoted relay input collapsed while the answer and question card stay visible", async () => {
+    const original = "Synthetic relay transport details\n".repeat(8).trim();
+    const relay: Item = { id: "relay#0", seq: 1, role: "user", kind: "text", text: original, source: { kind: "conversation", conversation_id: "source-1", title: "Synthetic source" } };
+    const ask: Item = { id: "ask#0", seq: 2, role: "assistant", kind: "tool_use", tool_use_id: "ask-call", tool_name: "mcp__persona__ask_user", tool_input: { question: "Which mock change should ship?" } };
+    const receipt: Item = { id: "receipt#0", seq: 3, role: "user", kind: "tool_result", tool_use_id: "ask-call", text: "ok" };
+    const reply: Item = { id: "reply#0", seq: 4, role: "assistant", kind: "text", text: "The mock result needs your confirmation." };
+    transcript.items = [relay, ask, receipt, reply];
+    Object.assign(getState(), {
+      assistant: { machine_id: "hub", main: "c1", conversations: [] },
+      interactions: [question],
+      answered: {},
+    });
+    upsertSession({ machine_id: "hub", session_id: "c1", title: "Persona", status: "done", state: "needs_you", assistant: true, agent: "claude" } as Session);
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+
+    const source = host.querySelector('[data-message-source="conversation"]');
+    const disclosure = source?.querySelector<HTMLButtonElement>("button[aria-expanded]");
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+    expect(host.textContent).not.toContain(original);
+    expect(host.querySelector("[data-answer]")?.textContent).toContain(reply.text);
+    expect(card(question.id)?.textContent).toContain("Which mock change should ship?");
+
+    act(() => disclosure!.click());
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
+    expect(host.textContent).toContain(original);
+  });
+
   it("is in the chat, not only in the closed Needs you tray", async () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
     await flush();
     // the tray starts closed, and the card is there anyway
     expect(host.querySelector("[data-tray-list]")).toBeNull();
     expect(card()).not.toBeNull();
-    expect(tray()?.contains(card())).toBe(false);
+    expect(host.querySelector("[data-decision-pager]")?.contains(card())).toBe(true);
     expect(card()?.textContent).toContain(t("chat-interactions.permission_kicker"));
     expect(card()?.textContent).toContain("ssh vps");
     expect(button(t("chat-interactions.allow"))).toBeDefined();
     expect(button(t("chat-interactions.deny"))).toBeDefined();
   });
 
-  it("is still counted in Needs you, whose row leads to the card instead of drawing it twice", async () => {
+  it("a worker's card is still counted in Needs you, whose row leads to the card instead of drawing it twice", async () => {
+    withWorker();
+    Object.assign(getState(), { interactions: [workerBash], answered: {} });
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
     await flush();
     const needs = host.querySelector<HTMLButtonElement>('[data-tray-entry="needs"]')!;
     expect(needs.textContent).toContain("1");
     act(() => needs.click());
-    const row = host.querySelector<HTMLButtonElement>(`[data-own-ask="${bash.id}"]`);
+    const row = host.querySelector<HTMLButtonElement>(`[data-own-ask="${workerBash.id}"]`);
     expect(row).not.toBeNull();
-    expect(host.querySelectorAll(`[data-card="${bash.id}"]`).length).toBe(1);
+    expect(host.querySelectorAll(`[data-card="${workerBash.id}"]`).length).toBe(1);
     act(() => row!.click());
     expect(host.querySelector("[data-tray-list]")).toBeNull();
-    expect(card()).not.toBeNull();
+    expect(card(workerBash.id)).not.toBeNull();
   });
 
-  it("cycles to the next unanswered question or approval card, expanding the existing stack and wrapping (#10347)", async () => {
-    Object.assign(getState(), { interactions: [bash, question], answered: {} });
+  it("cycles to the next unanswered card of a session folded under it, expanding the existing stack and wrapping (#10347)", async () => {
+    withWorker();
+    Object.assign(getState(), { interactions: [workerBash, workerQuestion], answered: {} });
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
     await flush();
     expect(nextOwn()?.textContent).toBe(`${t("assistant-tasks.next_unanswered")}2`);
-    expect(card(question.id)).toBeNull();
+    expect(card(workerQuestion.id)).toBeNull();
     revealed.length = 0; // the card slot's initial landing is not a shortcut navigation
 
     act(() => nextOwn()!.click());
     await flush();
-    expect(revealed).toEqual([bash.id]);
+    expect(revealed).toEqual([workerBash.id]);
 
     act(() => nextOwn()!.click());
     await flush();
-    expect(card(question.id)).not.toBeNull();
-    expect(revealed).toEqual([bash.id, question.id]);
+    expect(card(workerQuestion.id)).not.toBeNull();
+    expect(revealed).toEqual([workerBash.id, workerQuestion.id]);
     // The expanded cards must not shrink the closed action bar to zero and cover the next click (real-browser evidence).
     expect(tray()?.classList.contains("shrink-0")).toBe(true);
 
     act(() => nextOwn()!.click());
     await flush();
-    expect(revealed).toEqual([bash.id, question.id, bash.id]);
+    expect(revealed).toEqual([workerBash.id, workerQuestion.id, workerBash.id]);
     expect(host.querySelectorAll("[data-card]")).toHaveLength(2);
   });
 
   it("reduces the next-unanswered count as either kind of card is answered, then hides it", async () => {
-    Object.assign(getState(), { interactions: [bash, question], answered: {} });
+    withWorker();
+    Object.assign(getState(), { interactions: [workerBash, workerQuestion], answered: {} });
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
     await flush();
     act(() => button(t("chat-interactions.allow"))!.click());
     await flush();
     expect(nextOwn()?.textContent).toBe(`${t("assistant-tasks.next_unanswered")}1`);
 
-    const choice = [...card(question.id)!.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Use mock"));
+    const choice = [...card(workerQuestion.id)!.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Use mock"));
     act(() => choice!.click());
     await flush();
     expect(getState().interactions).toEqual([]);
@@ -269,5 +307,86 @@ describe("a Persona conversation's own approval card (#4883)", () => {
     expect(zh.permission_kicker).toBe("在等你批准");
     expect(en.permission_kicker).toBe("Waiting for your approval");
     expect(ja.permission_kicker).toBe("承認を待っています");
+  });
+});
+
+// An approval the chat's own turn waits on starts in the visible decision pager. Needs you does not need a second copy.
+// A worker's or side session's card does not hold the turn and stays folded in the stack and behind Needs you.
+describe("cards the chat's own turn waits on", () => {
+  it("keeps an unavailable skip outside the answers and hand-back available without Skip", async () => {
+    Object.assign(getState(), { interactions: [bash, question], answered: {} });
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    const disabledSkip = card(bash.id)?.querySelector<HTMLButtonElement>("[data-decision-actions] button[disabled]");
+    expect(disabledSkip).not.toBeNull();
+    expect(disabledSkip?.hasAttribute("data-card-answer")).toBe(false);
+    expect(card(bash.id)?.querySelector(`[aria-label="${t("chat-interactions.hand_back")}"]`)).not.toBeNull();
+    act(() => above()!.querySelector<HTMLButtonElement>(`[aria-label="${t("assistant-tasks.next_decision")}"]`)!.click());
+    expect(card(question.id)?.querySelector(`[aria-label="${t("chat-interactions.hand_back")}"]`)).not.toBeNull();
+  });
+
+  it("hands an approval back from the pager when Skip is unavailable", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    const handBack = card(bash.id)?.querySelector<HTMLButtonElement>(`[aria-label="${t("chat-interactions.hand_back")}"]`);
+    expect(handBack).not.toBeNull();
+    act(() => handBack!.click());
+    await flush();
+    expect(resolves()).toHaveLength(1);
+    expect(JSON.parse(String((resolves()[0][1] as RequestInit).body))).toEqual({ dismiss: true });
+  });
+
+  const above = () => host.querySelector("[data-decision-pager]");
+  const before = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it("opens above the capsules and pages between requests without opening Needs you", async () => {
+    Object.assign(getState(), { interactions: [bash, question], answered: {} });
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    expect(above()?.contains(card(bash.id))).toBe(true);
+    expect(card(question.id)).toBeNull();
+    const next = above()!.querySelector<HTMLButtonElement>(`[aria-label="${t("assistant-tasks.next_decision")}"]`)!;
+    act(() => next.click());
+    expect(above()?.contains(card(question.id))).toBe(true);
+    expect(card(bash.id)).toBeNull();
+    expect(host.querySelector("[data-chat-cards-position]")).toBeNull();
+    expect(host.querySelector("[data-chat-cards-fold]")).toBeNull();
+    // above the capsules, and the tray is closed
+    const needs = host.querySelector<HTMLButtonElement>('[data-tray-entry="needs"]')!;
+    expect(before(above()!, needs)).toBe(true);
+    expect(tray()?.contains(above())).toBe(true);
+    expect(host.querySelector("[data-tray-list]")).toBeNull();
+    // the cards give up their height and scroll in their own box; the capsules under them never shrink out of view
+    expect(above()?.querySelector("[data-scroll-box]")?.className).toContain("overflow-y-auto");
+    // answerable in place, and not counted or listed behind the capsule as well
+    expect(card(question.id)!.querySelector("button")).not.toBeNull();
+    expect(needs.textContent).toBe(t("assistant-tasks.tray_needs_you"));
+    expect(nextOwn()).toBeNull();
+    act(() => needs.click());
+    expect(host.querySelector(`[data-own-ask="${bash.id}"]`)).toBeNull();
+    expect(above()).toBeNull();
+    expect(host.querySelectorAll(`[data-card="${bash.id}"]`)).toHaveLength(0);
+  });
+
+  it("leave the other cards folded as before", async () => {
+    withWorker();
+    Object.assign(getState(), { interactions: [workerBash, workerQuestion, bash], answered: {} });
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    expect(above()?.contains(card(bash.id))).toBe(true);
+    expect(above()?.querySelectorAll("[data-card]")).toHaveLength(1);
+    // the worker's two: the first in the stack with its position chip, the second folded behind it
+    expect(card(workerBash.id)).not.toBeNull();
+    expect(above()?.contains(card(workerBash.id))).toBe(false);
+    expect(card(workerQuestion.id)).toBeNull();
+    expect(host.querySelector("[data-chat-cards-position]")?.textContent).toContain("2");
+    // and behind Needs you: counted there, with a row each
+    const needs = host.querySelector<HTMLButtonElement>('[data-tray-entry="needs"]')!;
+    expect(needs.textContent).toContain("2");
+    expect(nextOwn()?.textContent).toBe(`${t("assistant-tasks.next_unanswered")}2`);
+    act(() => needs.click());
+    expect(host.querySelector(`[data-own-ask="${workerBash.id}"]`)).not.toBeNull();
+    expect(host.querySelector(`[data-own-ask="${workerQuestion.id}"]`)).not.toBeNull();
+    expect(host.querySelector(`[data-own-ask="${bash.id}"]`)).toBeNull();
   });
 });

@@ -21,7 +21,30 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x3b11d3e1bfabc8cc
+// Derive the merged layout only after proving that it is the union of both incoming
+// schemas. Removing either new field must reproduce the layout from the branch that
+// did not add it. Any subsequent Session change still fails the layout comparison.
+var sessionWireLayout = func() uint64 {
+	t := reflect.TypeFor[Session]()
+	without := func(skip string) uint64 {
+		h := fnv.New64a()
+		for i := range t.NumField() {
+			f := t.Field(i)
+			if f.Name == skip {
+				continue
+			}
+			h.Write([]byte(f.Name + " " + f.Type.String() + " " + string(f.Tag) + "\n"))
+		}
+		return h.Sum64()
+	}
+	if got := without("LogicalPlaceholder"); got != 0xb2c1878f1bb31c09 {
+		return got
+	}
+	if got := without("NativeTurnVerified"); got != 0x3a4a9b026ed8443a {
+		return got
+	}
+	return typeLayout(t)
+}()
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -34,14 +57,14 @@ func sessionLayout() uint64 {
 // too, each type under its own layout hash: while one's fields differ from the ones written here, its values are left to
 // the reflect encoder (value), the rest of the session still written here.
 const (
-	backgroundWireLayout   = 0x2c6a40db481222e7
+	backgroundWireLayout   = 0x69fdd6d60e3fb445
 	subagentWireLayout     = 0xbf84f2ee699de074
 	workflowToolWireLayout = 0x56c71f2c71223998
 )
 
 // hierarchyWireLayout is the layout hash of SessionHierarchy and SessionChildren, whose members appendSession writes
 // on the row: while either differs, appendSession leaves every session to the reflect encoder, as for sessionWireLayout.
-const hierarchyWireLayout = 0x6b086a44c528e38b
+const hierarchyWireLayout = 0x8fa73e1a26348c63
 
 // hierarchyLayout hashes SessionHierarchy's fields, then SessionChildren's.
 func hierarchyLayout() uint64 {
@@ -127,8 +150,21 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"agent_surface":`, s.AgentSurface, true)
 	w.str(`"launcher":`, s.Launcher, true)
 	w.str(`"model":`, s.Model, true)
+	if s.RequestedModel != nil {
+		w.str(`"requested_model":`, *s.RequestedModel, false)
+	}
 	w.str(`"permission_mode":`, s.PermissionMode, true)
 	w.str(`"effort":`, s.Effort, true)
+	if s.PendingEffort != nil {
+		w.str(`"pending_effort":`, *s.PendingEffort, false)
+	}
+	w.boolean(`"effort_change_failed":`, s.EffortChangeFailed, true)
+	w.boolean(`"context_restart_recommended":`, s.ContextRestartRecommended, true)
+	w.boolean(`"off_launcher":`, s.OffLauncher, true)
+	w.boolean(`"native_turn_verified":`, s.NativeTurnVerified, true)
+	if s.BackgroundStalledSince != 0 {
+		w.time(`"background_stalled_since":`, s.BackgroundStalledSince.Time())
+	}
 	if s.Ultracode != nil {
 		w.boolean(`"ultracode":`, *s.Ultracode, false)
 	}
@@ -273,6 +309,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.strs(`"also_open_in":`, s.AlsoOpenIn)
 	w.str(`"host":`, s.Host, true)
 	if h := s.Hierarchy; h != nil { // sessionWire's hierarchy members, keys of the row itself (compatibility.go)
+		w.boolean(`"hidden_by_directory":`, h.HiddenByDirectory, true)
 		if h.CompletedTodo != nil {
 			w.value(`"completed_todo":`, h.CompletedTodo)
 		}
@@ -280,10 +317,15 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 		if !h.StartedAt.IsZero() {
 			w.time(`"started_at":`, h.StartedAt)
 		}
+		w.str(`"creation_id":`, h.CreationID, true)
 		w.str(`"asking_parent_session_id":`, h.AskingParentSessionID, true)
 		w.str(`"folded_under":`, h.FoldedUnder, true)
+		w.str(`"folded_under_machine_id":`, h.FoldedUnderMachineID, true)
 		w.str(`"folded_as":`, h.FoldedAs, true)
 		w.str(`"folded_side":`, h.FoldedSide, true)
+		w.str(`"parent_machine_id":`, h.ParentMachineID, true)
+		w.str(`"a2a_task_id":`, h.A2ATaskID, true)
+		w.str(`"subagent_origin":`, h.SubagentOrigin, true)
 		if c := h.Children; c != nil {
 			w.key(`"children":`)
 			w.open()
@@ -309,7 +351,14 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 				w.value(`"background_ended":`, &h.BackgroundEnded)
 			}
 		}
+		if h.ContextBreakdown != nil {
+			w.value(`"context_breakdown":`, h.ContextBreakdown)
+		}
 		w.boolean(`"deleted":`, h.Deleted, true)
+		if h.View != nil {
+			w.value(`"view":`, h.View)
+		}
+		w.boolean(`"botmux_external_trigger":`, h.BotmuxExternalTrigger, true)
 	}
 	w.boolean(legacyStartedMember, s.StartedByPersona, false) // sessionWire's legacy key (compatibility.go)
 	return append(w.b, '}'), w.ok
@@ -422,6 +471,7 @@ func (w *wireWriter) backgroundTasks(list []BackgroundTask) {
 		if t.ExitCode != nil {
 			w.integer(`"exit_code":`, int64(*t.ExitCode), false)
 		}
+		w.boolean(`"moved_from_foreground":`, t.MovedFromForeground, true)
 		w.close()
 	}
 	w.b = append(w.b, ']')

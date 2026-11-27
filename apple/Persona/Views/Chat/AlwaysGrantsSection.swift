@@ -73,15 +73,10 @@ struct AlwaysGrantsSection: View {
                 } else {
                     ProgressView().frame(maxWidth: .infinity)
                 }
-                #if os(macOS)
-                scope.font(Theme.Font.caption).foregroundStyle(.secondary) // a Mac list's footer stops at one line
-                #endif
             } header: {
                 Text("Always allowed in this conversation")
             } footer: {
-                #if !os(macOS)
                 scope
-                #endif
             }
         }
     }
@@ -120,7 +115,7 @@ private struct AlwaysGrantRow: View {
                 .tint(Theme.danger)
                 .disabled(busy)
                 .accessibilityIdentifier("always-grant-revoke")
-                .confirmationDialog("Revoke this permission?", isPresented: $confirming, titleVisibility: .visible) {
+                .accessibleConfirmationDialog("Revoke this permission?", isPresented: $confirming, titleVisibility: .visible) {
                     Button("Revoke", role: .destructive) { Task { await revoke() } }
                 } message: {
                     Text("Revoking stops the current response to clear its permissions. Send another message to continue.")

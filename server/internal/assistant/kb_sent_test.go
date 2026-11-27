@@ -19,7 +19,8 @@ func (*kbSentFailure) SentAsUsersForArchive(context.Context, string, time.Time, 
 }
 
 func TestKBDaySentDatabaseAndTimezone(t *testing.T) {
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	needsKnowledgeUIModule(t)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +91,7 @@ func TestKBDaySentDatabaseAndTimezone(t *testing.T) {
 }
 
 func TestKBDaySentStoreFailure(t *testing.T) {
+	needsKnowledgeUIModule(t)
 	for _, store := range []Store{newKBStore(), &kbSentFailure{newKBStore()}} {
 		s := kbServiceOn(t, newFakeHub(), store, t.TempDir(), nil)
 		e := kbEng(t, s)
@@ -119,7 +121,8 @@ func (kbSentSource) Messages(context.Context, kb.SourceChat, string, int) ([]kb.
 func (kbSentSource) Download(context.Context, string, string) error { return nil }
 
 func TestKBDaySentIngestedReference(t *testing.T) {
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	needsKnowledgeUIModule(t)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

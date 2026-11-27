@@ -6,11 +6,15 @@ The desktop experience for macOS and Windows is an Electron shell around the hub
 
 **Persona desktop** is for everyone who wants to chat and use Agents on any computer. It needs no local node and no Persona Link. It supplies the existing web sign-in and screens, native notifications, the existing Needs-you badge, desktop presence, single-instance behavior, window-state restoration, deep links, a tray with close-to-background behavior, a visible launch-at-login setting and public-release update wiring.
 
-**Persona Link** is only for a computer whose Agents the hub should reach. Its CLI and service are independently installable and useful without the desktop app, including on Linux and headless computers. The connector owns the hub connection, node-service management and the Persona Screen recording helper. Do not delete these capabilities when removing an old desktop UI.
+**Persona Link** is only for a computer whose Agents the hub should reach. It stands alone: its CLI and service, and its own Mac menu bar App and Windows tray for pairing and the connection, need nothing from the desktop app, including on Linux and headless computers ([link.md](../operations/link.md), "Tray and menu bar App"). The connector owns the hub connection, node-service management and the Persona Screen recording helper.
 
 When an installed Link is present, the desktop's local setup page can show its redacted status and offer fixed operations for pairing, reconnect and node-service installation. Link remains a separate install; the desktop app never silently installs a background service or bundles one as a prerequisite. When it is absent, those controls are disabled and the page offers the separate installation guide.
 
 After sign-in, **Settings › General › This computer** opens that same local options window through the additive `openLocalSettings` bridge capability. A normal browser and an older desktop without the method do not show the entry. The hub renderer can request only that the window open: it receives no Link command, local status, hub address or credential. The separate local window retains its own origin-checked preload for the fixed operations. Merely opening or closing it does not navigate or destroy the signed-in hub window. If the person explicitly chooses **Continue** for a different hub, the shell waits for the old hub window to close and creates a new window with that hub's own persistent session; merely saving the global address cannot leave the old page denied by IPC. The acceptance smoke checks both boundaries, the absent-Link explanation and the second hub's sign-in; it does not perform real pairing.
+
+If a saved hub cannot be reached at launch, the shell keeps its address, generation and persistent per-hub session instead of treating the profile as a new install. The same local setup window shows a plain connection failure with **Retry** and **Local settings**. Retry submits the unchanged address through the existing validated setup bridge and persists nothing when the load fails; Local settings reveals the existing form and desktop options. Closing setup during a pending attempt retires that attempt without reopening a window, and quitting cannot reopen recovery. Closing the onboarding or recovery setup window when no signed-in hub window exists quits the app cleanly instead of reopening setup. A late failure from an older generation cannot clear a replacement hub or its IPC owner.
+
+During first-run setup, entering an explicit pairing link (`persona://pair?…`) or a hub URL carrying a token (`#token=…` or `?token=…`) extracts the hub address, passes the token through the existing `#token=` web sign-in path in one step, and avoids a second sign-in prompt.
 
 ## Existing web behavior
 
@@ -18,7 +22,7 @@ After sign-in, **Settings › General › This computer** opens that same local 
 - Native notification clicks return to the existing SPA route. Native display failure keeps the browser fallback. Signing out clears the previous account's native notices.
 - `persona://` links open a page of the route table in the window (`docs/protocol/deep-links.md`, #9931): `persona://open<path>` (the hub's web path after `persona://open`) and the first form `persona://open?route=<path>` go through the same route as a notification click, with only the query keys a page reads (no `hub`, no token). The web app opens the path or says it is no page. A port, a user name, a fragment, or a route that does not start with a single `/` or would leave the hub is refused (`src/urls.ts` `parseDeepLink`, checked against `spec/fixtures/deep-links/cases.json`). The packaged app lists the scheme in `electron-builder.yml` `protocols`, so macOS hands it these links (its Info.plist `CFBundleURLTypes`); Windows registers it at run time. Pairing links (`persona://pair`, `persona://link`) are data as before, never automatic pairing. A route that comes before the page listens for it (the link that started the app, a notification or island click while the page reloads) waits in the main process until the page's app calls `onOpenNotification`; only the latest one waits (`src/page-routes.ts`, #10282).
 - `register_desktop` uses the existing authenticated web socket, never a token in the Electron main process. An active, unlocked, recently used desktop with notifications may register. Locking, idling or disabling notifications withdraws it. New hubs use `unregister_desktop`; older hubs use socket-close withdrawal and reconnect only when active and notifying again. Resume alone does not mean unlocked; only the actual unlock event restores presence.
-- Standard platform TLS validation is used. There is no broad certificate bypass and no unverified saved-pin shortcut.
+- Standard platform TLS validation is used by default. When an explicit pairing link supplies an SPKI SHA-256 fingerprint (`fp`) for a direct Hub TLS origin (`tls`), the desktop installs `webRequest.onBeforeRequest` to block off-port or plaintext (`http:`/`ws:`) requests on the pinned hostname so only the exact pinned `https:`/`wss:` origin matches, and verifies its leaf certificate SPKI hash with `setCertificateVerifyProc`. Whenever the Hub window opens or reuses a pinned session or its active pin changes, it refreshes both hooks and closes pooled connections (`closeAllConnections`) first. There is no broad certificate bypass and no unverified saved-pin shortcut.
 
 ## Process and privilege boundaries
 
@@ -48,6 +52,14 @@ The app and its tray use the Persona helper, the same art as the iPhone, Mac and
 
 `desktop/src/tray-icon.ts` picks the tray file by platform; `desktop/scripts/copy-assets.mjs` copies `src/assets` into `dist/assets`. `desktop/test/icons.test.ts` checks every file is there at its sizes and that `electron-builder.yml` names the app icons. The taskbar's Needs-you overlay stays the plain dot in `src/badge-art.ts`.
 
+## Unified macOS titlebar
+
+On macOS (`#16607`), the main window uses `titleBarStyle: "hiddenInset"` with `trafficLightPosition: { x: 14, y: 19 }` so the traffic lights sit inside the same surface rather than above a separate OS title bar strip:
+
+- **Expanded sidebar**: displays the 44 px window drag strip at the top of the sidebar column; the main inset card keeps standard rounded corners.
+- **Collapsed rail / hidden sidebar**: the web shell activates a 44 px co-linear Apple G2 continuous-curvature control bay (`web/src/lib/mac-chrome.ts`, `web/src/views/MacChrome.tsx`) holding the sidebar expand button and quick search right beside the traffic lights, keeping the header's 45 px divider co-linear with the bay floor across Settings and list pages. Fullscreen retracts the bay and restores standard rounded corners.
+- **Bridge and opt-in Liquid Glass**: `windowChrome`, `onWindowChromeChange` and `setSurfaceStyle` are optional additive v1 methods on `DesktopBridge`. Default appearance stays opaque; when the user chooses **Liquid Glass** under Settings › Advanced › Appearance, the Electron shell enables `under-window` macOS vibrancy cleanly and restores solid backing when switched back to **Default**. Older shells without those methods keep plain frame behavior automatically.
+
 ## Island at the MacBook notch
 
 On a Mac the desktop app can show the Agents' state at the notch (#7669), as the iPhone shows it in the Dynamic Island
@@ -59,11 +71,11 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
   saves the choice before applying it: one it cannot save changes nothing, and the switch says why.
 - **What it shows**: closed, a black pill around the notch: the most urgent category with its symbol and count on the left
   (Needs you, then Working, then Unread), the next one on the right, the iPhone's preset A (`IslandCell.sides`), in the
-  iPhone island's colors. With the pointer over it, it opens downward into the agents that need you, then the working
-  ones, then the ones that finished unseen (at most five; in each state the one that entered it last first, by
-  `state_since`, so a working agent's updates do not move its row), each with its title, state and the line its
-  Agents-list row shows. A click shows the desktop window at that session through the notification-click path. With
-  nothing to count, it is hidden.
+  iPhone island's colors. With the pointer over it, it grows downward, at the pill's width, into the agents that need
+  you, then the working ones, then the ones that finished unseen (at most five; in each state the one that entered it
+  last first, by `state_since`, so a working agent's updates do not move its row), each with its title, state and the
+  line its Agents-list row shows. A click shows the desktop window at that session through the notification-click
+  path. With nothing to count, it is hidden.
 - **Data**: the web works it out from the Agents list (`web/src/lib/desktop-island.ts`, a leaf beside
   `AttentionSignals`) and sends it with `setIslandState` when it changes, words already in the user's language. The
   counts and the rows come from the same list, so the pill counts no agent its list cannot show: not the Persona
@@ -80,9 +92,12 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
   hidden until a signed-in page sends its own.
 - **Shell**: `desktop/src/island.ts` draws it from a local page, in a frameless, transparent, always-on-top panel that
   takes no focus and stays on every Space and over full-screen apps, without Electron's default of making the whole app
-  a background one for that (no Dock icon or badge; the e2e checks it). The page comes from the shell's own scheme,
-  `persona-island://app/island.html` (`island-page.ts`), which serves its three files (`island.html`, `island.css`,
-  `island.cjs`, in `dist/island/`) and nothing else. It cannot come from `file://`: with
+  a background one for that (no Dock icon or badge; the e2e checks it). The panel has no title bar style
+  (`roundedCorners: false` in `ISLAND_WINDOW`, `island-model.ts`): Electron keeps every frameless window titled
+  otherwise, and macOS rounds all four corners of a titled window (16 pt on macOS 27), which pulled the island's top
+  corners off the top of the screen (#16301). Its page draws its own bottom corners. The page comes from the shell's
+  own scheme, `persona-island://app/island.html` (`island-page.ts`), which serves its three files (`island.html`,
+  `island.css`, `island.cjs`, in `dist/island/`) and nothing else. It cannot come from `file://`: with
   `grantFileProtocolExtraPrivileges` off, a packaged app's `file://` does not reach into its asar, the page fails with
   `ERR_FILE_NOT_FOUND` and the island's window shows nothing. The page's preload (`island-preload.cts`) has two fixed
   operations: the pointer over it or away, and a clicked row's route. A route is checked as a notification's
@@ -91,11 +106,15 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
 - **Where**: Electron does not say where a notch is. The built-in display whose menu bar is taller than a plain one
   (32 pt or more instead of 24) is taken to have one, about 200 pt wide at the top center; the pill is the menu bar's
   height, with 64 pt on each side for a symbol and a count. On another display it is the same pill without the middle,
-  at the top center over the menu bar. Moving or adding displays places it again.
+  at the top center over the menu bar. Open, it keeps the pill's width around the notch (328 pt) and only grows
+  downward, so it covers no more of the menu bar than the pill does (it was 400 pt wide and reached the menu bar items
+  beside the pill, #16301); on another display it opens to that same width. Moving or adding displays places it again.
 - **Not yet**: the iPhone's other presets (tokens per minute, today's tokens), buttons on the island, Windows.
 
 The screenshots are on #7699, captured from the built desktop app against the synthetic hub
-(`scripts/mock/mock_hub.py`), in English; the island is always dark, as the notch is. What they show:
+(`scripts/mock/mock_hub.py`), in English; the island is always dark, as the notch is. They are captures of the page
+(`capturePage`), which show neither the window's shape nor where it sits over the menu bar; the PR for #16301 shows the
+island at its place over a notched display, before and after its open width and corners changed. What they show:
 
 - **Settings › Notifications**, light and dark: "Show at the MacBook notch" ("Counts of Agents that need you, are working
   or finished, around the notch; point at it for the list") sits between "Notify this browser" and "Alert sound", off by
@@ -110,7 +129,7 @@ The check by a person on a real Mac is section 9 of [mac-acceptance.md](mac-acce
 
 ## Packaging and verification
 
-`electron-builder.yml` defines universal macOS DMG/ZIP and Windows NSIS artifacts. `electron-builder.unsigned.yml` uses a temporary development app ID and explicitly disables certificate discovery/signing and notarization. It is for development only. Unsigned artifacts do not prove signed distribution, notarization or installation.
+`electron-builder.yml` defines universal macOS DMG/ZIP and Windows NSIS artifacts. The macOS app declares macOS 15.0 as its minimum. Electron's prebuilt executable has an older Mach-O floor, so `desktop/scripts/macos-after-pack.cjs` rewrites it to 15.0 while retaining its SDK and linker metadata, then the fuse writer restores the development bundle's ad-hoc signatures before electron-builder's normal release-signing step. After either a signed or unsigned Mac package build, `scripts/ci/desktop-package.sh` runs `scripts/release/check_macos_artifact.py`: the app and every bundled `.appex` must declare 15.0 and contain x86_64 and arm64 slices whose own minimum is 15.0, and `hdiutil verify` must accept the DMG. The check reads the packaged metadata and Mach-O build versions without mounting the image. `electron-builder.unsigned.yml` uses a temporary development app ID and explicitly disables certificate discovery/signing and notarization. It is for development only. Unsigned artifacts do not prove signed distribution, notarization or installation.
 
 CI has a Linux job (policy tests, the web client's build and the headless acceptance smoke), macOS universal packaging and Windows NSIS jobs, each with the acceptance smoke on its own runner and its screenshots uploaded (`persona-desktop-<os>-smoke`). Windows is built on Windows, not via a failed Wine cross-build. The package steps run whether or not the smoke passed, so each reports its own verdict. The Linux job builds the web client once (`scripts/ci/desktop-web.sh`) and hands the bundle to the other two jobs. The desktop lane needs that bundle, not the web lane's verdict: when the only thing that failed in the web build is its first-screen size budget, checked after every file is written, the script warns and the smoke runs on the complete bundle; any other build failure fails the job. The development workflow builds unsigned packages only and never receives signing credentials; signing and notarization run only in the release workflow. Signed artifacts require explicitly supplied credentials and an authorized run; no certificate is purchased, inferred from App Store signing or sought from a private key store. The secrets and what each must contain are listed under "What the owner must provide" below.
 
@@ -167,20 +186,20 @@ The update state lives in the tray menu, between **Open Persona** and **Quit Per
 
 ### How a release publishes desktop packages
 
-A stable `v<major>.<minor>.<patch>` tag runs `.github/workflows/release.yml` (`docs/operations/release.md`, "Desktop packages on version tags"). Behind the same administrator-only gate as the hub image, it:
+A stable `v<major>.<minor>.<patch>` tag or a `v<major>.<minor>.<patch>-beta.<N>` tag runs `.github/workflows/release.yml` (`docs/operations/release.md`, "Desktop packages on version tags"). Behind the same administrator-only gate as the hub image, it:
 
 1. decides per platform whether every signing secret below is configured (`scripts/ci/desktop-release-gate.sh`; only whether a secret exists reaches the script, never its value);
 2. builds on native runners with `scripts/ci/desktop-package.sh`: the universal macOS DMG and ZIP, signed and notarized, and the Windows NSIS installer, signed. The package version is the tag without its `v`; the app ID comes from the `PERSONA_DESKTOP_APP_ID` secret and is never written in the repository;
 3. verifies the result (`codesign` and Gatekeeper's `spctl` on macOS, `Get-AuthenticodeSignature` on Windows);
 4. attaches the packages and their block maps to the GitHub Release the workflow already created, and only then the update metadata (`latest-mac.yml`, `latest.yml`), so an installed app never reads metadata naming a package that is not there yet.
 
-**A release never ships an unsigned package as if it were final.** When a platform's secrets are missing, that platform is skipped, the run's summary names the missing secrets, and the hub image and GitHub Release are published as before. In release mode the package script refuses to build without a certificate or with the placeholder app ID instead of falling back to the unsigned development build. Prerelease tags (`v1.3.0-rc1`) publish no desktop packages: installed apps follow the latest stable Release only.
+**A release never ships an unsigned package as if it were final.** When a platform's secrets are missing, that platform is skipped, the run's summary names the missing secrets, and the hub image and GitHub Release are published as before. In release mode the package script refuses to build without a certificate or with the placeholder app ID instead of falling back to the unsigned development build. Stable and beta desktop channels are distinct: stable versions use `latest.yml` / `latest-mac.yml`; beta versions use `beta.yml` / `beta-mac.yml` on their immutable prerelease, so the stable update channel does not opt into prereleases. The separate hub beta setting does not silently change a desktop's update channel.
 
 Between the moment the Release is created and the moment its desktop metadata is attached, the newest Release has no update metadata. A check in that window fails quietly and the next scheduled one succeeds.
 
 ### What the owner must provide
 
-No certificate exists yet, so no release has published desktop packages. Before adding credentials, the owner must create the `persona-desktop-release` GitHub Environment with required reviewer approval restricted to the administrator, and configure these as **Environment secrets**, not repository secrets. The environment restricts their use to the release jobs on stable version tags. The development Desktop workflow never receives them. None is ever committed, and nobody should look for them in a key store.
+No certificate exists yet, so no release has published desktop packages. Before adding credentials, the owner must create the `persona-desktop-release` GitHub Environment with required reviewer approval restricted to the administrator, and configure these as **Environment secrets**, not repository secrets. The environment restricts their use to the release jobs on version tags. The development Desktop workflow never receives them. None is ever committed, and nobody should look for them in a key store.
 
 | Secret | What it is |
 | --- | --- |
@@ -299,7 +318,10 @@ passing is not first-install acceptance. Do not relax fuses or the existing orig
 green.
 
 The notch island's page failed the same way in every packaged app, not only on a first run: its window was on screen and
-empty. It now loads from its own scheme ("Island at the MacBook notch"); the setup page's path is still the claim's above.
+empty. It now loads from its own scheme ("Island at the MacBook notch"). The setup page now likewise loads from its own
+scheme (`persona-setup://app/setup.html`, `desktop/src/setup-page.ts`), which serves only `setup.html`, `setup.css` and
+`setup.cjs` from `dist/setup/` on the default session with `grantFileProtocolExtraPrivileges: false` unchanged. Full
+signed-release, macOS and physical-device acceptance under #6770 remain separate.
 
 ## Owner actions and decisions still required
 
@@ -340,6 +362,6 @@ record; this audit does not backdate a new review or imply a prior one.
 
 ## Migration boundaries
 
-The retired `PersonaMac` target and native-Mac source directory are removed separately, with iOS, watchOS, visionOS and shared package checks. The old Mac menu bar UI and Windows `linktray` are removed too: independent Link installation, pairing/reconnect/status/service controls and Persona Screen packaging now use the CLI and fixed desktop setup bridge. The CLI/service works without the desktop app; Mac uses launchd `com.persona.link`, Windows retains its scheduled task.
+The retired `PersonaMac` target and native-Mac source directory are removed separately, with iOS, watchOS, visionOS and shared package checks. Persona Link keeps its own Mac menu bar App and Windows tray (`linktray`) for pairing and the connection, with no notifications; the CLI/service works without the desktop app; Mac uses launchd `com.persona.link`, Windows retains its scheduled task.
 
 Remaining platform acceptance, signed/notarized artifacts, Windows installation and a published auto-update belong to the migration issue (#6770), not to a claim that the shell or independent Link packaging completes the migration.

@@ -530,7 +530,7 @@ func (s *meshStore) UpdateTodo(context.Context, string, *string, *string, *bool,
 func (s *meshStore) FailTodo(context.Context, string, string, time.Time) (*db.TodoRow, error) {
 	return nil, db.ErrTodoNotFound
 }
-func (s *meshStore) AutoDoneTodo(context.Context, string, string, time.Time, time.Time) (*db.TodoRow, bool, error) {
+func (s *meshStore) AutoDoneTodo(context.Context, string, string, time.Time, time.Time, func() error) (*db.TodoRow, bool, error) {
 	return nil, false, db.ErrTodoNotFound
 }
 func (s *meshStore) RetryTodo(context.Context, string, time.Time) (*db.TodoRow, bool, error) {
@@ -556,11 +556,16 @@ func (s *meshStore) FeedItem(context.Context, string) (*db.FeedRow, error) { ret
 func (s *meshStore) MarkFeedSent(context.Context, string, string, time.Time, json.RawMessage) ([]db.FeedRow, error) {
 	return nil, nil
 }
-func (s *meshStore) LinkTodoSpace(context.Context, string, string, string, time.Time) (string, error) {
+func (s *meshStore) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
+	return nil, nil
+}
+func (s *meshStore) LinkTodoSpace(context.Context, string, string, string, time.Time, db.KeptLinks) (string, error) {
 	return "", nil
 }
-func (s *meshStore) UnlinkTodoSpace(context.Context, string, string, string) error { return nil }
-func (s *meshStore) RenameTodoSpace(context.Context, string, string, string) (bool, error) {
+func (s *meshStore) UnlinkTodoSpace(context.Context, string, string, string, db.KeptLinks) error {
+	return nil
+}
+func (s *meshStore) RenameTodoSpace(context.Context, string, string, string, db.KeptLinks) (bool, error) {
 	return false, nil
 }
 func (s *meshStore) LinkTodoAgent(context.Context, string, string, string, string, string, string, string, time.Time) ([]string, error) {

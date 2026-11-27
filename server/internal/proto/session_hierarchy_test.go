@@ -323,3 +323,122 @@ func TestSessionEngineHistory(t *testing.T) {
 		t.Fatalf("no history left a hierarchy: %+v", s.Hierarchy)
 	}
 }
+
+// Directory visibility is sparse and copy-on-write, like the other row metadata.
+func TestSessionHiddenByDirectoryCopyOnWrite(t *testing.T) {
+	var a Session
+	a.SetHiddenByDirectory(false)
+	if a.Hierarchy != nil {
+		t.Fatal("default visibility allocated sparse metadata")
+	}
+	a.SetHiddenByDirectory(true)
+	b := a
+	b.SetHiddenByDirectory(false)
+	if !a.HiddenByDirectory() || b.HiddenByDirectory() || b.Hierarchy != nil {
+		t.Fatal("visibility update mutated a shared row")
+	}
+	kept := a.Hierarchy
+	if n := testing.AllocsPerRun(100, func() { a.SetHiddenByDirectory(true) }); n != 0 || a.Hierarchy != kept {
+		t.Fatal("unchanged visibility allocated")
+	}
+	a.SetFold("parent", "", "", nil)
+	a.SetHiddenByDirectory(false)
+	if a.HiddenByDirectory() || a.FoldedUnder() != "parent" {
+		t.Fatal("visibility update dropped other metadata")
+	}
+}
+
+// Cross-machine hierarchy fields (folded_under_machine_id, parent_machine_id, a2a_task_id, subagent_origin)
+// live in sparse SessionHierarchy, round-trip cleanly on the wire, remain zero-alloc when unchanged, and omit
+// empty keys for ordinary same-machine rows.
+func TestSessionHierarchyCrossMachineWire(t *testing.T) {
+	var child Session
+	child.MachineID = "box"
+	child.SessionID = "sub-1"
+	child.IsSubagent = true
+	child.ParentSessionID = "lead-1"
+	child.SetSubagentProvenance("mac", "task-123", SubagentOriginA2A)
+	child.SetFoldWithMachine("mac", "lead-1", "", "", nil)
+
+	b, err := json.Marshal(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"folded_under":"lead-1"`,
+		`"folded_under_machine_id":"mac"`,
+		`"parent_machine_id":"mac"`,
+		`"a2a_task_id":"task-123"`,
+		`"subagent_origin":"a2a"`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%s missing %s", b, want)
+		}
+	}
+	ref, err := json.Marshal(wireOf((*sessionJSON)(&child)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ref) != string(b) {
+		t.Fatalf("hand-written wire differs from reflect:\n got %s\nwant %s", b, ref)
+	}
+	var back Session
+	if err := json.Unmarshal(b, &back); err != nil || !reflect.DeepEqual(back, child) {
+		t.Fatalf("round trip: %+v vs %+v (err=%v)", back.Hierarchy, child.Hierarchy, err)
+	}
+
+	// Copy-on-write and zero-alloc on unchanged provenance / fold.
+	clone := child
+	kept := child.Hierarchy
+	if n := testing.AllocsPerRun(100, func() {
+		child.SetSubagentProvenance("mac", "task-123", SubagentOriginA2A)
+		child.SetFoldWithMachine("mac", "lead-1", "", "", nil)
+	}); n != 0 || child.Hierarchy != kept {
+		t.Fatalf("unchanged cross-machine setters allocated %v times", n)
+	}
+	clone.SetFoldWithMachine("", "", "", "", nil)
+	if clone.FoldedUnder() != "" || clone.FoldedUnderMachineID() != "" || child.FoldedUnderMachineID() != "mac" {
+		t.Fatalf("clearing clone mutated original or left dangling machine: clone=%+v child=%+v", clone.Hierarchy, child.Hierarchy)
+	}
+	clone.SetSubagentProvenance("", "", "")
+	if clone.Hierarchy != nil {
+		t.Fatalf("emptying all sparse fields left hierarchy: %+v", clone.Hierarchy)
+	}
+
+	// Interaction carries folded_under_machine_id only when set.
+	ixBytes, err := json.Marshal(Interaction{ID: "ix-1", MachineID: "box", SessionID: "sub-1", FoldedUnder: "lead-1", FoldedUnderMachineID: "mac"})
+	if err != nil || !strings.Contains(string(ixBytes), `"folded_under":"lead-1","folded_under_machine_id":"mac"`) {
+		t.Fatalf("interaction wire: %s (err=%v)", ixBytes, err)
+	}
+	if plainIx, _ := json.Marshal(Interaction{ID: "ix-2", FoldedUnder: "lead-1"}); strings.Contains(string(plainIx), "folded_under_machine_id") {
+		t.Fatalf("same-machine interaction wrote folded_under_machine_id: %s", plainIx)
+	}
+}
+
+func TestSessionBotmuxExternalTriggerWire(t *testing.T) {
+	var s Session
+	s.SessionID = "botmux-1"
+	if s.BotmuxExternalTrigger() || s.Hierarchy != nil {
+		t.Fatalf("zero session should have false flag and nil hierarchy")
+	}
+	s.SetBotmuxExternalTrigger(true)
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"botmux_external_trigger":true`) {
+		t.Fatalf("missing top-level botmux_external_trigger: %s", b)
+	}
+	var back Session
+	if err := json.Unmarshal(b, &back); err != nil || !back.BotmuxExternalTrigger() || !reflect.DeepEqual(back, s) {
+		t.Fatalf("round trip mismatch: %+v vs %+v (err=%v)", back.Hierarchy, s.Hierarchy, err)
+	}
+	clone := s
+	clone.SetBotmuxExternalTrigger(false)
+	if clone.BotmuxExternalTrigger() || clone.Hierarchy != nil || !s.BotmuxExternalTrigger() {
+		t.Fatalf("clearing clone failed copy-on-write or empty cleanup: clone=%+v orig=%+v", clone.Hierarchy, s.Hierarchy)
+	}
+	if bFalse, _ := json.Marshal(clone); strings.Contains(string(bFalse), "botmux_external_trigger") {
+		t.Fatalf("false flag must be omitted on wire: %s", bFalse)
+	}
+}

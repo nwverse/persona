@@ -14,6 +14,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -211,23 +212,26 @@ func TestRecordingDaysKeepsLastGoodOnReadFailure(t *testing.T) {
 
 	// Never successfully read, and the read fails: there is no good value to keep.
 	expire()
-	st.failSetting = errors.New("database locked")
+	st.setFailSetting(errors.New("database locked"))
 	if _, ok := s.settingsLastGood(ctx); ok {
 		t.Fatal("never read + failure: want !ok")
 	}
-	if d := s.recordingDaysNow(); d != kb.DefaultRecordingDays {
+	if d := s.recordingAudioDaysNow(); d != kb.DefaultRecordingDays {
 		t.Fatalf("never read + failure: days=%d, want %d", d, kb.DefaultRecordingDays)
+	}
+	if d := s.recordingTextDaysNow(); d != 0 { // the text is never pruned on a value that could not be read
+		t.Fatalf("never read + failure: text days=%d, want forever", d)
 	}
 
 	// The user picked 365; a failure past the 5s freshness keeps serving 365 instead of falling back to 14.
-	st.failSetting = nil
+	st.setFailSetting(nil)
 	setSettings(t, s, func(v *Settings) { v.RecordingDays = days(365) })
 	expire()
-	st.failSetting = errors.New("database locked")
+	st.setFailSetting(errors.New("database locked"))
 	if v, ok := s.settingsLastGood(ctx); !ok || v.RecordingDays == nil || *v.RecordingDays != 365 {
 		t.Fatalf("failure with last-good: ok=%v days=%v", ok, v.RecordingDays)
 	}
-	if d := s.recordingDaysNow(); d != 365 {
+	if d := s.recordingAudioDaysNow(); d != 365 {
 		t.Fatalf("failure with last-good: days=%d, want 365", d)
 	}
 
@@ -237,32 +241,34 @@ func TestRecordingDaysKeepsLastGoodOnReadFailure(t *testing.T) {
 	}
 
 	// A successful refresh still picks up a value another hub wrote (the 5s freshness behaviour is unchanged).
-	st.failSetting = nil
+	st.setFailSetting(nil)
 	if err := st.PutSetting(ctx, settingsKey, Settings{RecordingDays: days(30)}); err != nil {
 		t.Fatal(err)
 	}
 	expire()
-	if d := s.recordingDaysNow(); d != 30 {
+	if d := s.recordingAudioDaysNow(); d != 30 {
 		t.Fatalf("successful refresh: days=%d, want 30", d)
 	}
 
 	// Failing again serves the new last-good value (30); once the database recovers the read works again.
 	expire()
-	st.failSetting = errors.New("database busy")
-	if d := s.recordingDaysNow(); d != 30 {
+	st.setFailSetting(errors.New("database busy"))
+	if d := s.recordingAudioDaysNow(); d != 30 {
 		t.Fatalf("failure after refresh: days=%d, want 30", d)
 	}
-	st.failSetting = nil
+	st.setFailSetting(nil)
 	expire()
-	if d := s.recordingDaysNow(); d != 30 {
+	if d := s.recordingAudioDaysNow(); d != 30 {
 		t.Fatalf("recovered: days=%d, want 30", d)
 	}
 }
 
 // A message for one of its conversations: one the machine does not list (and not the main one) keeps what it runs
-// on; the main one runs on the main chat's, a gone launcher falls back to the assistant's, a dropped model to the launcher's
-// default; the first message to a new main conversation started empty carries what the old one left, once.
+// on; the main one runs on the main chat's, a gone launcher is refused without an implicit substitute, a dropped model
+// falls back to the launcher's default; the first message to a new main conversation started empty carries what the
+// old one left, once.
 func TestSendParams(t *testing.T) {
+	fastLauncherRecovery(t)
 	ctx := context.Background()
 	f := newFakeHub().withMachine()
 	f.setSessions("server", proto.Session{SessionID: "side", Launcher: "gone-l", Model: "m", Assistant: true},
@@ -271,14 +277,17 @@ func TestSendParams(t *testing.T) {
 	f.launcherList = []proto.Launcher{{Name: "claude"}, {Name: "conv"}, {Name: "side-l"}}
 	f.agentModels = map[string][]proto.AgentModel{"side-l": {{ID: "m"}}}
 	s := newTestService(t, f)
+	setLauncherRecovery(f, 1, nil)
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.conv"})
-	if p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "unlisted", Params: map[string]any{"text": "hi"}}); err != nil ||
-		len(p) != 3 || p["is_main"] != false || p["supervision_instructions"] != "" {
-		t.Fatalf("unlisted: %v %v", p, err)
+	p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "unlisted", Params: map[string]any{"text": "hi"}})
+	_, attested := p["origin_known"]
+	if err != nil || len(p) != 4 || p["is_main"] != false || p["supervision_instructions"] != "" || attested ||
+		p["model_source"] != (modelhttp.Source{Role: "main", Session: "unlisted"}) {
+		t.Fatalf("unlisted and not yet backfilled must stay unknown: %v %v", p, err)
 	}
-	p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "side", Params: map[string]any{"text": "hi"}})
-	if err != nil || p["launcher"] != "conv" || p["model"] != nil || p["model_fingerprint"] == nil { // the main chat's
-		t.Fatalf("a gone launcher: %v %v", p, err)
+	p, err = s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "side", Params: map[string]any{"text": "hi"}})
+	if err == nil || p["launcher"] != nil {
+		t.Fatalf("a gone launcher used an implicit substitute: %v %v", p, err)
 	}
 	p, err = s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "side2", Params: map[string]any{"text": "hi"}})
 	if err != nil || p["launcher"] != "side-l" || p["model"] != nil {
@@ -418,7 +427,7 @@ func TestBoolSettingsSet(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		def  bool
-	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"done_needs_delivery", false}, {"interject_background", false}, {"agent_tasks", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
+	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"interject_background", false}, {"agent_tasks", false}, {"task_lessons", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"fold_routine_relay_replies", false}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
 		key := "assistant." + c.name
 		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
 		set := func(value string) (string, bool) {
@@ -442,6 +451,100 @@ func TestBoolSettingsSet(t *testing.T) {
 		if out, _ := set(fmt.Sprint(!c.def)); !strings.HasPrefix(out, key+" is "+fmt.Sprint(!c.def)) || get() != fmt.Sprint(!c.def) {
 			t.Fatalf("%s approved: %s", key, out)
 		}
+	}
+	// Legacy assistant.done_needs_delivery aliases the 3-tier delivery_gate (true->live, false->off); from the default
+	// merged tier, setting false disables the gate to off instead of reporting unchanged.
+	{
+		const key = "assistant.done_needs_delivery"
+		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
+		set := func(value string) (string, bool) {
+			return tool(`{"action":"set","key":"` + key + `","value":` + value + `}`)
+		}
+		if out := get(); out != "false" {
+			t.Fatalf("%s default: %s", key, out)
+		}
+		if out, isErr := set(`"yes"`); !isErr || !strings.Contains(out, "true or false") {
+			t.Fatalf("%s set to a string: %s", key, out)
+		}
+		if out, isErr := set(`null`); !isErr || !strings.Contains(out, "true or false") || len(s.pendingQuestions()) != 0 || s.deliveryGate(ctx) != deliveryGateMerged {
+			t.Fatalf("%s set to null: err=%v out=%q pending=%d gate=%s", key, isErr, out, len(s.pendingQuestions()), s.deliveryGate(ctx))
+		}
+		mergedToOff := i18n.T(i18n.Default, "assistant-settings_tool.change_delivery_gate", i18n.Args{
+			"before": i18n.T(i18n.Default, "assistant-settings_tool.delivery_gate_merged"),
+			"after":  i18n.T(i18n.Default, "assistant-settings_tool.delivery_gate_off"),
+		})
+		go answer(true, mergedToOff)
+		if out, _ := set("false"); !strings.HasPrefix(out, key+" is false") || s.deliveryGate(ctx) != deliveryGateOff {
+			t.Fatalf("%s disable from merged: %s (gate=%s)", key, out, s.deliveryGate(ctx))
+		}
+		if out, isErr := set("false"); isErr || !strings.Contains(out, "没有变化") || len(s.pendingQuestions()) != 0 {
+			t.Fatalf("%s set to false while already off: %s", key, out)
+		}
+		card := i18n.T(i18n.Default, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": word[false], "after": word[true]})
+		go answer(false, card)
+		if out, _ := set("true"); !strings.Contains(out, "declined") || get() != "false" {
+			t.Fatalf("%s declined: %s", key, out)
+		}
+		go answer(true, card)
+		if out, _ := set("true"); !strings.HasPrefix(out, key+" is true") || get() != "true" || s.deliveryGate(ctx) != deliveryGateLive {
+			t.Fatalf("%s approved: %s (gate=%s)", key, out, s.deliveryGate(ctx))
+		}
+	}
+}
+
+// The approval card names the new relay preference in the owner's language, rather than falling back to the English
+// description shown to the assistant. Declining each card leaves the setting ready for the next language case.
+func TestFoldRoutineRelayRepliesApprovalTitleLocalized(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub().withMachine()
+	s := newTestService(t, f)
+	const key = "assistant.fold_routine_relay_replies"
+	var setting ownSetting
+	for _, candidate := range s.ownSettings() {
+		if candidate.Key == key {
+			setting = candidate
+			break
+		}
+	}
+	if setting.Key != key {
+		t.Fatalf("%s is not an own setting", key)
+	}
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		t.Run(string(lang), func(t *testing.T) {
+			f.mu.Lock()
+			f.hello.Locale = string(lang)
+			f.mu.Unlock()
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.ownSettingAction(ctx, ToolCall{MachineID: "server", SessionID: "c1"}, setting, "set", json.RawMessage(`true`))
+				done <- err
+			}()
+			card, ok := awaitCard(s)
+			if !ok {
+				t.Fatal("the setting change did not wait for approval")
+			}
+			var shown struct{ Setting string }
+			if err := json.Unmarshal(card.ToolInput, &shown); err != nil {
+				t.Fatal(err)
+			}
+			allow := false
+			raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
+			if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: card.ID, Answer: raw}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the declined setting change did not finish")
+			}
+			want := i18n.T(lang, "assistant-settings_tool.title_fold_routine_relay_replies")
+			if shown.Setting != want {
+				t.Errorf("approval setting title = %q, want %q", shown.Setting, want)
+			}
+		})
 	}
 }
 

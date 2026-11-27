@@ -1,0 +1,16 @@
+{
+  "name": "view_show",
+  "description": "Create a live card in this assistant conversation: a View as persona-view and extension UI use (sections of components, a required plain-text fallback, optional named pages), at most 64 KB, 200 cards a conversation. It keeps its feed position; change it with view_update. Field-level errors come back for correction. No push: keep the conclusion in your reply too. Returns {id, version}. Never collect passwords or secrets. An html component with a key may call persona.reply / persona.open, each confirmed by the user; the card's one reply is shared with its reply actions.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "view"
+    ],
+    "properties": {
+      "view": {
+        "type": "object",
+        "description": "A View from schema/extension/view.schema.json with a required plain-text fallback and sections. Only assistant reply/open/push.page/pop actions, not extension ui.action ids."
+      }
+    }
+  }
+}

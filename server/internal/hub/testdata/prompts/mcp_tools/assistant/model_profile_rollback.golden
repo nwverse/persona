@@ -1,0 +1,9 @@
+{
+  "name": "model_profile_rollback",
+  "description": "Undo the latest profile switch, restoring touched model settings only. Inspect the preview first; another rollback may redo it.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}

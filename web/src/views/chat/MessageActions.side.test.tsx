@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatActionsContext, type ChatActions } from "./chat-actions";
 import { MessageActions } from "./MessageActions";
 import { placeSideBar } from "./ReplyBar";
+import { setStarredRows, starKey } from "../../lib/starred-rows";
+import { setStarredEnabled, setStarredSummary } from "../../lib/starred-summary";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const chat: ChatActions = { draftKey: "m/s", canCompose: true, speaker: "Persona", title: "Persona", images: () => [] };
@@ -31,6 +33,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  setStarredRows(new Map());
+  setStarredSummary(undefined, false);
+  setStarredEnabled(false);
   host.remove();
   vi.restoreAllMocks();
 });
@@ -48,6 +53,12 @@ function draw() {
 }
 const bar = () => host.querySelector<HTMLElement>("[data-side-bar]")!;
 const copy = () => host.querySelector<HTMLButtonElement>('[data-side-bar] button[aria-label="复制消息"]')!;
+// StarAvailability reports through an effect after the lazy chunk and the switch subscription update; wait for that
+// second render rather than assuming dynamicImportSettled also ran the parent's effect.
+const until = async (ok: () => boolean) => {
+  for (let i = 0; i < 400 && !ok(); i++) await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+  expect(ok()).toBe(true);
+};
 
 describe("your bubble's hover bar", () => {
   it("stays beside a bubble with room to its left", async () => {
@@ -108,4 +119,74 @@ describe("your bubble's hover bar", () => {
     placeSideBar(row, side, place);
     expect(place).not.toHaveBeenCalled();
   });
+});
+
+it("offers no star action or marker while the Starred switch is off, and offers them once it is on", async () => {
+  const origin = { mid: "m", sid: "s", item: "id#0" };
+  const key = starKey({ machine_id: "m", session_id: "s", item_id: "id#0", conversation: "agent" });
+  setStarredRows(new Map([[key, { id: "saved-star" }]]));
+  setStarredSummary(1, true);
+  const drawIt = async () => {
+    await act(async () => {
+      root.render(
+        <ChatActionsContext.Provider value={{ ...chat, canCompose: false }}>
+          <MessageActions text="Saved words" isUser side starSource={origin}>
+            <div>Saved words</div>
+          </MessageActions>
+        </ChatActionsContext.Provider>,
+      );
+      await vi.dynamicImportSettled();
+    });
+  };
+  await drawIt();
+  expect(host.querySelector("[data-star-mark]")).toBeNull();
+  expect(bar().querySelector("button[aria-haspopup=menu]")).toBeNull();
+  await act(async () => { setStarredEnabled(true); await vi.dynamicImportSettled(); });
+  await until(() => host.querySelector('[data-star-mark="saved"]') !== null);
+  expect(host.querySelector('[data-star-mark="saved"]')).not.toBeNull();
+  expect(bar().querySelector("button[aria-haspopup=menu]")).not.toBeNull();
+});
+
+it("offers More for a star only when a read-only bubble has a starrable source", async () => {
+  const readOnly = { ...chat, canCompose: false };
+  const drawPosition = async (fingerprint?: string) => {
+    await act(async () => {
+      root.render(
+        <ChatActionsContext.Provider value={readOnly}>
+          <MessageActions text="Saved source words" isUser side starSource={{ mid: "m", sid: "s", item: "line12#0", fingerprint }}>
+            <div>Saved source words</div>
+          </MessageActions>
+        </ChatActionsContext.Provider>,
+      );
+      await vi.dynamicImportSettled();
+    });
+  };
+  setStarredEnabled(true);
+  setStarredSummary(0, true);
+  await drawPosition();
+  expect(bar().querySelector("button[aria-haspopup=menu]")).toBeNull();
+  expect(host.querySelector("[data-star-mark]")).toBeNull();
+
+  await drawPosition("a".repeat(32));
+  expect(bar().querySelector("button[aria-haspopup=menu]")).not.toBeNull();
+});
+
+it("keeps a saved-star marker when the index is readable and writes are unavailable", async () => {
+  const origin = { mid: "m", sid: "s", item: "id#0" };
+  const key = starKey({ machine_id: "m", session_id: "s", item_id: "id#0", conversation: "agent" });
+  setStarredEnabled(true);
+  setStarredRows(new Map([[key, { id: "saved-star" }]]));
+  setStarredSummary(1, false);
+  await act(async () => {
+    root.render(
+      <ChatActionsContext.Provider value={{ ...chat, canCompose: false }}>
+        <MessageActions text="Saved words" isUser side starSource={origin}>
+          <div>Saved words</div>
+        </MessageActions>
+      </ChatActionsContext.Provider>,
+    );
+    await vi.dynamicImportSettled();
+  });
+  expect(host.querySelector('[data-star-mark="saved"]')).not.toBeNull();
+  expect(bar().querySelector("button[aria-haspopup=menu]")).toBeNull();
 });

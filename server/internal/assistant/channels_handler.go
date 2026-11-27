@@ -24,7 +24,7 @@ func (s *Service) ChannelUnbound(_ context.Context, p ChannelUnbound) error {
 
 // ChannelReceive is channels.receive: the owner's message from a plugin's channel, taken once (the chat apps deliver
 // some again) and handled in the background.
-func (s *Service) ChannelReceive(_ context.Context, p ChannelReceive) error {
+func (s *Service) ChannelReceive(ctx context.Context, p ChannelReceive) error {
 	var m channel.Message
 	if err := json.Unmarshal(p.Message, &m); err != nil {
 		return badRequest(err)
@@ -32,14 +32,17 @@ func (s *Service) ChannelReceive(_ context.Context, p ChannelReceive) error {
 	if m.ID == "" {
 		return badRequest(errors.New("a message without an id"))
 	}
-	first, err := s.claimChannelMessage(p.Channel, m.ID)
+	if m.Owner != nil && !*m.Owner {
+		return badRequest(errors.New(i18n.T(s.botLang(ctx), "assistant-channels_plugin.mention_owner_required")))
+	}
+	admission, err := s.admitChannelMessage(ctx, p.Channel, m)
 	if err != nil {
 		return &rpc.Error{Code: CodeTryAgain, Message: err.Error()} // the hub hands it over again
 	}
-	if !first {
+	if admission == nil {
 		return nil // delivered again
 	}
-	go s.channelReceive(p.Channel, m, p.Action)
+	go admission.run(s, m, p.Action)
 	return nil
 }
 
@@ -59,7 +62,7 @@ func (s *Service) InteractionAnnounced(_ context.Context, p InteractionAnnounced
 	}
 	c.announced[p.Interaction.ID] = true
 	c.mu.Unlock()
-	go s.feishuInteraction(p.Interaction)
+	go s.larkModule().AskAnnounced(p.Interaction)
 	go s.channelInteraction(p.Interaction)
 	go s.taskAsks(p.Interaction)
 	s.boardChanged()
@@ -102,7 +105,7 @@ func (s *Service) InteractionEnded(_ context.Context, p InteractionEnded) {
 	}
 	// Taken back because the user wrote in the conversation: what they write next is not a late answer to it.
 	inChat := p.Resolution != nil && p.Resolution.Dismiss && p.Resolution.Reason == proto.DismissedInChat && p.Resolution.AnsweredBy == ""
-	s.feishuInteractionEnded(p.Interaction, how, inChat)
+	s.larkModule().AskEnded(p.Interaction, how, inChat)
 	s.channelInteractionEnded(p.Interaction, inChat)
 	s.boardChanged()
 }
@@ -166,8 +169,8 @@ func (s *Service) channelsReconnected(ctx context.Context) {
 		s.askFollow(ctx, k[0], k[1]) // a failure is asked again by the run's watcher
 	}
 	s.forgetChannelList()
-	s.feishuForgetStatus()
-	if _, err := s.feishuStatus(ctx); err != nil { // the pairing as it is now (feishuReconcile)
+	s.larkModule().ForgetStatus()
+	if _, err := s.chat().Status(ctx); err != nil { // the pairing as it is now (feishuReconcile)
 		s.logf("channels: the Feishu bot's status: %v", err)
 	}
 	go s.sweepChannelRuns()
@@ -234,38 +237,5 @@ func (s *Service) channelsCatchUp(ctx context.Context) {
 	for _, a := range gone {
 		s.channelInteractionDone(proto.Interaction{ID: a.ID})
 	}
-	s.closeEndedBotCards(ctx, pending, true)
-}
-
-// closeEndedBotCards closes the bot's cards whose interaction is over. Not being in pending is not enough: right
-// after a restart the manager's table is empty or partial (interactions are restored, screen and Codex cards rebuilt,
-// after this runs), so each is closed only once the history says it ended for good (botCardOver). One that may still
-// be waiting is looked at again a little later, once (again).
-func (s *Service) closeEndedBotCards(ctx context.Context, pending map[string]bool, again bool) {
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(ctx) // cards posted before a restart are in the chat's state
-	var maybe []botCard
-	for id, card := range b.cards {
-		if !pending[id] && card.MessageID != "" {
-			maybe = append(maybe, card)
-		}
-	}
-	b.mu.Unlock()
-	var unsure []botCard
-	for _, card := range maybe {
-		switch s.botCardOver(ctx, card.Ix.ID) {
-		case cardOver:
-			s.feishuInteractionDone(card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))
-		case cardUnsure:
-			unsure = append(unsure, card)
-		}
-	}
-	if again && len(unsure) > 0 {
-		time.AfterFunc(botCardRecheck, func() {
-			cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			s.closeEndedBotCards(cctx, nil, false)
-		})
-	}
+	s.larkModule().AsksCatchUp(ctx, pending)
 }

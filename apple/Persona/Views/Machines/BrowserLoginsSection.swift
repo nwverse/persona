@@ -56,12 +56,7 @@ struct BrowserLoginsSection: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .card()
             Group {
-                #if os(macOS)
-                // read(_:) runs on this machine on every platform, so on the Mac the file is parsed locally, not on a phone.
-                Text("Only sites and counts are listed, never cookie contents. Imported files are read on this machine, and only the sites you check go through the hub straight to the target machine. The hub keeps nothing, and the assistant can't see or import them.")
-                #else
                 Text("Only sites and counts are listed, never cookie contents. Imported files are read on your phone, and only the sites you check go through the hub straight to this Mac. The hub keeps nothing, and the assistant can't see or import them.")
-                #endif
             }
             .font(Theme.Font.label).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, Theme.Space.xs)
@@ -223,7 +218,7 @@ extension View {
     func browserLoginsClearDialog(_ clearing: Binding<[String]?>, busy: Bool, run: @escaping ([String]) async -> Void) -> some View {
         let sites = clearing.wrappedValue ?? []
         let title = sites.count == 1 ? String(localized: "Clear Sign-in for \(sites[0])?") : String(localized: "Clear Sign-ins for \(sites.count) Sites?")
-        return confirmationDialog(title, isPresented: Binding(get: { clearing.wrappedValue != nil }, set: { if !$0 { clearing.wrappedValue = nil } }),
+        return accessibleConfirmationDialog(title, isPresented: Binding(get: { clearing.wrappedValue != nil }, set: { if !$0 { clearing.wrappedValue = nil } }),
                                   titleVisibility: .visible) {
             Button("Clear [Image Editor bce237]", role: .destructive) {
                 Task {

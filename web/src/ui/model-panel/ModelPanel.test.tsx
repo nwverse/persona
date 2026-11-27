@@ -7,6 +7,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelProvider, PanelState } from "../../lib/model-panel";
+import { t } from "../../i18n";
 import type { LauncherQuotaAnswer } from "../../lib/quota";
 import { effortTitle } from "../../lib/session-actions";
 
@@ -74,7 +75,7 @@ const codex = (over: Partial<PanelProvider> = {}): PanelProvider => ({
       id: "gpt-5.5",
       name: "GPT 5.5",
       efforts: ["low", "medium", "high"],
-      fast: true,
+      speeds: [{ id: "standard" }, { id: "fast" }],
     },
   ],
   unavailable: "需要新开对话",
@@ -109,7 +110,7 @@ interface Opts {
   providers?: PanelProvider[];
   state?: PanelState;
   onPick?: (c: unknown) => Promise<boolean>;
-  onApplyCurrent?: (p: { effort?: string; fast?: boolean }) => Promise<boolean>;
+  onApplyCurrent?: (p: { effort?: string; speed?: string }) => Promise<boolean>;
   onReload?: (p: string) => void;
   onForget?: (p: string, m: string) => void;
   quotas?: Readonly<Record<string, LauncherQuotaAnswer>>;
@@ -175,14 +176,19 @@ describe("the model panel", () => {
     expect(document.body.querySelector("[data-rail-cell]")).toBeNull();
     expect(launcher("claude").getAttribute("aria-expanded")).toBe("true");
     expect(launcher("codex").getAttribute("aria-expanded")).toBe("false");
-    expect(document.body.textContent).toContain("需要新开对话");
+    // a folded launcher that can't take a pick says why in its tooltip, not in a line of the list (#12315)
+    expect(launcher("codex").getAttribute("aria-description")).toBe("需要新开对话");
+    expect(document.body.textContent).not.toContain("需要新开对话");
   });
 
-  it("distinguishes identical model names by their launcher in All", async () => {
+  it.each(["search", "expanded"] as const)("distinguishes identical model names by their launcher in %s", async (view) => {
     const shared = [{ id: "fable", name: "Fable", efforts: [] }];
     await open({ providers: [claude({ models: shared }), codex({ models: shared, unavailable: undefined })], state: { current: null, recommended: [], starting: true } });
-    act(() => launcher("claude").click());
-    act(() => launcher("codex").click());
+    if (view === "search") type(search(), "Fable");
+    else {
+      act(() => launcher("claude").click());
+      act(() => launcher("codex").click());
+    }
     const duplicates = rows().filter((r) => r.textContent?.includes("Fable"));
     expect(duplicates).toHaveLength(2);
     expect(duplicates[0].textContent).toContain("Claude");
@@ -192,7 +198,7 @@ describe("the model panel", () => {
   it("draws each provider's Agent mark once, first: on its launcher summary and at the start of its rows, never a letter (#5497)", async () => {
     await open({ providers: [claude(), codex(), { ...codex(), id: "dsh", name: "dsh", engine: "dsh" }] });
     const mark = (el: Element) => el.querySelector("[data-agent-mark]")?.getAttribute("data-agent-mark");
-    expect(["claude", "codex", "dsh"].map((p) => mark(launcher(p)))).toEqual(["claude", "codex", "generic"]);
+    expect(["claude", "codex", "dsh"].map((p) => mark(launcher(p)))).toEqual(["claude", "codex", "dsh"]);
     expect(row("Opus").querySelectorAll("[data-agent-mark]")).toHaveLength(1);
     expect(mark(row("Opus").firstElementChild!)).toBe("claude");
     act(() => launcher("codex").click());
@@ -280,10 +286,9 @@ describe("the model panel", () => {
     expect(onPick).toHaveBeenCalledWith({
       provider: "claude",
       model: "sonnet",
-      effort: "xhigh",
     });
     expect(onClose).toHaveBeenCalled();
-    expect(stored("recent")).toEqual([{ provider: "claude", model: "sonnet", effort: "xhigh" }]);
+    expect(stored("recent")).toEqual([{ provider: "claude", model: "sonnet" }]);
   });
 
   it("a refused pick keeps the panel open and records nothing", async () => {
@@ -387,11 +392,11 @@ describe("the model panel", () => {
     await flush();
     expect(onPick).not.toHaveBeenCalled();
     expect(flyout()).not.toBeNull();
-    const fast = flyout()!.querySelector<HTMLButtonElement>("[data-fast-toggle]")!;
+    const fast = flyout()!.querySelector<HTMLButtonElement>('[data-panel-speed="fast"]')!;
     expect(fast.getAttribute("aria-pressed")).toBe("false");
     act(() => fast.click());
     await flush();
-    expect(onApplyCurrent).toHaveBeenCalledWith({ fast: true });
+    expect(onApplyCurrent).toHaveBeenCalledWith({ speed: "fast" });
   });
 
   it("the current effort-only row is not greyed out and a tap opens its working slider", async () => {
@@ -504,7 +509,6 @@ describe("the model panel", () => {
     expect(saved[0]).toMatchObject({
       provider: "claude",
       model: "sonnet",
-      effort: "xhigh",
     });
     expect(document.body.querySelector("[data-panel-quick]")?.textContent).toContain("Sonnet 5");
     act(() => document.body.querySelector<HTMLButtonElement>('[data-panel-quick] button[aria-label="取消收藏"]')!.click());
@@ -632,9 +636,13 @@ describe("launcher-first acceptance #10249", () => {
     const { onPick } = await open({ providers: catalog(), state: { current: { provider: "account-2", model: "opus" }, recommended: [] } });
     expect(document.body.querySelectorAll("[data-panel-launcher]")).toHaveLength(7);
     expect([...document.body.querySelectorAll('[data-panel-launcher][aria-expanded="true"]')].map((el) => el.getAttribute("data-panel-launcher"))).toEqual(["account-2"]);
-    expect(launcher("account-6").parentElement!.textContent).toContain("Signed out");
-    for (const header of document.body.querySelectorAll("[data-panel-launcher]")) {
-      expect(header.textContent).toContain("Claude Code · Opus 5.5 · 3 个模型");
+    expect(launcher("account-6").getAttribute("aria-description")).toBe("Signed out");
+    for (const header of document.body.querySelectorAll<HTMLElement>("[data-panel-launcher]")) {
+      // the launcher the chat runs on says "Current" and not its model again (#12315)
+      if (header.dataset.panelLauncher === "account-2") {
+        expect(header.textContent).toContain("当前");
+        expect(header.textContent).not.toContain("Opus 5.5");
+      } else expect(header.textContent).toContain("Claude Code · Opus 5.5 · 3 个模型");
     }
     act(() => launcher("account-4").click());
     const wanted = document.body.querySelector<HTMLElement>('[data-panel-row="model:account-4\\a sonnet"]')!;
@@ -694,6 +702,25 @@ describe("launcher-first acceptance #10249", () => {
     expect(onPick).toHaveBeenCalledWith({ provider: "account-1", model: "vendor/new-model" });
   });
 
+  it("opens a favorite saved by the binary speed picker as Fast", async () => {
+    localStorage.setItem(panelStoreKey("agent", "favorites"), JSON.stringify([
+      { uid: "fast", provider: "codex", model: "gpt-5.5", fast: true },
+      { uid: "ultra", provider: "codex", model: "gpt-5.5", speed: "ultrafast", fast: false },
+    ]));
+    const current = codex({ unavailable: undefined });
+    current.models = current.models?.map((model) => ({
+      ...model,
+      speeds: [{ id: "standard" }, { id: "fast" }, { id: "ultrafast" }],
+    })) ?? null;
+    const { onPick } = await open({ providers: [current], state: { current: null, recommended: ["codex"] } });
+    const choices = [...document.querySelectorAll<HTMLElement>("[data-panel-quick] [data-panel-row]")];
+    expect(choices.map((choice) => choice.querySelector("[data-row-speed]")?.getAttribute("aria-label")))
+      .toEqual([t("ui-modelpanel.fast_short"), t("ui-modelpanel.speed_ultrafast")]);
+    act(() => choices[0].click());
+    await flush();
+    expect(onPick).toHaveBeenCalledWith({ provider: "codex", model: "gpt-5.5", speed: "fast" });
+  });
+
   it("combines favorites and recent into at most three distinct one-action saved setups", async () => {
     localStorage.setItem(panelStoreKey("agent", "favorites"), JSON.stringify([{ uid: "saved", provider: "claude", model: "sonnet", effort: "low" }]));
     localStorage.setItem(
@@ -735,7 +762,7 @@ describe("a long list", () => {
     expect(document.body.querySelector("[data-panel-more]")).toBeNull();
   });
 
-  it("a name cut short shows the launcher and whole model ID; others add them only on a touch screen", async () => {
+  it.each(["", "A detailed model"])("a name cut short shows the launcher and whole model ID; others add them only on a touch screen (description: %s)", async (description) => {
     const sw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
     const cw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
     // a name longer than 20 characters does not fit
@@ -757,7 +784,7 @@ describe("a long list", () => {
         providers: [
           claude({
             models: [
-              { id: long, name: long, efforts: [] },
+              { id: long, name: long, description, efforts: [] },
               { id: "sonnet", name: "Sonnet 5", efforts: [] },
             ],
           }),

@@ -12,11 +12,14 @@ import (
 
 // creationResult covers synchronous terminal, async registration, launcher
 // runtimes and engine runtimes. Resume never establishes new ownership.
-func (n *Node) creationResult(s *proto.Session, err error, resume, creation, incarnation string) (any, error) {
+func (n *Node) creationResult(s *proto.Session, err error, resume, creation, incarnation string, spaces ...*taskSpace) (any, error) {
 	if err == nil && s != nil && !s.Starting && s.PaneID != "" && !s.Assistant {
 		n.recordRunning(s.SessionID)
 	}
 	out := map[string]any{"session": s}
+	if len(spaces) > 0 {
+		withTaskSpaceReply(out, spaces[0])
+	}
 	result, id := "start_failed", ""
 	if s != nil {
 		id = s.SessionID
@@ -24,8 +27,11 @@ func (n *Node) creationResult(s *proto.Session, err error, resume, creation, inc
 	if err != nil || s == nil || resume != "" || creation == "" || incarnation == "" {
 		if err == nil && s != nil {
 			result = "identity_missing"
-			if resume != "" {
+			switch {
+			case resume != "":
 				result = "resume_skipped"
+			case creation == "" && incarnation == "":
+				result = "receipt_not_requested"
 			}
 		}
 		devicewire.ShareCreationLog(n.logf, id, "node_receipt", result)

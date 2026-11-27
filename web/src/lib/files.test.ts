@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,7 +8,6 @@ import {
   columns,
   diffTotals,
   dirName,
-  extendStates,
   fileName,
   gitLetter,
   gitMark,
@@ -19,8 +18,6 @@ import {
   isMachineRef,
   isStaged,
   joinPath,
-  languageOf,
-  lexLine,
   markdownChunks,
   parseDiff,
   prettyJSON,
@@ -34,11 +31,18 @@ import {
   type FileContent,
   type GitFile,
   type GitStatus,
-  type LexState,
-  type Token,
 } from "./files";
+import { extendStates, languageOf, lexLine, type LexState, type Token } from "./files-syntax";
 
 const f = (path: string, index: string, worktree: string, added = 0, deleted = 0): GitFile => ({ path, index, worktree, added, deleted });
+
+describe("loading boundary", () => {
+  it("keeps the viewer's lexer out of the first screen's file helpers", () => {
+    const source = readFileSync(new URL("./files.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("files-syntax");
+    expect(source).not.toMatch(/export (?:function|interface|type) (?:lexLine|languageOf|extendStates|LexState|TokenKind)\b/);
+  });
+});
 
 describe("paths", () => {
   it("joins, splits and resolves", () => {
@@ -207,6 +211,55 @@ describe("diff", () => {
   ])("preserves a rename or deletion chunk for %j", (path, diff) => {
     expect(splitDiff(diff)).toEqual({ [path]: diff });
   });
+
+  it("preserves unquoted paths containing ' b/' across edits, deletions, binaries and renames", () => {
+    const edited = "diff --git a/docs/part b/guide.md b/docs/part b/guide.md\n--- a/docs/part b/guide.md\t\n+++ b/docs/part b/guide.md\t\n@@ -1 +1,2 @@\n x\n+++ b/not-a-header.md";
+    const deleted = "diff --git a/a b/gone.ts b/a b/gone.ts\ndeleted file mode 100644\n--- a/a b/gone.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-old";
+    const binary = "diff --git a/assets/set b/logo.png b/assets/set b/logo.png\nnew file mode 100644\nBinary files /dev/null and b/assets/set b/logo.png differ";
+    const renamed = "diff --git a/old.md b/docs/part b/renamed.md\nsimilarity index 100%\nrename from old.md\nrename to docs/part b/renamed.md";
+    const parts = splitDiff([edited, deleted, binary, renamed].join("\n"));
+    expect(Object.keys(parts)).toEqual(["docs/part b/guide.md", "a b/gone.ts", "assets/set b/logo.png", "docs/part b/renamed.md"]);
+    expect(parts["docs/part b/guide.md"]).toBe(edited);
+    expect(parts["a b/gone.ts"]).toBe(deleted);
+    expect(parts["assets/set b/logo.png"]).toBe(binary);
+    expect(parts["docs/part b/renamed.md"]).toBe(renamed);
+  });
+
+  it("keeps only filenames with a diff chunk in the lookup", () => {
+    const README = "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n";
+    const file = "diff --git a/constructor b/constructor\n--- a/constructor\n+++ b/constructor\n@@ -1 +1 @@\n-old\n+new\n";
+    expect(splitDiff(README)["constructor"]).toBeUndefined();
+    expect(splitDiff(README + file)["constructor"]).toBe(file);
+  });
+
+  it("maps actual Git-produced headers for names with spaces, which end their ---/+++ lines with a tab", () => {
+    const dir = mkdtempSync(join(tmpdir(), "persona-space-diff-"));
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", ["-c", "core.quotepath=on", ...args], { cwd: dir, encoding: "utf8", timeout: 10_000 });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    const names = ["my file.md", "docs/part b/guide.md", "a b\u00e9.md", "new name.md"];
+    try {
+      git("init", "-q");
+      mkdirSync(join(dir, "docs/part b"), { recursive: true });
+      for (const name of [...names.slice(0, 3), "old name.md"]) writeFileSync(join(dir, name), "one\ntwo\nthree\nfour\n");
+      git("add", "-A");
+      const base = git("write-tree").trim();
+      for (const name of names.slice(0, 3)) writeFileSync(join(dir, name), "one\ntwo\nthree\nfour\nfive\n");
+      git("mv", "old name.md", "new name.md");
+      writeFileSync(join(dir, "new name.md"), "one\ntwo\nthree\nfour\nsix\n");
+      git("add", "-A");
+      const edited = git("write-tree").trim();
+      const diff = git("diff", "-M", base, edited);
+      expect(diff).toContain("+++ b/my file.md\t\n");
+      const parts = splitDiff(diff);
+      expect(Object.keys(parts).sort()).toEqual([...names].sort());
+      for (const name of names) expect(parseDiff(parts[name]).filter((line) => line.kind === "add").length).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("viewer", () => {
@@ -223,8 +276,8 @@ describe("viewer", () => {
     expect(viewKind(file("a.csv", { text: "a,b", mime: "text/csv" }))).toBe("sheet");
     expect(viewKind(file("a.tsv", { text: "a\tb" }))).toBe("sheet");
     expect(viewKind(file("export", { text: "a,b", mime: "text/csv" }))).toBe("sheet");
-    expect(viewKind(file("Book.xlsx", { stream: true, mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }))).toBe("sheet");
-    expect(viewKind(file("old.xls", { data: "AA==" }))).toBe("sheet");
+    expect(viewKind(file("Book.xlsx", { stream: true, mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }))).toBe("workbook");
+    expect(viewKind(file("old.xls", { data: "AA==" }))).toBe("workbook");
     expect(viewKind(file("clip.mp4", { stream: true, mime: "video/mp4" }))).toBe("video");
     expect(viewKind(file("IMG_0001.MOV", { data: "AA==", mime: "application/octet-stream" }))).toBe("video");
     expect(viewKind(file("memo.m4a", { stream: true, mime: "audio/mp4" }))).toBe("audio");

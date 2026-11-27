@@ -13,7 +13,7 @@ import { codedFailure, helpTopic, passesBySelf, refreshReadiness, type CodedFail
 import { conversationPage } from "../lib/conversation-page";
 import { navigate } from "../lib/router";
 import { hubHas, refreshAssistant, useStore } from "../lib/store";
-import { effectiveLauncher, NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel, pickEffort, pickFast, pickLauncher, usePickedLauncher } from "../lib/assistant-chat";
+import { effectiveLauncher, NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel, pickedServiceTier, pickEffort, pickLauncher, pickServiceTier, usePickedLauncher } from "../lib/assistant-chat";
 import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../lib/assistant-models";
 import { adoptedConversation, noteSent, outboxMessage } from "../lib/outbox";
 import { CLEAR_MAIN_FEATURE, isClearCommand, mainCommands, useMainCleared } from "../lib/main-clear";
@@ -32,7 +32,7 @@ import { StartSessionButton } from "./StartSessionButton";
 import { conversationTitle } from "./assistant/conversations";
 import { t } from "../i18n";
 import { useAssistantTitle, useShownOffline } from "./ManagerParts";
-import { chosenManager, noteConversation, noteRoutedConversation, ownerHeaders, sameManager, shownManager, useShownManager } from "../lib/manager-choice";
+import { chosenManager, defaultManager, noteConversation, noteRoutedConversation, ownerHeaders, sameManager, shownManager, useShownManager } from "../lib/manager-choice";
 import type { AssistantInfo, Session } from "../lib/types";
 
 /** Every computer's tokens a day under the things to ask (#9506): a lazy chunk, not on the first screen. */
@@ -146,7 +146,7 @@ export function PersonaAssistant({ sid, fresh, routed, at, onToggleSidebar }: { 
   const manager = chosenManager() ?? "";
   // A reloaded conversation link needs its machine before the socket reconnects, so its saved outbox can appear.
   useEffect(() => {
-    if (sid && !fresh && !assistant && !assistantError) void refreshAssistant().catch(() => {});
+    if (sid && !fresh && !assistant && !assistantError) void refreshAssistant({ coalesce: true }).catch(() => {});
   }, [sid, fresh, assistant, assistantError, manager]);
   const cached = useMemo(() => {
     if (sid || fresh || assistant) return null;
@@ -172,12 +172,15 @@ export function PersonaAssistant({ sid, fresh, routed, at, onToggleSidebar }: { 
     }
     // the main conversation is the phone's assistant page: "Assistant | Agents" in its top bar (ChatView's `topCenter`, narrow only)
     const topCenter = id === main ? <ShellSwitch page="assistant" /> : undefined;
+    // keyed by the conversation, not its computer: the cached first view's computer giving way to the hub's answer is the
+    // same chat, and a new key would take the typing person's words, pictures and focus with the old page (#11237)
     return (
       <ChatView
-        key={`${scope}/${manager}/${machine}/${id}`}
+        key={`${scope}/${manager}/${id}`}
         mid={machine}
         sid={id}
         assistant
+        assistantManager={homeOther ? routedManager ?? defaultManager() : shown}
         starting={starting.has(id)}
         onToggleSidebar={onToggleSidebar}
         topCenter={topCenter}
@@ -234,7 +237,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
   const assistant = useStore((s) => s.assistant);
   const manager = useShownManager();
   const selectedLauncher = usePickedLauncher(NEW_CONVERSATION);
-  const mention = useMemo<MentionSource>(() => ({ self: "persona-new", files: () => [], workspaces: true,
+  const mention = useMemo<MentionSource>(() => ({ self: "persona-new", files: () => [], workspaces: true, repositories: manager,
     skills: { manager, launcher: selectedLauncher, environment: assistant?.launcher ?? "" },
   }), [manager, selectedLauncher, assistant?.launcher]);
   const persona = usePersona();
@@ -286,7 +289,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
     const launcher = pickedLauncher(NEW_CONVERSATION);
     // written for the manager shown now: its retries go there even if the switcher moves meanwhile
     const chosen = chosenManager() ?? undefined;
-    const body = { prompt: out.text, images: out.images.length ? out.images : undefined, launcher, model: launcher ? pickedModel(NEW_CONVERSATION) : undefined, effort: pickedEffort(NEW_CONVERSATION), service_tier: startServiceTier && !chosen && pickedFast() ? "priority" : undefined, main: main || undefined };
+    const body = { prompt: out.text, images: out.images.length ? out.images : undefined, launcher, model: launcher ? pickedModel(NEW_CONVERSATION) : undefined, effort: pickedEffort(NEW_CONVERSATION), service_tier: startServiceTier && !chosen ? pickedServiceTier() : undefined, main: main || undefined };
     const headers = ownerHeaders(chosen);
     const from = shownManager();
     // one op id for this message, its quiet retries included (#1382); sent again after a refusal, it gets a new one
@@ -301,7 +304,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
         noteSent(r.session.machine_id, r.session.session_id, out);
         if (launcher) pickLauncher(NEW_CONVERSATION, undefined);
         pickEffort(NEW_CONVERSATION, undefined);
-        pickFast(false);
+        pickServiceTier(undefined);
         void refreshAssistant().catch(() => {});
         navigate(conversationPage(r.session.session_id, r.session.machine_id, from));
         return true;
@@ -418,7 +421,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
           {gate.dialog}
           {/* the box: in the page's middle, or docked at the bottom as the conversation's (ChatView's dock) while the start is on its way */}
           <div ref={box} className={docked ? "mx-auto flex w-full max-w-[880px] flex-col justify-end gap-2 px-4 pb-4 sm:px-7 [@media(max-height:500px)]:pb-2" : undefined}>
-            <Composer key={seed} blocked={offline ? undefined : gate.blocked} disabled={Boolean(offline) || Boolean(sending)} draftKey="persona-new" placeholder={offline ? offline.composer : t("personaassistant.ask_placeholder", { name: persona.name })} machineId={assistant?.machine_id} mention={mention} onSend={start} autoFocus commands={commands} trailing={assistant && !sending ? <AssistantModelPill /> : undefined} />
+            <Composer key={seed} blocked={offline ? undefined : gate.blocked} disabled={Boolean(offline) || Boolean(sending)} draftKey="persona-new" placeholder={offline ? offline.composer : t("personaassistant.ask_placeholder", { name: persona.name })} machineId={assistant?.machine_id} mention={mention} onSend={start} autoFocus commands={commands} trailing={assistant && !sending ? <AssistantModelPill mainStart={main} /> : undefined} />
           </div>
           {!docked && (
           <div className="mt-4 grid grid-cols-1 gap-1.5 sm:grid-cols-2">

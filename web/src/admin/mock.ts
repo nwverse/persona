@@ -80,14 +80,18 @@ export function installMock(scenario: string) {
   };
   let restart = { required: scenario === "app", reasons: scenario === "app" ? ["添加电脑「studio」", "TLS 监听改成 :18662"] : [] };
   const startedAt = iso(60 * 26 + 17);
-  // Usage sources (docs/server/usage-windows.md"Account-pool gateways"): one Relay that works, one generic that does not answer. Any key
-  // other than "wrong" tests fine; an address containing "dead" does not connect. The key is never given back.
+  // Usage sources (docs/server/usage-windows.md"Account-pool gateways"): one Relay that works, one relay read with an API key
+  // (#12311), one generic that does not answer. Any key other than "wrong" tests fine (a relay_key test with the key "hidden"
+  // answers that the relay shares no allowances with it); an address containing "dead" does not connect. The key is never given back.
   const usage: UsageSources = {
     enabled: true,
     poll_minutes: 5,
     limit: 8,
+    hidden_providers: [],
+    providers: ["claude", "codex", "kimi"],
     sources: [
       { id: "src-1a2b3c4d", name: "Relay", type: "relay", url: "https://gateway.example.com", has_key: true, enabled: true, status: { ok_at: iso(2), tried_at: iso(2), seen: { accounts: 12, windows: 31, listed: 14, providers: { codex: 8, claude: 4 } } } },
+      { id: "src-9c0d1e2f", name: "Shared relay", type: "relay_key", url: "https://relay.example.com/v1", has_key: true, enabled: true, status: { ok_at: iso(3), tried_at: iso(3), seen: { accounts: 7, windows: 20, listed: 9, providers: { claude: 5, codex: 1, antigravity: 1 } } } },
       { id: "src-5e6f7a8b", name: "Team pool", type: "generic", url: "https://pool.example.com/persona/usage", has_key: true, enabled: true, status: { ok_at: iso(95), tried_at: iso(1), error: "unreachable", seen: { accounts: 3, windows: 5, listed: 3, providers: { kimi: 3 } } } },
     ],
   };
@@ -253,7 +257,8 @@ export function installMock(scenario: string) {
       ? []
       : [
           { id: MA, spec: "https://extensions.example.com/persona/", name: "Example 扩展", description: "Example 官方维护的扩展", has_token: false, extensions: 4, warnings: [], fetched_at: iso(42), added_at: iso(60 * 72), official: true },
-          { id: MB, spec: "github:example/team-extensions", name: "团队扩展", has_token: true, extensions: 2, warnings: ["第 3 个扩展：没有 manifest，跳过"], fetched_at: iso(95), added_at: iso(60 * 48) },
+          { id: MB, spec: "github:example/team-extensions", name: "团队扩展", has_token: true, extensions: 2, warnings: ["第 3 个扩展：没有 manifest，跳过"], fetched_at: iso(95), added_at: iso(60 * 48),
+            signature: { state: "signed", key_id: "5d1e0c7a9b3f2468" }, trusted_keys: { "5d1e0c7a9b3f2468": "ed25519:" + "Q".repeat(43) + "=" } },
         ];
   const catalogItems = (): CatalogItem[] => {
     const raw: CatalogItem[] = [
@@ -448,6 +453,7 @@ export function installMock(scenario: string) {
       case "PUT /usage-sources":
         if (typeof body.enabled === "boolean") usage.enabled = body.enabled;
         if (typeof body.poll_minutes === "number") usage.poll_minutes = body.poll_minutes;
+        if (Array.isArray(body.hidden_providers)) usage.hidden_providers = body.hidden_providers as string[];
         return json(usage);
       case "POST /usage-sources": {
         if (usage.sources.length >= usage.limit) return fail(409, "too_many", "最多 8 个来源");
@@ -463,6 +469,8 @@ export function installMock(scenario: string) {
         const saved = body.id ? usageSource(String(body.id)) : undefined;
         const key = body.key || (saved && saved.url === url ? "saved" : "");
         if (!key || key === "wrong") return json({ ok: false, code: "unauthorized" });
+        if (body.type === "relay_key")
+          return json(key === "hidden" ? { ok: true, accounts: 0, windows: 0, listed: 0, providers: {}, quota_hidden: true } : { ok: true, accounts: 7, windows: 20, listed: 9, providers: { claude: 5, codex: 1, antigravity: 1 } });
         return json({ ok: true, accounts: 12, windows: 31, listed: 14, providers: { codex: 8, claude: 4 } });
       }
       case "GET /mesh":
@@ -553,6 +561,19 @@ export function installMock(scenario: string) {
         return json({ link_switch: switchToLink(machine) }, 202);
       }
       if (m[2] === "/link-pair") return json({ pair_url: `persona://link?url=https%3A%2F%2Fhub.example.com%3A18662&machine=${id}&token=jp_mock`, expires_at: later(10), command: `persona-link pair 'persona://link?…&machine=${id}'` });
+    }
+    // A private market's signing keys (docs/extensions/extensions.md "Private market keys"): add one, remove one by key id.
+    const mkKeys = /^\/extensions\/-\/markets\/([^/?]+)\/keys(?:\/([^/?]+))?$/.exec(path);
+    if (mkKeys) {
+      const m = markets.find((x) => x.id === decodeURIComponent(mkKeys[1]));
+      if (!m) return fail(404, "not_found", "没有这个市场");
+      if (method === "GET") return json({ keys: m.trusted_keys ?? {} });
+      const next = { ...(m.trusted_keys ?? {}) };
+      if (method === "POST") next[Math.random().toString(16).slice(2, 10).padEnd(16, "0")] = String(body.key);
+      else delete next[decodeURIComponent(mkKeys[2] ?? "")];
+      const read: Market = { ...m, trusted_keys: next, signature: Object.keys(next).length ? m.signature : { state: "unsigned" } };
+      markets = markets.map((x) => (x.id === m.id ? read : x));
+      return json(read);
     }
     const mk = /^\/extensions\/-\/markets\/([^/?]+)(\/[a-z]+)?$/.exec(path);
     if (mk) {

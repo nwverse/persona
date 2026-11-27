@@ -7,12 +7,12 @@
 // own session's lines, built apart (no exchange crosses a switch; each later stretch opens with its switch divider),
 // drawn above the live one. Their messages keep Copy; nothing goes to the composer, and nothing rewinds, branches or
 // forwards from them: they belong to a session the conversation has left.
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, errorText, sessionPath } from "../../lib/api";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { api, errorText, sessionHistoryNotFound, sessionPath } from "../../lib/api";
 import { planStretches, sameItems, splitStretches, stretchWindows, type StretchSource } from "../../lib/engine-stretches";
 import { sessionLoadError } from "../../lib/session-link";
 import { buildTaskIndex } from "../../lib/tasks";
-import { chatLines, mergeItems, type ChatLine } from "../../lib/turns";
+import { chatLines, insideFold, mergeItems, type ChatLine } from "../../lib/turns";
 import type { Item, ItemsPage } from "../../lib/types";
 import { NO_WORKFLOW_CALLS } from "../../lib/workflows";
 import { Button } from "../../ui/atoms";
@@ -22,7 +22,8 @@ import { ChatActionsContext, useChatActions, type ChatActions } from "./chat-act
 import { ChatContext, useChatContext, type ChatContextValue } from "./chat-context";
 import { ChatLineView } from "./Lines";
 import { dayRowKey, withDayDividers } from "./day-dividers";
-import type { EarlierStretch, StretchesHost } from "./useEarlierStretches";
+import type { EarlierStretch, LiveTranscript, StretchesHost } from "./useEarlierStretches";
+import { waitForEarlierRetry } from "./useTranscript";
 
 const PAGE = "turns=2&fold_work=1&lazy_images=1";
 /** After a page fails, loading waits this long before asking again (scrolling at the top asks on every tick), doubling up
@@ -31,6 +32,42 @@ const RETRY_MS = 3000;
 const RETRY_MAX_MS = 30_000;
 
 type Offscreen = (line: ChatLine) => ((section: HTMLElement) => () => void) | undefined;
+
+export interface EarlierPageRequest {
+  mid: string;
+  sid: string;
+  beforeSeq?: number;
+  signal: AbortSignal;
+}
+
+export interface EarlierFoldPageRequest {
+  mid: string;
+  sid: string;
+  fromSeq: number;
+  throughSeq: number;
+}
+
+export interface EarlierStretchLineProps {
+  line: ChatLine;
+  mid: string;
+  sid: string;
+  expandFold: EarlierStretch["expandFold"];
+  offscreen?: (section: HTMLElement) => () => void;
+}
+
+export interface EarlierStretchesProps extends StretchesHost {
+  offscreen?: Offscreen;
+  /** Loads an earlier session page without calling the default hub API client. */
+  loadPage?: (request: EarlierPageRequest) => Promise<ItemsPage>;
+  /** Loads one fold-expansion page without calling the default hub API client. */
+  loadFoldPage?: (request: EarlierFoldPageRequest) => Promise<ItemsPage>;
+  /** Classifies a missing-history error that ends the stretch cleanly without retrying. */
+  isHistoryNotFound?: (error: unknown) => boolean;
+  /** Waits out retry backoff when `loadEarlier({ waitForRetry: true })` is called. */
+  waitForRetry?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Replaces the default chat line view for each row rendered inside an earlier stretch. */
+  renderLine?: (props: EarlierStretchLineProps) => ReactNode;
+}
 
 interface Store {
   items: Item[];
@@ -42,15 +79,36 @@ const NO_STORES: Record<string, Store> = {};
 const NO_STRETCHES: EarlierStretch[] = [];
 const NO_SUBAGENTS: never[] = [];
 
+const defaultLoadPage = ({ mid, sid, beforeSeq, signal }: EarlierPageRequest) =>
+  api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}${beforeSeq !== undefined ? `&before_seq=${beforeSeq}` : ""}`, { signal });
+
+const defaultLoadFoldPage = ({ mid, sid, fromSeq, throughSeq }: EarlierFoldPageRequest) =>
+  api<ItemsPage>(`${sessionPath(mid, sid)}/items?from_seq=${fromSeq}&through_seq=${throughSeq}&lazy_images=1`);
+
 /** `offscreen`: ChatView's (an exchange off screen skips drawing, SegmentView `offscreen`). */
-export default memo(function EarlierStretches({ mid, sid, scope, history, live, report, offscreen }: StretchesHost & { offscreen?: Offscreen }) {
+export default memo(function EarlierStretches({
+  mid,
+  sid,
+  scope,
+  history,
+  live,
+  report,
+  offscreen,
+  loadPage,
+  loadFoldPage,
+  isHistoryNotFound,
+  waitForRetry,
+  renderLine,
+}: EarlierStretchesProps) {
+  const callbacks = useRef({ loadPage, loadFoldPage, isHistoryNotFound, waitForRetry });
+  callbacks.current = { loadPage, loadFoldPage, isHistoryNotFound, waitForRetry };
   const windows = useMemo(() => stretchWindows(history, sid), [history, sid]);
-  const [state, setState] = useState<{ scope: string; stores: Record<string, Store> }>({ scope, stores: NO_STORES });
+  const [state, setState] = useState<{ scope: string; stores: Record<string, Store>; page?: symbol }>({ scope, stores: NO_STORES });
   const stores = state.scope === scope ? state.stores : NO_STORES;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const gen = useRef(0);
-  const inFlight = useRef(false);
+  const inFlight = useRef<{ controller: AbortController; promise: Promise<symbol | undefined> } | null>(null);
   const retryAt = useRef(0);
   const wait = useRef(0);
   // a failed page's wait: when it is over, `due` moves and the chat asks again (ChatView, while its top is in view)
@@ -62,13 +120,17 @@ export default memo(function EarlierStretches({ mid, sid, scope, history, live, 
   }, []);
   useEffect(() => {
     gen.current++;
-    inFlight.current = false;
+    inFlight.current = null;
     retryAt.current = 0;
     wait.current = 0;
     stopRetry();
     setLoading(false);
     setError("");
-    return stopRetry;
+    return () => {
+      inFlight.current?.controller.abort();
+      inFlight.current = null;
+      stopRetry();
+    };
   }, [scope, stopRetry]);
 
   const liveSource = useMemo<StretchSource>(() => ({ items: live.items, hasMore: live.hasMore, ready: !live.loading }), [live.items, live.hasMore, live.loading]);
@@ -100,16 +162,17 @@ export default memo(function EarlierStretches({ mid, sid, scope, history, live, 
       let from = fold.seq;
       const out: Item[] = [];
       for (let n = 0; n < 20; n++) {
-        const p = await api<ItemsPage>(`${sessionPath(mid, s)}/items?from_seq=${from}&through_seq=${fold.fold.through_seq}&lazy_images=1`);
+        const p = await (callbacks.current.loadFoldPage ?? defaultLoadFoldPage)({ mid, sid: s, fromSeq: from, throughSeq: fold.fold.through_seq });
         if (g !== gen.current) return;
         out.push(...(p.items ?? []));
         if (!p.more || !p.items?.length) break;
         from = p.items[p.items.length - 1].seq + 1;
       }
+      const scoped = out.filter((i) => insideFold(i, fold));
       setState((st) => {
         const base = st.scope === scope ? st.stores : NO_STORES;
         const cur = base[s];
-        return cur ? { scope, stores: { ...base, [s]: { ...cur, items: mergeItems(cur.items, out) } } } : st;
+        return cur ? { scope, stores: { ...base, [s]: { ...cur, items: mergeItems(cur.items, scoped) } } } : st;
       });
     },
     [mid, scope],
@@ -137,47 +200,73 @@ export default memo(function EarlierStretches({ mid, sid, scope, history, live, 
   const now = useRef({ plan, windows, stores, live, scope });
   now.current = { plan, windows, stores, live, scope };
 
-  const loadEarlier = useCallback(async () => {
+  const loadEarlier = useCallback<LiveTranscript["loadEarlier"]>(async (options) => {
+    if (inFlight.current) return inFlight.current.promise;
     const { plan: p, windows: ws, stores: have, live: tr, scope: at } = now.current;
     if (p.next === undefined) return;
     const w = ws[p.next];
-    if (w.sid === sid) return tr.loadEarlier();
-    if (inFlight.current || Date.now() < retryAt.current) return;
-    const g = gen.current;
+    if (w.sid === sid) return tr.loadEarlier(options);
+    const delay = retryAt.current - Date.now();
+    if (delay > 0 && !options?.waitForRetry) return;
     const store = have[w.sid];
     const first = store?.ready ? store.items[0] : undefined;
-    inFlight.current = true;
+    const controller = new AbortController();
+    const read = { controller, promise: Promise.resolve<symbol | undefined>(undefined) };
+    inFlight.current = read;
     setLoading(true);
-    try {
-      const page = await api<ItemsPage>(`${sessionPath(mid, w.sid)}/items?${PAGE}${first ? `&before_seq=${first.seq}` : ""}`);
-      if (g !== gen.current) return;
-      const got = page.items ?? [];
-      setState((st) => {
-        const base = st.scope === at ? st.stores : NO_STORES;
-        const cur = base[w.sid];
-        // an empty page ends it whatever it says: asking again from the same place would get the same
-        return { scope: at, stores: { ...base, [w.sid]: { items: mergeItems(cur?.items ?? [], got), hasMore: Boolean(page.has_more) && got.length > 0, ready: true } } };
-      });
-      setError("");
-      retryAt.current = 0;
-      wait.current = 0;
-      stopRetry();
-    } catch (e) {
-      if (g !== gen.current) return;
-      wait.current = Math.min(wait.current ? wait.current * 2 : RETRY_MS, RETRY_MAX_MS);
-      retryAt.current = Date.now() + wait.current;
-      setError(sessionLoadError(errorText(e)));
-      stopRetry();
-      retryTimer.current = window.setTimeout(() => {
-        retryTimer.current = undefined;
-        if (g === gen.current) setDue((n) => n + 1);
-      }, wait.current);
-    } finally {
-      if (g === gen.current) {
-        inFlight.current = false;
-        setLoading(false);
+    const g = gen.current;
+    const current = () => inFlight.current === read && now.current.scope === at && !controller.signal.aborted;
+    read.promise = (async () => {
+      try {
+        if (delay > 0) await (callbacks.current.waitForRetry ?? waitForEarlierRetry)(delay, controller.signal);
+        if (!current()) return;
+        const page = await (callbacks.current.loadPage ?? defaultLoadPage)({ mid, sid: w.sid, beforeSeq: first?.seq, signal: controller.signal });
+        if (!current()) return;
+        const got = page.items ?? [];
+        const pageToken = got.some((item) => !first || item.seq < first.seq) ? Symbol() : undefined;
+        setState((st) => {
+          const base = st.scope === at ? st.stores : NO_STORES;
+          const cur = base[w.sid];
+          // an empty page ends it whatever it says: asking again from the same place would get the same
+          return { scope: at, page: pageToken, stores: { ...base, [w.sid]: { items: mergeItems(cur?.items ?? [], got), hasMore: Boolean(page.has_more) && got.length > 0, ready: true } } };
+        });
+        setError("");
+        retryAt.current = 0;
+        wait.current = 0;
+        stopRetry();
+        return pageToken;
+      } catch (e) {
+        if (!current()) return;
+        if ((callbacks.current.isHistoryNotFound ?? sessionHistoryNotFound)(e)) {
+          // its computer can't find that stretch's history (#11450): the stretch ends there, as an empty page ended
+          // it, and the older ones load; asking again would get the same. The hub's own 404 (a computer it does not
+          // know) is retried as any failure.
+          setState((st) => {
+            const base = st.scope === at ? st.stores : NO_STORES;
+            return { scope: at, page: undefined, stores: { ...base, [w.sid]: { items: base[w.sid]?.items ?? [], hasMore: false, ready: true } } };
+          });
+          setError("");
+          retryAt.current = 0;
+          wait.current = 0;
+          stopRetry();
+          return;
+        }
+        wait.current = Math.min(wait.current ? wait.current * 2 : RETRY_MS, RETRY_MAX_MS);
+        retryAt.current = Date.now() + wait.current;
+        setError(sessionLoadError(errorText(e)));
+        stopRetry();
+        retryTimer.current = window.setTimeout(() => {
+          retryTimer.current = undefined;
+          if (g === gen.current) setDue((n) => n + 1);
+        }, wait.current);
+      } finally {
+        if (inFlight.current === read) {
+          inFlight.current = null;
+          setLoading(false);
+        }
       }
-    }
+    })();
+    return read.promise;
   }, [mid, sid, stopRetry]);
 
   const retry = () => {
@@ -190,9 +279,7 @@ export default memo(function EarlierStretches({ mid, sid, scope, history, live, 
 
   // what the chat around them reads (useEarlierStretches): before paint, so it keeps its place as they come in above
   const hasMore = plan.next !== undefined;
-  // the lines each stretch draws and the divider days those rows actually carry. The live transcript's guard and the
-  // per-stretch skip set derive from these drawn rows, not the raw items: a day met only inside a folded tool run or a
-  // recap draws no divider, so it must not suppress a divider another stretch draws (#8160).
+  // Use the days actually drawn in each stretch, so a folded-only day cannot suppress another divider.
   const stretchRows = useMemo(() => stretches.map((s) => {
     const lines = chatLines(s.items).map((l) => ({ ...l, id: `${s.key}/${l.id}` }));
     const days = withDayDividers(lines, Date.now(), { includeLeadingDay: true })
@@ -200,11 +287,14 @@ export default memo(function EarlierStretches({ mid, sid, scope, history, live, 
       .filter((d): d is string => d !== undefined);
     return { lines, days };
   }), [stretches]);
-  // the calendar days the drawn stretches put a divider on: the live transcript skips its own dividers for them
   const dayKeys = useMemo(() => [...new Set(stretchRows.flatMap((r) => r.days))], [stretchRows]);
-  useLayoutEffect(() => report(scope, { hasMore, loading, loadEarlier, stretches, dayKeys, due }), [report, scope, hasMore, loading, loadEarlier, stretches, dayKeys, due]);
+  const projectedLivePage = live.earlierPage;
+  const projectedOtherPage = state.scope === scope ? state.page : undefined;
+  useLayoutEffect(() => {
+    report(scope, { hasMore, loading, loadEarlier, stretches, dayKeys, due, projectedLivePage, projectedOtherPage });
+  }, [report, scope, hasMore, loading, loadEarlier, stretches, dayKeys, due, projectedLivePage, projectedOtherPage]);
 
-  // days an older stretch already put a divider on: a later stretch never opens with a second one for the same day
+  // Days already drawn by older stretches.
   const skipByStretch = useMemo(() => {
     const seen = new Set<string>();
     return stretchRows.map((r) => {
@@ -223,12 +313,12 @@ export default memo(function EarlierStretches({ mid, sid, scope, history, live, 
           <Button onClick={retry} icon="retry">{t("chat-chatview.retry")}</Button>
         </div>
       )}
-      {stretches.map((s, i) => <StretchLines key={s.key} mid={mid} stretch={s} lines={stretchRows[i].lines} skipDays={skipByStretch[i]} offscreen={offscreen} />)}
+      {stretches.map((s, i) => <StretchLines key={s.key} mid={mid} stretch={s} lines={stretchRows[i].lines} skipDays={skipByStretch[i]} offscreen={offscreen} renderLine={renderLine} />)}
     </>
   );
 });
 
-const StretchLines = memo(function StretchLines({ mid, stretch, lines, skipDays, offscreen }: { mid: string; stretch: EarlierStretch; lines: ChatLine[]; skipDays?: ReadonlySet<string>; offscreen?: Offscreen }) {
+const StretchLines = memo(function StretchLines({ mid, stretch, lines, skipDays, offscreen, renderLine }: { mid: string; stretch: EarlierStretch; lines: ChatLine[]; skipDays?: ReadonlySet<string>; offscreen?: Offscreen; renderLine?: (props: EarlierStretchLineProps) => ReactNode }) {
   const base = useChatContext();
   const actions = useChatActions();
   const { items, key, sid } = stretch;
@@ -251,9 +341,13 @@ const StretchLines = memo(function StretchLines({ mid, stretch, lines, skipDays,
   return (
     <ChatContext.Provider value={ctx}>
       <ChatActionsContext.Provider value={readOnly}>
-        <div className="contents" data-engine-stretch={sid}>
+        <div className="contents" data-engine-stretch={sid} data-stretch-index={stretch.index} data-stretch-first={items[0]?.seq}>
           {dayRows.map((row) => row.kind === "day" ? (
             <div key={row.id} data-day-divider={row.id}><DayLine date={row.date} /></div>
+          ) : renderLine ? (
+            <Fragment key={row.line.id}>
+              {renderLine({ line: row.line, mid, sid, expandFold: stretch.expandFold, offscreen: offscreen?.(row.line) })}
+            </Fragment>
           ) : (
             <ChatLineView key={row.line.id} line={row.line} mid={mid} sid={sid} expandFold={stretch.expandFold} offscreen={offscreen?.(row.line)} />
           ))}

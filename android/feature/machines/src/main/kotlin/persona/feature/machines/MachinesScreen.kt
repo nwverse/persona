@@ -1,5 +1,6 @@
 package persona.feature.machines
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -11,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -61,6 +63,9 @@ internal fun MachinesScreen(
     }
     val machine = machines.firstOrNull { it.id == machineId }
     val acting = actions?.state?.collectAsStateWithLifecycle()?.value ?: MachineActionsState()
+    val linkAttempt = machineId?.let { acting.linkSwitches[it] }
+    val linkSwitchBusy = linkSwitchConnectionBusy(machine?.linkSwitch, linkAttempt)
+    if (actions != null && machineId != null) LaunchedEffect(actions, machineId) { actions.observeLinkSwitch(machineId) }
     // An offline machine has no launchers; they are read again when it comes online (after "Reconnect").
     if (actions != null && machineId != null) LaunchedEffect(actions, machineId, machine?.online) {
         actions.loadLaunchers(machineId, machine?.online == true)
@@ -88,6 +93,8 @@ internal fun MachinesScreen(
     val listSummary = machineSummary(entries)
     val locale = currentLocale
     val healthState = health?.state?.collectAsStateWithLifecycle()?.value ?: MachineHealthState()
+    val subscriptionUsage = LocalSidebarUsage.current?.value ?: healthState.usage
+    val (hiddenUsage, showUsage) = rememberHiddenUsageProviders()
     var allChecks by rememberSaveable(machineId) { mutableStateOf(false) }
     var allAgents by rememberSaveable(machineId) { mutableStateOf(false) }
     var confirmFix by remember { mutableStateOf(false) }
@@ -128,7 +135,7 @@ internal fun MachinesScreen(
     JListPage(
         title = if (machineId == null) stringResource(R.string.machines_title) else machine?.displayName ?: stringResource(R.string.machines_title_detail),
         summary = if (machineId == null) machineSummaryText(listSummary) else null,
-        onBack = if (machineId == null && LocalIsSidebarRoot.current) null else navigator::back,
+        onBack = if (LocalIsSidebarRoot.current) null else navigator::back,
         largeTitle = machineId == null,
         state = listState,
         actions = {
@@ -140,7 +147,11 @@ internal fun MachinesScreen(
         state.failure?.let { failure -> item("failure") { JNotice(stringResource(failure.text)) } }
         if (state.sessionsFailure) item("sessions-failure") { JNotice(stringResource(R.string.machines_sessions_failure)) }
         if (machineId == null) {
-            usageWindows(healthState.usage, java.time.Instant.ofEpochSecond(state.now))
+            usageWindows(subscriptionUsage, java.time.Instant.ofEpochSecond(state.now), hiddenUsage, showUsage)
+            val tokenShares = entries.mapNotNull { entry ->
+                entry.metrics.usage?.let { (entry.machine?.displayName ?: entry.id) to it }
+            }
+            if (tokenShares.isNotEmpty()) item("today-tokens") { TodayTokensCard(tokenShares) }
             // An offline assistant with no computer the hub still keeps: out of reach, not a first run (no Add).
             if (!state.loading && ids.isEmpty() && assistant.offline != null) item("offline") { JAssistantOffline(assistant) }
             else if (!state.loading && ids.isEmpty()) item("empty") {
@@ -160,6 +171,11 @@ internal fun MachinesScreen(
                     navigator.navigate(MachineDetailRoute(id))
                 }
             }
+            usageWindows(subscriptionUsage, java.time.Instant.ofEpochSecond(state.now))
+            if (entries.any { entry ->
+                val cores = (entry.metrics.system ?: entry.machine?.system)?.cores
+                loadPerCore(entry.metrics.current(state.now)?.load, cores) != null
+            }) item("load-definition") { MachineLoadDefinition() }
         } else {
             val metric = state.history?.metrics?.live(machine) ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
             val system = metric.system ?: machine?.system
@@ -167,14 +183,18 @@ internal fun MachinesScreen(
             val agents = machineSessions(sessions, machineId, model.sessions.supportsFeature(machineId, "sessions_hierarchy"))
             item("machine") {
                 MachineCard(machine, metric, AgentTally(agents), state.now, state.history?.step ?: state.range.step, deploy = deployLine,
-                    onConfirm = if (adds) confirmComputer else null)
+                    onConfirm = if (adds) confirmComputer else null, linkSwitchExpected = linkSwitchBusy, showLoadReading = false)
+            }
+            if (machine != null && actions != null) item("link-switch") {
+                MachineLinkSwitchSection(machine, linkAttempt,
+                    onStart = { actions.startLinkSwitch(machine.id) }, onCheck = { actions.checkLinkSwitch(machine.id) })
             }
             if (machine == null && machines.isNotEmpty()) item("gone") { JNotice(stringResource(R.string.machines_gone)) }
             // Move to… with several managers, for this hub's own computers (a linked hub's is that hub's to give).
             val owner = machine?.takeIf { roster?.isMulti == true && movable(it, managerGroup) }?.let { roster?.ownerOf(it.manager) }
             if (machine != null && actions != null) machineControls(machine, acting.reconnecting,
                 // Reconnect goes through its manager: not while that one is offline
-                canReconnect = offlineManagerOf(roster, machine, managerGroup) == null,
+                canReconnect = offlineManagerOf(roster, machine, managerGroup) == null && !linkSwitchBusy,
                 onEngine = { navigator.navigate(EngineRoute(machine.id)) }, onReconnect = { actions.reconnect(machine.id) },
                 botmux = acting.botmux, botmuxSaving = acting.botmuxSaving, onBotmux = { actions.setBotmux(machine.id, it) },
                 move = owner?.let { id -> MachineMoveRow(roster?.manager(id)?.shownName ?: id, acting.moving) { choosingManager = true } },
@@ -230,7 +250,16 @@ internal fun MachinesScreen(
             }
             itemsIndexed(values, key = { _, it -> "now-${it.first}" }, contentType = { _, _ -> "value" }) { index, value ->
                 JGroupItem(GroupPosition.of(index, values.size)) {
-                    JRow(stringResource(value.first), value = value.second ?: stringResource(R.string.machines_swap_off))
+                    val label = stringResource(value.first)
+                    val reading = value.second ?: stringResource(R.string.machines_swap_off)
+                    val perCore = if (value.first == R.string.machines_metric_load) loadPerCoreText(current?.load, system?.cores, locale) else null
+                    if (perCore == null) JRow(label, value = reading)
+                    else JRow(label, trailing = {
+                        Column(Modifier.widthIn(max = Tokens.Size.cardColumn / 2), horizontalAlignment = Alignment.End) {
+                            Text(reading, style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink3)
+                            Text(perCore, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, textAlign = TextAlign.End)
+                        }
+                    })
                 }
             }
             if (current == null) item("no-current") { JNotice(stringResource(if (metric.online) R.string.machines_no_sample else R.string.machines_offline_history)) }
@@ -259,9 +288,10 @@ internal fun MachinesScreen(
                         MetricKind.Rx -> current?.netRx; MetricKind.Tx -> current?.netTx; MetricKind.Load -> current?.load
                         MetricKind.Disk -> percent(current?.diskUsed, current?.diskTotal)
                     } }, state.now, state.range.seconds, state.history?.step ?: state.range.step, activeSelection, { selection = it },
-                    reference = system?.cores?.takeIf { kinds.first() == MetricKind.Load && it > 0 }?.toDouble())
+                    loadCores = system?.cores?.takeIf { kinds.first() == MetricKind.Load })
             }
             if (system?.os == "linux" && !current?.cores.isNullOrEmpty()) item("cores") { CoreBars(current.cores!!) }
+            item("load-definition") { MachineLoadDefinition() }
             if (machine != null && actions != null) machineLaunchers(machine.online, acting,
                 onLauncher = if (launcherPages) ({ name -> navigator.navigate(LauncherRoute(machine.id, name)) }) else null)
             item("system") { JSectionHeader(stringResource(R.string.machines_system_title)) }
@@ -300,6 +330,10 @@ internal fun MachineCard(
     deploy: (@Composable (Machine?) -> Unit)? = null,
     /** "Confirm computer" for a computer that waits to be confirmed; null where the phone cannot (demo mode). */
     onConfirm: ((String) -> Unit)? = null,
+    /** A confirmed or listed Link switch makes this computer's temporary offline state expected. */
+    linkSwitchExpected: Boolean = false,
+    /** The detail page shows load in its monitoring section instead. */
+    showLoadReading: Boolean = true,
     onClick: (() -> Unit)? = null,
 ) {
     val current = metrics.current(now)
@@ -307,6 +341,7 @@ internal fun MachineCard(
     val alerts = alerts(current, system?.cores)
     val locale = currentLocale
     val pending = machine?.pending == true
+    val switching = linkSwitchExpected || linkSwitchRunning(machine?.linkSwitch)
     val concern = machineConcern(machine, metrics.online, alerts, tally.needsYou)
     val status = when (concern) {
         MachineConcern.Pending, MachineConcern.Critical, MachineConcern.Warning,
@@ -314,7 +349,17 @@ internal fun MachineCard(
         MachineConcern.Offline -> Status.Offline
         MachineConcern.None -> Status.Unread
     }
-    JCard(modifier.padding(bottom = Tokens.Space.m), onClick = onClick, status = status) {
+    val glass = PersonaTheme.style == AppStyle.Glass
+    val glassAlertBorder = if (glass) when (concern) {
+        MachineConcern.Critical -> PersonaTheme.palette.danger.dot.copy(alpha = 0.6f)
+        MachineConcern.Warning -> PersonaTheme.palette.working.dot.copy(alpha = 0.6f)
+        else -> null
+    } else null
+    val cardModifier = modifier.padding(bottom = Tokens.Space.m).let { base ->
+        if (glassAlertBorder != null) base.border(Tokens.Size.line, glassAlertBorder, PersonaTheme.shapes.cardShape) else base
+    }
+    // On Glass, offline and healthy cards keep a clean neutral surface (matching iOS); only alert cards carry an edge.
+    JCard(cardModifier, onClick = onClick, status = if (glass) null else status) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp.dense)) {
             OsBadge(system)
             Column(Modifier.weight(1f)) {
@@ -341,7 +386,7 @@ internal fun MachineCard(
             val goneWith = offlineManagerOf(LocalManagerRoster.current, machine, LocalManagerGroup.current)
             if (goneWith != null) {
                 Text(stringResource(R.string.machines_manager_offline, goneWith.shownName), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-            } else {
+            } else if (!switching) {
                 // A known error_code in plain words; else why and what to do as read from the hub's error, its own words
                 // after in a quieter colour; else the hub's error alone (#4463).
                 val coded = machineErrorText(machine?.errorCode)
@@ -364,6 +409,12 @@ internal fun MachineCard(
         if (deploy != null && showsDeploy(machine)) deploy(machine)
         else if (machine?.nodeMismatch == true) Warning(stringResource(R.string.machines_node_mismatch))
         alerts.forEach { Warning(stringResource(it.label)) }
+        if (showLoadReading) loadPerCoreText(current?.load, system?.cores, locale)?.let { load ->
+            Row(Modifier.fillMaxWidth().padding(top = Tokens.Space.s), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                Text(stringResource(R.string.machines_metric_load), Modifier.weight(1f), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink2)
+                Text(load, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink, textAlign = TextAlign.End)
+            }
+        }
         if (fillsRow) Spacer(Modifier.weight(1f))
         val groups = listOf(listOf(MetricKind.Cpu), listOf(MetricKind.Memory), listOf(MetricKind.Rx, MetricKind.Tx))
         groups.forEach { kinds ->
@@ -379,6 +430,12 @@ internal fun MachineCard(
             Plot(metrics.points, kinds, now, 3600, step, Modifier.fillMaxWidth().height(32.dp))
         }
     }
+}
+
+@Composable
+private fun MachineLoadDefinition() {
+    Text(stringResource(R.string.machines_load_definition), Modifier.padding(bottom = Tokens.Space.m),
+        style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
 }
 
 @Composable

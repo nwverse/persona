@@ -1,11 +1,11 @@
 // The composer's model pill (#5032, after Cindy's model selector, which the user asked this part of the chat to match;
 // docs/web/web.md "Model pill and model panel", docs/design/DESIGN_SYSTEM.md 3.1): at the right of the composer's bottom
-// row, before voice / Stop / Send, `[engine][model][effort][Fast][⌄]`. It opens the unified model panel above
+// row, before voice / Stop / Send, `[engine][model][effort][speed][⌄]`. It opens the unified model panel above
 // it (ui/model-panel/ModelPanel.tsx), and so does `/model` Enter in the composer. The composer card is a container: under
 // 600 px the pill takes the width its words need (the name at most 108 px, a bracketed qualifier left out but for a
 // context size, `pillShortName`) and gives way
-// only when the row is short, under 520 px its text and marks are a step smaller, under 420 px it keeps only the
-// engine's mark and the chevron (64 px), except an explicit Agent launcher label (#10248). The Agent's mark comes first
+// only when the row is short. Under 520 px its text and marks are a step smaller. Under 420 px the compact pill keeps the
+// engine, speed mark and chevron. Explicit Agent launcher labels stay visible (#10248). The Agent's mark comes first
 // and only once (#5497).
 // An agent that can switch neither its model nor its effort gets the same
 // words as a label, except Codex: its panel explains why. A Persona chat (and the new-chat page) has `AssistantModelPill`
@@ -15,36 +15,45 @@ import { memo, useCallback, useEffect, useRef, useState, type ReactNode, type Re
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
 import { onModelPicker, requestModelPicker, sessionLauncher } from "../../lib/model-switch";
-import { modelSupportsFast } from "../../lib/launcher-models";
+import { effortVariantBase, withoutEffortQualifier } from "../../lib/launcher-models";
 import { effortTitle } from "../../lib/session-actions";
-import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
+import { dropPick, launcherOffered, pickServiceTier, usePickedEffort, usePickedLauncher, usePickedModel, usePickedServiceTier } from "../../lib/assistant-chat";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { launcherTitle } from "../../lib/provider-names";
-import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
+import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantModelHost, assistantPickKey, assistantPillView, assistantSetup, canonicalLauncher, findAssistantLauncher, type AssistantChat } from "../../lib/assistant-models";
 import {
-  agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readSuperviseDefault, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
+  agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readMainDefault, mainDefault, readSuperviseDefault, sessionModelHost, useRevisionReread, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { turnErrorFix, type TurnFix } from "../../lib/readiness";
+import { launchModelForSession } from "../../lib/new-agent";
+import { speedId, startSpeedTier } from "../../lib/session-speed";
 import { getSession, hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
 import type { AssistantInfo, Session } from "../../lib/types";
 import { cx, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ProviderMark } from "../../ui/model-panel/ProviderMark";
+import { SpeedMark } from "../../ui/model-panel/SpeedMark";
 import { lazyOverlay } from "../LazyOverlay";
 import { UltraMark } from "./Ultracode";
 
 // the panel (and what it is built from) loads on the pill's first tap, not with every chat's composer
 const SessionModelPanel = lazyOverlay(() => import("./SessionModelPanel").then((m) => m.SessionModelPanel));
 
-/** The effort as the pill says it: English shortens "Very high" to "Extra" here only (the tooltip and the panel keep the
- *  full name); other languages say it in full. */
-export function pillEffort(id: string): string {
-  return id === "xhigh" ? t("chat-modelpill.effort_xhigh_short") : effortTitle(id);
+function pillDisplayName({ model, effort, engine }: PillSetup): string | undefined {
+  if (!model || !effort) return model;
+  // Before the catalog arrives, Antigravity can report only the variant ID and its effort.
+  return (engine === "agy" && effortVariantBase(model, effort)) || withoutEffortQualifier(model);
 }
 
 // the composer card's widths (Composer.tsx `@container/composer`): narrow < 600, dense < 520, ultra < 420
 const ULTRA_HIDDEN = "@max-[420px]/composer:hidden";
+
+function pillSpeedLabel(speed?: string): string {
+  if (speed === "fast") return t("chat-sessiondialogs.speed_fast");
+  if (speed === "ultrafast") return t("ui-modelpanel.speed_ultrafast");
+  return "";
+}
 
 /** The name where the pill is narrow: a trailing qualifier in brackets left out ("Default (recommended)" → "Default",
  *  "GPT-5 (beta)" → "GPT-5"), except a context size, which names another model and stays as a short mark, as the chat's
@@ -88,15 +97,19 @@ export function ModelPill({
 }) {
   const shown = pending ?? current;
   const launcher = shown.launcherName;
+  const speedLabel = pillSpeedLabel(shown.speed);
   const unknown = !shown.model;
-  const name = shown.model ?? (loading ? t("chat-modelpill.loading") : failed ? t("chat-modelpill.failed") : t("chat-modelpill.default_model"));
-  const describe = (x: PillSetup) =>
-    [agentName(x.engine, x.engineLabel), x.model ?? name, x.launcherName || x.provider, x.effort && effortTitle(x.effort), x.fast && t("chat-sessiondialogs.speed_fast")].filter(Boolean).join(" · ");
+  const name = pillDisplayName(shown) ?? (loading ? t("chat-modelpill.loading") : failed ? t("chat-modelpill.failed") : t("chat-modelpill.default_model"));
+  const describe = (x: PillSetup) => {
+    const engine = agentName(x.engine, x.engineLabel);
+    const provider = x.launcherName || x.provider;
+    return [engine, pillDisplayName(x) ?? name, provider && provider !== engine ? provider : "", x.effort && effortTitle(x.effort), pillSpeedLabel(x.speed)].filter(Boolean).join(" · ");
+  };
   const title = pending
     ? t("chat-modelpill.current_and_next", { current: describe(current), next: describe(pending) })
     : [describe(current), failed && !unknown ? t("chat-modelpill.failed") : ""].filter(Boolean).join(" · ");
   const short = pillShortName(name);
-  const effort = shown.effort ? effortTitle(shown.effort) : "";
+  const effort = effortTitle(shown.effort);
   // An explicit Agent launcher matches the panel even across engines; other pills keep the existing pending label.
   const target = launcher || (pending ? (pending.engine !== current.engine ? agentName(pending.engine, pending.engineLabel) : pending.provider) : "");
   const label = t(
@@ -105,6 +118,7 @@ export function ModelPill({
       : (effort ? "chat-modelpill.aria_effort" : "chat-modelpill.aria"),
     { agent: target, model: !pending && launcher ? `${launcher} · ${name}` : name, effort },
   );
+  const accessibleLabel = speedLabel ? `${label} · ${speedLabel}` : label;
 
   const body: ReactNode = (
     <>
@@ -122,18 +136,24 @@ export function ModelPill({
       )}
       {/* the name gives way first (a far larger shrink than the effort's): narrow, the effort truncates only once the
           name has no room left */}
-      <span title={name} className={cx("shrink-[1000] truncate text-ink @max-[600px]/composer:max-w-[108px]", launcher ? "min-w-[3ch]" : "min-w-0", short !== name && "@max-[600px]/composer:hidden", !launcher && ULTRA_HIDDEN)}>{name}</span>
-      {/* narrow, the name without its bracketed qualifier, a context size kept short (the tooltip keeps all of it): the
-          108 px would cut it there */}
-      {short !== name && (
-        <span title={name} data-pill-short className={cx("hidden shrink-[1000] truncate text-ink @max-[600px]/composer:block @max-[600px]/composer:max-w-[108px]", launcher ? "min-w-[3ch]" : "min-w-0", !launcher && ULTRA_HIDDEN)}>{short}</span>
-      )}
+      <span title={name} className={cx("shrink-[1000] truncate text-ink @max-[600px]/composer:max-w-[108px]", launcher ? "min-w-[3ch]" : "min-w-0", !launcher && ULTRA_HIDDEN)}>
+        {short === name ? name : (
+          <>
+            <span className="@max-[600px]/composer:hidden">{name}</span>
+            <span data-pill-short className="hidden @max-[600px]/composer:inline">{short}</span>
+          </>
+        )}
+      </span>
       {shown.effort && (
         <span title={effort} data-pill-effort className={cx("ml-1 shrink-0 whitespace-nowrap text-ink @max-[600px]/composer:min-w-0 @max-[600px]/composer:shrink @max-[600px]/composer:truncate", ULTRA_HIDDEN)}>
-          {pillEffort(shown.effort)}
+          {effort}
         </span>
       )}
-      {shown.fast && <Icon name="bolt" stroke={2} className={cx("ml-0.5 size-[13px] shrink-0 fill-current text-ink-2 @max-[520px]/composer:size-[12px]", ULTRA_HIDDEN)} />}
+      {speedLabel && (
+        <span data-pill-speed={shown.speed} aria-hidden className="ml-0.5 flex shrink-0 text-ink-2">
+          <SpeedMark speed={shown.speed} className="size-[13px] @max-[520px]/composer:size-[12px]" />
+        </span>
+      )}
       {workflow && !pending && <UltraMark size={12} label={workflow.label} title={workflow.title} className={cx("ml-0.5", ULTRA_HIDDEN)} />}
       {!unknown && loading && <span className="ml-0.5 flex shrink-0"><Spinner size={12} /></span>}
       {!unknown && failed && !loading && <Icon name="warning" stroke={2} className="ml-0.5 size-[12px] shrink-0 text-red @max-[520px]/composer:size-[11px]" />}
@@ -142,19 +162,19 @@ export function ModelPill({
   );
   const shell = cx(
     // Cindy's bare toolbar pill: no frame at rest, the capsule shows on hover and while its panel is open
-    "flex h-[30px] max-w-[min(320px,100%)] min-w-[72px] shrink items-center rounded-full border border-transparent px-2.5 text-[13px] leading-none whitespace-nowrap transition-colors duration-150",
+    "flex h-[30px] max-w-[min(320px,100%)] min-w-[72px] shrink items-center rounded-full border border-transparent px-2.5 text-[13px] leading-normal whitespace-nowrap transition-colors duration-150",
     // narrow, it still takes the width its words need (a fixed width cut "Opus 5.5" to "Opus …" beside free room) and
     // shrinks, the name first, only when the row is short of room
     "@max-[520px]/composer:text-[12px] @max-[420px]/composer:min-w-[64px]",
-    // Under 420 px an explicit launcher keeps its model label; other pills keep only the mark and the chevron (64 px).
-    (pending || launcher) ? "@max-[420px]/composer:w-auto" : "@max-[420px]/composer:w-[64px]",
+    // Under 420 px the fixed width fits the engine and chevron. A launcher or speed mark needs its own width.
+    (pending || launcher || speedLabel) ? "@max-[420px]/composer:w-auto" : "@max-[420px]/composer:w-[64px]",
   );
   // the clip is inside, so the touch target (touch-hit) can reach past the pill's 30 px
   const inner = "flex min-w-0 flex-1 items-center gap-1 overflow-hidden";
   if (!onOpen) {
     return (
       <span data-model-pill="label" title={title} className={shell}>
-        <span className="sr-only">{label}</span>
+        <span className="sr-only">{accessibleLabel}</span>
         <span aria-hidden className={inner}>{body}</span>
       </span>
     );
@@ -166,7 +186,7 @@ export function ModelPill({
       data-model-pill={pending ? "pending" : failed ? "failed" : unknown && loading ? "loading" : "ready"}
       aria-haspopup="listbox"
       aria-expanded={Boolean(open) && !disabled}
-      aria-label={label}
+      aria-label={accessibleLabel}
       title={title}
       disabled={disabled}
       // the caret stays in the message box (Tab still focuses the pill)
@@ -191,12 +211,14 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
   const scope = agentCatalogScope();
   const mid = session.machine_id;
   const own = sessionLauncher(session);
+  const ownHost = sessionModelHost(session);
+  const launchModel = useStore((s) => launchModelForSession(s.launches, session));
   const switches = sessionSwitches(session);
-  const view = pillView(session, modelList(mid, own));
+  const view = pillView(session, modelList(mid, own, undefined, ownHost), launchModel);
   const opens = switches.model || switches.effort || view.engine === "codex";
   useEffect(() => {
-    if (opens) void readModels(mid, own, { first: true });
-  }, [opens, mid, own, scope]);
+    if (opens) void readModels(mid, own, { first: true, host: ownHost });
+  }, [opens, mid, own, ownHost, scope]);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const key = `${mid}/${session.session_id}`;
@@ -210,8 +232,8 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
   const shown = Boolean(anchor) && opens;
   // every list again behind the one shown, once per opening (while the panel's code loads, the first time)
   useEffect(() => {
-    if (shown) readForPanel(mid, own);
-  }, [shown, mid, own, scope]);
+    if (shown) readForPanel(mid, own, ownHost);
+  }, [shown, mid, own, ownHost, scope]);
 
   // a switch to another launcher that the next message carries out (#5035): its list names the model picked
   const target = session.pending_switch?.launcher;
@@ -240,7 +262,7 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
         workflow={workflow}
         buttonRef={button}
       />
-      {shown && anchor && <SessionModelPanel session={session} anchor={anchor} onClose={close} />}
+      {shown && anchor && <SessionModelPanel session={session} displayModel={launchModel} anchor={anchor} onClose={close} />}
     </>
   );
 });
@@ -281,41 +303,42 @@ export function useAssistantTurnFix(session: Session | undefined, on: boolean): 
  *  what it started with: lib/assistant-models.ts), opening the unified panel (scope "assistant"). `session` absent: the
  *  new-conversation page, whose pick goes with the start. Every Persona chat has one (#9248) and switches whatever its
  *  state: the hub applies a pick from the next message. */
-export const AssistantModelPill = memo(function AssistantModelPill({ session }: { session?: Session }) {
+export const AssistantModelPill = memo(function AssistantModelPill({ session, mainStart = false }: { session?: Session; mainStart?: boolean }) {
   const version = useModelLists();
   const scope = assistantCatalogScope();
   const assistant = useStore((s) => s.assistant);
   const kept = useStore((s) => hubHas(s.features, ASSISTANT_MODEL_PICK_FEATURE));
   const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
   const mid = session?.machine_id ?? assistant?.machine_id ?? "";
-  const isMain = Boolean(session && assistant?.main === session.session_id);
+  const isMain = mainStart || Boolean(session && assistant?.main === session.session_id);
   // Without a pick, what the next message runs on is a default: Main chat's for the main conversation, a leader and a
   // scheduled task's own conversation (origin "task"); the supervisor's own model purpose for the background supervisor.
   const supervisor = Boolean(session && isBackgroundSupervisor(assistant, session.session_id));
   const followsDefault = Boolean(session && followsDefaultOf(assistant, session));
-  const chat: AssistantChat = { session, isMain, followsDefault, kept, config: assistant?.launcher, ...(supervisor ? { def: superviseDefault(mid) } : {}) };
+  const chat: AssistantChat = { session, isMain, followsDefault, kept, config: assistant?.launcher, ...(isMain ? { def: mainDefault(mid) } : supervisor ? { def: superviseDefault(mid) } : {}) };
   const key = assistantPickKey(chat);
   // this page's picks (an older hub, the new-conversation page) draw it again
   const picked = usePickedLauncher(key);
   usePickedModel(key);
   usePickedEffort(key);
-  const tier = usePickedFast();
+  const tier = usePickedServiceTier();
   const { info } = assistantLaunchers(mid);
   // the computer's default and what can run a Persona chat: once for the pill, again behind it on each opening
   useEffect(() => {
     if (!mid) return;
     void readAssistantLaunchers(mid);
+    if (isMain) void readMainDefault(mid, { again: true });
     if (supervisor) void readSuperviseDefault(mid);
-  }, [mid, scope, supervisor]);
-  // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that bumps
+  }, [mid, scope, supervisor, isMain]);
+  // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that moves
   // this conversation's revision re-reads the picker, so the pill can't keep an old model the hub no longer resolves.
-  const lastRev = useRef<number | undefined>(session?.rev);
-  useEffect(() => {
-    if (!mid || session?.rev === undefined || session.rev === lastRev.current) return;
-    lastRev.current = session.rev;
+  // Once per turn: the revision moves with every write while the turn streams (useRevisionReread).
+  useRevisionReread(session, Boolean(mid), () => {
+    if (!mid) return;
     void readAssistantLaunchers(mid, { again: true });
+    if (isMain) void readMainDefault(mid, { again: true });
     if (supervisor) void readSuperviseDefault(mid, { again: true });
-  }, [mid, scope, session?.rev, supervisor]);
+  });
   // a pick of this page's that the list no longer offers (gone, or it can't run the assistant) goes back to the default,
   // its model and effort with it: on the new-conversation page they would otherwise go with the start
   useEffect(() => {
@@ -324,21 +347,23 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
     toast(t("chat-modelpill.pick_dropped", { launcher: picked }), "info");
   }, [key, picked, info, session, kept]);
   const setup = assistantSetup(chat, info);
-  // A hub or native catalog that can't honor Fast disarms the draft even while the lazy panel is closed. A manager
+  const catalogLauncher = findAssistantLauncher(info, setup.provider)?.name ?? canonicalLauncher(setup.provider);
+  const modelHost = assistantModelHost(session, catalogLauncher);
+  // A hub or native catalog that can't honor the speed disarms the draft even while the lazy panel is closed. A manager
   // change disarms it in the store, before this pill or its destination catalog answers.
   useEffect(() => {
     if (session || !tier) return;
     if (!startServiceTier) {
-      pickFast(false);
+      pickServiceTier(undefined);
       return;
     }
-    const list = modelList(mid, setup.provider, "assistant").list;
+    const list = modelList(mid, catalogLauncher, "assistant", modelHost).list;
     if (!list) return;
-    if (!modelSupportsFast(currentModelRow(list.models, setup.model))) pickFast(false);
-  }, [key, mid, session, setup.provider, setup.model, tier, startServiceTier, version]);
+    if (!startSpeedTier(currentModelRow(list.models, setup.model), speedId(tier))) pickServiceTier(undefined);
+  }, [key, mid, session, catalogLauncher, modelHost, setup.model, tier, startServiceTier, version]);
   useEffect(() => {
-    if (mid) void readModels(mid, setup.provider, { purpose: "assistant", first: true });
-  }, [mid, scope, setup.provider]);
+    if (mid) void readModels(mid, catalogLauncher, { purpose: "assistant", first: true, host: modelHost });
+  }, [mid, scope, catalogLauncher, modelHost]);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setAnchor(null), []);
@@ -350,16 +375,17 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   // every list again behind the one shown, once per opening
   useEffect(() => {
     if (!shown) return;
-    void readModels(mid, setup.provider, { purpose: "assistant", again: true, first: true });
+    void readModels(mid, catalogLauncher, { purpose: "assistant", again: true, first: true, host: modelHost });
+    if (isMain) void readMainDefault(mid, { again: true });
     if (supervisor) void readSuperviseDefault(mid, { again: true });
     void readAssistantLaunchers(mid, { again: true }).then(() => {
       if (scope !== assistantCatalogScope()) return;
-      for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== setup.provider) void readModels(mid, l.name, { purpose: "assistant", again: true });
+      for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== catalogLauncher) void readModels(mid, l.name, { purpose: "assistant", again: true, host: assistantModelHost(session, l.name) });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
   }, [shown, mid, scope]);
   if (!mid) return null;
-  const view = assistantPillView(chat, setup, info, modelList(mid, setup.provider, "assistant"));
+  const view = assistantPillView(chat, setup, info, modelList(mid, catalogLauncher, "assistant", modelHost));
   const workflow = view.engine === "codex" && view.effort === CODEX_ULTRA ? { label: t("ultracode.codex_ultra_title"), title: t("ultracode.codex_ultra_title") } : undefined;
   return (
     <>

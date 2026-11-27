@@ -120,11 +120,7 @@ nonisolated enum StorageUsage {
 
     /// Whether the app runs in a sandbox (its own caches, temp and Library). Always on iOS.
     private static var sandboxed: Bool {
-        #if os(macOS)
-        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
-        #else
         true
-        #endif
     }
 
     /// The caches folder's entries that are Persona's (all of them in a sandbox).
@@ -218,11 +214,7 @@ struct StorageView: View {
                 }
                 .padding(.vertical, Theme.Space.sm)
             } footer: {
-                #if os(macOS)
-                Text("Space Persona uses on this Mac. Caches can all be fetched again from the hub: after clearing, chats and images download again when you open them.")
-                #else
                 Text("Space Persona uses on this phone. Caches can all be fetched again from the hub: after clearing, chats and images download again when you open them.")
-                #endif
             }
 
             // Above the rows, on the first screen: a hint below them was never seen (#8355).
@@ -245,17 +237,6 @@ struct StorageView: View {
             }
 
             Section {
-                #if os(macOS)
-                // A standard button at the trailing end, not a bar the width of the form (#1221).
-                HStack(spacing: Theme.Space.s) {
-                    Spacer(minLength: 0)
-                    if clearing != nil { ProgressView().controlSize(.small) }
-                    Button("Clear All Caches…", role: .destructive) { confirmAll = true }
-                        .lineLimit(1)
-                        .formButton()
-                        .disabled(usage == nil || clearing != nil || clearableTotal == 0)
-                }
-                #else
                 Button(role: .destructive) { confirmAll = true } label: {
                     HStack {
                         Spacer()
@@ -264,7 +245,6 @@ struct StorageView: View {
                     }
                 }
                 .disabled(usage == nil || clearing != nil || clearableTotal == 0)
-                #endif
             }
         }
         .themedPage()
@@ -278,10 +258,10 @@ struct StorageView: View {
             #endif
         }
         .refreshable { await measure() }
-        .confirmationDialog("Clear all \(clearableTotal.storageText) of caches? Settings and pairing info are kept.", isPresented: $confirmAll, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Clear all \(clearableTotal.storageText) of caches? Settings and pairing info are kept.", isPresented: $confirmAll, titleVisibility: .visible) {
             Button("Clear [Image Editor bce237]", role: .destructive) { Task { await clear(StorageKind.allCases.filter(\.clearable)) } }
         }
-        .confirmationDialog(confirmOne.map { String(localized: "Clear “\($0.title)” (\((usage?[$0] ?? 0).storageText))?") } ?? "",
+        .accessibleConfirmationDialog(confirmOne.map { String(localized: "Clear “\($0.title)” (\((usage?[$0] ?? 0).storageText))?") } ?? "",
                             isPresented: Binding(get: { confirmOne != nil }, set: { if !$0 { confirmOne = nil } }), titleVisibility: .visible,
                             presenting: confirmOne) { k in
             Button("Clear [Image Editor bce237]", role: .destructive) { Task { await clear([k]) } }

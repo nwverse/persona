@@ -3,6 +3,7 @@
 // assistant's avatar and a Switch that opens the sidebar's list, "This device" and "Hub", in that order, with their lines;
 // the first group's pages ask the current assistant only, read again for another, and an item of theirs open when the
 // pick changes goes back to its list.
+import { installedMailbox, preloadMailbox } from "../test/installed-mailbox";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,11 +109,11 @@ const navGroups = () => [...host.querySelectorAll<HTMLElement>("[data-settings-n
 const asked = (path: string) => calls.filter((c) => c.path === path).map((c) => c.manager);
 
 describe("Settings' groups", () => {
-  it("are the current assistant's, this device's and the hub's, in that order, with their titles and lines", async () => {
+  it("are the current assistant's, this device's and the hub's, in that order, with their titles and lines, then Labs untitled", async () => {
     setRoster(ROSTER);
     await mount("/settings?tab=shortcuts");
     const groups = navGroups();
-    expect(groups.map((g) => g.dataset.settingsNavGroup)).toEqual(["assistant", "device", "hub"]);
+    expect(groups.map((g) => g.dataset.settingsNavGroup)).toEqual(["assistant", "device", "hub", "labs"]);
     expect(groups[0].textContent).toContain(t("settings-nav.group_assistant", { name: "助手" }));
     expect(groups[0].querySelector("[data-assistant-avatar]")?.getAttribute("data-assistant-avatar")).toBe("assistant");
     expect(groups[0].querySelector("[data-settings-switch]")?.textContent).toBe(t("settings-nav.switch"));
@@ -123,6 +124,8 @@ describe("Settings' groups", () => {
     // the rows: the assistant's profile in the first, the assistant list in the hub's, never called like a group
     expect(groups[0].textContent).toContain(t("settings-nav.tab_profile"));
     expect(groups[2].textContent).toContain(t("settings-nav.tab_managers"));
+    // Labs on its own: only its row, no title or line of a group
+    expect(groups[3].textContent).toBe(t("settings-nav.tab_labs"));
   });
 
   it("are the phone's first page too", async () => {
@@ -130,7 +133,7 @@ describe("Settings' groups", () => {
     setRoster(ROSTER);
     await mount("/settings");
     const sections = [...host.querySelectorAll<HTMLElement>("[data-settings-group^='nav-']")];
-    expect(sections.map((s) => s.dataset.settingsGroup)).toEqual(["nav-assistant", "nav-device", "nav-hub"]);
+    expect(sections.map((s) => s.dataset.settingsGroup)).toEqual(["nav-assistant", "nav-device", "nav-hub", "nav-labs"]);
     expect(sections[0].textContent).toContain(t("settings-nav.group_assistant", { name: "助手" }));
     expect(sections[0].querySelector("[data-settings-switch]")).not.toBeNull();
   });
@@ -178,10 +181,11 @@ describe("the current assistant's pages", () => {
   });
 
   it("ask the current assistant for its mail accounts on Connectors, and leave other pages' requests alone", async () => {
+    await preloadMailbox("Settings");
     setRoster(ROSTER);
     await switchTo("m-1");
     await mount("/settings?tab=connectors");
-    expect(asked("/api/v1/mail/accounts")).toEqual(["m-1"]);
+    expect(asked("/api/v1/mail/accounts")).toEqual(installedMailbox ? ["m-1"] : []);
     // a page outside the group: nothing pinned
     await act(async () => root.render(null));
     calls = [];

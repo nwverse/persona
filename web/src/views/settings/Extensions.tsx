@@ -2,7 +2,8 @@
 // This controller owns manager routing, configuration drafts, authentication and mutation results;
 // extensions supply only their configuration fields and custom content (docs/extensions/extension-settings.md).
 import { OwnerMark } from "./OwnerMark";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { currentListViewKey, listViewCache, useListViewKey } from "../../lib/list-view-cache";
 import { enc, errorText, subscribeCredentialOwner } from "../../lib/api";
 import { OfflineState, useShownOffline } from "../ManagerParts";
 import { defaultManager, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
@@ -14,23 +15,26 @@ import { operations, operationsListed, opOf, watchOperations } from "../../lib/e
 import { extensionsRoute, routeSub } from "../../lib/extension-market";
 import { composing } from "../../lib/send-history";
 import {
-  asksFirst, changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, fieldLabel, fieldTitle, isDirty, listItems, listExtensionsInfo, listSummary, numberProblems,
-  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setContribution, setExtensionConfig, setExtensionEnabled,
+  asksFirst, changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, entryID, entryItems, entryKey, fieldLabel, fieldPath, fieldTitle, isDirty, isEntryList, listItems, listExtensionsInfo, listSummary, numberProblems,
+  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setContribution, setExtensionConfig, setExtensionConfigPreservingEntries, setExtensionEnabled,
   channelOf, machineStatus, nodeProgramStatus, pickerChoices, sandboxState, saveFooter, setExtensionAutoUpgrade, setExtensionSecret, sourceText, stateLine, valueAt,
-  removeHandoffRule, setExtensionSecretReference, type HandoffRule, type SecretUser,
+  removeHandoffRule, setExtensionSecretReference, permissionDetail, permissionTitle, type HandoffRule, type SecretUser,
   type HubExtension, type HubExtensionDetail, type Json, type JsonObject, type ExtensionField, type ExtensionNodeState, type ExtensionSandbox, type ExtensionSecret,
-  type PickerLauncher,
+  type ExtensionPermission, type PickerLauncher,
 } from "../../lib/extensions";
 import { loadLaunchers } from "../../lib/launcher-list";
 import { hubHasExt } from "../../lib/extension-api";
+import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { TriageRuleField } from "../../ui/TriageRuleField";
 import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { ExtensionDownloads, packageDownloads } from "../../ui/ExtensionDownloads";
 import { Icon } from "../../ui/icons";
 import { ChannelLink } from "./Channels";
+import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { MarketCatalog, MarketItem, Markets, PackMemberRow, UninstallDialog, useInstalledNames } from "./ExtensionMarket";
 import { ExtensionSettingsPage } from "./ExtensionSettingsPage";
+import { ExtensionInfoAccess } from "./ExtensionInfoAccess";
 import { ExtensionUI } from "./ExtensionView";
 import { ExtensionConnectorInbox } from "./HubConnector";
 import { getAuth, listAuthNote, onAuthChange, shownPages, signInAsked, takeSignIn, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
@@ -48,7 +52,7 @@ import { isOpenBeside } from "./open-beside";
  * The tab's pages, by its `extension` parameter (lib/extension-market.ts extensionsRoute): the list, an extension, a page an extension
  * draws, and the market (its catalog, one extension of it, the markets).
  */
-export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside }: {
+export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside, onPageWide }: {
   open: string | null;
   onOpen: (id: string | null) => void;
   /** The page's top bar has the way back (a phone, Settings.tsx itemParent): an extension's page, a page it draws, the
@@ -59,6 +63,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
   /** `manager`: another manager's channel / connector (its extension's page links to its own); none: the default's. */
   onChannel?: (id: string, manager?: string) => void;
   onConnector?: (id: string, manager?: string) => void;
+  onPageWide?: (wide: boolean) => void;
 }) {
   const r = extensionsRoute(open);
   const go = (to: Parameters<typeof routeSub>[0]) => onOpen(routeSub(to));
@@ -87,7 +92,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
     case "page":
       return (
         <OwnedExtension id={r.id} manager={r.manager}>
-          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} />}
+          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} onWide={onPageWide} />}
         </OwnedExtension>
       );
     case "catalog":
@@ -122,19 +127,21 @@ function OwnedExtension({ id: _id, manager, children }: { id: string; manager?: 
 }
 
 /** A page an extension draws (placement plugin_page), under the extension's name. `onBack`: none where the page's top
- *  bar has the way back (a phone). */
-function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; manager?: string; onBack?: () => void }) {
+ *  bar has the way back (a phone), or while that page has pushed one of its own: its Back returns to the page below. */
+function ExtensionPage({ id, ui, manager, onBack, onWide }: { id: string; ui: string; manager?: string; onBack?: () => void; onWide?: (wide: boolean) => void }) {
   usePinnedExtension(id, manager);
   const [d, setD] = useState<HubExtensionDetail | null>(null);
   const [n, setN] = useState(0);
+  const [depth, setDepth] = useState(1);
   useEffect(() => {
     extensionDetail(id).then(setD, () => {});
   }, [id]);
+  useEffect(() => () => onWide?.(false), [onWide]);
   const title = d?.ui?.find((u) => u.id === ui)?.title;
   return (
     <>
       <div className="mb-3 flex items-center gap-2">
-        {onBack && (
+        {onBack && depth === 1 && (
           <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
             <span className="max-w-[240px] truncate">{d?.name ?? id}</span>
           </Button>
@@ -142,7 +149,10 @@ function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; ma
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-extensions.redraw")} onClick={() => setN((x) => x + 1)} />
       </div>
-      <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} />
+      {/* its extension id scopes what a graph's `key` keeps (lib/extension-owner.tsx) */}
+      <ExtensionOwnerScope owner={id}>
+        <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} onDepth={setDepth} />
+      </ExtensionOwnerScope>
     </>
   );
 }
@@ -164,26 +174,47 @@ function StateDot({ extension }: { extension?: HubExtension | null }) {
 
 // ── the list ────────────────────────────────────────────
 
+type ExtensionListProps = { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void; openBeside?: string | null };
+type ExtensionListView = { extensions: HubExtension[]; markets: boolean };
+const extensionViews = listViewCache<ExtensionListView>();
+
+function ExtensionList(props: ExtensionListProps) {
+  const viewKey = useListViewKey();
+  return <ScopedExtensionList key={viewKey} viewKey={viewKey} {...props} />;
+}
+
 /** `openBeside`: the extension open beside the list (Settings' two columns): its row is marked current, and every row
  *  puts its state under its name (with a warning, when it has one, in place of the description), so the narrow column
  *  shows the name whole. */
-function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void; openBeside?: string | null }) {
+function ScopedExtensionList({ viewKey, onOpen, onMarket, onMarkets, openBeside }: ExtensionListProps & { viewKey: string }) {
   const picked = useChosenManager();
-  const [extensions, setExtensions] = useState<HubExtension[] | null>(null);
-  const [markets, setMarkets] = useState(false);
+  const [view, setView] = useState(() => extensionViews.read(viewKey));
+  const extensions = view?.extensions;
+  const markets = view?.markets;
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   // Reads are numbered: an answer older than the last one asked for is dropped.
   const reads = useRef(0);
-  const load = () => {
+  const active = useRef(false);
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  const load = useCallback(() => {
     const mine = ++reads.current;
+    const current = () => active.current && mine === reads.current && viewKey === currentListViewKey();
+    if (!current()) return;
     setLoading(true);
-    listExtensionsInfo()
-      .then((r) => mine === reads.current && (setExtensions(r.extensions), setMarkets(r.markets), setError(""), dropGone(r.extensions)))
-      .catch((e) => mine === reads.current && setError(errorText(e)))
-      .finally(() => mine === reads.current && setLoading(false));
-  };
-  useEffect(load, []);
+    listExtensionsInfo(current).then((r) => {
+      if (!current()) return;
+      setView(r);
+      setError("");
+      dropGone(r.extensions);
+    }, (e) => {
+      if (current()) setError(errorText(e));
+    }).finally(() => { if (current()) setLoading(false); });
+  }, [viewKey]);
+  useEffect(load, [load]);
   // An install, upgrade or uninstall that finished (here, on another device, or the hub's auto-upgrade) changes the
   // list: lib/extension-operations.ts sends EXTENSIONS_CHANGED when one succeeds. watchOperations starts its push
   // listener, which otherwise only a market page starts. Several at once read the list once.
@@ -203,15 +234,20 @@ function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (i
       window.removeEventListener(EXTENSIONS_CHANGED, again);
       stop();
     };
-  }, []);
+  }, [load]);
   // a sign-in that changed (signed in, out, expired) shows at once
   // only the row of the manager whose extension signed in (or out): another manager's of the same id stays as it is
-  useEffect(() => onAuthChange((id, auth, from) => setExtensions((cur) => cur?.map((x) => ((x.manager || defaultManager()) === from ? withAuth(x, id, auth) : x)) ?? cur)), []);
+  useEffect(() => onAuthChange((id, auth, from) => setView((cur) => cur && ({
+    ...cur, extensions: cur.extensions.map((x) => (x.manager || defaultManager()) === from ? withAuth(x, id, auth) : x),
+  }))), []);
   // a reconnect the hub could not resume: the extension_auth pushes missed meanwhile are not replayed (#4954)
-  useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && load()), []);
+  useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && load()), [load]);
   // the current assistant's extensions only (docs/assistant/managers.md "The current assistant"); one assistant: all
   const scope = useScope();
   const own = useMemo(() => (extensions ? scoped(extensions, scope) : null), [extensions, scope]);
+  useEffect(() => {
+    if (own && markets !== undefined) extensionViews.keep(viewKey, { extensions: own, markets });
+  }, [viewKey, own, markets]);
   const drafts = useUnsaved();
   // an offline current assistant: the hub has none of its extensions to merge in, which must not read as "none installed"
   const offline = useShownOffline();
@@ -336,7 +372,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (i
 // ── one extension ──────────────────────────────────────────
 
 /** A number field as typed, by dotted path, until it reads as one. */
-type Typed = Record<string, { text: string; integer: boolean }>;
+export type Typed = Record<string, { text: string; integer: boolean }>;
 
 /** Requests about extension id (its details, settings, models, pages) go to manager while the view is open: the same
  *  id may be installed under several managers (each one's built-ins), and the default's own keep going to it elsewhere. */
@@ -497,9 +533,10 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   useEffect(() => (signsIn ? onHubEvent("hello", (m) => !isResumed(m) && authChanged()) : undefined), [id, signsIn]);
 
   const problems = useMemo(() => numberProblems(typed), [typed]);
-  const dirty = !!detail && (isDirty(draft, detail.config) || Object.keys(problems).length > 0);
-  const canSave = dirty && !Object.keys(problems).length && !saving && !offline;
   const fields = detail?.form?.fields ?? [];
+  const requiredEntryLists = new Set(fields.filter((f) => isEntryList(f) && f.required).map((f) => f.name));
+  const dirty = !!detail && (isDirty(draft, detail.config, requiredEntryLists) || Object.keys(problems).length > 0);
+  const canSave = dirty && !Object.keys(problems).length && !saving && !offline;
   const editable = !!detail && !detail.read_only && detail.source !== "dev" && detail.source !== "hub.json";
   const setupTarget = editable ? setupSecret(detail?.needs_setup, detail?.secrets) : undefined;
   // Nothing to set here: the configuration's heading stands over "No configuration required". Otherwise every group in
@@ -523,7 +560,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
     const edits = base.current ? { base: base.current, draft, typed } : unsaved.get(keptKey);
     base.current = config;
     if (!edits) return;
-    const next = rebaseDraft(edits, config);
+    const next = rebaseDraft(edits, config, requiredEntryLists);
     setDraft(next.draft);
     setTyped(next.typed);
   }, [config, keptKey]);
@@ -542,6 +579,12 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   // pushed meanwhile is old.
   const dirtyNow = useRef(dirty);
   dirtyNow.current = dirty;
+  // A save answers to the local revision it submitted, which may be older than the form by then.
+  const editRevision = useRef(0);
+  const draftNow = useRef(draft);
+  const typedNow = useRef(typed);
+  draftNow.current = draft;
+  typedNow.current = typed;
   const backNow = useRef(onBack);
   backNow.current = onBack;
   useEffect(() => {
@@ -565,20 +608,23 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   }, [id, manager]);
 
   const edit = (path: string[], value: Json | undefined) => {
+    editRevision.current++;
     setDraft((d) => setAt(d, path, value));
-    const key = path.join(".");
+    const key = fieldPath(path);
     if (fieldErrors[key] || fieldErrors[""]) setFieldErrors(({ [key]: _a, [""]: _b, ...rest }) => rest);
     setCheckFailed("");
   };
   const type = (path: string[], text: string, integer: boolean) => {
-    const key = path.join(".");
+    const key = fieldPath(path);
     setTyped((t) => ({ ...t, [key]: { text, integer } }));
     setCheckFailed("");
     const n = readNumber(text, integer);
     if (!n.error) edit(path, n.value);
+    else editRevision.current++;
   };
   const revert = () => {
     if (!detail) return;
+    editRevision.current++;
     setDraft(detail.config ?? {});
     setTyped({});
     setFieldErrors({});
@@ -591,10 +637,24 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
     setFieldErrors({});
     setCheckFailed("");
     const n = writing();
+    const submitted = draft;
+    const revision = editRevision.current;
     try {
-      const d = await setExtensionConfig(id, compact(draft));
-      if (wrote(n, d)) apply(d);
-      setTyped({});
+      const d = await setExtensionConfig(id, compact(draft, requiredEntryLists));
+      const unchanged = editRevision.current === revision;
+      if (wrote(n, d)) {
+        if (unchanged) apply(d);
+        else {
+          // Only edits made after submission remain local; submitted and untouched fields take the authoritative answer.
+          const fresh = d.config ?? {};
+          const next = rebaseDraft({ base: submitted, draft: draftNow.current, typed: typedNow.current }, fresh, requiredEntryLists);
+          base.current = fresh;
+          setDraft(next.draft);
+          setTyped(next.typed);
+          setError("");
+        }
+      }
+      if (unchanged) setTyped({});
       toast(t("settings-extensions.saved_restart"), "ok");
     } catch (e) {
       const ce = configError(e);
@@ -663,10 +723,11 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   const saveNow = async (path: string[], value: Json | undefined) => {
     if (!detail) return;
     const saved = detail.config ?? {};
+    editRevision.current++;
     setDraft((d) => setAt(d, path, value));
     const n = writing();
     try {
-      const d = await setExtensionConfig(id, compact(setAt(saved, path, value)));
+      const d = await setExtensionConfigPreservingEntries(id, compact(setAt(saved, path, value), requiredEntryLists));
       if (wrote(n, d)) setDraft((cur) => setAt(cur, path, valueAt(d.config ?? {}, path)));
     } catch (e) {
       setDraft((cur) => setAt(cur, path, valueAt(saved, path)));
@@ -675,7 +736,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   };
   const computers = !!detail?.contributes?.computer;
   const nodes = detail?.node_machines ? { field: detail.node_machines, states: detail.nodes ?? [] } : undefined;
-  const launchers = useFormLaunchers(!!detail?.form?.fields?.some((f) => f.format === "launcher" || f.fields?.some((g) => g.format === "launcher")), detail?.id);
+  const launchers = useFormLaunchers(hasLauncherField(detail?.form?.fields), detail?.id);
 
   // A secret's answer is a whole detail too; keep the form's draft as it is.
   // The dialog's request is numbered as it leaves, like the page's own writes.
@@ -767,8 +828,19 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
           )}
 
           {(p.enabled ?? true) && !!p.contributes?.connectors?.length && <ExtensionConnectorInbox ids={p.contributes.connectors} manager={manager} onOpen={onConnector} />}
+          <ConnectorExternalSourceSettings
+            ids={[...(p.contributes?.connectors ?? []), ...(p.contributes?.channel ?? [])]}
+            manager={manager}
+            copy={{
+              channelDefaultsTitle: t("settings-extensions.source_defaults_title"),
+              channelHint: t("settings-extensions.source_defaults_hint"),
+              flowsTitle: t("settings-extensions.source_flows_title"),
+              flowsHint: t("settings-extensions.source_flows_hint"),
+              hideEmptyFlows: true,
+            }}
+          />
           {/* source subscriptions (#2041) of its connectors, the default manager's */}
-          {(p.enabled ?? true) && !manager && !!p.contributes?.connectors?.length && <SubscriptionsEntry pick={(l) => l.extension === p.id} scope={{ ext: p.id }} />}
+          {(p.enabled ?? true) && !manager && !!p.contributes?.connectors?.length && <SubscriptionsEntry pick={(l) => l.extension === p.id} scope={{ ext: p.id }} description={t("settings-extensions.subscriptions_footer")} />}
 
           {editable && fields.length > 0 && (
             <>
@@ -778,7 +850,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
                   {fields
                     .filter((f) => f.type !== "object")
                     .map((f) => (
-                      <FieldRow key={f.name} field={f} path={[f.name]} draft={draft} typed={typed} errors={fieldErrors} problems={problems} onEdit={edit} onType={type} onSaveNow={saveNow} computers={computers} nodes={nodes} launchers={launchers} />
+                      <FieldRow key={f.name} field={f} path={[f.name]} draft={draft} typed={typed} errors={fieldErrors} problems={problems} onEdit={edit} onType={type} onSaveNow={saveNow} computers={computers} nodes={nodes} launchers={launchers} secrets={p.secrets} onSecret={setSecret} />
                     ))}
                 </Group>
               )}
@@ -794,9 +866,9 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
             </>
           )}
 
-          {editable && !!p.secrets?.length && (
+          {editable && !!p.secrets?.some((s) => !s.list) && (
             <Group title={t("settings-extensions.secrets_title")} footer={t("settings-extensions.secrets_footer")}>
-              {p.secrets.map((s) => (
+              {p.secrets.filter((s) => !s.list).map((s) => (
                 <Row
                   key={s.name}
                   label={
@@ -817,6 +889,8 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
           </>}
           information={<>
           <SecretProviderGroups extension={id} users={p.secret_users} rules={p.handoff_rules} editable={editable} onStart={secretStart} onDone={secretDone} />
+          {/* extension trust is the default manager's (docs/web/web.md "Domain spaces"): another manager's page leaves it out */}
+          {!manager && <ExtensionInfoAccess extension={id} editable={editable} />}
           {!!p.depends?.length && (
             <Group title={t("settings-extensions.depends_title")} footer={t("settings-extensions.depends_footer")}>
               {p.depends.map((d) => <Row key={d.id} label={d.name || d.id} hint={d.version}><span className={cx(d.state !== "ok" && "text-orange")}>{dependencyText(d)}</span></Row>)}
@@ -853,14 +927,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
           {p.sandbox && <SandboxGroup s={p.sandbox} id={p.id} name={p.name} />}
 
           {!!p.permissions?.length && (
-            <Group title={t("settings-extensions.permissions_title")} footer={t("settings-extensions.permissions_footer")}>
-              {p.permissions.map((perm) => (
-                <div key={perm.key} className="px-4 py-2.5">
-                  <div className="text-[13px] text-ink">{perm.title}</div>
-                  {perm.detail && <div className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{perm.detail}</div>}
-                </div>
-              ))}
-            </Group>
+            <Permissions permissions={p.permissions} />
           )}
 
           </>}
@@ -888,7 +955,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
       )}
 
 
-      {secret && <SecretDialog extension={id} secret={secret} onClose={() => setSecret(null)} onStart={secretStart} onDone={secretDone} />}
+      {secret && <SecretDialog extension={id} secret={secret.list && secret.entry_title ? { ...secret, title: `${secret.entry_title} · ${secret.title}` } : secret} onClose={() => setSecret(null)} onStart={secretStart} onDone={secretDone} />}
     </div>
   );
 }
@@ -938,6 +1005,21 @@ export function SandboxGroup({ s, id, name }: { s: ExtensionSandbox; id: string;
   );
 }
 
+/** What an extension may do, in user-facing terms: internal point keys and socket filenames stay behind the explanation. */
+export function Permissions({ permissions }: { permissions: ExtensionPermission[] }) {
+  return (
+    <Group title={t("settings-extensions.permissions_title")} footer={t("settings-extensions.permissions_footer")}>
+      {permissions.map((perm) => (
+        <div key={perm.key} className="px-4 py-2.5">
+          <div className="text-[13px] text-ink">{permissionTitle(perm)}</div>
+          {permissionDetail(perm) && <div className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{permissionDetail(perm)}</div>}
+        </div>
+      ))}
+      {permissions.some((perm) => perm.key === "network") && <SettingsHint>{t("settings-extensions.permission_network_hint")}</SettingsHint>}
+    </Group>
+  );
+}
+
 /** Where the admin page shows an extension's network and isolation (its row opened at that block, #5696). */
 export function adminNetworkURL(id: string): string {
   return `/admin/extensions?extension=${encodeURIComponent(id)}#network`;
@@ -947,7 +1029,7 @@ export function adminNetworkURL(id: string): string {
 
 const inputClass = "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
 
-interface FieldProps {
+export interface FieldProps {
   field: ExtensionField;
   path: string[];
   draft: JsonObject;
@@ -964,6 +1046,9 @@ interface FieldProps {
   nodes?: { field: string; states: ExtensionNodeState[] };
   /** The hub's launchers, for a field of format launcher. */
   launchers: FormLaunchers;
+  /** Live entry-secret views; no values. */
+  secrets?: ExtensionSecret[];
+  onSecret?: (secret: ExtensionSecret) => void;
 }
 
 interface FormLaunchers {
@@ -972,9 +1057,9 @@ interface FormLaunchers {
 }
 
 /** One field of the form, by its type; its title above (or beside a switch), its description and error below. */
-function FieldRow(props: FieldProps) {
+export function FieldRow(props: FieldProps) {
   const { field: f, path, draft, errors, problems, onEdit } = props;
-  const key = path.join(".");
+  const key = fieldPath(path);
   const err = errors[key] ?? problems[key];
   const title = fieldTitle(f);
   const id = `extension-field-${key}`;
@@ -1038,11 +1123,15 @@ function TurnOnDialog({ name, sentence, onCancel, onConfirm }: { name: string | 
   );
 }
 
-function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, computers, nodes, launchers, id, invalid }: FieldProps & { id: string; invalid: boolean }) {
+function Control({ field: f, path, draft, typed, errors, problems, onEdit, onType, onSaveNow, computers, nodes, launchers, secrets, onSecret, id, invalid }: FieldProps & { id: string; invalid: boolean }) {
   const ring = invalid ? "shadow-[inset_0_0_0_1px_var(--red)]" : "shadow-inset-field";
   const v = valueAt(draft, path);
 
   if (f.type === "string" && f.name === "triage_rules") return <TriageRuleField id={id} value={typeof v === "string" ? v : ""} placeholder={placeholder(f)} maxLength={f.max_length} invalid={invalid} onChange={(text) => onEdit(path, text || undefined)} />;
+
+  if (isEntryList(f)) {
+    return <EntryListControl field={f} path={path} draft={draft} typed={typed} errors={errors} problems={problems} onEdit={onEdit} onType={onType} onSaveNow={onSaveNow} computers={computers} nodes={nodes} launchers={launchers} secrets={secrets} onSecret={onSecret} id={id} ring={ring} />;
+  }
 
   if (f.type === "array" && f.items?.format === "machine") {
     return <MachineSwitches field={f} path={path} draft={draft} onSaveNow={onSaveNow} computers={computers} nodes={nodes?.field === f.name ? nodes.states : undefined} id={id} />;
@@ -1067,7 +1156,7 @@ function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, comp
   }
 
   if (f.type === "integer" || f.type === "number") {
-    const key = path.join(".");
+    const key = fieldPath(path);
     const text = typed[key]?.text ?? (typeof v === "number" ? String(v) : "");
     const range = [f.minimum !== undefined ? t("settings-extensions.min", { value: f.minimum }) : "", f.maximum !== undefined ? t("settings-extensions.max", { value: f.maximum }) : ""].filter(Boolean).join(t("settings-extensions.range_separator"));
     return (
@@ -1103,9 +1192,13 @@ function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, comp
   );
 }
 
+export function hasLauncherField(fields?: ExtensionField[]): boolean {
+  return !!fields?.some((f) => f.format === "launcher" || hasLauncherField(f.fields) || hasLauncherField(f.items?.fields));
+}
+
 /** The hub's launchers for the form's launcher pickers, read once while the page is open (GET /launchers asks every
  *  machine): null while they load, or when they could not be read. */
-function useFormLaunchers(on: boolean, page: string | undefined): FormLaunchers {
+export function useFormLaunchers(on: boolean, page: string | undefined): FormLaunchers {
   const [state, setState] = useState<FormLaunchers>({ list: null, loading: false });
   useEffect(() => {
     if (!on) return;
@@ -1195,6 +1288,78 @@ function MachineSwitches({ field: f, path, draft, onSaveNow, computers, nodes, i
   );
 }
 
+function entryDisplayTitle(list: ExtensionField, entry: JsonObject, index: number): string {
+  const fields = list.items?.fields ?? [];
+  for (const preferred of [true, false]) {
+    for (const field of fields) {
+      if (preferred && field.name !== "name") continue;
+      const value = entry[field.name];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  }
+  return t("settings-extensions.entry_untitled", { count: index + 1 });
+}
+
+/** A user-managed list of flat entries. IDs and secrets never become editable text fields. */
+function EntryListControl(props: FieldProps & { id: string; ring: string }) {
+  const { field: f, path, draft, errors, onEdit, secrets, onSecret, id, ring } = props;
+  const entries = entryItems(draft, path);
+  const [removing, setRemoving] = useState<{ key: string; title: string } | null>(null);
+  const store = (next: JsonObject[]) => onEdit(path, next.length || f.required ? next : undefined);
+  const max = f.max_items ?? 32;
+  const clearsOnRebind = !!f.items?.fields?.some((field) => field.clears_secret);
+  return (
+    <div id={id} role="group" aria-label={fieldLabel(f)} data-entry-list={f.name} className={cx("flex flex-col gap-2 rounded-control", ring)}>
+      {entries.map((entry, index) => {
+        const key = entryKey(entry);
+        const savedID = entryID(entry);
+        const secret = savedID ? secrets?.find((s) => s.name === savedID && s.list === f.name) : undefined;
+        const title = entryDisplayTitle(f, entry, index);
+        return (
+          <section key={key} data-entry-key={key} className="overflow-hidden rounded-control bg-surface shadow-hairline">
+            <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-meta font-medium text-ink">{title}</p>
+                <p className={cx("mt-0.5 text-submeta", secret && !secret.set && secret.required ? "text-orange" : "text-ink-3")}>
+                  {secret ? secretState(secret) : t("settings-extensions.entry_save_before_secret")}
+                </p>
+              </div>
+              <Button tone="quiet" icon="key" disabled={!secret || !onSecret} onClick={() => secret && onSecret?.(secret)}>
+                {t("settings-extensions.entry_secret")}
+              </Button>
+              <IconButton icon="x" label={t("settings-extensions.entry_remove", { entry: title })} disabled={!!f.required && entries.length <= (f.min_items ?? 0)} onClick={() => setRemoving({ key, title })} />
+            </div>
+            {errors[`${f.name}[${index}]._id`] && <p role="alert" className="px-4 pt-2 text-submeta text-red">{errors[`${f.name}[${index}]._id`]}</p>}
+            {(f.items?.fields ?? []).map((field) => (
+              <FieldRow key={field.name} {...props} field={field} path={[...path, String(index), field.name]} />
+            ))}
+          </section>
+        );
+      })}
+      <div className="px-1 pt-1">
+        <Button tone="secondary" icon="plus" disabled={entries.length >= max} onClick={() => store([...entries, {}])}>
+          {t("settings-extensions.entry_add")}
+        </Button>
+        <p className="mt-2 text-submeta leading-relaxed text-ink-3">
+          {t("settings-extensions.entry_editor_hint")}
+          {clearsOnRebind ? ` ${t("settings-extensions.entry_rebind_hint")}` : ""}
+        </p>
+      </div>
+      <Dialog
+        open={!!removing}
+        title={removing ? t("settings-extensions.entry_remove_title", { entry: removing.title }) : undefined}
+        onClose={() => setRemoving(null)}
+        footer={<><Button tone="quiet" onClick={() => setRemoving(null)}>{t("common.cancel")}</Button><Button tone="danger" onClick={() => {
+          if (removing) store(entries.filter((entry) => entryKey(entry) !== removing.key));
+          setRemoving(null);
+        }}>{t("settings-extensions.entry_remove_confirm")}</Button></>}
+      >
+        <p className="text-meta leading-relaxed text-ink-2">{t("settings-extensions.entry_remove_body")}</p>
+      </Dialog>
+    </div>
+  );
+}
+
 function ListControl({ field: f, path, draft, onEdit, id, ring }: Pick<FieldProps, "field" | "path" | "draft" | "onEdit"> & { id: string; ring: string }) {
   const [adding, setAdding] = useState("");
   const items = listItems(draft, path, f);
@@ -1273,7 +1438,7 @@ function ListControl({ field: f, path, draft, onEdit, id, ring }: Pick<FieldProp
 // ── a secret ────────────────────────────────────────────
 
 /** Sets one secret: typed in hidden, saved to the hub, never shown again; one that is set can be cleared. */
-function SecretDialog({ extension, secret, onClose, onStart, onDone }: { extension: string; secret: ExtensionSecret; onClose: () => void; onStart: () => number; onDone: (n: number, d: HubExtensionDetail) => void }) {
+export function SecretDialog({ extension, secret, onClose, onStart, onDone }: { extension: string; secret: ExtensionSecret; onClose: () => void; onStart: () => number; onDone: (n: number, d: HubExtensionDetail) => void }) {
   // a provider's reference in place of the value (docs/extensions/secret-providers.md), where the hub takes one
   const references = useStore((s) => hubHasExt(s.features, "secret_references"));
   const [byRef, setByRef] = useState(!!secret.reference);
@@ -1406,7 +1571,7 @@ function SecretDialog({ extension, secret, onClose, onStart, onDone }: { extensi
  * A secret provider's page (docs/extensions/secret-providers.md): the settings that hold its references, each the
  * user's standing approval, and the Always rules of hand-offs to Agents, each removable (the next hand-off asks again).
  */
-function SecretProviderGroups({ extension, users, rules, editable, onStart, onDone }: {
+export function SecretProviderGroups({ extension, users, rules, editable, onStart, onDone }: {
   extension: string;
   users?: SecretUser[];
   rules?: HandoffRule[];
@@ -1436,14 +1601,14 @@ function SecretProviderGroups({ extension, users, rules, editable, onStart, onDo
       ? u.machine
         ? t("settings-extensions.user_launcher_machine", { name: u.launcher_name || u.launcher || "", machine: machineName(u.machine) })
         : t("settings-extensions.user_launcher", { name: u.launcher_name || u.launcher || "" })
-      : `${u.extension_name || u.extension || ""} › ${u.secret_title || u.secret || ""}`;
+      : `${u.extension_name || u.extension || ""} › ${u.secret_title || u.secret || ""}${u.entry_title ? ` (${u.entry_title})` : ""}`;
   return (
     <>
       {!!users?.length && (
         <div data-secret-users>
           <Group title={t("settings-extensions.users_title")} footer={t("settings-extensions.users_footer")}>
             {users.map((u, i) => (
-              <Row key={`${u.kind}/${u.extension ?? u.launcher}/${u.secret ?? u.machine ?? ""}/${i}`} label={userLabel(u)} hint={u.reference} />
+              <Row key={`${u.kind}/${u.extension ?? u.launcher}/${u.secret ?? u.machine ?? ""}/${i}`} label={userLabel(u)} hint={u.entry_title ? `${u.entry_title} · ${u.reference}` : u.reference} wrapHint={!!u.entry_title} />
             ))}
           </Group>
         </div>

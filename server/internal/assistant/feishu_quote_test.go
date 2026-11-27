@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -28,8 +28,8 @@ func quoteHub(t *testing.T, resource appAnswer) (*fakeHub, *Service) {
 	return f, newTestService(t, f)
 }
 
-func quoteReply() *feishubot.MessageEvent {
-	var ev feishubot.MessageEvent
+func quoteReply() *botcard.MessageEvent {
+	var ev botcard.MessageEvent
 	ev.Message.MessageID, ev.Message.ParentID, ev.Message.RootID = "om_ask", "om_pic", "om_pic"
 	ev.Message.ChatType, ev.Message.MessageType, ev.Message.Content = "p2p", "text", `{"text":"这张图里写的什么？"}`
 	return &ev
@@ -53,6 +53,7 @@ func sentImages(f *fakeHub) []any {
 // Replying to a picture to ask about it: the picture goes to the model with the question, downloaded with the
 // message it is in, not only the "[image]" line in the quote.
 func TestFeishuReplyToAPictureCarriesThePicture(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	var asked []string
 	f, s := quoteHub(t, func(p json.RawMessage) (any, error) {
 		var a map[string]any
@@ -61,8 +62,8 @@ func TestFeishuReplyToAPictureCarriesThePicture(t *testing.T) {
 		return map[string]any{"data": []byte("png"), "mime": "image/png"}, nil
 	})
 	ev := quoteReply()
-	content := feishubot.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
-	if err := s.botSend(context.Background(), ev, content, botTarget{Kind: targetMain}); err != nil {
+	content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
+	if err := s.larkModule().Send(context.Background(), ev, content, botTarget{Kind: targetMain}); err != nil {
 		t.Fatal(err)
 	}
 	if len(asked) != 1 || asked[0] != "om_pic/img_q" {
@@ -78,10 +79,11 @@ func TestFeishuReplyToAPictureCarriesThePicture(t *testing.T) {
 
 // A quoted picture that can't be had does not hold the question back: it goes with the quote's words.
 func TestFeishuQuotedPictureGoneStillSends(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, s := quoteHub(t, func(json.RawMessage) (any, error) { return nil, errors.New("resource gone") })
 	ev := quoteReply()
-	content := feishubot.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
-	if err := s.botSend(context.Background(), ev, content, botTarget{Kind: targetMain}); err != nil {
+	content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
+	if err := s.larkModule().Send(context.Background(), ev, content, botTarget{Kind: targetMain}); err != nil {
 		t.Fatalf("held back: %v", err)
 	}
 	if text := sendOnceText(f); !strings.Contains(text, "这张图里写的什么？") {
@@ -92,9 +94,95 @@ func TestFeishuQuotedPictureGoneStillSends(t *testing.T) {
 	}
 }
 
+// A quote reply to a notify_user copy returns to the conversation that made the notification and carries the copied
+// card's identity and text. Two nearby notices make a default-conversation fallback visible.
+func TestFeishuQuoteReplyToOwnNotificationKeepsSourceAndQuote(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
+	e := newThreadEnv(t, nil)
+	e.features.Pushes = true
+	e.s.larkModule().SetTarget(botTarget{Kind: targetPersona, MachineID: "server", SessionID: "m1"})
+	ids := []string{"om_notice_main", "om_notice_work"}
+	e.f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {
+		if len(ids) == 0 {
+			return nil, errors.New("unexpected extra notification card")
+		}
+		id := ids[0]
+		ids = ids[1:]
+		return map[string]any{"message_id": id}, nil
+	})
+	if err := e.s.feishuPushTold(context.Background(), "server", "m1", "First notification", "First original body", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.s.feishuPushTold(context.Background(), "server", "c1x1x1", "Second notification", "Second original body", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	target := e.s.larkModule().Route("", "om_notice_work")
+	if target.Kind != targetPersona || target.MachineID != "server" || target.SessionID != "c1x1x1" {
+		t.Fatalf("notification reply target %+v", target)
+	}
+	e.f.answerApp(AppFeishu, FeishuMessages, func(json.RawMessage) (any, error) {
+		return map[string]any{"items": []map[string]any{{
+			"message_id": "om_notice_work", "msg_type": "interactive", "sender": map[string]any{"sender_type": "app"},
+			"body": map[string]any{"content": `{"schema":"2.0","header":{"title":{"tag":"plain_text","content":"Second notification"}},"body":{"elements":[{"tag":"markdown","content":"Second original body"}]}}`},
+		}}}, nil
+	})
+	ev := privateEvent("om_notice_answer", "Which notice is this?")
+	ev.Message.ParentID, ev.Message.RootID = "om_notice_work", "om_notice_work"
+	e.deliver(ev)
+	h := onlyHandoff(t, e.f)
+	if h.machine != "server" || h.session != "c1x1x1" {
+		t.Fatalf("reply went to %+v", h)
+	}
+	for _, want := range []string{"om_notice_work", "Second notification", "Second original body", "Which notice is this?"} {
+		if !strings.Contains(h.text, want) {
+			t.Errorf("reply lacks %q:\n%s", want, h.text)
+		}
+	}
+}
+
+// An ordinary private reply does not read or invent a quote.
+func TestFeishuPlainPrivateReplySkipsQuoteLookup(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
+	e := newThreadEnv(t, nil)
+	e.deliver(privateEvent("om_plain", "Plain private words"))
+	h := onlyHandoff(t, e.f)
+	if h.machine != "server" || h.session != "m1" || !strings.Contains(h.text, "Plain private words") || strings.Contains(h.text, "引用的消息") {
+		t.Fatalf("plain reply changed: %+v", h)
+	}
+	if got := e.f.appParams(AppFeishu, FeishuMessages); len(got) != 0 {
+		t.Fatalf("plain reply read a quote: %v", got)
+	}
+}
+
+// An unknown source keeps the existing current-conversation fallback, but the quoted message still has its ID.
+func TestFeishuQuoteReplyUnknownSourceKeepsFallbackAndQuoteID(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
+	e := newThreadEnv(t, nil)
+	e.s.larkModule().SetTarget(botTarget{Kind: targetPersona, MachineID: "server", SessionID: "c1x1x1"})
+	e.f.answerApp(AppFeishu, FeishuMessages, func(json.RawMessage) (any, error) {
+		return map[string]any{"items": []map[string]any{{
+			"message_id": "om_unknown", "msg_type": "text", "sender": map[string]any{"id": "ou_a", "sender_type": "user"},
+			"body": map[string]any{"content": `{"text":"Original external words"}`},
+		}}}, nil
+	})
+	ev := privateEvent("om_unknown_answer", "Answer the quote")
+	ev.Message.ParentID, ev.Message.RootID = "om_unknown", "om_unknown"
+	e.deliver(ev)
+	h := onlyHandoff(t, e.f)
+	if h.machine != "server" || h.session != "c1x1x1" {
+		t.Fatalf("reply went to %+v", h)
+	}
+	for _, want := range []string{"om_unknown", "Original external words", "Answer the quote"} {
+		if !strings.Contains(h.text, want) {
+			t.Errorf("reply lacks %q:\n%s", want, h.text)
+		}
+	}
+}
+
 // A quoted or forwarded message read back carries its own mentions: an @ in it reaches the model as the person's name,
 // not as the message's @_user_N key.
 func TestFeishuQuoteAndForwardNameTheirMentions(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	mentions := []map[string]any{{"key": "@_user_1", "name": "Alice"}}
 	t.Run("quote", func(t *testing.T) {
 		f, s := quoteHub(t, func(json.RawMessage) (any, error) { return nil, errors.New("no media") })
@@ -103,8 +191,8 @@ func TestFeishuQuoteAndForwardNameTheirMentions(t *testing.T) {
 				"sender": map[string]any{"id": "ou_a", "sender_type": "user"}, "body": map[string]any{"content": `{"text":"@_user_1 please check"}`}}}}, nil
 		})
 		ev := quoteReply()
-		content := feishubot.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
-		if err := s.botSend(context.Background(), ev, content, botTarget{Kind: targetMain}); err != nil {
+		content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
+		if err := s.larkModule().Send(context.Background(), ev, content, botTarget{Kind: targetMain}); err != nil {
 			t.Fatal(err)
 		}
 		if text := sendOnceText(f); !strings.Contains(text, "@Alice please check") || strings.Contains(text, "@_user_1") {
@@ -120,11 +208,11 @@ func TestFeishuQuoteAndForwardNameTheirMentions(t *testing.T) {
 					"sender": map[string]any{"id": "ou_a", "sender_type": "user"}, "body": map[string]any{"content": `{"text":"@_user_1 please check"}`}},
 			}}, nil
 		})
-		var ev feishubot.MessageEvent
+		var ev botcard.MessageEvent
 		ev.Message.MessageID, ev.Message.ChatType, ev.Message.MessageType = "om_fwd", "p2p", "merge_forward"
 		ev.Message.Content = `{"content":"Merged and Forwarded Message"}`
-		content := feishubot.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
-		if err := s.botSend(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil {
+		content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
+		if err := s.larkModule().Send(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil {
 			t.Fatal(err)
 		}
 		if text := sendOnceText(f); !strings.Contains(text, "@Alice please check") || strings.Contains(text, "@_user_1") {

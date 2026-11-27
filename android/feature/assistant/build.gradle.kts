@@ -1,5 +1,7 @@
 plugins {
     id("persona.android.library")
+    // Its tests expect CoreText in Simplified Chinese (CoreTextFallback).
+    id("persona.coretext.zh")
     id("persona.compose")
     id("persona.hilt")
 }
@@ -16,6 +18,7 @@ dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:navigation"))
+    implementation(project(":core:moduleapi"))
     implementation(project(":feature:chat"))
     implementation(libs.compose.preview)
     implementation(libs.androidx.activity)

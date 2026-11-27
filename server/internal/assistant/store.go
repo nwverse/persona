@@ -22,6 +22,10 @@ type Store interface {
 	Setting(ctx context.Context, key string, out any) (bool, error)
 	PutSetting(ctx context.Context, key string, v any) error
 
+	PutPlacement(context.Context, db.PlacementRow) error
+	// PutModelRouting records which candidate of a model profile's tier a dispatch ran on (tier_pick.go).
+	PutModelRouting(context.Context, db.ModelRoutingRow) error
+
 	// The plans the assistant handed the user (task_plan).
 	CreateTaskPlan(ctx context.Context, p db.TaskPlanRow) error
 	TaskPlan(ctx context.Context, id string) (*db.TaskPlanRow, error) // db.ErrTaskPlanNotFound
@@ -39,4 +43,7 @@ type Store interface {
 	// MarkFeedSent merges patch into the bodies of the kind / ref items put in by at that do not say sent_at yet; the
 	// items it changed.
 	MarkFeedSent(ctx context.Context, kind, ref string, at time.Time, patch json.RawMessage) ([]db.FeedRow, error)
+	// FeedByRef lists the items of kinds about ref in every conversation, newest first, at most limit: a to-do's
+	// history (todo_timeline.go). It refuses message cards (db.ErrFeedByRefMessage).
+	FeedByRef(ctx context.Context, ref string, kinds []string, limit int) ([]db.FeedRow, error)
 }

@@ -2,6 +2,8 @@ package kbwire
 
 import (
 	"encoding/json"
+	"errors"
+	"slices"
 	"time"
 )
 
@@ -16,13 +18,16 @@ type DayMessage struct {
 
 // Detail is everything about one entity: its metadata, compressed context, a project's timeline, a chat's latest text.
 type Detail struct {
-	Kind    string          `json:"kind"`
-	ID      string          `json:"id"`
-	Path    string          `json:"path"` // absolute, for reading more with file tools
-	Meta    json.RawMessage `json:"meta"`
-	Summary string          `json:"summary,omitempty"`
-	Log     []string        `json:"log,omitempty"`
-	Recent  string          `json:"recent,omitempty"`
+	Kind        string            `json:"kind"`
+	ID          string            `json:"id"`
+	Path        string            `json:"path"` // absolute, for reading more with file tools
+	Meta        json.RawMessage   `json:"meta"`
+	Summary     string            `json:"summary,omitempty"`
+	Log         []string          `json:"log,omitempty"`
+	Recent      string            `json:"recent,omitempty"`
+	ProjectMode string            `json:"project_mode,omitempty"`
+	Freshness   *ProjectFreshness `json:"freshness,omitempty"`
+	Sources     []ProjectSource   `json:"sources,omitempty"`
 	// Links are the linked projects, chats and people, named and ranked.
 	Links []Entry `json:"links,omitempty"`
 	// Removed: the links the user removed by hand (meta's excluded), named as Links are; automatic organizing leaves
@@ -41,6 +46,10 @@ type Detail struct {
 	// Profiles: a person's profiles by writer ("user", "ext:<id>"), as written (Summary shows them too); none when no
 	// one wrote one.
 	Profiles map[string]ProfileRecord `json:"profiles,omitempty"`
+	// Paused: a recording whose stored state is in flight (an upload not complete, minutes or a day recap pending, a
+	// hub transcription not final) while nothing can settle it; "module_off": the recording module is off. Derived
+	// when read, never stored (docs/assistant/knowledge.md "Recordings without the recording module"). Absent otherwise.
+	Paused string `json:"paused,omitempty"`
 }
 
 // ProfileRecord is one writer's profile of a person and when it was written.
@@ -163,7 +172,7 @@ type RecordingSegment struct {
 	// "The transcript of record"): "hub" or "device"; absent means device. Only the hub sets it, never an upload.
 	Source string `json:"source,omitempty"`
 	// Echo: the line is Persona's own answer as the meeting's microphone heard it (#5905,
-	// docs/assistant/meeting-minutes.md "Persona's echo"), marked by the phone or by the hub's rule (kb/echo.go). Kept,
+	// docs/assistant/meeting-minutes.md "Persona's echo"), marked by the phone or by the hub's rule (modules/recording/writers/echo.go). Kept,
 	// never fed to the minutes, the summary or the follow-up; absent (false) for every other line.
 	Echo bool `json:"echo,omitempty"`
 }
@@ -176,15 +185,18 @@ type Hit struct {
 
 // Entry is a row of a ranked list.
 type Entry struct {
-	Kind       string    `json:"kind"`
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	OneLine    string    `json:"one_line,omitempty"`
-	Importance string    `json:"importance,omitempty"`
-	Relevance  int       `json:"relevance"`
-	Tags       []string  `json:"tags,omitempty"`
-	Updated    time.Time `json:"updated"`
-	Extra      string    `json:"extra,omitempty"` // projects: short / long · status; chats: dm / group…
+	Kind        string            `json:"kind"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	OneLine     string            `json:"one_line,omitempty"`
+	Importance  string            `json:"importance,omitempty"`
+	Relevance   int               `json:"relevance"`
+	Tags        []string          `json:"tags,omitempty"`
+	Updated     time.Time         `json:"updated"`
+	Extra       string            `json:"extra,omitempty"` // projects: short / long · status; chats: dm / group…
+	ProjectMode string            `json:"project_mode,omitempty"`
+	Freshness   *ProjectFreshness `json:"freshness,omitempty"`
+	Sources     []ProjectSource   `json:"sources,omitempty"`
 	// Source is where it came from: a chat's source (lark, mail, wechat, github…); a document's, meeting's or event's
 	// connector, so an app can show which app a meeting was imported from (#8872).
 	Source string `json:"source,omitempty"`
@@ -194,4 +206,22 @@ type Entry struct {
 	// MeetingID is a recording's imported meeting (#8872): the id of the meetings item it overlaps, as the meetings list
 	// has it, so a Meetings list shows the two as one row. Absent on other kinds, before a match, and from a hub before it.
 	MeetingID string `json:"meeting_id,omitempty"`
+	// Paused: as Detail.Paused, on a recording's list entry.
+	Paused string `json:"paused,omitempty"`
+}
+
+// ErrNotFound: the knowledge base has no such entry. ErrReadOnly: it was opened read-only. The knowledge base returns
+// these values (kb.ErrNotFound and kb.ErrReadOnly are the same errors), so a module that writes through a port can
+// return and test them without importing the knowledge base.
+var (
+	ErrNotFound = errors.New("not found")
+	ErrReadOnly = errors.New("the knowledge base is read-only")
+)
+
+// TaggingFieldLocked: the user set field of t by hand, so no automatic writer changes it.
+func TaggingFieldLocked(t *Tagging, field string) bool {
+	if slices.Contains(t.LockedFields, field) {
+		return true
+	}
+	return t.Locked && (field == "importance" || field == "relevance" || field == "tags")
 }

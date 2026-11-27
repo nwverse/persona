@@ -1,7 +1,9 @@
 // Machine details (docs/server/machines.md "App"): the pure part of the page — ranges, the metric charts' scales, gaps, ticks and
 // the hover read-out, the number formats, the agents by space and the system facts. MachineDetail.tsx only draws.
 import { formatDate, t } from "../i18n";
-import { stateOf, tabLabel } from "./format";
+import { normalizeTraeCliName } from "./agent-kind";
+import type { HostWorkspace } from "./workspace-catalog";
+import { activityOf, tabLabel } from "./format";
 import type { AgentState, Machine, Session } from "./types";
 import type { MachineComputer } from "./computer";
 import { stateCount } from "./state-labels";
@@ -299,6 +301,7 @@ export function level(v: number | undefined, warn: number, crit: number): Level 
 // ── agents by space ──
 
 export interface SpaceGroup {
+  workspace?: HostWorkspace;
   key: string;
   name: string;
   sessions: Session[];
@@ -307,16 +310,21 @@ export interface SpaceGroup {
 
 /** A machine's live agents (not the assistant's conversations), by herdr space in herdr's order (space, then tab),
  * agents outside any space last. */
-export function agentsBySpace(sessions: Session[]): SpaceGroup[] {
-  const live = sessions.filter((s) => !s.assistant && stateOf(s) !== "offline");
+export function agentsBySpace(sessions: Session[], workspaceOf?: (s: Session) => HostWorkspace | undefined): SpaceGroup[] {
+  const live = sessions.filter((s) => !s.assistant && activityOf(s) !== "offline");
   const map = new Map<string, SpaceGroup & { index: number }>();
   for (const s of live) {
-    const key = s.space_id || "";
-    if (!map.has(key)) map.set(key, { key, name: s.space_id ? s.space_name || s.space_id : t("lib-machine-detail.no_space"), sessions: [], counts: { needs: 0, working: 0, unread: 0 }, index: s.space_id ? (s.space_index ?? 0) : Number.MAX_SAFE_INTEGER });
+    const workspace = workspaceOf?.(s);
+    const key = workspace ? JSON.stringify(["workspace", workspace.id]) : s.space_id || "";
+    if (!map.has(key)) {
+      const name = workspace?.title || s.space_name || s.space_id || workspace?.cwd || t("lib-machine-detail.no_space");
+      map.set(key, { key, name, workspace, sessions: [], counts: { needs: 0, working: 0, unread: 0 },
+        index: workspace?.index ?? (s.space_id ? s.space_index ?? 0 : Number.MAX_SAFE_INTEGER) });
+    }
     const g = map.get(key)!;
     g.sessions.push(s);
-    const st = stateOf(s);
-    if (st === "needs_you") g.counts.needs++;
+    const st = activityOf(s);
+    if (s.view ? s.view.counted : st === "needs_you") g.counts.needs++;
     else if (st === "working") g.counts.working++;
     else if (st === "unread") g.counts.unread++;
   }
@@ -333,7 +341,7 @@ export function countsText(c: SpaceGroup["counts"]): string {
 
 /** The tab label and, for anything but Claude Code, which agent it is: "#2 · Codex". */
 export function agentMeta(s: Session): string {
-  const agent = s.agent && s.agent !== "claude" ? (s.agent_label || (s.agent === "codex" ? "Codex" : s.agent === "traex" ? "TRAEX" : s.agent)) : "";
+  const agent = s.agent && s.agent !== "claude" ? normalizeTraeCliName(s.agent_label || (s.agent === "codex" ? "Codex" : s.agent)) : "";
   return [tabLabel(s), agent].filter(Boolean).join(" · ");
 }
 

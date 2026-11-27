@@ -30,17 +30,21 @@ struct MeetingPageBar: View {
     var entry: RecordingEntry
     var mode: MeetingPage.Mode
     var paused = false
+    /// What the bar offers, handed down by the page: a replayed tape (#10589) only Pause and End, and so with the hub's
+    /// recording module off (#15214).
+    var offers: MeetingRoomOffers
     @Binding var justMe: Bool
     /// The field has the keyboard: the page steps aside as the bar does (`MeetingPage`).
     var focus: FocusState<Bool>.Binding
     /// After the meeting, a voice call bound to the follow-up (#3862 phase 6): set where one can start now; nil, no button.
     var voice: (() -> Void)?
 
-    init(entry: RecordingEntry, mode: MeetingPage.Mode, paused: Bool = false, justMe: Binding<Bool>, focus: FocusState<Bool>.Binding,
-         voice: (() -> Void)? = nil) {
+    init(entry: RecordingEntry, mode: MeetingPage.Mode, paused: Bool = false, offers: MeetingRoomOffers? = nil,
+         justMe: Binding<Bool>, focus: FocusState<Bool>.Binding, voice: (() -> Void)? = nil) {
         self.entry = entry
         self.mode = mode
         self.paused = paused
+        self.offers = offers ?? .of(entry.id)
         _justMe = justMe
         self.focus = focus
         self.voice = voice
@@ -68,8 +72,6 @@ struct MeetingPageBar: View {
     private enum Target { case room, justMe, followup }
 
     private var target: Target { mode == .after ? .followup : justMe ? .justMe : .room }
-    /// What the bar offers: a replayed tape (#10589) only Pause and End.
-    private var offers: MeetingRoomOffers { .of(entry.id) }
     private var role: MeetingAttendance { entry.attendance?.role ?? .off }
     /// The last upload's `200` had no `room`: an older manager took the meeting with Persona off (`RecordingSync`).
     private var roomMissing: Bool { sync.roomMissing.contains(entry.id) }
@@ -396,8 +398,8 @@ struct MeetingPageBar: View {
                     confirmingStop = true
                 }
                 // On the button, so the question points at End.
-                .confirmationDialog(offers.replayClock ? String(localized: "End the Replay?") : String(localized: "End the Meeting?"),
-                                    isPresented: $confirmingStop, titleVisibility: .visible) {
+                .accessibleConfirmationDialog(offers.replayClock ? String(localized: "End the Replay?") : String(localized: "End the Meeting?"),
+                                              isPresented: $confirmingStop, titleVisibility: .visible, hasCancel: true) {
                     Button(offers.replayClock ? String(localized: "End Replay") : String(localized: "End and Write the Minutes"),
                            role: .destructive) { MeetingRecorder.shared.stop(recordingID: entry.id.uuidString) }
                     Button("Keep Going [Meeting Room]", role: .cancel) {}

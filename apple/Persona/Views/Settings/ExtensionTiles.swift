@@ -16,6 +16,7 @@ struct ExtensionTileView: View {
     @Environment(\.extensionDisplayedRevision) private var displayed
     @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.pluginUICompact) private var compact
     /// Its switch asking first (`confirm`): the value it asks about, kept apart from the alert's flag.
     @State private var asking: String?
     @State private var confirming = false
@@ -42,7 +43,8 @@ struct ExtensionTileView: View {
             .onTapGesture { tap() }
             .extensionRowActions(tile.actions, model: model, link: $link)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(spoken)
+            .accessibilityLabel(tile.gauge == nil ? spoken : tile.title)
+            .accessibilityValue(tile.gauge.map { ExtensionGaugeReading.accessibilityValue(tile, gauge: $0) } ?? "")
             .accessibilityAddTraits(tile.action != nil ? .isButton : [])
             .accessibilityAction { tap() }
             .accessibilityIdentifier("plugin-ui-tile-\(tile.key ?? tile.title)")
@@ -56,7 +58,28 @@ struct ExtensionTileView: View {
             }
     }
 
-    private var content: some View {
+    @ViewBuilder private var content: some View {
+        if let gauge = tile.gauge {
+            GaugeRing(title: tile.title, value: ExtensionGaugeReading.center(tile, gauge: gauge),
+                      unit: tile.value?.isEmpty == false ? gauge.unit : nil, subtitle: tile.subtitle,
+                      ratio: gauge.ratio,
+                      color: ExtensionUIStyle.color(gauge.color) ?? ExtensionUIStyle.color(tile.color) ?? Theme.accent,
+                      compact: compact)
+                .accessibilityHidden(true)
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .topTrailing) {
+                    HStack(spacing: Theme.Space.xs) {
+                        if let b = tile.badge, !b.text.isEmpty { Chip(text: b.text, look: ExtensionUIStyle.badge(b)) }
+                        if let c = control { toggle(c) }
+                    }
+                    .padding(Theme.Space.m)
+                }
+        } else {
+            ordinaryContent
+        }
+    }
+
+    private var ordinaryContent: some View {
         VStack(alignment: .leading, spacing: Theme.Space.flush) {
             if let img = tile.image {
                 // As tall as the tile's width makes it: offered only part of the tile's height, a 16:9 shape fits
@@ -148,6 +171,23 @@ struct ExtensionTileView: View {
         guard let a = tile.action, let model, model.isEnabled(a) else { return }
         let execute = model.prepared(a, with: [:], displayed: displayed)
         Task { ExtensionOutcome.show(await execute(), app: app, link: $link) }
+    }
+}
+
+/// UI version 9's gauge: the numbers and words are kept apart from drawing so the ring, its accessibility value and
+/// their tests all use one rounding rule (the hub's downgrade and the web use it too).
+nonisolated enum ExtensionGaugeReading {
+    static func percent(_ ratio: Double) -> Int { Int((min(max(ratio, 0), 1) * 100).rounded()) }
+
+    static func center(_ tile: ExtensionTile, gauge: ExtensionGauge) -> String {
+        tile.value?.isEmpty == false ? tile.value! : "\(percent(gauge.ratio))%"
+    }
+
+    /// The accessibility value: "4.69 USD, 94%", or just "50%" when the tile has no value of its own.
+    static func accessibilityValue(_ tile: ExtensionTile, gauge: ExtensionGauge) -> String {
+        guard tile.value?.isEmpty == false else { return "\(percent(gauge.ratio))%" }
+        let amount = [tile.value!, gauge.unit ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+        return "\(amount), \(percent(gauge.ratio))%"
     }
 }
 

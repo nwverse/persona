@@ -86,6 +86,13 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 		return nil, ErrIdentity
 	}
 	var p *Extension
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
+	var previousMutation *settingsMutation
+	if previousID != id {
+		previousMutation = r.settingsWrite(previousID)
+		defer previousMutation.finish()
+	}
 	err = func() error {
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -111,6 +118,10 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 			return err
 		}
 		row := snapshotExtension(cur).Record
+		row.Config, err = rollbackFixedSlots(cur.Full, m, row.Config)
+		if err != nil {
+			return err
+		}
 		row.ExpectedID, row.ExpectedVersion = cur.Record.ID, cur.Record.Version
 		row.ID, row.PreviousID = previousID, ""
 		if previousID != id && !slices.Contains(row.Aliases, id) {
@@ -144,7 +155,8 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 	}
 	unlock()
 	r.audit(ctx, id, "rollback", actor, map[string]any{"from": old.Record.Version, "to": prev})
-	r.changed(Change{ID: p.Record.ID, Kind: "rolled_back", Old: old})
+	previousMutation.finish()
+	mutation.changed(Change{ID: p.Record.ID, Kind: "rolled_back", Old: old})
 	return p, nil
 }
 
@@ -170,6 +182,8 @@ func (r *Registry) Uninstall(ctx context.Context, id string, keepData bool, acto
 		return i18n.Err("extension-status.config_disable_only", i18n.Args{"id": id})
 	}
 	id = old.Record.ID
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
 	var trash string
 	err = func() error {
 		r.mu.Lock()
@@ -182,7 +196,7 @@ func (r *Registry) Uninstall(ctx context.Context, id string, keepData bool, acto
 		slot := old.Record.StorageKey()
 		dirs := []string{filepath.Join("installed", slot), filepath.Join("tools", slot)}
 		if !keepData {
-			dirs = append(dirs, filepath.Join("data", slot))
+			dirs = append(dirs, filepath.Join("data", slot), filepath.Join("backups", slot)) // its snapshots are its data too
 		}
 		// Its directories move aside before the row goes: one that cannot move fails the uninstall with nothing
 		// changed, rather than leaving data behind an uninstall that said it worked. Load finishes or undoes a move
@@ -235,7 +249,7 @@ func (r *Registry) Uninstall(ctx context.Context, id string, keepData bool, acto
 	}
 	unlock()
 	r.audit(ctx, id, "uninstall", actor, map[string]any{"version": old.Record.Version, "keep_data": keepData})
-	r.changed(Change{ID: id, Kind: "removed", Old: old})
+	mutation.changed(Change{ID: id, Kind: "removed", Old: old})
 	return left
 }
 
@@ -362,12 +376,13 @@ func (r *Registry) moveBack(aside string) error {
 	return os.RemoveAll(aside)
 }
 
-// ownDir says whether rel is one of the directories an uninstall of id moves: installed/<id>, data/<id>, tools/<id>.
+// ownDir says whether rel is one of the directories an uninstall of id moves: installed/<id>, data/<id>, tools/<id>,
+// backups/<id>.
 func ownDir(id, rel string) bool {
 	if id == "" || id != filepath.Base(id) || id == "." || id == ".." {
 		return false
 	}
-	for _, d := range []string{"installed", "data", "tools"} {
+	for _, d := range []string{"installed", "data", "tools", "backups"} {
 		if filepath.Clean(rel) == filepath.Join(d, id) {
 			return true
 		}

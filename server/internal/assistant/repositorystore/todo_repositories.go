@@ -9,16 +9,22 @@ import (
 	"slices"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/nwverse/persona/server/internal/assistant/externalsourcestore"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
 )
 
 // Store adds repository persistence to the manager's ordinary database store.
 // Embedding preserves every unrelated assistant store capability on the same connection pool.
-type Store struct{ *db.DB }
+type Store struct {
+	*db.DB
+	*externalsourcestore.Store
+}
 
 // New wraps the assistant manager's database without opening another pool.
-func New(database *db.DB) *Store { return &Store{DB: database} }
+func New(database *db.DB) *Store {
+	return &Store{DB: database, Store: externalsourcestore.New(database)}
+}
 
 func decodeTodoRepositories(id string, revision int64, raw []byte) (repository.TaskSet, error) {
 	out := repository.TaskSet{SchemaVersion: 1, TodoID: id, Revision: revision, Repositories: []repository.TaskRepository{}}
@@ -44,6 +50,37 @@ func (d *Store) TodoRepositories(ctx context.Context, id string) (repository.Tas
 		return repository.TaskSet{}, err
 	}
 	return decodeTodoRepositories(id, revision, raw)
+}
+
+// ListTodoRepositories loads saved repository associations for the named to-dos in one query.
+func (d *Store) ListTodoRepositories(ctx context.Context, ids []string) (map[string][]repository.TaskRepository, error) {
+	out := make(map[string][]repository.TaskRepository, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := d.Transaction(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT todo_id, repositories FROM todo_repository_sets WHERE todo_id = ANY($1)`, ids)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var todoID string
+			var raw []byte
+			if err := rows.Scan(&todoID, &raw); err != nil {
+				return err
+			}
+			set, err := decodeTodoRepositories(todoID, 0, raw)
+			if err != nil {
+				return err
+			}
+			if len(set.Repositories) > 0 {
+				out[todoID] = set.Repositories
+			}
+		}
+		return rows.Err()
+	})
+	return out, err
 }
 
 // ReadTodoRepositoriesTx locks the Todo, including an empty association set. Preparation
@@ -171,7 +208,7 @@ func (d *Store) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, i
 				if err != nil {
 					return err
 				}
-				repository.PreserveLinkTitles(row.Links, links)
+				repository.PreserveLinkTitles(row.Links, links, in.Links)
 				cur.Repositories[index].Links = links
 				cur.Revision++
 				out = cur
@@ -179,6 +216,63 @@ func (d *Store) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, i
 			}
 		}
 		return repository.Problem("not_found")
+	})
+	return out, err
+}
+
+// SetTodoRepositoryLinkRole rewrites the role of a single link (matched by canonical URL) inside one transaction, so
+// the automatic gate downgrade can never clobber a concurrent edit made to another link.
+func (d *Store) SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL, role string) (repository.TaskSet, error) {
+	normalized, perr := repository.NormalizeLinkRole(role)
+	if perr != "" {
+		return repository.TaskSet{}, perr
+	}
+	// NormalizeLink stores the default delivery role as an empty string.
+	storedRole := ""
+	if normalized == repository.LinkRoleReference {
+		storedRole = normalized
+	}
+	return d.updateTodoRepositoryLink(ctx, id, canonicalURL, func(link *repository.TaskLink) {
+		link.Role = storedRole
+	})
+}
+
+// SetTodoPRLinkTitle updates only an existing PR link. A poll must never recreate a removed link.
+func (d *Store) SetTodoPRLinkTitle(ctx context.Context, id, canonicalURL, title string) error {
+	_, err := d.updateTodoRepositoryLink(ctx, id, canonicalURL, func(link *repository.TaskLink) {
+		if link.Kind == "pull_request" && title != "" {
+			link.Title = title
+		}
+	})
+	return err
+}
+
+func (d *Store) updateTodoRepositoryLink(ctx context.Context, id, canonicalURL string, update func(*repository.TaskLink)) (repository.TaskSet, error) {
+	var out repository.TaskSet
+	err := d.Transaction(ctx, func(tx pgx.Tx) error {
+		cur, err := ReadTodoRepositoriesTx(ctx, tx, id, nil)
+		if err != nil {
+			return err
+		}
+		changed := false
+		for _, row := range cur.Repositories {
+			for i, link := range row.Links {
+				if link.CanonicalURL == canonicalURL {
+					update(&row.Links[i])
+					changed = changed || row.Links[i] != link
+				}
+			}
+		}
+		if !changed {
+			out = cur
+			return nil
+		}
+		if cur.Revision >= repository.MaxRevision {
+			return repository.Problem("limit")
+		}
+		cur.Revision++
+		out = cur
+		return writeTodoRepositoriesTx(ctx, tx, cur)
 	})
 	return out, err
 }
@@ -246,7 +340,7 @@ func (d *Store) ImportTodoRepositoryLinkDetails(ctx context.Context, id string, 
 			}
 			canonical = append(canonical, link.CanonicalURL)
 			if source == "explicit" || !slices.Contains(seen, link.CanonicalURL) {
-				pending = append(pending, repository.LinkInput{URL: link.CanonicalURL, Title: link.Title, Resolved: in.Resolved})
+				pending = append(pending, repository.LinkInput{URL: link.CanonicalURL, Title: link.Title, Role: in.Role, Resolved: in.Resolved})
 			}
 		}
 		if len(pending) == 0 {

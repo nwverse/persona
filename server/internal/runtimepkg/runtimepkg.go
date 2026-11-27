@@ -55,7 +55,8 @@ const (
 var Packages = map[string][]string{
 	"persona-dsh-runtime":         {"dsh/package.json", "dsh/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
 	"persona-pi-runtime":          {"pi/package.json", "pi/index.js", "pi/companion.mjs", "pi/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
-	"persona-antigravity-runtime": {"antigravity/package.json", "antigravity/companion.mjs", "antigravity/mcp-proxy.mjs", "antigravity/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
+	"persona-antigravity-runtime": {"antigravity/package.json", "antigravity/companion.mjs", "antigravity/desktop.mjs", "antigravity/mcp-proxy.mjs", "antigravity/media-guard.mjs", "antigravity/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
+	"persona-opencode-runtime":    {"opencode/package.json", "opencode/index.js", "opencode/companion.mjs", "opencode/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
 	// The Paseo bridge is not loaded by another program: the node writes it out and runs it (node/paseobridge.go).
 	"persona-paseo-runtime": {"paseo/package.json", "paseo/bridge.mjs", "paseo/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
 }
@@ -519,11 +520,25 @@ func byDirectory(files []File) []partFiles {
 	return groups
 }
 
-// pack is files as a gzipped tar in path order. Every header field that could vary between machines or runs is fixed:
+// pack is files as a gzipped tar in a deterministic order. Every header field that could vary between machines or runs is fixed:
 // the tar entries carry mode 0644, time 0 and no owner; the gzip header (left zero) carries no name and time 0.
 func pack(files []File) ([]byte, error) {
 	sorted := append([]File(nil), files...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
+	// Keep small files and their headers together. Write the large files largest first so the following
+	// files can reuse more of the 32 KiB gzip window. Paths break ties for reproducibility.
+	// The 21 KiB cutoff keeps the current runtime packages within the embedded size budget.
+	const largeFile = 21 << 10
+	sort.Slice(sorted, func(i, j int) bool {
+		a, b := sorted[i], sorted[j]
+		aSize, bSize := len(a.Data), len(b.Data)
+		if aSize == bSize {
+			return a.Path < b.Path
+		}
+		if aSize >= largeFile && bSize >= largeFile {
+			return aSize > bSize
+		}
+		return aSize < bSize
+	})
 	var buf bytes.Buffer
 	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {

@@ -12,20 +12,86 @@ import (
 // What the projection works out over a whole list: the rows' order within each section (rank), the counts, and the
 // places (proposal 3.3, 3.4, 3.7; spec/fixtures/todo-counts/README.md).
 
+// routeLinkedInteractions gives one to-do the existing card: the session's tied to-do when it lists it, else the first
+// that lists its worker. A released worker is listed only for its linked park. Non-owners keep their park, not a second ask.
+func routeLinkedInteractions(list []Facts) {
+	type sessionKey struct{ machine, session string }
+	listing := map[sessionKey][]string{}
+	for _, f := range list {
+		linked := parkEvidenceInteractionID(&f) != ""
+		for _, a := range f.Agents {
+			if a.DismissedAt != nil || a.StartError != "" || a.ReleasedAt != nil && !linked {
+				continue
+			}
+			key := sessionKey{a.MachineID, a.SessionID}
+			if !slices.Contains(listing[key], f.ID) {
+				listing[key] = append(listing[key], f.ID)
+			}
+		}
+	}
+	for i := range list {
+		id := parkEvidenceInteractionID(&list[i])
+		if id == "" {
+			continue
+		}
+		var key sessionKey
+		found := false
+		for _, c := range list[i].Interactions {
+			if c.ID == id {
+				key, found = sessionKey{c.MachineID, c.SessionID}, true
+				break
+			}
+		}
+		if !found || len(listing[key]) == 0 {
+			continue
+		}
+		home := listing[key][0]
+	tied:
+		for _, f := range list {
+			for _, s := range f.Sessions {
+				if s.MachineID == key.machine && s.SessionID == key.session && s.Todo != nil && slices.Contains(listing[key], s.Todo.ID) {
+					home = s.Todo.ID
+					break tied
+				}
+			}
+		}
+		if home == list[i].ID {
+			continue
+		}
+		sv := *list[i].Supervision
+		parked := *sv.Parked
+		evidence := *parked.Evidence
+		evidence.InteractionID = ""
+		parked.Evidence = &evidence
+		sv.Parked = &parked
+		list[i].Supervision = &sv
+	}
+}
+
 // Views is the view of every to-do of list at now, in the list's order: each related to the rest of the list (its
 // steps, a superseded failed start), then ranked within its section.
 func Views(list []Facts, now time.Time) []assistantwire.TodoSummary {
+	views, _ := ViewsAndWaits(list, now)
+	return views
+}
+
+// ViewsAndWaits works out both the view (TodoSummary) and the strongly-typed waiting reason (TodoWait, nil unless the
+// row is in Waiting) of every to-do in list in a single pass (#16168).
+func ViewsAndWaits(list []Facts, now time.Time) ([]assistantwire.TodoSummary, []*assistantwire.TodoWait) {
 	related := relate(list)
+	routeLinkedInteractions(related)
 	placed := make([]placement, len(related))
 	for i := range related {
 		placed[i] = place(&related[i], now)
 	}
 	rank(related, placed, now)
 	views := make([]assistantwire.TodoSummary, len(placed))
+	waits := make([]*assistantwire.TodoWait, len(placed))
 	for i := range placed {
 		views[i] = placed[i].TodoSummary
+		waits[i] = cloneWait(placed[i].wait)
 	}
-	return views
+	return views, waits
 }
 
 // rank sets each placement's rank: its place among the rows of the same section, 0 first, by its section's rule
@@ -46,10 +112,21 @@ func rank(list []Facts, placed []placement, now time.Time) {
 	for i := range placed {
 		bySection[placed[i].Section] = append(bySection[placed[i].Section], i)
 	}
+	var blocked map[string]int
+	if needsYouRows := bySection[assistantwire.TodoListSectionNeedsYou]; len(needsYouRows) > 1 && anyTodosV2(list, needsYouRows) {
+		blocked = downstreamBlockedCounts(list, placed)
+	}
 	for section, rows := range bySection {
+		useCriticalPath := section == assistantwire.TodoListSectionNeedsYou && blocked != nil
 		keys := make(map[int]rankKey, len(rows))
 		for _, i := range rows {
-			keys[i] = rankKeyOf(&list[i], &placed[i], now)
+			k := rankKeyOf(&list[i], &placed[i], now)
+			if useCriticalPath {
+				k.criticalPath = true
+				k.canWait = placed[i].CanWait
+				k.downstreamBlocked = blocked[list[i].ID]
+			}
+			keys[i] = k
 		}
 		slices.SortFunc(rows, func(a, b int) int {
 			return cmp.Or(compareRank(section, keys[a], keys[b]), strings.Compare(list[a].ID, list[b].ID))
@@ -60,10 +137,71 @@ func rank(list []Facts, placed []placement, now time.Time) {
 	}
 }
 
+func anyTodosV2(list []Facts, rows []int) bool {
+	for _, i := range rows {
+		if list[i].TodosV2 {
+			return true
+		}
+	}
+	return false
+}
+
+// downstreamBlockedCounts computes, for each open to-do in list, how many distinct open downstream
+// to-dos transitively depend on it via after (dep -> dependent) or part_of (step -> parent) edges.
+// Closed and Someday to-dos are excluded, and graph traversal is cycle-safe.
+func downstreamBlockedCounts(list []Facts, placed []placement) map[string]int {
+	open := make(map[string]bool, len(list))
+	for i := range list {
+		if list[i].ID != "" && isOpen(placed[i].TodoSummary) {
+			open[list[i].ID] = true
+		}
+	}
+	if len(open) == 0 {
+		return nil
+	}
+	downstream := make(map[string][]string, len(open))
+	for i := range list {
+		f := &list[i]
+		if !open[f.ID] {
+			continue
+		}
+		for _, dep := range f.After {
+			if dep != "" && dep != f.ID && open[dep] {
+				downstream[dep] = append(downstream[dep], f.ID)
+			}
+		}
+		if f.PartOf != "" && f.PartOf != f.ID && !outsideDecisionRow(*f) && open[f.PartOf] {
+			downstream[f.ID] = append(downstream[f.ID], f.PartOf)
+		}
+	}
+	counts := make(map[string]int, len(open))
+	for start := range open {
+		if len(downstream[start]) == 0 {
+			continue
+		}
+		visited := map[string]bool{start: true}
+		queue := append([]string(nil), downstream[start]...)
+		for len(queue) > 0 {
+			cur := queue[0]
+			queue = queue[1:]
+			if visited[cur] {
+				continue
+			}
+			visited[cur] = true
+			queue = append(queue, downstream[cur]...)
+		}
+		counts[start] = len(visited) - 1
+	}
+	return counts
+}
+
 // rankKey is what a section's rule compares; a zero time is "none", which goes last where a time leads.
 type rankKey struct {
 	deadline, since, activity, wake, due, back, created time.Time
 	priority                                            int
+	criticalPath                                        bool
+	canWait                                             bool
+	downstreamBlocked                                   int
 }
 
 func rankKeyOf(f *Facts, p *placement, now time.Time) rankKey {
@@ -84,6 +222,18 @@ func rankKeyOf(f *Facts, p *placement, now time.Time) rankKey {
 	return k
 }
 
+// compareBool orders false before true.
+func compareBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case !a && b:
+		return -1
+	default:
+		return 1
+	}
+}
+
 // soonest compares two times where the earlier leads and none goes last.
 func soonest(a, b time.Time) int {
 	switch {
@@ -100,7 +250,17 @@ func soonest(a, b time.Time) int {
 // compareRank orders two rows of section by its rule.
 func compareRank(section string, a, b rankKey) int {
 	switch section {
-	case assistantwire.TodoListSectionNeedsYou, assistantwire.TodoListSectionCanWait:
+	case assistantwire.TodoListSectionNeedsYou:
+		if a.criticalPath && b.criticalPath {
+			if c := compareBool(a.canWait, b.canWait); c != 0 {
+				return c
+			}
+			if c := cmp.Compare(b.downstreamBlocked, a.downstreamBlocked); c != 0 {
+				return c
+			}
+		}
+		return cmp.Or(soonest(a.deadline, b.deadline), soonest(a.since, b.since))
+	case assistantwire.TodoListSectionCanWait:
 		return cmp.Or(soonest(a.deadline, b.deadline), soonest(a.since, b.since))
 	case assistantwire.TodoListSectionWorking:
 		return b.activity.Compare(a.activity)
@@ -126,7 +286,7 @@ func carried(list []Facts, views []assistantwire.TodoSummary) []bool {
 	}
 	out := make([]bool, len(list))
 	for i, f := range list {
-		out[i] = f.PartOf != "" && f.PartOf != f.ID && open[f.PartOf]
+		out[i] = f.PartOf != "" && f.PartOf != f.ID && open[f.PartOf] && !outsideDecisionRow(f)
 	}
 	return out
 }

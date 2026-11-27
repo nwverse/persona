@@ -5,7 +5,7 @@
 // (`assistant_readiness`) nothing here shows and the page behaves as before.
 import { useEffect, useSyncExternalStore } from "react";
 import { t } from "../i18n";
-import { api, ApiError, errorText, isAbort, pastHub } from "./api";
+import { api, ApiError, errorText, invalidateInFlightGets, isAbort, pastHub } from "./api";
 import { navigate } from "./router";
 import { getState, hubHas, useStore } from "./store";
 
@@ -253,6 +253,14 @@ export function turnErrorFix(code: string | undefined, launcher?: string): TurnF
   const title = (key: string) => name ? `${name} · ${t(key)}` : t(key);
   switch (code) {
     case "not_logged_in":
+      // The built-in Claude launcher has its own sign-in path. Another launcher gets guidance naming it, and without
+      // launcher metadata the card must not assume Claude Code (#10918; keeps #9366's words for `claude`).
+      if (name && name.toLowerCase() !== "claude") {
+        return { title: title("lib-readiness.turn_not_logged_in_other"), detail: t("lib-readiness.turn_not_logged_in_other_detail", { launcher: name }), action: "connect_model", launcher: name };
+      }
+      if (!name) {
+        return { title: t("lib-readiness.turn_not_logged_in_other"), detail: t("lib-readiness.turn_not_logged_in_generic_detail"), action: "connect_model" };
+      }
       return { title: title("lib-readiness.turn_not_logged_in"), detail: t("lib-readiness.turn_not_logged_in_detail"), action: "connect_model", launcher: name };
     case "auth_failed":
       return { title: title("lib-readiness.turn_auth_failed"), detail: t("lib-readiness.turn_auth_failed_detail"), action: "edit_provider", launcher: name };
@@ -320,7 +328,7 @@ export function refreshReadiness(o: { force?: boolean; probe?: boolean; changed?
   const mine = ++asked;
   // a probe always lands: it is the only answer that carries "Try it"'s result, however long it took
   const lands = () => (o.probe || mine > answered) && ((answered = Math.max(answered, mine)), true);
-  const p = (o.probe ? api<Readiness>(`${READINESS_PATH}?probe=1`, { timeout: pastHub(PROBE_HUB_MS) }) : api<Readiness>(READINESS_PATH))
+  const p = (o.probe ? api<Readiness>(`${READINESS_PATH}?probe=1`, { timeout: pastHub(PROBE_HUB_MS) }) : api<Readiness>(READINESS_PATH, { dedupe: !o.force && !o.changed }))
     .then((r) => {
       // a newer answer replaces a failed try's words, as it replaces a try's result
       if (!lands()) return;
@@ -411,6 +419,7 @@ export function claudeMissing(r: Readiness | null | undefined): boolean {
 
 /** For tests: forget everything. */
 export function resetReadiness(r: Readiness | null = null) {
+  invalidateInFlightGets(READINESS_PATH);
   rs = { readiness: r, unsupported: false, probing: false, probeError: "", at: r ? Date.now() : 0, tried: !!r };
   inflight = null;
   listeners.forEach((l) => l());

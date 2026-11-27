@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/devices"
@@ -31,6 +32,9 @@ type viaDevs struct {
 func (d *viaDevs) Has(id string) bool         { return id == "server" }
 func (d *viaDevs) Canonical(id string) string { return id }
 func (d *viaDevs) List() []devices.Summary    { return nil }
+func (d *viaDevs) ConnectedAt(string) time.Time {
+	return time.Time{}
+}
 
 func (d *viaDevs) CallNode(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, error) {
 	d.calls.Add(1)
@@ -43,7 +47,11 @@ func (d *viaDevs) CallNode(ctx context.Context, id, method string, params json.R
 	if err := json.Unmarshal(params, &d.saw); err != nil {
 		return nil, err
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, d.saw.URL, bytes.NewReader(d.saw.Body))
+	wireMethod := d.saw.Method
+	if wireMethod == "" {
+		wireMethod = http.MethodPost
+	}
+	req, _ := http.NewRequestWithContext(ctx, wireMethod, d.saw.URL, bytes.NewReader(d.saw.Body))
 	req.Header = d.saw.Header
 	req.Header.Set("X-Sent-By", "node")
 	resp, err := http.DefaultClient.Do(req)

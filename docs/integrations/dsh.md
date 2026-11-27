@@ -72,7 +72,7 @@ node <Persona repository>/integrations/dsh/companion.mjs --dsh <DSH installation
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `interactions` | `auto` | Who gets authorizations and questions first: `phone` always tries the phone first; `browser` never uses the phone (Persona only reads and sends); `auto` is described below |
+| `interactions` | `auto` | Who answers authorizations and questions: `phone` tries the phone first; `browser` never uses the phone; `both` offers each request to the phone and Web GUI at once; `auto` is described below |
 | `socket` | `~/.persona/runtime.sock` | Node runtime socket; environment variable `PERSONA_RUNTIME_SOCKET` also works |
 | `listDays` | `7` | List sessions active within this many days (running or waiting-for-user sessions are always listed) |
 | `maxSessions` | `80` | Maximum count; sessions messaged or created from the phone (most recent 50) bypass both limits and stay listed |
@@ -113,6 +113,8 @@ plugin management inside phone-driven sessions also reports `HMR transactions ca
 | Phone tools | Hub tools (`mcp.tools` forwarded by node) register in DSH as `mcp__persona__<name>`; calls go through node `mcp.call` to the hub with the calling session attached. Result text becomes tool output; error results become tool failures |
 | Agent supervision | Regular Agent sessions get their own Persona tools (such as `report_to_supervisor`) even when assistant support is enabled. At step preparation, DSH checks the calling session with the node and offers `task_plan` and `task_review` only to an active task leader. |
 
+Markdown in assistant text uses the session computer's existing file machinery for local destinations: absolute paths and paths relative to the session cwd open in the file viewer, and valid local images render in the reply. Missing, denied, and unreadable files show the file API's reason; image retries happen only when requested. HTTP(S) destinations keep their existing behavior. These reads use the machine-file API and its normal path guards, not a DSH-specific file-read RPC.
+
 ## Authorization, questions, and plan approval
 
 The plugin goes first (`prepend`) on DSH's two response chains, `approval/request` and `user-questions/request`. When its turn comes:
@@ -128,7 +130,8 @@ The plugin goes first (`prepend`) on DSH's two response chains, `approval/reques
   deny first, then steer that text into the active turn (DSH authorizations have no reason field; Codex works the same way), so the Agent can read why.
 - **Questions**: `ask_user_question` questions, options, and multi-select go unchanged to the phone; match answers by option text back to DSH `{id, selected, custom}`, with non-option text as `custom`.
 - **Plan approval**: questions with `intent.kind = plan-review` render as plan cards, with plan body in `detail`; approve selects its `approve` option, send back selects the other option, revision comments go in `custom`.
-- **Return to computer / expiry / no hub**: call `next()`, and the Web GUI prompts normally. While the phone holds a card, the Web GUI cannot see it (the response chain is a chain, not a broadcast),
+- **Both phone and Web GUI** (`interactions: both`): while the hub is connected, start `rt.ask()` and `next()` together for every session. The first valid answer wins; a phone answer aborts the Web GUI branch, and a Web GUI answer withdraws the phone card. An unavailable downstream responder leaves the phone card active. Request cancellation withdraws both branches, and timed questions retain the late-answer path.
+- **Return to computer / expiry / no hub** (`auto` and `phone`): call `next()`, and the Web GUI prompts normally. While the phone holds a card in these modes, the Web GUI cannot see it (the response chain is a chain, not a broadcast),
   the same trade-off as Claude hooks intercepting dialogs so they do not appear in the computer TUI.
 - **Timed questions**: `ask_user_question` waits only 45 seconds by default. At timeout, DSH first reports "Not answered yet" to the model, without withdrawing the phone card; a later answer goes through `userQuestions.answer` (late answer).
 - **Node restart, hub link drop**: interaction ids derive from session + tool call; after connecting to the next node (or once its hub is back), the plugin asks again with the same id (waiting at most 2 minutes from the drop), preserving the same phone card: the hub keeps a card under the runtime's own id through the gap (#8128).
@@ -161,7 +164,7 @@ The assistant computer (hub computer, or `assistant.machine`) must run persisten
 | Permission mode | Sent with every message; the plugin sets DSH permission presets (`permissionPresets.set`): Default / Auto-accept edits / Auto → `workspace-write`, Plan → `read-only`, Allow all → `danger-full-access` (the Lark gate still applies: it runs on node, independent of DSH authorization); customizable through `config.presets` |
 | Reasoning effort, model | Choose in DSH (Web GUI or DSH default model); Persona model configuration does not select a specific model for `dsh` |
 | Images | Already in the plugin: base64 image blocks |
-| Instructions | DSH reads assistant-directory `AGENTS.md` / `CLAUDE.md` (`assistant.prepare` writes both, loading only one if identical), plus the user's `$DSH_HOME/AGENTS.md` |
+| Instructions | DSH reads the bounded assistant-directory `AGENTS.md` / `CLAUDE.md` entry (`assistant.prepare` writes both, loading only one if identical); node carries the exact remainder in `context` on every non-command message, plus the user's `$DSH_HOME/AGENTS.md` |
 | Extension skills (such as those from the Lark extension) | Assistant directory `.agents/skills/` (DSH reads here); commands run through the gate-declared tool above |
 | Memory | **The same files** as Claude and Codex: the first message of a new chat is prefixed with memory directory, format, and current index (`prompts/assistant/runtime_instructions.md`); edits in that directory do not prompt outside Plan mode |
 | Background tasks | DSH's own tasks (`job_*`), with running ones listed in session `background` (see "Subagents and background tasks"); whether completion wakes the chat follows DSH rules, with no separate node bookkeeping |

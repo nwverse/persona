@@ -179,6 +179,15 @@ class ExtensionSchemaTests(unittest.TestCase):
     def setUp(self):
         self.v = Validator(load_schemas())
 
+    def test_configured_network_entry_paths(self):
+        for value in ("config:endpoint", "config:endpoint:http", "config:accounts[].address", "config:accounts[].address:http"):
+            with self.subTest(valid=value):
+                self.assertEqual(self.v.validate("NetworkEntry", value), [])
+        for value in ("config:accounts[0].address", "config:accounts[].address[]", "config:accounts[].nested.address",
+                      "config:accounts[].address:http:extra", "config:[].address", "config:accounts[]."):
+            with self.subTest(invalid=value):
+                self.assertNotEqual(self.v.validate("NetworkEntry", value), [])
+
     def test_generated_files_are_current(self):
         r = subprocess.run([sys.executable, str(GENERATOR), "--check"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -186,6 +195,13 @@ class ExtensionSchemaTests(unittest.TestCase):
     def test_open_object_codegen_is_generic(self):
         r = subprocess.run([sys.executable, str(ROOT / "scripts/test/test_extension_codegen.py")],
                            capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_typed_keywords_codegen(self):
+        # x-enum closed, x-id, enum-keyed structs, x-decode strict, x-opaque and Rust (#15397); it compiles what it
+        # generates where the toolchain is here, so it gets longer.
+        r = subprocess.run([sys.executable, str(ROOT / "scripts/test/test_wiregen_typed.py")],
+                           capture_output=True, text=True, timeout=600)
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_examples_hold_to_the_schema(self):

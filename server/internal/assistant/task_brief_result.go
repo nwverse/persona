@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -61,6 +61,13 @@ func (s *Service) recordBriefResult(ctx context.Context, t Todo, checks []Review
 	}); err != nil {
 		s.logf("task %s: brief result: %v", t.ID, err)
 		return nil
+	}
+	if verdict == reviewAccepted {
+		source := briefCompletionReview
+		if by == reviewerJudge {
+			source = briefCompletionJudge
+		}
+		s.recordBriefCompletion(ctx, t, source, time.Now().UTC())
 	}
 	s.clearOverdue(t.ID)
 	return &r
@@ -160,7 +167,7 @@ func notMetLine(l i18n.Lang, r *BriefResult) string {
 	var missed []string
 	for _, c := range r.Criteria {
 		if c.State == criterionNotMet {
-			missed = append(missed, feishubot.EscapeMarkdown(clip(oneLine(c.Criterion), 60)))
+			missed = append(missed, botcard.EscapeMarkdown(clip(oneLine(c.Criterion), 60)))
 		}
 	}
 	if len(missed) == 0 {

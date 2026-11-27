@@ -21,6 +21,8 @@ type worktreePrepareParams struct {
 	WorkspaceID string `json:"workspace_id"`
 	Cwd         string `json:"cwd"`
 	Branch      string `json:"branch"`
+	// AllowUntracked applies only to an automatic task branch in the checkouts folder.
+	AllowUntracked bool `json:"allow_untracked"`
 }
 
 // worktreeCreateParams is worktree.create's request (worktree.go): Composer asks for the composer's variant, AutoName for
@@ -37,6 +39,9 @@ type worktreeCreateParams struct {
 	// ForAgent: the assistant makes this worktree for an Agent it starts there, so its first shell is Persona's
 	// (finished_close.go, #10624). The user's "New worktree…" never sends it.
 	ForAgent bool `json:"for_agent"`
+	// OpenWorkspace defaults to true. A herdr leader task sets false for a checkout whose Agent tab opens in the
+	// task's shared workspace instead (#4786).
+	OpenWorkspace *bool `json:"open_workspace,omitempty"`
 }
 
 // worktreeSourceParams is the request of worktree.source, .preset and .delete: which workspace (their handlers read the rest of the request themselves).

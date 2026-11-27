@@ -304,13 +304,7 @@ struct InboxHandOffSheet: View {
         NavigationStack {
             Form {
                 Section("Instructions") {
-                    #if os(macOS)
-                    // A grouped Mac form shows a titled field as label + trailing value: the request took the right half.
-                    TextField(Self.presets[0], text: $instruction, prompt: Text(Self.presets[0]), axis: .vertical)
-                        .labelsHidden().lineLimit(2...6)
-                    #else
                     TextField(Self.presets[0], text: $instruction, axis: .vertical).lineLimit(2...6)
-                    #endif
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: Theme.Space.s) {
                             ForEach(Self.presets, id: \.self) { p in
@@ -378,9 +372,6 @@ struct InboxHandOffSheet: View {
                     startedAgent = (s.key, p)
                     newAgent = nil
                 }
-                #if os(macOS)
-                .macSheet()
-                #endif
             }
             #if DEBUG
             // `-showHandOffNewAgent YES`: New Agent… picked (screenshots). `-showHandOffNewAgent <machine>/<session>`: then,
@@ -416,12 +407,7 @@ struct InboxHandOffSheet: View {
         guard await handOff.send(ask: ask.isEmpty ? Self.presets[0] : ask) else { return }
         if let key = InboxHandOffMemory.key(item) { memory.remember(key, target: handOff.target) }
         Haptics.success()
-        #if os(macOS)
-        // The sheet closes first and `onDisappear` opens where it went: opening first left the sheet up for good (#5921).
-        handOff.openWhenClosed()
-        #else
         handOff.open() // the tab changes under the sheet as it slides away
-        #endif
         dismiss()
     }
 
@@ -471,11 +457,7 @@ struct InboxHandOffSheet: View {
         memory.rememberStarted(item, agent: key)
         handOff.started(key, markDone: prefill.markDone)
         Haptics.success()
-        #if os(macOS)
-        handOff.openWhenClosed() // as `send()`: the Agent opens once this sheet has closed (#5921)
-        #else
         handOff.open()
-        #endif
         dismiss()
     }
 
@@ -493,7 +475,7 @@ struct InboxHandOffSheet: View {
         }
         if let c = it.connector, let url = c.url { text += "\n\n（\(it.accountName)：\(url)）" } // i18n-ignore: context for the agent
         if let m = it.mail, let uid = m.uids.last {
-            text += "\n\n（邮件 account_id \(m.accountID)，mailbox \(m.mailbox)，uid \(uid)，可用 mail_read 读全文、mail_send 回复）" // i18n-ignore
+            text += "\n\n（邮件 account_id \(m.accountID)，mailbox \(m.sourceMailbox ?? "INBOX")，uid \(uid)，可用 mail_read 读全文、mail_send 回复）" // i18n-ignore
         }
         return ContextRef(kind: "context", title: title, url: "", text: text)
     }

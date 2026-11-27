@@ -8,7 +8,9 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -23,12 +25,22 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 		return nil
 	}
 	switch method {
-	case devicewire.MethodCall, devicewire.MethodFileCall:
+	case devicewire.MethodCall, devicewire.MethodFileCall, devicewire.MethodRetireCall:
 		var p devicewire.NodeCall
 		if err := decode(&p); err != nil {
 			return nil, true, err
 		}
+		if method == devicewire.MethodRetireCall && p.Method != nodeproto.StopIfIdle {
+			return nil, true, &rpc.Error{Code: "invalid_params", Message: "devices.retire_call requires session.stop_if_idle"}
+		}
 		out, err := d.Call(ctx, p)
+		return out, true, err
+	case devicewire.MethodHoldStart:
+		var p devicewire.HoldStartRequest
+		if err := decode(&p); err != nil {
+			return nil, true, err
+		}
+		out, err := d.holdStart(ctx, p)
 		return out, true, err
 	case devicewire.MethodAccept:
 		var p devicewire.Accept
@@ -102,9 +114,14 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 	return nil, false, nil
 }
 
-// Event takes the hub's devices.* events; false: not one of them.
+// Event takes the hub's devices.* and credential revocation events; false: not one of them.
 func (d *Devices) Event(name string, params json.RawMessage) bool {
 	switch name {
+	case bus.EventCredentialRevoked:
+		var p bus.DeviceCredential
+		if json.Unmarshal(params, &p) == nil && p.ID != "" {
+			d.heldCredentialRevoked(p.ID)
+		}
 	case devicewire.EventNotify:
 		var p devicewire.NodeEvent
 		if json.Unmarshal(params, &p) == nil {
@@ -274,13 +291,19 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	route("GET /api/v1/sessions/{mid}/{sid}/skills", d.getSessionSkills)
 	route("GET /api/v1/sessions/{mid}/{sid}/mode-changes", d.getModeChanges)
 	route("POST /api/v1/sessions/{mid}/{sid}/start/continue", d.postStartContinue)
+	route(devicewire.HeldOutboxRoute, d.listHeldOutbox)
 	route("POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry", d.postHeldRetry)
 	route("DELETE /api/v1/sessions/{mid}/{sid}/held/{msg}", d.deleteHeld)
+	route(devicewire.HeldStartsListRoute, d.listHeldStarts)
+	route(devicewire.HeldStartRetryRoute, d.postHeldStartRetry)
+	route(devicewire.HeldStartDeleteRoute, d.deleteHeldStart)
 	route("POST /api/v1/machines/{mid}/codex/{sid}/takeover", d.commitCodexTakeover)
 	route("PUT /api/v1/machines/{mid}/engine", d.putEngine)
 	route("GET /api/v1/machines/{mid}/herdr", d.getHerdr)
 	route("PUT /api/v1/machines/{mid}/herdr", d.putHerdr)
 	route("POST /api/v1/machines/{mid}/herdr/start", d.postHerdrStart)
+	route("GET /api/v1/machines/{mid}/herdr/sessions", d.getHerdrSessions)
+	route("PUT /api/v1/machines/{mid}/herdr/sessions/blocked", d.putHerdrSessionsBlocked)
 	route("GET /api/v1/machines/{mid}/botmux", d.getBotmux)
 	route("PUT /api/v1/machines/{mid}/botmux", d.putBotmux)
 	route("GET /api/v1/machines/{mid}/health/reports", d.listHealthReports)
@@ -295,7 +318,10 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	route("POST /api/v1/machines/{mid}/link-switch", d.postLinkSwitch)
 	route("GET /api/v1/machines/{mid}/diagnosis", d.getDiagnosis)
 	route("POST /api/v1/machines/{mid}/cleanup", d.postCleanup)
+	d.usageMapRoutes(route)
 	route("GET /api/v1/machines/{mid}/claude-dirs", d.getClaudeDirs)
+	route("GET /api/v1/machines/{mid}/agent-dirs/hidden", d.getHiddenAgentDirs)
+	route("PUT /api/v1/machines/{mid}/agent-dirs/hidden", d.putHiddenAgentDirs)
 	route("GET /api/v1/machines/{mid}/claude-live-replies", d.getLiveReplies)
 	route("PUT /api/v1/machines/{mid}/claude-live-replies", d.putLiveReplies)
 	route("GET /api/v1/machines/{mid}/clipboard", d.getClipboard)
@@ -309,6 +335,7 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	d.metricsRoutes(mux)
 	d.usageRoutes(mux)
 	d.usageHistoryRoutes(mux)
+	d.usageProjectRoutes(mux)
 	d.usageWindowRoutes(mux)
 	d.adminUsageRoutes(mux)
 	d.shareRoutes(mux)

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -22,12 +23,17 @@ func TestCompletedTodoOwnershipDoesNotBecomeActiveWork(t *testing.T) {
 		}})
 	putTodo(e.s, Todo{ID: "open", Title: "Current task",
 		Agents: []TodoAgent{{MachineID: "box", SessionID: "reused"}}})
+	putTodo(e.s, Todo{ID: "cancelled", Title: "Cancelled task", DoneAt: &now, DoneBy: db.DoneByCancelled,
+		Agents: []TodoAgent{{MachineID: "box", SessionID: "cancelled-history"}}})
 	report := e.s.todoReport(context.Background())
 	if len(report.Links) != 1 || report.Links[0].TodoID != "open" {
 		t.Fatalf("completed work entered active links: %+v", report.Links)
 	}
-	if len(report.Completed) != 1 || report.Completed[0].TodoID != "done" ||
-		report.Completed[0].SessionID != "history" || report.Completed[0].Task {
+	if len(report.Completed) != 2 ||
+		report.Completed[0].TodoID != "cancelled" || report.Completed[0].SessionID != "cancelled-history" ||
+		!report.Completed[0].Cancelled || report.Completed[0].Task ||
+		report.Completed[1].TodoID != "done" || report.Completed[1].SessionID != "history" ||
+		report.Completed[1].Cancelled || report.Completed[1].Task {
 		t.Fatalf("completed ownership: %+v", report.Completed)
 	}
 	if _, ok := e.s.openTodoOfAgent("box", "history"); ok {

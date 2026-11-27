@@ -2,7 +2,11 @@
 // the independent index without coupling the rail's gestures to transcript loading.
 
 import { NAV_RAIL_METRICS } from "../ui/nav-rail-metrics";
-import { isLoopTick, isOwnMessage, type ChatLine, type Segment, type UserMessage } from "./turns";
+import { lineItemIds } from "./chat-search";
+import { splitInlineTrailer } from "./inline-mentions";
+import { isLoopTick, isOwnMessage, parseUserText, type ChatLine, type Segment, type UserMessage } from "./turns";
+import type { Item } from "./types";
+import { hasInputExcerpt, inputEntry, type UserInputIndex, type UserInputPosition } from "./user-input-index";
 
 /** One of your questions in the loaded conversation: what a tick knows. */
 export interface NavRailTick {
@@ -10,6 +14,8 @@ export interface NavRailTick {
   id: string;
   /** Optional loaded row owner and stable sequence from the independent server index. */
   lineId?: string;
+  /** Owner in the retained live tail when the corresponding row is outside the reading window. */
+  retainedLineId?: string;
   seq?: number;
   /** An unloaded input's ordinal, localized by the component rather than cached in its preview. */
   ordinal?: number;
@@ -19,6 +25,8 @@ export interface NavRailTick {
   attachmentsOnly?: number;
   /** A bounded answer excerpt, or visible follow-up text in this exchange while the answer is not available. */
   answerExcerpt?: string;
+  /** A compact position whose excerpt can be requested on demand. */
+  loadPreview?: boolean;
 }
 
 /** Even a single loaded input is a useful position and selection target. */
@@ -26,10 +34,18 @@ export const NAV_RAIL_MIN_TICKS = 1;
 export const NAV_RAIL_TICK_PITCH = NAV_RAIL_METRICS.tickPitch;
 export const NAV_RAIL_TICK_MIN_PITCH = NAV_RAIL_METRICS.minTickPitch;
 export const NAV_RAIL_MIN_HEIGHT = NAV_RAIL_METRICS.minHeight;
-/** The card renders at most two excerpt lines; this also bounds the underlying accessible description. */
+/** The card renders at most three excerpt lines. This also bounds the accessible description. */
 export const NAV_RAIL_EXCERPT_MAX = 200;
 /** The question line's cap for the label; the card truncates to one line, the label carries the whole preview. */
 export const NAV_RAIL_PREVIEW_MAX = 120;
+
+/** `text` cut to at most `max` UTF-16 units, never between the two units of a character (a cut text is read from its
+ *  head, so this looks at one unit rather than splitting the whole text into characters). */
+function cutUnits(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+}
 
 /** The questions of the loaded lines, oldest first: one tick per turn you wrote yourself. Persona's own messages,
  *  other sessions' and other conversations' (`isOwnMessage`), /loop wake-ups (`isLoopTick`) and lines that are not
@@ -94,7 +110,7 @@ export function navRailPreview(text: string): string {
   const own = lines.find((l) => l.trim() && !l.trimStart().startsWith(">"));
   const any = lines.find((l) => l.trim()) ?? "";
   const line = (own ?? any).replace(/^\s*>\s?/, "").trim();
-  return line.length > NAV_RAIL_PREVIEW_MAX ? `${line.slice(0, NAV_RAIL_PREVIEW_MAX - 1)}…` : line;
+  return line.length > NAV_RAIL_PREVIEW_MAX ? `${cutUnits(line, NAV_RAIL_PREVIEW_MAX - 1)}…` : line;
 }
 
 /** The answer's start as one plain line: Markdown marks a preview does not render are stripped (links keep their
@@ -104,9 +120,9 @@ export function navRailExcerpt(raw: string): string {
   const head = excerptHead(raw);
   if (head !== undefined) {
     const out = plainLine(head);
-    if (out.length >= NAV_RAIL_EXCERPT_MAX) return out.slice(0, NAV_RAIL_EXCERPT_MAX);
+    if (out.length >= NAV_RAIL_EXCERPT_MAX) return cutUnits(out, NAV_RAIL_EXCERPT_MAX);
   }
-  return plainLine(raw.replace(COMMENT, "").replace(LINK, "$1")).slice(0, NAV_RAIL_EXCERPT_MAX);
+  return cutUnits(plainLine(raw.replace(COMMENT, "").replace(LINK, "$1")), NAV_RAIL_EXCERPT_MAX);
 }
 
 const COMMENT = /<!--[\s\S]*?-->/g;
@@ -152,15 +168,15 @@ function excerptHead(raw: string): string | undefined {
   return open ? undefined : linked.slice(0, -4);
 }
 
-/** Idle marks stay uniformly short; only an interactive preview creates bell-shaped focus shoulders. */
+/** Idle marks stay short, with emphasis on the current input. A preview creates bell-shaped focus shoulders. */
 export function navRailMark(index: number, count: number, current: number | null, preview: number | null) {
   const m = NAV_RAIL_METRICS;
   const isCurrent = index === current;
   if (preview === null) {
     return {
       state: isCurrent ? "current" : "idle",
-      width: m.tickWidth,
-      height: m.tickHeight,
+      width: isCurrent ? m.currentWidth : m.tickWidth,
+      height: isCurrent ? m.currentHeight : m.tickHeight,
       opacity: isCurrent ? 1 : m.tailOpacity,
     };
   }
@@ -181,18 +197,21 @@ export function navRailMark(index: number, count: number, current: number | null
 export interface NavRailPlan {
   start: number;
   pitch: number;
-  hidden: number;
   count: number;
+  content: number;
+  viewport: number;
 }
 
-/** Bound the DOM, not the navigable history: keep a window around the selected input. Keyboard navigation and
- *  the rail's wheel can move this window in either direction; older inputs are never permanently discarded. */
-export function planNavRailTicks(count: number, height: number, focus = count - 1): NavRailPlan {
-  if (count <= 0 || height <= 0) return { start: 0, pitch: NAV_RAIL_TICK_PITCH, hidden: 0, count: 0 };
-  const capacity = Math.max(1, Math.floor(height / NAV_RAIL_TICK_MIN_PITCH));
-  const shown = Math.min(count, capacity);
-  const start = Math.max(0, Math.min(Math.floor(focus) - Math.floor(shown / 2), count - shown));
-  return { start, pitch: Math.min(NAV_RAIL_TICK_PITCH, height / shown), hidden: count - shown, count: shown };
+/** A full-height track with only the marks in and just outside its viewport mounted. */
+export function planNavRailTicks(count: number, height: number, scrollTop = 0): NavRailPlan {
+  if (count <= 0 || height <= 0) return { start: 0, pitch: NAV_RAIL_TICK_PITCH, count: 0, content: 0, viewport: 0 };
+  const pitch = Math.min(NAV_RAIL_TICK_PITCH, Math.max(NAV_RAIL_TICK_MIN_PITCH, Math.floor(height / count)));
+  const content = count * pitch;
+  const viewport = Math.min(height, content);
+  const top = Math.max(0, Math.min(scrollTop, content - viewport));
+  const start = Math.max(0, Math.floor(top / pitch) - NAV_RAIL_METRICS.overscan);
+  const end = Math.min(count, Math.ceil((top + viewport) / pitch) + NAV_RAIL_METRICS.overscan);
+  return { start, pitch, count: end - start, content, viewport };
 }
 
 /** Cached monotone offsets make normal scrolling logarithmic, without per-message DOM reads. */
@@ -208,9 +227,47 @@ export function activeNavRailOffset(offsets: { index: number; top: number }[], t
   return offsets[Math.max(0, lo - 1)].index;
 }
 
-/** Explicit data-source seam: an index adapter may load missing content before resolving a selection. */
-export interface NavRailSource {
-  ticks: NavRailTick[];
-  total?: number;
-  select: (id: string) => void | Promise<void>;
+export function withInputPreview(tick: NavRailTick, input?: UserInputPosition): NavRailTick {
+  if (!input) return tick;
+  const preview = tick.preview || navRailPreview(splitInlineTrailer(input.preview ?? "").text);
+  return {
+    ...tick, preview,
+    attachmentsOnly: preview ? undefined : tick.attachmentsOnly ?? input.attachments,
+    answerExcerpt: tick.answerExcerpt || navRailExcerpt(input.answer ?? "") || undefined,
+  };
+}
+
+export function indexedNavTicks(index: UserInputIndex, lines: ChatLine[], items: Item[], retained?: { lines: ChatLine[]; items: Item[] }): NavRailTick[] {
+  const owner = new Map<string, string>();
+  for (const line of lines) for (const id of lineItemIds(line)) owner.set(inputEntry(id), line.id);
+  const loaded = new Map(navRailTicks(lines).map((tick) => [tick.id, tick]));
+  const retainedOwners = new Map<string, string>();
+  for (const line of retained?.lines ?? []) for (const id of lineItemIds(line)) retainedOwners.set(inputEntry(id), line.id);
+  for (const tick of retained ? navRailTicks(retained.lines) : []) {
+    if (!loaded.has(tick.id)) loaded.set(tick.id, tick);
+  }
+  const words = new Map<string, string>();
+  for (const source of retained ? [retained.items, items] : [items]) {
+    const byEntry = new Map<string, string>();
+    for (const item of source) {
+      if (item.role === "user" && item.kind === "text") {
+        const key = inputEntry(item.id);
+        byEntry.set(key, [byEntry.get(key), parseUserText(item.text ?? "").text].filter(Boolean).join("\n"));
+      }
+    }
+    for (const [id, text] of byEntry) words.set(id, text);
+  }
+  return index.inputs.map((input, i) => {
+    const key = inputEntry(input.id);
+    const lineId = owner.get(key);
+    const retainedLineId = lineId ? undefined : retainedOwners.get(key);
+    const local = lineId ?? retainedLineId;
+    const tick = local ? loaded.get(local) : undefined;
+    const preview = navRailPreview(words.get(key) ?? "") || tick?.preview || "";
+    const loadPreview = !local && !words.has(key) && !hasInputExcerpt(input);
+    return withInputPreview({
+      id: `seg:${input.id}`, seq: input.seq, lineId, retainedLineId, ordinal: i + 1, preview, loadPreview,
+      attachmentsOnly: tick?.attachmentsOnly, answerExcerpt: tick?.answerExcerpt,
+    }, hasInputExcerpt(input) ? input : undefined);
+  });
 }

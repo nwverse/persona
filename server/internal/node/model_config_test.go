@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -134,11 +135,11 @@ func TestAssistantModelComesFromTheHub(t *testing.T) {
 	n := codexTestNode(t)
 	fh := withFakeHub(t, n)
 	fh.mu.Lock()
-	fh.model = map[string]any{"launcher": "conv", "effort": "high", "model_fingerprint": "fp"}
+	fh.model = map[string]any{"launcher": "conv", "effort": "high", "model_fingerprint": "fp", "origin_known": true}
 	fh.mu.Unlock()
-	l, m := n.assistantModel(context.Background(), testThread)
-	if l != "conv" || m != (modelExecution{Effort: "high", UseEffort: true, Fingerprint: "fp"}) {
-		t.Fatalf("assistantModel = %q %+v", l, m)
+	l, m, answered := n.assistantModelDecision(context.Background(), testThread)
+	if l != "conv" || !answered || m != (modelExecution{Effort: "high", UseEffort: true, Fingerprint: "fp", OriginKnown: true}) {
+		t.Fatalf("assistantModel = %q %+v answered=%v", l, m, answered)
 	}
 	fh.mu.Lock()
 	got := fh.queried["assistant.model"]
@@ -147,9 +148,22 @@ func TestAssistantModelComesFromTheHub(t *testing.T) {
 		t.Fatalf("asked the hub about %q", got)
 	}
 	fh.mu.Lock()
-	fh.model = nil // an older hub: unknown method
+	source := modelhttp.Source{Role: "background", Session: testThread}
+	fh.model = map[string]any{"origin": originInbox, "origin_known": true, "inbox_permission_mode": proto.ModeBypass, "model_source": source}
 	fh.mu.Unlock()
-	if l, m := n.assistantModel(context.Background(), testThread); l != "" || m != (modelExecution{}) {
-		t.Fatalf("without the hub's answer: %q %+v", l, m)
+	if _, m, answered := n.assistantModelDecision(context.Background(), testThread); !answered || m.Origin != originInbox || !m.OriginKnown || m.InboxPermissionMode != proto.ModeBypass || m.Source != source {
+		t.Fatalf("the hub's Inbox attestation, own mode or model source was lost: %+v answered=%v", m, answered)
+	}
+	fh.mu.Lock()
+	fh.model = map[string]any{} // a successful scope refusal is not an ordinary-origin decision
+	fh.mu.Unlock()
+	if l, m, answered := n.assistantModelDecision(context.Background(), testThread); l != "" || !answered || m != (modelExecution{}) {
+		t.Fatalf("with an empty hub answer: %q %+v answered=%v", l, m, answered)
+	}
+	fh.mu.Lock()
+	fh.model = nil // an older hub: unknown method, not an ordinary-origin decision
+	fh.mu.Unlock()
+	if l, m, answered := n.assistantModelDecision(context.Background(), testThread); l != "" || answered || m != (modelExecution{}) {
+		t.Fatalf("without the hub's answer: %q %+v answered=%v", l, m, answered)
 	}
 }

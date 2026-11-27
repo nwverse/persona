@@ -23,7 +23,7 @@ data class LineItem(
     val part get() = blockPart(id)
     val kind get() = item.kind
     val text get() = item.text
-    val time: Instant? get() = item.ts?.let(Instant::parse)
+    val time: Instant? get() = item.ts?.let(::parseLineInstant)
     /** Persona typed it in for the model (a task's notice, a scheduled run…): the chat shows its line, not a bubble. */
     val injected: Injected? by lazy { injectedOf(item) }
     internal val isWork get() = kind in setOf("thinking", "tool_use", "tool_result", "fold") ||
@@ -52,6 +52,16 @@ data class TaskNote(
 }
 
 internal fun blockPart(id: String): Int = id.substringAfterLast('#', "").toIntOrNull() ?: 0
+internal fun parseLineInstant(iso: String): Instant? {
+    if (iso.isNotEmpty()) {
+        val last = iso[iso.length - 1]
+        if (last == 'Z' || last == 'z') {
+            val fast = persona.core.contracts.parseTime(iso)
+            if (fast != null) return fast
+        }
+    }
+    return runCatching { Instant.parse(iso) }.getOrNull()
+}
 internal fun positionCompare(seq: Int, part: Int, otherSeq: Int, otherPart: Int): Int =
     if (seq == otherSeq) part.compareTo(otherPart) else seq.compareTo(otherSeq)
 internal val itemOrder = compareBy<LineItem> { it.seq }.thenBy { it.part }
@@ -205,6 +215,10 @@ sealed interface ChatLine {
      * line was written by [to], the visible one before it by [from], as the transcript names them.
      */
     data class ModelChange(override val id: String, val from: String, val to: String) : ChatLine
+    /** The agent continued in the other engine from a handoff or resumed a previous session. */
+    data class EngineChanged(override val id: String, val change: EngineChange) : ChatLine
+    /** A permission mode change recorded outside the transcript, merged at presentation time (#10297). */
+    data class ModeChange(override val id: String, val change: persona.core.contracts.ModeChange) : ChatLine
 }
 
 data class WorkSummary(val full: List<CoreText>, val short: List<CoreText>) {

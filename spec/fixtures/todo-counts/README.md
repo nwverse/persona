@@ -10,7 +10,7 @@ values to the schema and the generated types read them back unchanged (the tests
 
 | File | What it pins | Cases |
 | --- | --- | --- |
-| `todo_counts.json` | A list → its counts, places and order | 8: an empty list, one to-do in each section, a failed start counted open, a superseded failed start, a step counted once, rows ranked in every section, rows ranked by what their steps carry, runs that wait counted In progress and ranked by their wake |
+| `todo_counts.json` | A list → its counts, places and order | 10: an empty list, one to-do in each section, a failed start counted open, a superseded failed start, a step counted once, rows ranked in every section, rows ranked by what their steps carry, runs that wait counted In progress and ranked by their wake, can_wait/supervisor-held/merged-vs-live counts, and parent/child with superseded steps |
 
 ## Format
 
@@ -23,7 +23,9 @@ values to the schema and the generated types read them back unchanged (the tests
   project's slug, and a place is titled by its project.
 - `expected.counts`: the `TodoCounts`. `expected.places`: the `TodoPlaces` answer, whose `counts` equal
   `expected.counts`. Compare as JSON values.
-- `expected.order` (optional, added here): every to-do of the list by its view's section, in the order of its `rank`.
+- `expected.order` (added here): every to-do of the list by its view's section, in the order of its `rank`. Required
+  for every case with to-dos (optional only for an empty list): the iOS app files rows from it to replay the counts
+  (`apple/PersonaTests/TodoCountsFallbackTests.swift`), and the hub's projection test checks it against the ranks.
 
 All data is made up.
 

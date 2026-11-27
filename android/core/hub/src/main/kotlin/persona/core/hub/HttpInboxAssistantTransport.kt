@@ -6,6 +6,7 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.api.InboxAssistantTransport
 import persona.core.contracts.api.InboxBulkAction
 import persona.core.contracts.api.InboxDoneTarget
+import persona.core.contracts.api.LarkMention
 import persona.core.contracts.api.LarkThreadTransport
 import persona.core.contracts.api.MailReplyTarget
 import persona.core.contracts.api.MailReplyTargetChanged
@@ -25,20 +26,34 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import java.util.concurrent.TimeUnit
+
+private fun JsonObjectBuilder.putLarkMentions(mentions: List<LarkMention>) {
+    if (mentions.isEmpty()) return
+    putJsonArray("mentions") {
+        mentions.forEach { mention ->
+            require(mention.userId.isNotBlank() && mention.name.isNotBlank())
+            addJsonObject { put("user_id", mention.userId); put("name", mention.name) }
+        }
+    }
+}
 
 class HttpInboxAssistantTransport private constructor(
     override val scope: String,
-    private val request: suspend (String, String, RequestBody?, Boolean) -> Response,
+    private val request: suspend (String, String, RequestBody?, Boolean, Long?) -> Response,
     private val mediaOrigin: () -> HttpUrl,
     private val publicImages: PublicImageReader,
     private val isCurrent: () -> Boolean,
+    override val replyImages: HubReplyImages? = null,
 ) : InboxAssistantTransport, LarkThreadTransport, LarkThreadReplyTransport {
     constructor(
         scope: String, connection: OkHttpHubConnection, publicImages: PublicImageReader = PublicImageReader.shared,
         isCurrent: () -> Boolean = { true },
     ) : this(
-        scope, { path, method, body, buffered -> connection.request(path, method, body, buffered = buffered) },
-        { connection.activeRoute().endpoint.baseUrl() }, publicImages, isCurrent,
+        scope, { path, method, body, buffered, readTimeoutSeconds ->
+            connection.request(path, method, body, buffered = buffered, readTimeoutSeconds = readTimeoutSeconds)
+        },
+        { connection.activeRoute().endpoint.baseUrl() }, publicImages, isCurrent, HubReplyImages(connection, isCurrent),
     )
 
     /** Fixed origins are only available to tests in this module. */
@@ -53,7 +68,12 @@ class HttpInboxAssistantTransport private constructor(
 
     private fun checkScope() { if (!isCurrent()) throw CancellationException("Pairing changed") }
 
-    private suspend fun json(url: HttpUrl, body: JsonElement? = null, method: String = if (body == null) "GET" else "POST"): JsonObject {
+    private suspend fun json(
+        url: HttpUrl,
+        body: JsonElement? = null,
+        method: String = if (body == null) "GET" else "POST",
+        readTimeoutSeconds: Long? = null,
+    ): JsonObject {
         return withContext(Dispatchers.IO) {
             // Acquire before requesting: queued responses must not occupy the heap either.
             jsonDecodeGate.withPermit {
@@ -61,7 +81,7 @@ class HttpInboxAssistantTransport private constructor(
                 context.ensureActive()
                 checkScope()
                 request(url.apiPath(), method,
-                    body?.toString()?.toRequestBody("application/json".toMediaType()), false).use { response ->
+                    body?.toString()?.toRequestBody("application/json".toMediaType()), false, readTimeoutSeconds).use { response ->
                     BoundedInboxJson.read(response.body) { context.ensureActive(); checkScope() }
                         .also { context.ensureActive(); checkScope() }
                 }
@@ -88,10 +108,15 @@ class HttpInboxAssistantTransport private constructor(
             cursor?.let { addQueryParameter("cursor", it) }
         }.build(),
     )
-    override suspend fun replyInThread(messageId: String, text: String, clientId: String): JsonObject {
+    override suspend fun replyInThread(messageId: String, text: String, clientId: String): JsonObject =
+        replyInThread(messageId, text, clientId, emptyList())
+    override suspend fun replyInThread(messageId: String, text: String, clientId: String, mentions: List<LarkMention>): JsonObject {
         require(messageId.isNotBlank() && text.isNotBlank() && clientId.isNotBlank())
         return json(url("api", "v1", "lark", "messages", messageId, "replies"),
-            buildJsonObject { put("text", text); put("thread", true); put("client_id", clientId) })
+            buildJsonObject {
+                put("text", text); put("thread", true); put("client_id", clientId)
+                putLarkMentions(mentions)
+            })
     }
     override suspend fun thread(messageId: String, before: String?) = json(
         url("api", "v1", "lark", "messages", messageId, "thread").newBuilder().apply {
@@ -120,12 +145,18 @@ class HttpInboxAssistantTransport private constructor(
         if (e.status != 404 && e.status != 405) throw e
         setDone(items, action != InboxBulkAction.Reopen)
     }
-    override suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String): JsonObject {
+    override suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String): JsonObject =
+        reply(itemId, feedId, text, clientId, emptyList())
+    override suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String, mentions: List<LarkMention>): JsonObject {
         require(clientId.isNotBlank() && text.isNotBlank())
         require((itemId == null) != (feedId == null))
+        require(mentions.isEmpty() || feedId != null) { "Only direct Feishu sends carry mentions" }
         val target = if (itemId != null) url("api", "v1", "inbox", itemId, "reply")
             else url("api", "v1", "lark", "conversations", requireNotNull(feedId), "messages")
-        return json(target, buildJsonObject { put("text", text); put("client_id", clientId) })
+        return json(target, buildJsonObject {
+            put("text", text); put("client_id", clientId)
+            putLarkMentions(mentions)
+        })
     }
     override suspend fun handOff(itemId: String, text: String, clientId: String): JsonObject {
         require(itemId.isNotBlank() && text.isNotBlank() && clientId.isNotBlank())
@@ -202,16 +233,19 @@ class HttpInboxAssistantTransport private constructor(
     }
     override suspend fun assistant() = json(url("api", "v1", "assistant"))
     override suspend fun createConversation(main: Boolean) = json(url("api", "v1", "assistant", "conversations"),
-        buildJsonObject { put("prompt", ""); put("main", main) })
+        buildJsonObject { put("prompt", ""); put("main", main) },
+        readTimeoutSeconds = CREATE_CONVERSATION_TIMEOUT_SECONDS)
     override suspend fun createConversation(main: Boolean, launcher: String) = json(url("api", "v1", "assistant", "conversations"),
-        buildJsonObject { put("prompt", ""); put("main", main); put("launcher", launcher) })
+        buildJsonObject { put("prompt", ""); put("main", main); put("launcher", launcher) },
+        readTimeoutSeconds = CREATE_CONVERSATION_TIMEOUT_SECONDS)
     // A space's requests carry `?space=` on the URL too (as the web's do): with it the hub client names no manager, since
     // a space is the default manager's (isAssistantPath).
     override suspend fun assistantIn(space: String) =
         json(url("api", "v1", "assistant").newBuilder().addQueryParameter("space", space).build())
     override suspend fun createConversationIn(space: String) =
         json(url("api", "v1", "assistant", "conversations").newBuilder().addQueryParameter("space", space).build(),
-            buildJsonObject { put("prompt", ""); put("space", space) })
+            buildJsonObject { put("prompt", ""); put("space", space) },
+            readTimeoutSeconds = CREATE_CONVERSATION_TIMEOUT_SECONDS)
     // `?manager=` names the manager for this request alone: the hub client sends no header over it (an empty one is
     // the default, dropped before it goes).
     override suspend fun assistantOf(manager: String?) = json(url("api", "v1", "assistant").pinned(manager))
@@ -220,15 +254,17 @@ class HttpInboxAssistantTransport private constructor(
     override suspend fun directionsTreeOf(manager: String?) =
         json(url("api", "v1", "assistant", "directions", "tree").pinned(manager))
     override suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?) =
+        createConversationOf(manager, main, launcher, null)
+    override suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?, via: String?) =
         json(url("api", "v1", "assistant", "conversations").pinned(manager), buildJsonObject {
-            put("prompt", ""); put("main", main); launcher?.let { put("launcher", it) }
-        })
+            put("prompt", ""); put("main", main); launcher?.let { put("launcher", it) }; via?.let { put("via", it) }
+        }, readTimeoutSeconds = CREATE_CONVERSATION_TIMEOUT_SECONDS)
     override suspend fun createConversationOf(manager: String?, main: Boolean, pick: persona.core.contracts.ModelPick) =
         json(url("api", "v1", "assistant", "conversations").pinned(manager), buildJsonObject {
             put("prompt", ""); put("main", main); put("launcher", pick.launcher)
             pick.model?.takeIf(String::isNotBlank)?.let { put("model", it) }
             pick.effort?.takeIf(String::isNotBlank)?.let { put("effort", it) }
-        })
+        }, readTimeoutSeconds = CREATE_CONVERSATION_TIMEOUT_SECONDS)
     private fun HttpUrl.pinned(manager: String?) = newBuilder().addQueryParameter(ManagerQuery, manager.orEmpty()).build()
     override suspend fun pins() = json(url("api", "v1", "pins"))
     override suspend fun mutes() = json(url("api", "v1", "mutes"))
@@ -273,6 +309,12 @@ class HttpInboxAssistantTransport private constructor(
         require(thread.isNotBlank())
         return json(this.url("api", "v1", "lark", "documents", "comments", thread, "resolve"),
             buildJsonObject { put("url", url); put("resolved", resolved) })
+    }
+
+    override suspend fun larkMembers(feedId: String, query: String, limit: Int): JsonObject {
+        require(feedId.isNotBlank() && limit in 1..200)
+        return json(url("api", "v1", "lark", "conversations", feedId, "members").newBuilder()
+            .addQueryParameter("q", query).addQueryParameter("limit", limit.toString()).build())
     }
 
     override suspend fun documentPeople(url: String, query: String): JsonObject {
@@ -376,8 +418,9 @@ class HttpInboxAssistantTransport private constructor(
         val path = requireNotNull(base.hubPath(media)) { "Invalid media origin" }
         require(document && path.startsWith("/api/v1/lark/raw/documents/") ||
             path.startsWith("/api/v1/lark/media/") ||
-            Regex("/api/v1/lark/messages/[^/]+/media/.+").matches(path)) { "Invalid media path" }
-        return request(path + (media.encodedQuery?.let { "?$it" } ?: ""), "GET", null, true).use { response ->
+            Regex("/api/v1/lark/messages/[^/]+/media/.+").matches(path) ||
+            Regex("/api/v1/avatars/[^/]+/[^/]+").matches(path)) { "Invalid media path" }
+        return request(path + (media.encodedQuery?.let { "?$it" } ?: ""), "GET", null, true, null).use { response ->
                 checkScope()
                 requireNotNull(response.body).bytes()
             }
@@ -386,17 +429,26 @@ class HttpInboxAssistantTransport private constructor(
     private fun HttpUrl.apiPath() = encodedPath + (encodedQuery?.let { "?$it" } ?: "")
 
     companion object {
-        // Different repositories and pairing scopes can refresh at the same time.
-        private val jsonDecodeGate = Semaphore(1)
+        /** Cold-starting an assistant conversation on a node can exceed the default 15 s HTTP read timeout. */
+        internal const val CREATE_CONVERSATION_TIMEOUT_SECONDS = 45L
 
-        private fun fixedRequest(baseUrl: String, token: String, client: OkHttpClient): suspend (String, String, RequestBody?, Boolean) -> Response {
+        // Different repositories and pairing scopes can refresh at the same time.
+        internal val jsonDecodeGate = Semaphore(1)
+
+        private fun fixedRequest(baseUrl: String, token: String, client: OkHttpClient):
+            suspend (String, String, RequestBody?, Boolean, Long?) -> Response {
             val base = baseUrl.toHttpUrl()
             // Never forward pairing credentials to redirected media or repeat ambiguous writes.
             val http = client.newBuilder().followRedirects(false).followSslRedirects(false)
                 .retryOnConnectionFailure(false).build()
-            return { path, method, body, buffered ->
+            return { path, method, body, buffered, readTimeoutSeconds ->
                 val target = base.hubUrl(path).withRequestManager()
-                http.newCall(Request.Builder().url(target).header("Authorization", "Bearer $token")
+                val caller = if (readTimeoutSeconds != null) {
+                    http.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build()
+                } else {
+                    http
+                }
+                caller.newCall(Request.Builder().url(target).header("Authorization", "Bearer $token")
                     .method(method, body).build()).awaitResponse(buffered = buffered).also { response ->
                     if (!response.isSuccessful) throw response.use { HubFailure.from(it) }
                 }

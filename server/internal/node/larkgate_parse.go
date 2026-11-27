@@ -1,6 +1,8 @@
 package node
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,7 +18,7 @@ import (
 var (
 	larkFilters = map[string]bool{"jq": true, "head": true, "tail": true, "grep": true, "egrep": true, "wc": true, "sort": true, "uniq": true, "cut": true, "tr": true, "column": true,
 		// and commands that only print
-		"echo": true, "printf": true, "true": true, "date": true, "which": true, "type": true, "cd": true}
+		"echo": true, "printf": true, "true": true, "date": true, "seq": true, "which": true, "type": true, "cd": true}
 	// curl flags a gated command passes on that cannot leak the token or reach another host, with whether they take a value.
 	gateCurlFlags = map[string]bool{"--url-query": true, "-G": false, "--get": false, "--data-urlencode": true, "-d": true, "--data": true,
 		"--data-raw": true, "-o": true, "--output": true, "-i": false, "--include": false, "-m": true, "--max-time": true, "-s": false,
@@ -25,9 +27,28 @@ var (
 
 // classifyLark reads a Bash command against the command gates (curl / wget aimed at one's API is refused); cwd
 // resolves @file bodies and query inputs; risk supplies CLI metadata when configured. Known read commands also have a
-// static fallback.
+// static fallback. A PATH assignment may name only directories on this process's PATH and the system ones; larkCheck
+// uses classifyLarkWith, which also knows the login shell's (larkExtraPATH).
 func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk) larkVerdict {
-	v := classifyLarkDepth(cmd, gates, cwd, risk, 0)
+	return classifyLarkWith(cmd, gates, cwd, risk, nil)
+}
+
+// larkExtraPATH supplies directories a PATH assignment may name besides this process's PATH and the system ones: the
+// login shell's, the PATH the assistant's Bash resolves programs in (larkLoginPATH). nil: none. It is called only for
+// a command that assigns PATH.
+type larkExtraPATH func() []string
+
+// classifyLarkWith is classifyLark for a caller with a login shell in view.
+func classifyLarkWith(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, extraPATH larkExtraPATH) larkVerdict {
+	return classifyLarkRelaxed(cmd, gates, cwd, risk, extraPATH, false)
+}
+
+// classifyLarkRelaxed is classifyLarkWith for a conversation whose permission mode lets classified calls through
+// (relax: an assistant conversation in bypassPermissions, larkCheck). It also reads, as the usual reading cannot, a
+// loop over a file's words that only runs lark-cli reads (larkFileReadLoops) and a note written through a literal
+// path variable (normalizeLarkCommandRelaxed, larkWritesFileVars), #15860. Every other mode keeps the usual reading.
+func classifyLarkRelaxed(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, extraPATH larkExtraPATH, relax bool) larkVerdict {
+	v := classifyLarkDepth(cmd, gates, cwd, risk, extraPATH, 0, relax)
 	// A relative @file body or query input is read from cwd at check time. Whatever else the command runs may run
 	// the call elsewhere (cd in any spelling, env -C, sudo -D, a subshell) or change the file first (a redirect, an
 	// earlier command), so its contents are known only for a lone call (larkLoneGateCall, #8404).
@@ -74,7 +95,7 @@ func larkLoneGateCall(cmd string, gates []proto.CommandGate) bool {
 			}
 		}
 		if i > 0 {
-			if !larkFilters[words[0]] || words[0] == "cd" {
+			if !isLarkFilter(words) || words[0] == "cd" {
 				return false
 			}
 			continue
@@ -89,13 +110,91 @@ func larkLoneGateCall(cmd string, gates []proto.CommandGate) bool {
 	return true
 }
 
-func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, depth int) larkVerdict {
-	return classifyLarkAt(cmd, gates, cwd, risk, depth, false)
+// larkReadFormattingPipeline proves the narrow command an Inbox default conversation may allow (#11991):
+// one literal configured GET/HEAD under an optional timeout, then only the fixed output filters below. The AST must
+// be one pipeline, so an appended command, substitution, assignment or file redirect is not formatting. Interpreters
+// are not filters: even apparently inert Python may evaluate a string through a standard-library API. The caller
+// separately requires one classified, rule-allowed read; this helper never executes it.
+func larkReadFormattingPipeline(cmd string, gates []proto.CommandGate) bool {
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil || len(tree.Stmts) != 1 {
+		return false
+	}
+	var statements []*syntax.Stmt
+	var walk func(*syntax.Stmt) bool
+	walk = func(st *syntax.Stmt) bool {
+		if st.Background || st.Coprocess || st.Negated {
+			return false
+		}
+		switch c := st.Cmd.(type) {
+		case *syntax.CallExpr:
+			statements = append(statements, st)
+			return true
+		case *syntax.BinaryCmd:
+			return (c.Op == syntax.Pipe || c.Op == syntax.PipeAll) && walk(c.X) && walk(c.Y)
+		}
+		return false
+	}
+	if !walk(tree.Stmts[0]) || len(statements) < 2 {
+		return false
+	}
+	for i, st := range statements {
+		call := st.Cmd.(*syntax.CallExpr)
+		if len(call.Assigns) != 0 || len(call.Args) == 0 {
+			return false
+		}
+		for _, redirect := range st.Redirs {
+			// Only stdout/stderr duplication such as 2>&1 is inert. An inherited descriptor may name a file or socket,
+			// so neither an arbitrary target (>&3) nor an inherited input (<&3) belongs in this exception.
+			if redirect.Op != syntax.DplOut || redirect.Word == nil {
+				return false
+			}
+			fd, dynamic := executionWord(redirect.Word)
+			if dynamic || fd != "1" && fd != "2" {
+				return false
+			}
+			if redirect.N != nil && redirect.N.Value != "1" && redirect.N.Value != "2" {
+				return false
+			}
+		}
+		words := make([]string, len(call.Args))
+		for j, arg := range call.Args {
+			var dynamic bool
+			if words[j], dynamic = executionWord(arg); dynamic {
+				return false
+			}
+		}
+		if i > 0 {
+			// Do not inherit larkFilters: sort/uniq have output paths, and this exception never includes interpreters or
+			// general-purpose print commands. Only these fixed stdin/stdout filters qualify.
+			switch words[0] {
+			case "jq", "head", "tail", "grep", "cut", "tr", "wc", "column":
+				continue
+			default:
+				return false
+			}
+		}
+		if words[0] == "timeout" {
+			if len(words) <= 2 || !timeoutArg.MatchString(words[1]) {
+				return false
+			}
+			words = words[2:]
+		}
+		if len(words) != 3 || gateOf(gates, words[0]) < 0 || words[1] != "GET" && words[1] != "HEAD" ||
+			!strings.HasPrefix(words[2], "/") {
+			return false
+		}
+	}
+	return true
+}
+
+func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, extraPATH larkExtraPATH, depth int, relax bool) larkVerdict {
+	return classifyLarkAt(cmd, gates, cwd, risk, extraPATH, depth, false, relax)
 }
 
 // classifyLarkAt is classifyLarkDepth for a command run here or, remote, on another machine through ssh: there PATH
 // names that machine's directories, which say nothing about the programs here.
-func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, depth int, remote bool) larkVerdict {
+func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, extraPATH larkExtraPATH, depth int, remote, relax bool) larkVerdict {
 	var v larkVerdict
 	if depth > 16 {
 		v.other, v.unparsed, v.unknown = true, true, true
@@ -135,7 +234,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 	if commands, ok := literalLarkLoopCommands(cmd, gates); ok {
 		v.unknown, v.other = false, true
 		for _, command := range commands {
-			child := classifyLarkDepth(command, gates, cwd, risk, depth+1)
+			child := classifyLarkDepth(command, gates, cwd, risk, extraPATH, depth+1, relax)
 			merge(child)
 			v.unsure = v.unsure || child.unsure
 			v.unparsed = v.unparsed || child.unparsed
@@ -147,15 +246,89 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		}
 		return v
 	}
-	cmd = normalizeLarkCommand(cmd, cwd, gates)
+	resolvedPrefixes := map[int]bool{}
+	cmd = normalizeLarkCommandRelaxed(cmd, cwd, gates, resolvedPrefixes, relax)
 	v.unknown = shellCommandUnknown(cmd, false, depth)
 	segs, ok := shellcmd.Split(cmd)
 	if !ok {
+		// The line splitter cannot represent every compound statement. Walk the shell AST instead, preserving simple
+		// statements and whole pipelines, and classify each one with the same rules. Unsupported compound syntax keeps
+		// the original opaque verdict; no command is executed by this fallback.
+		if tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), ""); err == nil {
+			compound := true
+			var walk func(*syntax.Stmt) bool
+			walk = func(stmt *syntax.Stmt) bool {
+				if len(tree.Stmts) == 1 && stmt == tree.Stmts[0] {
+					if _, simple := stmt.Cmd.(*syntax.CallExpr); simple {
+						return false // the splitter, not a compound statement, is what failed
+					}
+				}
+				switch c := stmt.Cmd.(type) {
+				case *syntax.CallExpr:
+					for _, redirect := range stmt.Redirs {
+						if redirect.Pos().Offset() < c.End().Offset() {
+							return false // a redirect interleaved with arguments can change which words are the call
+						}
+					}
+				case *syntax.BinaryCmd:
+					if c.Op != syntax.Pipe && c.Op != syntax.PipeAll {
+						return walk(c.X) && walk(c.Y)
+					}
+				case *syntax.Block:
+					if len(stmt.Redirs) != 0 {
+						return false
+					}
+					for _, inner := range c.Stmts {
+						if !walk(inner) {
+							return false
+						}
+					}
+					return true
+				case *syntax.Subshell:
+					if len(stmt.Redirs) != 0 {
+						return false
+					}
+					for _, inner := range c.Stmts {
+						if !walk(inner) {
+							return false
+						}
+					}
+					return true
+				default:
+					return false
+				}
+				var text strings.Builder
+				if syntax.NewPrinter().Print(&text, stmt) != nil || strings.TrimSpace(text.String()) == strings.TrimSpace(cmd) {
+					return false // never recursively classify the same unsplittable text
+				}
+				child := classifyLarkAt(text.String(), gates, cwd, risk, extraPATH, depth+1, remote, relax)
+				merge(child)
+				v.other = true
+				v.unsure = v.unsure || child.unsure
+				v.unparsed = v.unparsed || child.unparsed
+				return true
+			}
+			for _, stmt := range tree.Stmts {
+				compound = walk(stmt) && compound
+			}
+			if compound {
+				v.other = true
+				// Splitting statements also loses larkTextRuns's cross-statement data flow (a heredoc written now and
+				// executed later). Keep every compound fallback that names the CLI opaque; the per-call results above
+				// are sufficient only when no such indirect execution text is present.
+				v.unknown = v.unknown || larkCLIRe.MatchString(cmd)
+				return v
+			}
+		}
 		v.other, v.unparsed, v.unknown = true, true, v.unknown || gateNamed(gates, cmd) || larkCLIRe.MatchString(cmd) || shellCommandUnknown(cmd, true, depth)
 		return v
 	}
 	vars := map[string]string{}
 	varsStable := larkVariableScopeStable(cmd, gates)
+	if !varsStable {
+		// Outside straight-line code only a variable constant over the whole command expands (#16491).
+		vars = larkLiteralConstants(cmd, gates)
+	}
 	executableEnv := false
 	// Text naming lark-cli is a call only where a program executes it (larkgate_text.go): flow notes each
 	// segment for larkTextRuns.
@@ -165,10 +338,24 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 	if tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), ""); err == nil {
 		_, sequential = larkFlatStmts(tree.Stmts)
 	}
-	for _, s := range segs {
-		writes, notes := larkWritesFile(s.Redirect)
+	// fileLoops: every loop over a command substitution in the command iterates over a file's words and only reads
+	// Lark (larkFileReadLoops, #15860); only a bypass conversation reads it so (classifyLarkRelaxed).
+	fileLoops := relax && larkFileReadLoops(cmd, risk)
+	// noteVars: the literal values a note's path may name (larkWritesFileVars); nil keeps every variable path a write.
+	var noteVars map[string]string
+	if relax && varsStable {
+		noteVars = vars
+	}
+	for position, s := range segs {
+		writes, notes := larkWritesFileVars(s.Redirect, noteVars)
 		flow = append(flow, larkFlow{text: s.Text, writes: writes, notes: notes})
 		seg := &flow[len(flow)-1]
+		seg.resolved = resolvedPrefixes[position]
+		assignmentWords := s.Words
+		for len(assignmentWords) > 0 && (assignmentWords[0] == "do" || assignmentWords[0] == "then" || assignmentWords[0] == "else") {
+			assignmentWords = assignmentWords[1:]
+		}
+		resultAssignment := len(assignmentWords) == 1 && isAssignment(assignmentWords[0])
 		nestedUnsure := false
 		// fileReads: every substitution that is no filter only reads files (larkFileReadSubstitution).
 		fileReads := true
@@ -178,7 +365,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 				// value is evaluated as an expression, which may hold a substitution of its own).
 				nestedUnsure, fileReads = true, false
 				for _, c := range inner {
-					child := classifyLarkDepth(c, gates, cwd, risk, depth+1)
+					child := classifyLarkDepth(c, gates, cwd, risk, extraPATH, depth+1, relax)
 					if len(child.calls) > 0 || child.unknown || child.unparsed {
 						v.other = true
 					}
@@ -186,11 +373,13 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 				}
 				continue
 			}
-			child := classifyLarkDepth(nested, gates, cwd, risk, depth+1)
+			child := classifyLarkDepth(nested, gates, cwd, risk, extraPATH, depth+1, relax)
 			if len(child.calls) > 0 || child.unknown || child.unparsed {
 				v.other = true
 			}
-			nestedUnsure = nestedUnsure || !larkFilterSubstitution(nested) || child.unknown || child.unparsed || child.unsure
+			formatting := larkFilterSubstitution(nested) || resultAssignment && larkAssignmentFormattingSubstitution(nested)
+			readResult := resultAssignment && larkClassifiedReadSubstitution(child)
+			nestedUnsure = nestedUnsure || !formatting && !readResult || child.unknown || child.unparsed || child.unsure
 			fileReads = fileReads && (larkFilterSubstitution(nested) || larkFileReadSubstitution(nested)) &&
 				len(child.calls) == 0 && !child.unknown && !child.unparsed && !child.unsure
 			merge(child)
@@ -201,7 +390,10 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		// the dynamic-argument rule below. In any other command's argument (curl's) a file read stays unsure: it could
 		// carry the file elsewhere.
 		cliFileRead := s.ArgSubst && nestedUnsure && fileReads && larkSegmentCLI(s.Words)
-		if s.ArgSubst && nestedUnsure && !cliFileRead {
+		// The header of a loop over a file's words, when every such loop only reads Lark (fileLoops): its body is
+		// classified segment by segment below, as any loop's.
+		loopFileRead := fileLoops && len(s.Words) > 0 && s.Words[0] == "for"
+		if s.ArgSubst && nestedUnsure && !cliFileRead && !loopFileRead {
 			v.unsure, v.other = true, true
 		}
 		if v.deny != "" {
@@ -222,7 +414,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			if !isAssignment(w) {
 				break
 			}
-			executableEnv = executableEnv || larkExecutableAssignment(w, remote)
+			executableEnv = executableEnv || larkExecutableAssignment(w, remote, extraPATH)
 		}
 		var env []string
 		for len(words) > 0 && isAssignment(words[0]) {
@@ -244,14 +436,14 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		}
 		for _, word := range words {
 			if isAssignment(word) {
-				executableEnv = executableEnv || larkExecutableAssignment(word, remote)
+				executableEnv = executableEnv || larkExecutableAssignment(word, remote, extraPATH)
 			}
 		}
 		var parsed bool
 		words, parsed = unwrapCommand(words)
 		if !parsed {
 			v.other = true
-			v.unknown = v.unknown || larkCLIRe.MatchString(s.Text)
+			v.unknown = v.unknown || gateNamed(gates, s.Text) || gateNamedFields(gates, words) || larkCLIRe.MatchString(s.Text)
 			for _, word := range words {
 				v.unknown = v.unknown || strings.ContainsAny(word, "$`*?[]{}")
 			}
@@ -273,21 +465,18 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		switch {
 		case shellScriptIndex(words) >= 0:
 			v.other = true
-			merge(classifyLarkDepth(words[shellScriptIndex(words)], gates, cwd, risk, depth+1))
+			merge(classifyLarkDepth(words[shellScriptIndex(words)], gates, cwd, risk, extraPATH, depth+1, relax))
 		case name == "eval":
 			v.other = true
-			merge(classifyLarkDepth(strings.Join(words[1:], " "), gates, cwd, risk, depth+1))
+			merge(classifyLarkDepth(strings.Join(words[1:], " "), gates, cwd, risk, extraPATH, depth+1, relax))
+		case codeBuiltinRuns(name, words) && (gateNamed(gates, s.Text) || gateNamedFields(gates, words)):
+			v.other, v.unknown = true, true
 		case isLarkCLI(name):
 			// As for gated calls (parseGateCall): literal assignments earlier in the command resolve; what stays a
 			// variable may be a flag value of a read, never a command word, an api route or anything of a write.
 			args := make([]string, len(words)-1)
 			for i, a := range words[1:] {
-				args[i] = shellVarRef.ReplaceAllStringFunc(a, func(m string) string {
-					if val, ok := vars[strings.Trim(m, "${}")]; ok {
-						return val
-					}
-					return m
-				})
+				args[i] = expandKnownVars(a, vars)
 			}
 			dynamic := strings.ContainsAny(strings.Join(args, " "), "$`")
 			c, deny, ok := parseLarkCLI(args, risk)
@@ -318,7 +507,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 					v.other = true
 				}
 			}
-			if s.ArgSubst || splitGateArguments(s.Text) {
+			if s.ArgSubst || splitGateArgumentsForGate(s.Text) {
 				v.other, v.unknown = true, true
 				v.unread = append(v.unread, gate)
 				continue
@@ -350,7 +539,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 				continue
 			}
 			// lark-cli there acts as the user too: only what the gate can read as reads stays out of the way.
-			child := classifyLarkAt(remote, gates, "", risk, depth+1, true)
+			child := classifyLarkAt(remote, gates, "", risk, extraPATH, depth+1, true, relax)
 			for _, c := range child.calls {
 				child.unknown = child.unknown || !c.CLI // a gated command there is not this machine's gate
 			}
@@ -362,7 +551,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			v.other = true // it edits text and runs none of it, whatever its pattern names
 		case name == "for" || name == "done" || name == "fi":
 			v.other = true // a loop's words are its variable's values: run only where a command uses $var (dynamicCommandName)
-		case larkFilters[name] && len(env) == 0:
+		case isLarkFilter(words) && len(env) == 0:
 			seg.filter = true
 		case name == "tee":
 			v.other, seg.filter, seg.writes = true, true, true
@@ -384,7 +573,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			}
 			// A program whose code the command does not show may run lark-cli; inline code that runs nothing
 			// else is read by its own words above.
-			seg.opaque = indirectLarkCommand(name) && !selfContainedCode(words) && !inert
+			seg.opaque = (indirectLarkCommand(name) || sortExecutesProgram(words)) && !selfContainedCode(words) && !inert
 			sequential = sequential && name != "trap" // its code runs later
 		}
 	}
@@ -400,9 +589,44 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 	return v
 }
 
+// codeBuiltinRuns reports a zsh builtin that executes code supplied as an argument. The code is not
+// parsed here: when it names a gate, the whole command must be confirmed rather than treated as ordinary.
+func codeBuiltinRuns(name string, words []string) bool {
+	if name != "emulate" {
+		return false
+	}
+	for i := 1; i < len(words); i++ {
+		if words[i] == "--" {
+			return false
+		}
+		if words[i] == "-c" || strings.HasPrefix(words[i], "-") && !strings.HasPrefix(words[i], "--") &&
+			strings.Contains(words[i][1:], "c") {
+			return i+1 < len(words)
+		}
+	}
+	return false
+}
+
 // larkFilterSubstitution reports whether a command substitution only formats
 // or prints data. Other programs keep the enclosing gated call conservative.
+// larkClassifiedReadSubstitution is a command substitution made solely of calls already proven to be reads. Its
+// output can be stored or formatted as data; the enclosing executable and any eval/shell use are checked separately.
+func larkClassifiedReadSubstitution(v larkVerdict) bool {
+	return len(v.calls) > 0 && !v.other && !v.unknown && !v.unparsed && !v.unsure &&
+		!slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkRead(c) || !larkBypassSafe(c) })
+}
+
 func larkFilterSubstitution(cmd string) bool {
+	return larkSubstitutionFilter(cmd, false)
+}
+
+// larkAssignmentFormattingSubstitution also permits self-contained inline formatters. It is used only when a result
+// is saved in a variable; command arguments keep the stricter filter rule above.
+func larkAssignmentFormattingSubstitution(cmd string) bool {
+	return larkSubstitutionFilter(cmd, true)
+}
+
+func larkSubstitutionFilter(cmd string, inlineCode bool) bool {
 	segs, ok := shellcmd.Split(cmd)
 	if !ok || len(segs) == 0 {
 		return false
@@ -412,7 +636,7 @@ func larkFilterSubstitution(cmd string) bool {
 			return false
 		}
 		words, ok := unwrapCommand(s.Words)
-		if !ok || len(words) == 0 || len(words) != len(s.Words) || !larkFilters[words[0]] {
+		if !ok || len(words) == 0 || len(words) != len(s.Words) || !isLarkFilter(words) && (!inlineCode || !selfContainedCode(words)) {
 			return false
 		}
 	}
@@ -593,6 +817,23 @@ func gateNamed(gates []proto.CommandGate, cmd string) bool {
 	return false
 }
 
+// gateNamedFields keeps a gate name visible when an unsupported wrapper leaves its
+// command packed inside one quoted or option=value word (for example env -S).
+// This fallback only confirms; it never reinterprets or executes those words.
+func gateNamedFields(gates []proto.CommandGate, words []string) bool {
+	for _, word := range words {
+		fields := strings.FieldsFunc(word, func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || strings.ContainsRune("='\"`;&|()", r)
+		})
+		for _, field := range fields {
+			if gateOf(gates, field) >= 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // larkVariableScopeStable reports whether straight-line assignments can be
 // used to expand a later route. Only known read-only commands can appear
 // between those assignments and the gated call.
@@ -658,7 +899,7 @@ func larkVariableScopeStable(cmd string, gates []proto.CommandGate) bool {
 			}
 			if !allowed {
 				allowed = map[string]bool{"cat": true, "tee": true, "ls": true, "git": true, "go": true, "pwd": true, "sleep": true, "false": true, ":": true}[name] ||
-					larkFilters[name] && name != "printf" && name != "cd"
+					isLarkFilter(suffix) && name != "printf" && name != "cd"
 			}
 			if !allowed {
 				stable = false
@@ -668,6 +909,239 @@ func larkVariableScopeStable(cmd string, gates []proto.CommandGate) bool {
 		return true
 	})
 	return stable
+}
+
+var (
+	larkConstantValue = lazyre.New(`^[A-Za-z0-9_-]+$`)
+	larkConstantName  = lazyre.New(`^(?:[a-z][A-Za-z0-9_]*|[A-Z])$`)
+	// zsh's lowercase special parameters and hook arrays: the shell sets or reads them itself (=~ fills match, cd runs
+	// chpwd_functions). bash's are all uppercase or start with "_", which larkConstantName already rules out.
+	larkShellLowercase = map[string]bool{"argv": true, "status": true, "pipestatus": true, "path": true, "cdpath": true,
+		"fpath": true, "fignore": true, "mailpath": true, "manpath": true, "module_path": true, "psvar": true, "watch": true,
+		"match": true, "mbegin": true, "mend": true, "reply": true, "signals": true, "histchars": true, "prompt": true,
+		"funcstack": true, "funcfiletrace": true, "funcsourcetrace": true, "functrace": true, "options": true,
+		"parameters": true, "commands": true, "aliases": true, "galiases": true, "saliases": true, "functions": true,
+		"builtins": true, "reswords": true, "history": true, "historywords": true, "jobdirs": true, "jobstates": true,
+		"jobtexts": true, "dirstack": true, "modules": true, "nameddirs": true, "userdirs": true, "usergroups": true,
+		"errnos": true, "sysparams": true, "termcap": true, "terminfo": true, "mapfile": true, "epochtime": true,
+		"langinfo": true, "keymaps": true, "widgets": true, "patchars": true, "words": true, "compstate": true}
+)
+
+// larkPlainTest: test / [ arguments that are only string and file tests, as in [[ ]]; zsh evaluates the operands of
+// the others (-t, -v, -eq, …) as arithmetic or a subscript. An expansion is only an operand, right after a literal
+// operator, never in an operator's place.
+func larkPlainTest(args []*syntax.Word) bool {
+	unary := []string{"-n", "-z", "-e", "-f", "-d", "-s", "-r", "-w", "-x"}
+	binary := []string{"=", "==", "!="}
+	words := make([]string, len(args))
+	dynamic := make([]bool, len(args))
+	for i, w := range args {
+		words[i], dynamic[i] = executionWord(w)
+	}
+	for i, w := range words {
+		switch {
+		case dynamic[i]:
+			prevOp := i > 0 && !dynamic[i-1] && (slices.Contains(unary, words[i-1]) || slices.Contains(binary, words[i-1]))
+			nextOp := i+1 < len(words) && !dynamic[i+1] && slices.Contains(binary, words[i+1])
+			if !prevOp && !nextOp {
+				return false
+			}
+		case strings.HasPrefix(w, "-") && !slices.Contains(unary, w) && w != "-a" && w != "-o":
+			return false
+		}
+	}
+	return true
+}
+
+// larkConstantSafeCommands: commands that cannot set a variable of the shell running them: programs that run in a
+// process of their own, and builtins that only print or test. Not printf / print (-v), read, set, or any modifier.
+var larkConstantSafeCommands = map[string]bool{"cd": true, "echo": true, "true": true, "false": true, ":": true,
+	"test": true, "[": true, "pwd": true, "cat": true, "tee": true, "ls": true, "head": true, "tail": true,
+	"grep": true, "egrep": true, "fgrep": true, "rg": true, "wc": true, "sort": true, "uniq": true, "cut": true,
+	"tr": true, "column": true, "jq": true, "awk": true, "sed": true, "paste": true, "seq": true, "date": true,
+	"sleep": true, "rm": true, "mkdir": true, "rmdir": true, "cp": true, "mv": true, "touch": true, "basename": true,
+	"dirname": true, "diff": true, "comm": true, "nl": true, "fold": true, "base64": true}
+
+// larkShellUppercase: bash's and zsh's uppercase parameters that the shell itself rewrites while a command runs (cd,
+// =~, read, getopts, every command or second). A literal binding of one says nothing about its later value.
+var larkShellUppercase = map[string]bool{"PWD": true, "OLDPWD": true, "FUNCNAME": true, "REPLY": true, "OPTARG": true,
+	"OPTIND": true, "LINENO": true, "RANDOM": true, "SRANDOM": true, "SECONDS": true, "EPOCHSECONDS": true,
+	"EPOCHREALTIME": true, "HISTCMD": true, "PIPESTATUS": true, "MATCH": true, "MBEGIN": true, "MEND": true,
+	"COPROC": true, "MAPFILE": true, "DIRSTACK": true, "GROUPS": true, "PPID": true, "UID": true, "EUID": true,
+	"SHLVL": true, "COLUMNS": true, "LINES": true, "TTYIDLE": true, "ERRNO": true}
+
+// larkShellManaged: a name bash or zsh sets or acts on by itself.
+func larkShellManaged(name string) bool {
+	return name == "_" || name == "IFS" || strings.HasPrefix(name, "BASH") || larkShellUppercase[name] ||
+		larkShellLowercase[name] || strings.HasSuffix(name, "_functions") || strings.HasPrefix(name, "zsh_") ||
+		strings.HasPrefix(name, "zle_") || strings.HasPrefix(name, "comp")
+}
+
+// larkConstantNameOK: a lowercase name or one capital letter that the shell never sets itself.
+func larkConstantNameOK(name string) bool {
+	return larkConstantName.MatchString(name) && !larkShellManaged(name)
+}
+
+// larkLiteralConstants returns the variables provably constant over the whole command, for routes in loops and lists
+// that larkVariableScopeStable rejects (#16491). A constant is assigned exactly once, as `NAME=value` on its own, by a
+// top-level statement that always runs: a `;` / newline statement, or an `&&` operand after only `true`, `:` or, in the
+// first statement, `cd /tmp`. Its value is a literal of
+// [A-Za-z0-9_-], so it cannot change which route a call reaches; its name is one the shell never sets itself
+// (larkConstantNameOK); it is not used before that statement, and no other assignment of it appears. Every command in
+// it must be one that cannot set a variable (larkConstantSafeCommands), every assignment in it must be to such a name,
+// and nothing in it may evaluate arithmetic, a subscript or a non-string test; otherwise there are no constants at all.
+func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]string {
+	out := map[string]string{}
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil {
+		return out
+	}
+	type constant struct {
+		value string
+		at    syntax.Pos
+	}
+	candidates := map[string]constant{}
+	assigned := map[string]int{} // every assignment of each name, anywhere
+	used := map[string][]syntax.Pos{}
+	opaque := false
+	alwaysRuns := func(st *syntax.Stmt, first bool) bool {
+		call, ok := st.Cmd.(*syntax.CallExpr)
+		if !ok || st.Negated || st.Background || st.Coprocess || len(st.Redirs) > 0 || len(call.Assigns) > 0 {
+			return false
+		}
+		words := make([]string, len(call.Args))
+		for i, arg := range call.Args {
+			var dynamic bool
+			if words[i], dynamic = executionWord(arg); dynamic {
+				return false
+			}
+		}
+		switch {
+		case len(words) == 1 && (words[0] == "true" || words[0] == ":"):
+			return true
+		case len(words) == 2 && words[0] == "cd" && words[1] == "/tmp" && first:
+			// Only /tmp, as the command's first statement: every user may enter it, and nothing before it runs.
+			info, err := os.Stat("/tmp")
+			return err == nil && info.IsDir()
+		}
+		return false
+	}
+	candidate := func(st *syntax.Stmt) {
+		call, ok := st.Cmd.(*syntax.CallExpr)
+		if !ok || len(call.Args) != 0 || len(call.Assigns) != 1 || len(st.Redirs) > 0 || st.Background || st.Coprocess || st.Negated {
+			return
+		}
+		a := call.Assigns[0]
+		if a.Append || a.Index != nil || a.Array != nil || a.Naked || a.Value == nil || a.Name == nil {
+			return
+		}
+		value, dynamic := executionWord(a.Value)
+		if dynamic || !larkConstantValue.MatchString(value) || !larkConstantNameOK(a.Name.Value) {
+			return
+		}
+		candidates[a.Name.Value] = constant{value: value, at: st.Pos()}
+	}
+	for si, st := range tree.Stmts {
+		// A top-level `a && b && NAME=v` is a left-nested chain; walk it in order.
+		var chain []*syntax.Stmt
+		for cur := st; ; {
+			b, ok := cur.Cmd.(*syntax.BinaryCmd)
+			if !ok || b.Op != syntax.AndStmt || cur.Negated || cur.Background || cur.Coprocess || len(cur.Redirs) > 0 {
+				chain = append([]*syntax.Stmt{cur}, chain...)
+				break
+			}
+			chain = append([]*syntax.Stmt{b.Y}, chain...)
+			cur = b.X
+		}
+		for i, part := range chain {
+			if !slices.ContainsFunc(chain[:i], func(prev *syntax.Stmt) bool { return !alwaysRuns(prev, si == 0) }) {
+				candidate(part)
+			}
+		}
+	}
+	syntax.Walk(tree, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.Assign:
+			opaque = opaque || n.Index != nil // a[expr]=v evaluates expr as arithmetic
+			if n.Name != nil {
+				assigned[n.Name.Value]++
+				// Only ordinary names: IFS changes how constants split, PATH what runs, and an assignment to one of zsh's
+				// integer specials (HISTSIZE=e) evaluates its value as arithmetic.
+				opaque = opaque || !larkConstantNameOK(n.Name.Value) || larkExecutableEnv[n.Name.Value]
+			}
+		case *syntax.WordIter:
+			if n.Name != nil {
+				assigned[n.Name.Value] += 2 // a loop variable is never a constant
+			}
+		case *syntax.ParamExp:
+			if n.Index != nil || n.Slice != nil {
+				opaque = true // a subscript or offset is arithmetic
+			}
+			if n.Param != nil {
+				if n.Exp != nil || n.Excl || n.Names != 0 {
+					assigned[n.Param.Value] += 2 // ${NAME:=x}, ${!NAME}: assigns or reads indirectly
+				}
+				used[n.Param.Value] = append(used[n.Param.Value], n.Pos())
+			}
+		case *syntax.ArithmCmd, *syntax.ArithmExp:
+			// Arithmetic can assign (`$((N=1))`), also through a variable whose value is an expression.
+			opaque = true
+		case *syntax.UnaryTest:
+			// Only string and file tests: zsh evaluates other operands (-t, -v, …) as arithmetic or a subscript.
+			switch n.Op {
+			case syntax.TsExists, syntax.TsRegFile, syntax.TsDirect, syntax.TsRead, syntax.TsWrite, syntax.TsExec,
+				syntax.TsNoEmpty, syntax.TsEmpStr, syntax.TsNempStr, syntax.TsNot:
+			default:
+				opaque = true
+			}
+		case *syntax.BinaryTest:
+			switch n.Op {
+			case syntax.TsMatchShort, syntax.TsMatch, syntax.TsNoMatch, syntax.AndTest, syntax.OrTest:
+			default:
+				opaque = true // -eq and the like evaluate arithmetic; =~ fills match variables
+			}
+		case *syntax.ExtGlob:
+			opaque = true // zsh glob qualifiers can run code
+		case *syntax.Lit:
+			// An unquoted or double-quoted [ is a glob or, after $name in zsh, a subscript evaluated as arithmetic; a $
+			// left in a literal is an expansion the parser did not read ($~name turns on zsh's glob qualifiers).
+			if strings.Contains(n.Value, "[") && n.Value != "[" || strings.Contains(n.Value, "$") {
+				opaque = true
+			}
+		case *syntax.FuncDecl, *syntax.DeclClause, *syntax.LetClause, *syntax.CoprocClause:
+			opaque = true
+		case *syntax.Redirect:
+			if n.N != nil && strings.Trim(n.N.Value, "0123456789") != "" {
+				opaque = true // {name}>file assigns name
+			}
+		case *syntax.CallExpr:
+			if len(n.Args) == 0 {
+				return true
+			}
+			// Only a program in a process of its own cannot set this shell's variables. bash and zsh have many builtins
+			// and precommand modifiers that can (print -v, zstyle -s, set -A, emulate -c, noglob eval, repeat, …):
+			// every command must be a gated one, lark-cli, or a name known to be one of those programs or an inert
+			// builtin; anything else leaves no constants.
+			name, dynamic := executionWord(n.Args[0])
+			if dynamic || gateOf(gates, name) < 0 && !isLarkCLI(name) && !larkConstantSafeCommands[name] {
+				opaque = true
+			}
+			if name == "test" || name == "[" {
+				opaque = opaque || !larkPlainTest(n.Args[1:])
+			}
+		}
+		return true
+	})
+	if opaque {
+		return map[string]string{}
+	}
+	for name, c := range candidates {
+		if assigned[name] != 1 || slices.ContainsFunc(used[name], func(p syntax.Pos) bool { return p.Offset() < c.at.Offset() }) {
+			continue
+		}
+		out[name] = c.value
+	}
+	return out
 }
 
 // scalarParameter is a plain quoted scalar expansion, not "$@", an array
@@ -729,6 +1203,16 @@ func wordExpandsToMany(word *syntax.Word) bool {
 // splitGateArguments reports an expansion that can produce extra arguments.
 // Redirect targets are excluded.
 func splitGateArguments(cmd string) bool {
+	return splitGateArgumentsMode(cmd, false)
+}
+
+// splitGateArgumentsForGate permits only the narrowly proven unquoted read-query case below. lark-cli's flags keep
+// the stricter splitGateArguments check.
+func splitGateArgumentsForGate(cmd string) bool {
+	return splitGateArgumentsMode(cmd, true)
+}
+
+func splitGateArgumentsMode(cmd string, unmatchedReadQuery bool) bool {
 	cmd = strings.TrimSpace(cmd)
 	for {
 		stripped := false
@@ -755,7 +1239,10 @@ func splitGateArguments(cmd string) bool {
 		if !ok {
 			return true
 		}
-		for _, arg := range call.Args {
+		for i, arg := range call.Args {
+			if unmatchedReadQuery && gateUnmatchedReadQuery(call.Args, i) {
+				continue
+			}
 			found = wordExpandsToMany(arg)
 			if found {
 				break
@@ -766,19 +1253,67 @@ func splitGateArguments(cmd string) bool {
 	return found
 }
 
+// gateUnmatchedReadQuery proves that an unquoted '?' in the final argument cannot produce a different request.
+// The method is a literal GET/HEAD, the route is absolute, no other glob or expansion occurs, the pathname glob has
+// no match, and the whole word still passes the deletion-action boundary with its query retained as path text. With
+// no match, an ordinary shell leaves the bytes alone; nullglob removes only the final route, leaving no request, and
+// failglob runs nothing. A match, a later argument or a non-read method stays unknown.
+func gateUnmatchedReadQuery(args []*syntax.Word, index int) bool {
+	if index < 2 || index != len(args)-1 {
+		return false
+	}
+	method, methodDynamic := executionWord(args[index-1])
+	if methodDynamic || method != "GET" && method != "HEAD" {
+		return false
+	}
+	value, dynamic := executionWord(args[index])
+	if dynamic || !strings.HasPrefix(value, "/") || !strings.Contains(value, "?") || strings.ContainsAny(value, "*[") {
+		return false
+	}
+	_, query, found := strings.Cut(value, "?")
+	if !found || !strings.Contains(query, "=") || !larkBypassSafe(larkCall{Method: method, Path: strings.ToLower(value)}) {
+		return false
+	}
+	matches, err := filepath.Glob(value)
+	return err == nil && len(matches) == 0
+}
+
+// expandKnownVars replaces $NAME and ${NAME} with their values in vars. A bare $NAME followed by `:` or `[` stays: zsh
+// applies a modifier ($F:s/x/y/) or a subscript there, so the value is not what the shell would use.
+func expandKnownVars(s string, vars map[string]string) string {
+	if !strings.Contains(s, "$") {
+		return s
+	}
+	var out strings.Builder
+	last := 0
+	for _, m := range shellVarRef.FindAllStringIndex(s, -1) {
+		ref := s[m[0]:m[1]]
+		val, ok := vars[strings.Trim(ref, "${}")]
+		if bare := !strings.HasPrefix(ref, "${"); bare && m[1] < len(s) && (s[m[1]] == ':' || s[m[1]] == '[') {
+			ok = false
+		}
+		if strings.HasPrefix(ref, "${") && !strings.HasSuffix(ref, "}") {
+			ok = false // ${NAME followed by an operator, not a plain reference
+		}
+		out.WriteString(s[last:m[0]])
+		if ok {
+			out.WriteString(val)
+		} else {
+			out.WriteString(ref)
+		}
+		last = m[1]
+	}
+	out.WriteString(s[last:])
+	return out.String()
+}
+
 // parseGateCall reads `METHOD PATH [BODY] [curl flags]` after a gated command.
 func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, cwd string) (larkCall, string, bool) {
 	expand := func(s string) (string, bool) {
 		if !strings.Contains(s, "$") {
 			return s, true
 		}
-		out := shellVarRef.ReplaceAllStringFunc(s, func(m string) string {
-			k := strings.Trim(m, "${}")
-			if val, ok := vars[k]; ok {
-				return val
-			}
-			return m
-		})
+		out := expandKnownVars(s, vars)
 		return out, !strings.Contains(out, "$")
 	}
 	// A literal method is part of the call's identity: even a previously
@@ -808,7 +1343,7 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 	if len(rest) > 0 && (strings.HasPrefix(rest[0], "{") || strings.HasPrefix(rest[0], "[")) {
 		c.Body, rest, hasData = rest[0], rest[1:], true
 	} else if len(rest) > 0 && strings.HasPrefix(rest[0], "@") {
-		c.Body, c.relFile, rest = readBodyFile(rest[0][1:], cwd), !filepath.IsAbs(rest[0][1:]), rest[1:]
+		c.Body, c.fileBody, c.relFile, rest = readBodyFile(rest[0][1:], cwd), true, !filepath.IsAbs(rest[0][1:]), rest[1:]
 		hasData = true
 	}
 	for i := 0; i < len(rest); i++ {
@@ -862,12 +1397,17 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 				if p == "-" {
 					query = val
 					c.queryUnknown = true
+				} else if p == "" {
+					return larkCall{}, "读不到 --url-query 文件 ：empty path", false
+				} else if p == os.DevNull {
+					// Curl reads os.DevNull as an empty file; skip opening the device node.
 				} else {
 					relative = !filepath.IsAbs(p)
 					if relative {
 						p = filepath.Join(cwd, p)
 					}
-					b, err := os.ReadFile(p)
+					p = filepath.Clean(p)
+					b, err := readSafeRegularBodyFile(p)
 					if err != nil {
 						return larkCall{}, "读不到 --url-query 文件 " + p + "：" + err.Error(), false
 					}
@@ -902,6 +1442,10 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 			queryFragment = hasFragment
 		case "-d", "--data", "--data-raw", "--data-urlencode":
 			hasData = true
+			if (name == "-d" || name == "--data") && strings.HasPrefix(val, "@") ||
+				name == "--data-urlencode" && hasCurlDataFile(val) {
+				c.fileBody = true
+			}
 			if c.Body == "" {
 				c.Body = val
 			}
@@ -960,11 +1504,273 @@ func gateCurlQueryEscape(s string) string {
 	return out.String()
 }
 
+const maxBodyFileBytes = 1 << 20
+
+// hasCurlDataFile reports whether a curl --data-urlencode value uses @file or name@file form.
+func hasCurlDataFile(val string) bool {
+	before, _, ok := strings.Cut(val, "@")
+	return ok && !strings.Contains(before, "=")
+}
+
+// isLarkFilter reports whether words invokes a pure output-only filter from larkFilters, rejecting
+// flags that write files, execute programs, or mutate system state (#8413).
+func isLarkFilter(words []string) bool {
+	if len(words) == 0 || !larkFilters[words[0]] {
+		return false
+	}
+	return isSafeFilterInvocation(words[0], words[1:])
+}
+
+func isSafeFilterInvocation(base string, args []string) bool {
+	switch base {
+	case "sort":
+		writesFile, runsProgram := inspectSortArgs(args)
+		return !writesFile && !runsProgram
+	case "date":
+		return safeDateArgs(args)
+	case "uniq":
+		return safeUniqArgs(args)
+	default:
+		return true
+	}
+}
+
+func sortExecutesProgram(words []string) bool {
+	if len(words) == 0 || filepath.Base(words[0]) != "sort" {
+		return false
+	}
+	_, runsProgram := inspectSortArgs(words[1:])
+	return runsProgram
+}
+
+func isLongFlagPrefix(flag, full string, minPrefix int) bool {
+	name, _, _ := strings.Cut(flag, "=")
+	return len(name) >= minPrefix && strings.HasPrefix(full, name)
+}
+
+func inspectSortArgs(args []string) (writesFile, runsProgram bool) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		if strings.HasPrefix(arg, "--") {
+			if isLongFlagPrefix(arg, "--output", 3) {
+				writesFile = true
+				if !strings.Contains(arg, "=") {
+					i++
+				}
+				continue
+			}
+			if isLongFlagPrefix(arg, "--compress-program", 4) {
+				runsProgram = true
+				if !strings.Contains(arg, "=") {
+					i++
+				}
+				continue
+			}
+			if !strings.Contains(arg, "=") {
+				switch arg {
+				case "--key", "--field-separator", "--temporary-directory", "--buffer-size",
+					"--batch-size", "--parallel", "--random-source", "--sort", "--files0-from":
+					i++
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && len(arg) > 1 {
+			for j := 1; j < len(arg); j++ {
+				switch arg[j] {
+				case 'o':
+					writesFile = true
+					if j+1 == len(arg) {
+						i++
+					}
+					j = len(arg)
+				case 'k', 't', 'T', 'S':
+					if j+1 == len(arg) {
+						i++
+					}
+					j = len(arg)
+				}
+			}
+		}
+	}
+	return writesFile, runsProgram
+}
+
+func safeDateArgs(args []string) bool {
+	afterEnd := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !afterEnd && arg == "--" {
+			afterEnd = true
+			continue
+		}
+		if !afterEnd && strings.HasPrefix(arg, "--") {
+			if isLongFlagPrefix(arg, "--set", 3) {
+				return false
+			}
+			if !strings.Contains(arg, "=") {
+				switch arg {
+				case "--date", "--file", "--reference", "--rfc-3339":
+					i++
+				}
+			}
+			continue
+		}
+		if !afterEnd && strings.HasPrefix(arg, "-") && len(arg) > 1 {
+			for j := 1; j < len(arg); j++ {
+				switch arg[j] {
+				case 's':
+					return false
+				case 'd', 'f', 'r':
+					if j+1 == len(arg) {
+						i++
+					}
+					j = len(arg)
+				case 'I':
+					// GNU date -I accepts an optional attached argument (such as -Iseconds);
+					// it never consumes the next word, and characters in that value are not flags.
+					j = len(arg)
+				}
+			}
+			continue
+		}
+		// GNU and BSD date treat any positional operand not starting with '+' as a clock-setting timestamp.
+		if !strings.HasPrefix(arg, "+") {
+			return false
+		}
+	}
+	return true
+}
+
+// safeUniqArgs rejects uniq invocations with a second positional operand, which uniq writes to as its output file.
+func safeUniqArgs(args []string) bool {
+	operands := 0
+	afterEnd := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !afterEnd && arg == "--" {
+			afterEnd = true
+			continue
+		}
+		if !afterEnd && strings.HasPrefix(arg, "--") {
+			if !strings.Contains(arg, "=") {
+				switch arg {
+				case "--skip-fields", "--skip-chars", "--check-chars":
+					i++
+				}
+			}
+			continue
+		}
+		if !afterEnd && strings.HasPrefix(arg, "-") && len(arg) > 1 {
+			for j := 1; j < len(arg); j++ {
+				switch arg[j] {
+				case 'f', 's', 'w':
+					if j+1 == len(arg) {
+						i++
+					}
+					j = len(arg)
+				}
+			}
+			continue
+		}
+		operands++
+		if operands > 1 {
+			return false
+		}
+	}
+	return true
+}
+
+func isVirtualFSPath(p string) bool {
+	clean := filepath.ToSlash(filepath.Clean(p))
+	for _, root := range []string{"/proc", "/dev", "/sys"} {
+		if clean == root || strings.HasPrefix(clean, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func readSafeRegularBodyFile(p string) ([]byte, error) {
+	if isVirtualFSPath(p) {
+		return nil, errors.New("virtual filesystem path")
+	}
+	base := filepath.Base(p)
+	if base == "" || base == "." || base == ".." || base == string(filepath.Separator) {
+		return nil, errors.New("not a regular file")
+	}
+	resolvedDir, err := filepath.EvalSymlinks(filepath.Dir(p))
+	if err != nil {
+		return nil, err
+	}
+	if isVirtualFSPath(resolvedDir) || isVirtualFSPath(filepath.Join(resolvedDir, base)) {
+		return nil, errors.New("virtual filesystem path")
+	}
+	root, err := os.OpenRoot(resolvedDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	// Confirm the pinned root inode still matches a canonical non-virtual directory after open.
+	afterDir, err := filepath.EvalSymlinks(resolvedDir)
+	if err != nil || isVirtualFSPath(afterDir) {
+		return nil, errors.New("virtual filesystem path")
+	}
+	afterInfo, err := os.Lstat(afterDir)
+	if err != nil {
+		return nil, err
+	}
+	rootInfo, err := root.Stat(".")
+	if err != nil || !os.SameFile(afterInfo, rootInfo) {
+		return nil, errors.New("parent directory changed during open")
+	}
+	st, err := root.Lstat(base)
+	if err != nil {
+		return nil, err
+	}
+	if st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular() || dataless(st) {
+		return nil, errors.New("not a regular file")
+	}
+	if st.Size() > maxBodyFileBytes {
+		return nil, errors.New("file too large")
+	}
+	f, err := openKnowledgeFile(root, base)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fst, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fst.Mode().IsRegular() || !os.SameFile(st, fst) {
+		return nil, errors.New("not a regular file")
+	}
+	if fst.Size() > maxBodyFileBytes {
+		return nil, errors.New("file too large")
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxBodyFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > maxBodyFileBytes {
+		return nil, errors.New("file too large")
+	}
+	return b, nil
+}
+
 func readBodyFile(p, cwd string) string {
+	if p == "" || p == "-" {
+		return "（读不到 " + p + "）"
+	}
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(cwd, p)
 	}
-	b, err := os.ReadFile(p)
+	p = filepath.Clean(p)
+	b, err := readSafeRegularBodyFile(p)
 	if err != nil {
 		return "（读不到 " + p + "）"
 	}

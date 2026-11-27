@@ -7,8 +7,10 @@ cd server && go test ./... && go vet ./...                    # server
 SIM=$(scripts/app/sim-boot.sh "Persona Tests <issue number>")              # your own simulator, slim boot ("Simulators")
 cd apple && xcodegen generate -q && xcodebuild -project Persona.xcodeproj -scheme Persona \
   -destination "id=$SIM" test   # iOS unit tests (ChatStore, ScreenParser, phone tool registry)
-./scripts/app/sim.sh [-openSession <machine>/<id>]                    # run in simulator, pair automatically to the real hub
+./scripts/app/sim.sh [--with-watch] [-openSession <machine>/<id>]     # run in simulator, pair automatically to the real hub ("Development builds")
 cd apple/Packages/PersonaKit && swift test                             # PersonaKit unit tests: directly on Mac, no App build or simulator
+cd apple/Packages/PersonaWire && swift test -Xswiftc -warnings-as-errors # PersonaWire unit tests, warnings as errors as CI runs them
+cd apple/Packages/PersonaModuleAPI && swift test -Xswiftc -warnings-as-errors # module contract and registry (#13432, docs/apple/ios.md "Modules")
 python3 -B scripts/test/test_sim_boot.py                               # sim-boot.sh (fake xcrun / simslim, no simulator)
 n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modules/*' | sort); do grep -q unittest "$f" || continue; n=$((n + 1)); (cd "$(dirname "$f")" && python3 -B -m unittest -q "$(basename "$f" .py)") || failed="$failed $f"; done; echo "$n suites, failed:${failed:- none}"; [ -z "$failed" ]   # all Python suites in scripts/, like CI (it skips files that never mention unittest); any failure exits nonzero
 ```
@@ -39,13 +41,27 @@ gh workflow run pr-needs-issue.yml --ref main -f pr_number=<number>  # metadata 
 ```
 
 The seven required lanes have independent reusable workflows. **CI required** rejects failed, cancelled, missing or unexpectedly skipped
-selected jobs. iOS/Watch contributes to that aggregate; **Mac (non-blocking)** reports its actual independent result without
+selected jobs, and any run whose path selection or guards did not succeed; it reads only the jobs' results, so it checks out one
+commit, not the whole history. iOS/Watch contributes to that aggregate; **Mac (non-blocking)** reports its actual independent result without
 `continue-on-error` and is not part of the aggregate. An unselected lane is never claimed as tested.
 All workflows except the image publisher accept only `workflow_dispatch` and, for reusable platform workflows, `workflow_call`.
 The image and Release publisher additionally retains `push` for **`v*` release tags**: Docker installations use its version and `latest` images, and the same tag gets a GitHub Release.
 No branch push or PR starts it. The issue-link Action also requires explicit dispatch from the default branch with a PR number.
 
-The `changes` job runs repository/commit privacy and path safety, including `scripts/ci/guards.sh`, migration freeze, sleep ratchet and the no-CallKit source guard (`docs/operations/release.md`, "No CallKit").
+The `changes` and `guards` jobs and the scripts shards need history and the base, so they fetch every branch and tag, but with file
+contents only at the tip (`filter: blob:none`, #12753); a full fetch would also download every screenshot branch's files, which no
+check reads. Git fetches a blob a check reads at the base when it asks for it, without a token (checkout has dropped it by then; the
+repository is public). One such fetch is quick; a new check there that reads many old files one at a time (`git blame`, `git log -p`
+over a long range) would wait on each, so it belongs in a job with a full checkout. A fetch can also fail, and then `git show` and
+`git cat-file -e` fail just as they do for a file the base does not have. So a check that reads a file at the base decides whether
+the file is there from the tree (`git ls-tree <base> -- <path>`, which needs no fetch) and fails when a listed file cannot be read;
+counting a failed read as "not at the base" would skip a never-raise comparison and pass. The migration freeze, the sleep and
+prompt-language ratchets and the counts table's base read work this way.
+
+The `guards` job (**Manual repository guards**) runs `scripts/ci/guards.sh`: repository/commit privacy and path safety, migration freeze, the sleep, web font, prompt-language and wire types ratchets ("Count ratchets" below; the wire types ratchet uses the runner's Go, which fetches the toolchain `server/go.mod` names, so every run counts it whatever lanes were selected) and the no-CallKit source guard (`docs/operations/release.md`, "No CallKit").
+It checks against the base the `changes` job (**Manual path selection**) resolved, so one run has one base. No platform lane needs it:
+a failing guard says nothing about the platforms, so their results still come out, and **CI required**, which needs both
+jobs, fails and names the guards. Before #12725 the guards ran inside `changes` and a guard failure skipped every lane.
 An edit, deletion or rename of a `.sql` file already on the base under `server/internal/db/migrations/hub` or
 `server/internal/db/migrations/manager` fails that check. Comment-only and whitespace-only edits pass; add a new migration instead.
 A new file is named by the UTC second it is written, `YYYYMMDDHHMMSS_<name>.sql` in lower case (`$(date -u +%Y%m%d%H%M%S)_<name>.sql`),
@@ -57,13 +73,16 @@ count may stay the same or go down, never up, and a new file starts at zero. Com
 `// sleep-ok: <reason>` (the reason must be non-empty) do not count. `python3 scripts/ci/sleep_ratchet.py --update` only lowers
 the baseline; it refuses to raise a count or to add a file that still sleeps. See `docs/lessons/testing.md`.
 Each file under `web/src` has a committed count of hard-coded pixel font sizes (`text-[13px]`, `text-[length:13px]`, inline `fontSize: 13`, CSS `font-size: 13px`; tests excluded) in `scripts/ci/web_font_baseline.json`. `python3 scripts/ci/web_font_ratchet.py` (in `scripts/ci/guards.sh`) fails when a count rises or a new file has one; `--update` only lowers the baseline. Use the named sizes (`text-xs`, `text-sm`, the `--chat-*` variables) instead; the role table is `docs/design/task-cards.md` section 4.1.
+Both are count ratchets: only a rise fails, and lowering a baseline is tidying ("Count ratchets" below).
 Both ratchets also run when a PR merges (#7977): `scripts/hooks/merge-pr.sh` runs `scripts/ci/changed_ratchets.py --base <base sha> --head <head sha>`.
 It reads only the Go test files and `web/src` sources the PR changes and the baseline entries it edits, from Git objects and as the
 squash merge leaves them (`git merge-file` where `main` changed a file too), without a checkout. Each ratchet's own counting and
-messages apply, the sleep ratchet's never-raise check included, and the merge is refused when a file ends further from its baseline
-than `main` has it. A file `main` already fails is left to its own fix unless the PR moves it further; a file both sides change in
-conflicting ways is left to the merge, which refuses it. A new per-file ratchet goes into that script's `RATCHETS` too.
-With `lanes=auto`, the base defaults to `origin/main`; an explicit `base` is resolved to a commit before guards and path selection.
+messages apply, the sleep ratchet's never-raise check included, and the merge is refused only when a file ends further above its
+baseline than `main` has it; a file the PR leaves under its baseline merges, as the checkers pass it. A file `main` already fails is
+left to its own fix unless the PR moves it further; a file both sides change in conflicting ways is left to the merge, which refuses
+it. It does not hold a changed file to its count at the base the way the checkers' `--base` mode does. A new per-file ratchet goes
+into that script's `RATCHETS` too.
+With `lanes=auto`, the base defaults to `origin/main`; an explicit `base` is resolved to a commit once, in `changes`, and the guards use that commit.
 
 Dispatched code runs with `contents: read`, without persisted checkout credentials, private config or new secrets. The issue-link
 workflow uses metadata-only write permissions and runs only from the default branch. Image and GitHub Release publishing have `packages: write` and `contents: write` only in the publish job. CI concurrency keys use the repository/branch and full/lanes selection; dispatches in the same group cancel stale
@@ -77,12 +96,28 @@ self-hosted capacity as part of these controls.
 
 Server keeps four independent shards (at most two concurrent runners): browser/node, hub/voice/assistant, all other packages, and
 formatting/vet/build/Windows/SDK checks. Every package from `go list ./...` belongs to exactly one test shard, including future packages.
-Browser tests remain isolated from other packages. `internal/node` runs its roughly 2,400 serial tests in two concurrent `go test -run '^(…)$'` partitions, split round-robin from `go test -list`; every test runs in exactly one, and each partition keeps the shard's `-p` and `-timeout=10m`. `internal/assistant` (about 4,100 serial tests, 570 s in one process on the hub machine) runs the same way in three partitions in the managers shard beside `internal/hub` and `internal/voice` (#7644). `scripts/test/go_partitions.py` holds the packages and their split for the shards, the release build (`scripts/release/build_hub_release.py`) and `scripts/test/test-server.sh` on the hub machine (through `scripts/test/go_test_partitioned.py`, which runs the partitions beside the other packages with the caller's flags and prints each partition's output whole when it ends), so they cannot drift; each serial run had outgrown the ten-minute limits (#5328, #5594, #7644). A plain `go test ./internal/node`, as a PR verifier runs it (no `-run`, `-list`, `-bench`, `-fuzz`, `-v`, `-json`, coverage or profiles), splits itself the same way: its `TestMain` lists the tests and runs them round-robin in concurrent processes of the test binary, half the CPUs and at most six by default, prints each one's output whole when it ends, keeps go test's cache log, and fails when any partition does (`server/internal/node/partition_test.go`, #5734). A run with `-run` (the partitions above, a helper process) or with `NODE_TEST_PARTITIONS=1` runs in one process; `NODE_TEST_PARTITIONS=n` sets how many share the tests. Go module/build caches are keyed by exact Go version, shard, dependency sums and
+Browser tests remain isolated from other packages. `internal/node` runs its roughly 4,300 serial tests in six concurrent `go test -run '^(…)$'` partitions, split round-robin from `go test -list`; every test runs in exactly one, and each partition keeps the shard's `-p` and `-timeout=10m`. Its two partitions reached about 569 and 572 seconds of test time before the unchanged 600-second lane stopped them with subtests still advancing (#12256); its tests mostly wait (about 1,060 s of test time on under a core and a half), and on the CI machine three partitions took 360 s where six take 186 s, without removing a test or lengthening a timeout. `internal/assistant` (about 4,100 serial tests, 570 s in one process on the hub machine, #7644; about 7,300 by 2026-11-22) runs the same way in eight partitions in the managers shard beside `internal/hub` and `internal/modules/voice`: its tests wait on timers and Postgres, not the CPU, and with the test database's `fsync` off eight finished within 165 s where three took up to 500 s. `internal/hub` (about 2,000 tests, 283 s in one process beside them) runs in three (112 s). In the other shard `internal/devices` (about 580 tests, 260 s in one process) and `internal/extmgr` (about 1,040 tests, 145 s) run in three partitions each (106 s and 59 s), beside the shard's other packages at `-p 4`. `scripts/test/go_partitions.py` holds the packages and their split for the shards, the release build (`scripts/release/build_hub_release.py`) and `scripts/test/test-server.sh` on the hub machine and `scripts/test/check-fast.sh`'s Go checks (through `scripts/test/go_test_partitioned.py`, which runs the partitions beside the other packages with the caller's flags and prints each partition's output whole when it ends; it also expands a `./<dir>/...` that covers `internal/assistant` with `go list`, leaving `internal/node` found there to its own split, #12765), so they cannot drift; each serial run had outgrown the ten-minute limits (#5328, #5594, #7644). A plain `go test ./internal/node`, as a PR verifier runs it (no `-run`, `-list`, `-bench`, `-fuzz`, `-v`, `-json`, coverage or profiles), splits itself the same way: its `TestMain` lists the tests and runs them round-robin in concurrent processes of the test binary, half the CPUs, at least three and at most six by default, prints each one's output whole when it ends, keeps go test's cache log, and fails when any partition does (`server/internal/node/partition_test.go`, #5734). A run with `-run` (the partitions above, a helper process) or with `NODE_TEST_PARTITIONS=1` runs in one process; `NODE_TEST_PARTITIONS=n` sets how many share the tests. Go module/build caches are keyed by exact Go version, shard, dependency sums and
 source inputs, with same-shard fallback keys; `-count=1` keeps test execution uncached. Test-event summaries report the slowest real
 tests, rather than inferring runtime from `Sleep` inside fake-clock tests, and end by repeating each failed test with its first lines
 (from its panic, if any; a timeout's names the test still running) so an excerpt that keeps only a log's head and tail, like the
 PR watcher's report, still says what failed (`scripts/ci/server-shards.py`). The full scripts suite splits complete sorted discovery
 across two independently isolated jobs, scheduled one at a time; each has its own synthetic HOME and mock ports.
+
+The Web suite's default file-worker count is `min(8, max(availableParallelism() - 1, 1))` (`web/test-scheduling.ts`, #12458). Vitest otherwise starts one fork per host CPU; under a CPU quota that can leave dozens of processes initializing isolated module graphs at once. On main `c866b5a377`, Node 24.22.3 under a four-CPU quota and 8 GiB memory limit, the complete suite took 79.06 seconds with two concurrency-sensitive assertion failures at the default 63 workers, 448.08 seconds with three workers, and 175.31 seconds with eight workers. Eight preserved all 1,542 files / 17,295 assertions (one skip in each count) and reduced CPU time from 2,301.7 to 1,660.4 seconds. The cap does not remove or reuse isolated test environments, and explicit project or command-line `maxWorkers` settings still override it for diagnosis. Measure wall time, test counts and failures together when changing it; the 600-second Web test deadline stays unchanged.
+
+`npm test` and check-fast's `vitest related` path run through `web/scripts/process-group.mjs`, which gives the test command a new process group on POSIX (an owned process tree on Windows) and starts an independent watchdog outside that group. The watchdog reaps the group after normal completion, on a deadline, or if the supervising parent disconnects, including after the parent's `SIGKILL`; the session also kills its own group if its watchdog disappears. The default deadline is 600,000 ms, and `PERSONA_WEB_TEST_TIMEOUT_MS` or `--timeout-ms` changes it (zero disables only the deadline, not exit cleanup). Cleanup escalates from `SIGTERM` to `SIGKILL` after 250 ms and reports failure unless the owned group is empty. `web/scripts/process-group.node-test.mjs` creates its own worker and control fixtures for normal exit, timeout and abrupt parent death; it never selects processes by command name or by an existing terminal, bot or Agent session.
+
+**Why tests stay uncached.** check-fast, the CI shards, `scripts/test/test-server.sh` and the bounded runner's
+commands below all pass `-count=1`, so no Go test result comes from Go's test cache; the build cache still serves
+compilation. The test cache reuses a result while the test binary, its flags and the environment variables and files
+the test process itself consulted are unchanged, and it checks those files only inside the module root, `server/`
+(`go help test`). Server tests read inputs outside it (`spec/fixtures/` alone in 19 packages; `schema/`, `sdk/go/`,
+`docs/`, `apple/` and `android/` sources), which are exactly the paths check-fast routes to the packages that read
+them, and guards such as `internal/archguard` read the module through a child `go list`, whose reads are never
+recorded. A cached run then repeats an old `ok` for a change that breaks the test, while a hit saves only seconds per
+package, and only on packages the change did not reach
+(`docs/lessons/testing.md`, "Go's test cache can repeat a pass the change broke").
+A plain `go test` while editing is fine; a result reported as verification comes from `-count=1`.
 
 Android runs two independently isolated lanes, both at once: `lint-build-test-0` (checker tests, all-module lint, the debug APK and
 the first of two disjoint sorted feature-test shards) and `test-1` (core tests, the second feature shard, and platform/app tests).
@@ -90,7 +125,10 @@ The parts are balanced by measured task time, and each lane runs its parts in on
 share runs once per lane rather than once per part (#3056). Module declarations are dynamically partitioned; unknown module prefixes
 use a fallback part, while unsupported declarations fail rather than skip coverage. Every module's complete test selector retains all
 variants. Gradle workers remain bounded; build and public Robolectric dependency caches do not contain private config. Per-lane Gradle
-profiles and test/lint reports are uploaded for diagnosis. Local entry points without lane options still run complete verification.
+profiles and test/lint reports are uploaded for diagnosis. An independent exact-source result job then verifies run-bound receipts from
+both lanes and publishes one aggregate artifact even when a lane fails or disappears; missing receipts are recorded as unavailable rather
+than as passes or ordinary test failures, and release signing consumes only a verified aggregate. Local entry points without lane
+options still run complete verification.
 The chat module's single-JVM tests use a 1 GB heap because their Robolectric native-graphics classes accumulate resource/theme
 tables in the shared test process. A two-worker lane can run at most two test JVMs, a 2 GB combined test-heap cap when both use that
 setting; the 4 GB Gradle daemon and non-heap allocations are separate.
@@ -98,13 +136,21 @@ setting; the 4 GB Gradle daemon and non-heap allocations are separate.
 | Platform / reusable workflow | Local entry | Checks | Hosted runner | Planning duration (warm / cold) |
 | --- | --- | --- | --- | --- |
 | Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, the programs and tunnel tests with `server/build-tags.txt`, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
-| Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest, production build and privacy | ubuntu-latest | 2–4 / 4–7 min |
-| Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion checker tests, translations/literals, token and motion ratchets, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056) |
+| Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest in two disjoint native file shards, production build and privacy; the core-only build and suite use the same two shards | ubuntu-latest, two lanes | 2–4 / 4–7 min |
+| Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion checker tests, translations/literals, token and motion ratchets, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056); each shard's job timeout is 90 minutes, while individual checks retain their own timeout and final verdict |
 | Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | PersonaKit/iOS/Watch/HTML and Mac build/unit tests, and in the iOS lane the isolation lint with its own tests (`scripts/test/isolation-lint.sh`; `docs/apple/performance.md`, "Isolation lint") and the no-CallKit check of the device and simulator apps (`scripts/release/check_no_callkit.py`; `docs/operations/release.md`, "No CallKit"); synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | queue and execution measured separately |
+| iOS 18.6 compatibility / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios18` | offline `PersonaTests` at the deployment floor, with iPhone 16 Pro and iPad layout coverage, separate HTML batches and a test-host restart check | macos-15 (arm64), Xcode 26.3 | one runner for up to 150 minutes per manual dispatch, about 8.86 GB to download a missing runtime |
 | Scripts/docs / `.github/workflows/scripts-tests.yml` | `scripts/ci/scripts.sh` | every Python script test, doc/code paths and index, layout/shell/Python compatibility, privacy-rule regression, catalog/translation/token checks, actionlint, issue-link logic, website worker | ubuntu-latest | 2–4 / 4–7 min |
 | Rust core / `.github/workflows/core-test.yml` | `scripts/ci/core.sh` | rustfmt, clippy, the shared core's unit tests and the fixtures it implements (directly and through its runtime), generated codecs up to date, the HarmonyOS NAPI binding linted for `aarch64-unknown-linux-ohos` with its `ohos` feature (the Rust target only, no SDK and nothing linked) and its notices, the generated ArkTS codec against the real runtime on the host (`harmony/tests/core-host/`, Node.js from the workflow) plus the two existing ArkTS core tests, release library, an independently compiled C11 client and dynamic-export check on Linux (not Swift/Apple ABI); the Android lane also builds it for `:core:rustcore`'s binding tests | ubuntu-latest | measured on the first runs |
 | Runtimes / `.github/workflows/runtimes-test.yml` | `scripts/ci/runtimes.sh` | TypeScript SDK typecheck/test/portability, every runtime integration's npm tests | ubuntu-latest | 2–4 / 4–7 min |
 | Container and Release / `.github/workflows/release.yml` | `scripts/ci/hub-image.sh` | amd64 build; isolated Compose Postgres, HTTP/TLS health, pairing, web, admin isolation, file ownership/0600; publication remains amd64+arm64, then a version-tag run creates the GitHub Release | ubuntu-latest | 8–15 / 15–30 min |
+
+Web's hosted workflow sets `PERSONA_WEB_TEST_SHARD` to `1/2` and `2/2` on two independent runners, with `fail-fast: false`.
+Vitest partitions both the ordinary and core-only test files natively, so their shard union is the complete suite and the
+partitions do not overlap. The small Node regression wrapper runs only on shard 1; local `npm test` and `npm run
+test:core-only` leave the variable unset and still run everything. An explicitly requested local shard uses the same
+contract. Each hosted lane repeats lint, typecheck and the production/core-only builds: this reduces wall-clock latency at
+the cost of repeated runner setup and compilation, not by dropping tests or raising a deadline (#14907).
 
 These planning estimates predate sharding and are not measured success claims; use job timestamps and each script's PASS/FAIL/TIMEOUT
 durations for an actual run. Parallelism reduces wall-clock latency but can increase total runner minutes through repeated setup and
@@ -118,10 +164,33 @@ are stored. Server Go and Robolectric caches restore with `actions/cache/restore
 repository's 10 GB cache. The initial SPM/runtime download makes a cold Apple run materially slower. Cache and parallelization work remains
 tracked in #1214; cache-based test substitution is not allowed.
 
+To check the iOS deployment floor (#10261), dispatch **Apple CI** with lane **ios18**
+(`gh workflow run apple-test.yml -f lane=ios18`). The regular CI workflow continues to select `ios`.
+Selecting `lane=ios` runs both the main `apple` job (`scripts/ci/apple.sh ios`, 120-minute limit) and the parallel
+`ios-core-only` job (`scripts/ci/apple.sh ios-core-only`, 60-minute limit, building `PERSONA_CORE_ONLY=YES` without
+feature modules) under the same `apple` workflow call, so a failure in either blocks **CI required** (#14496);
+`gh workflow run apple-test.yml -f lane=ios-core-only` runs the core-only build on its own.
+The compatibility job uses the runner's installed iOS 18.6 image, or requests that exact version from Xcode.
+Each dispatch resolves packages, builds the ad-hoc test host, and runs the offline suites with the regular iOS fixture exclusions.
+The About version comparisons use their English visual configuration and disposable screenshot directories. The compact suite
+runs on the iPhone, and the regular-width suite runs on a stock 10th-generation iPad with the same 18.6 runtime.
+On Apple silicon with Xcode 27.2, the runtime installed and dependency caches warm, one local run took 28 minutes,
+including 9 minutes 52 seconds for the build and 10 minutes 53 seconds for the main iPhone test batch.
+The step summary records each dispatch's build and test time separately from queue time.
+Each xcresult must identify the selected iOS 18.6 device. The job scans each xcodebuild test log for host restarts and fails when a restart is unexpected or unattributed,
+even when Xcode reports passing totals.
+The two known `PersonaCoreContinuityTests` restarts in `testEveryContinuityFixtureAgainstNativeChatStore`
+and `testNativeAndCoreShadowReplayMatchesFoldAndReloadRules` are reported individually.
+Some Xcode versions record the known aborts as failed cases and exit 65. The result check reports them as crashes
+when the case, allocator diagnostic, restart and xcresult signal agree. An assertion failure in either test still fails
+the job. Failure artifacts include the batch logs and xcresults.
+
 Local prerequisites: Go from `server/go.mod`, Node from `web/.nvmrc`, Python 3.9+ (CI uses 3.11), Docker/Compose for server/image,
 `pip install -r scripts/ci/requirements.txt` and `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12` for scripts, Bun 1.4.2 for
-TypeScript SDK. Android needs JDK 21 and SDK `platforms;android-37.0` / `build-tools;37.0.0` plus GNU timeout; Apple needs macOS 26,
-Xcode 26.0.1, XcodeGen and rsync. Local scripts fail on missing required tools rather than claim success. They do not deploy or publish.
+TypeScript SDK. Android needs JDK 21 and SDK `platforms;android-37.0` / `build-tools;37.0.0` plus GNU timeout.
+Both Apple lanes need XcodeGen and rsync. The regular lane needs macOS 26 and Xcode 26.0.1. For the iOS 18.6 lane use
+Xcode 26.3 on macOS 15, or set `DEVELOPER_DIR` to a newer local Xcode with the same 18.6 simulator image.
+Local scripts fail on missing required tools rather than claim success. They do not deploy or publish.
 Android also needs NDK `29.0.14206865` and the pinned Rust `aarch64-linux-android` / `x86_64-linux-android` targets to package
 `:core:rustcore-android` (its setup, ABI/size report and owned-device fixture replay: `android/core/rustcore-android/README.md`).
 The retired native-Mac offline-test entitlement preparation was removed with that target. iOS keeps its shipping entitlements and local ad-hoc test signing; no legacy profile-stripping helper is run.
@@ -129,6 +198,49 @@ On Apple failure, collect the simulator UDID log, boot command/status log, insta
 disk space, and any xcresult bundles before deleting the owned simulator. The workflow uploads the allowlisted diagnostics as
 `apple-<lane>-diagnostics-<run id>-<attempt>` artifacts for seven days. Source/configuration files, keys and result-bundle symlink targets
 are excluded. Do not infer a simulator boot timeout's cause without its diagnostics, add automatic retries, or extend the boot deadline.
+The app-hosted readiness probes also have a bounded live observer. On both the ordinary iPhone probe and the separate
+regular-iPad TypeScaleTests probe it samples only an app executable under that probe's owned UDID, checks the disposable
+app/test-bundle architecture and ad-hoc signature, and captures scoped launchd/runtime-mount events before Xcode timeout
+cleanup can shut down the device. The iPad has its own `regular-readiness-context.json` and `live-regular-readiness/`
+artifact directory; neither scope nor host samples can be borrowed from the iPhone. NDJSON is filtered while it is read;
+the observer starts a bounded live stream before xcodebuild and records its `live-launch.json` / `live-launch.status.txt`
+separately from the final `log show`. The first host PID/stack observation precedes the serial product checks; a process
+query's completion, failure and timeout are distinct from a successful empty PID set. Launch-service events may use an
+observed host PID in a structured field or explicit `pid` text; an unrelated number is not an anchor. Unmatched candidates
+are bounded and reconsidered when a later host observation supplies a PID. Runtime events require the owned UDID, and
+secret/environment text is never exported. The stream drains stdout/stderr and owns a separate process group so its stop
+can reap descendants without signalling the watcher or xcodebuild. A separately bounded watchdog holds only the validated
+log PGID and the watcher PID; if the watcher is killed before its `finally`, it closes that registered group. Launchd lines
+need not contain both the UDID and bundle ID. An absent process, missing log, Shutdown during cleanup,
+valid signature, or runtime mount alone is not a launch-cause verdict. The observer does not change signing, test selection,
+runtime or the 900-second deadlines. The iPad observer starts with deterministic unavailable status/host/product records,
+then replaces them atomically as bounded collection completes. Its separate process group gets a short bounded stop drain;
+if collection still cannot finish, the group is reaped without leaking its detached collectors. Probe and result-inspection
+deadline regressions require status and evidence to exist and every recorded watcher PID to be gone.
+The ordinary `AboutVersionRegularVisualTests` invocation has its own observation-only `live-regular-visual/` directory
+and `regular-visual-context.json`, recorded immediately before its unchanged `xcodebuild`. Its scoped stream therefore
+does not inherit the preceding readiness invocation's horizon. A 15-second sampler records only PID, parent PID, state
+and process name for the owned Persona host and a debugserver validated under it or its owned launchd_sim. A debugger
+first seen before the host remains associated with this invocation through its process start time while continuously
+present, including when its launcher exits. Once a successful snapshot observes it absent, or its identity is rejected,
+current owned ancestry is required before accepting it again. This applies even when its new parent is 1 or its
+one-second `lstart` timestamp is unchanged; an equal timestamp alone cannot transfer ownership. The timestamp is
+internal only and never exported. Matching `ps -M` output is bounded and runs only after an immediate PID, start-time
+and ancestry check.
+Each sample retains its own private identity snapshot while revalidation refreshes the shared current map. A process exit
+or a missing/changed identity at either check writes explicit unavailable evidence rather than aborting later sampling or
+final collection. A further check after temporary capture replaces a mismatching successful result with an explicit
+identity-mismatch status and unavailable evidence. Portable `ps` cannot atomically validate a PID and read its threads, so
+a replacement between those kernel operations remains an inherent race; the checks narrow it rather than claim atomic
+capture. Command arguments and private identity values are not exported.
+One read-only `launchctl print system` after 60 seconds projects only the synthetic bundle
+ID and its allowlisted `state`, `pid`, `runs` and `last exit code` fields; raw arguments, programs, paths, environment
+and arbitrary values are never exported. The visual command tees its actual stdout/stderr to `ios-about-regular.log`
+without losing its exit status. Once that invocation has started, failure diagnostics require the log, publish an
+unavailable status and fail closed if it cannot be included rather than treating the allowlist entry as evidence.
+launch verdict; an absent process or event, a shutdown and a terminal `-308` do not establish a root cause. The whole
+observer remains inside the visual test's existing 600-second step and does not boot, shut down or otherwise manage a
+simulator. The ordinary build remains 1800 seconds and each readiness probe remains 900 seconds.
 A maintainer-approved `gh run rerun --failed` runs the original commit; it cannot acquire diagnostic code added by a later commit.
 
 Deliberate boundaries: web `compatibility.live.test.ts` needs an isolated live hub/token and explicitly skips its one probe without them.
@@ -136,7 +248,8 @@ The offline web tests still run completely. Apple explicitly excludes five fixtu
 `NotificationServiceTests/opensWhatTheRelayDelivered`, `VideoFileTests/nativeVideoPlaysSeeksAndCleansUp`,
 `VideoFileResourceTests/realHTTPReadsMiddleTailAndRejectsChangedRevision`, `AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard`)
 and five `ExtensionStreamSnapshotTests` Mac cases needing a live extension/hub pair. Apple result parsing rejects any unexpected skip and
-requires the four design-system suites; UI suites, visionOS, Persona Link and SSH-package integration remain outside this lane.
+requires the four design-system suites. PersonaSSH's native package integration tests run before the app builds, using a temporary
+loopback SSH server and mock hub; their failure fails the lane. UI suites, visionOS and Persona Link remain outside this lane.
 Full simulator screenshots, device/instrumentation/UI suites, real Agent/phone integrations, release entitlements,
 production signing and publication need devices, explicit lab inputs or secrets; retain the manual checks below.
 The stock iOS unit-test simulator is granted Reminders access for the synthetic CI app, and `TEST_RUNNER_PERSONA_EVENTKIT_ROUNDTRIP=1`
@@ -156,7 +269,113 @@ repository runners if present. Do not uninstall machine services or delete their
 
 A test binary never touches the developer's real `~/.persona`: the packages that start Persona processes (`internal/hub`, `internal/assistant`) run through `testhome.Main` in their `TestMain`, with `HOME` set to an empty directory and `PERSONA_HOME` unset, and the run fails if anything created `<HOME>/.persona`. A test that needs state sets `PERSONA_HOME` (`t.Setenv`) to a directory of its own, as the two assistant-process tests in `internal/hub` do. A test started by hand with `go test` used to rewrite the real hub's assistant `manager.json` and `secret.key` (the next run's assistant then never came up); `scripts/test/test-server.sh` runs with a throw-away `HOME` already. Go tools a test starts keep the developer's Go settings and caches: `testhome` pins `GOENV`, `GOPATH`, `GOMODCACHE` and `GOCACHE` to their values under the real home (#5191).
 
+Nor does `internal/node` reach the developer's herdr or herdr-core: its `TestMain` points `HERDR_SOCKET_PATH` and `HC_SOCKET` at sockets that do not exist and unsets `HERDR_SESSION` / `HC_SESSION`, as it does for Orca and the other engines. Tests run from a herdr pane inherit the live server's `HERDR_SOCKET_PATH`, and the tests that build a node's default hosts pinged it and subscribed to its events (#13549); a test that wants a herdr gives its client the fake's socket.
+
 Server packages with database tests call `dbtest.Main` in their `TestMain`: the binary gets a database of its own next to `PERSONA_TEST_DATABASE_URL` and drops it at the end (`docs/lessons/workflow.md`). The databases `dbtest` makes commit asynchronously (`synchronous_commit = off`): a commit is visible to other sessions at once, and only a crash of that Postgres could lose the last ones, so a migration does not wait for a WAL flush per transaction. In `internal/db`, a test that needs a new database with the current schema calls `migratedDatabase(t, sets)`, which copies a template the binary migrated once per set (`dbtest.Template`, `dbtest.Clone`); a test that starts from an older state uses `freshDatabase` and migrates. `open(t)` and `db.TruncateForTest` empty everything their `TRUNCATE ... CASCADE` reaches, but truncate only the tables that have a row (`docs/lessons/testing.md`, "Test database setup"). The CI Postgres and hub databases keep their own settings.
+
+## Affected checks
+
+A PR does not need every lane: `scripts/ci/affected.sh` runs only what its diff against the merge base with
+`origin/main` reaches, and `scripts/ci/full.sh` runs every portable Linux lane for `main` after a merge and the
+nightly run. Each lane keeps about eight CPUs busy, so full.sh runs one lane per eight CPUs it may use at a time
+(`PERSONA_CI_FULL_JOBS` overrides): on eight CPUs, six lanes at once took each two to three times as long and timed
+out the tests that measure their own deadlines. `PERSONA_CI_FULL_EXCLUDE` leaves lanes out for a runner that runs them
+elsewhere (the gate runs web on a second slot when one is free).
+
+- **Go**: `scripts/ci/affected.py` takes the server and `sdk/go` packages with a changed file (a non-Go file counts for
+  the package whose directory holds it), every server package that imports one of them directly or through others, and
+  every package whose tests import any of those (`go list` in `server/`, under a second). check-fast's plan adds the
+  packages whose tests read a changed fixture, schema, doc or client source, and the repo-wide guard tests. They run
+  against a disposable Postgres the way a server shard does (`scripts/ci/server-shards.py affected`, the partitioned
+  packages in their partitions), with `go vet` for Linux and Windows.
+- **Everything else** is check-fast's own plan for the same diff (`scripts/test/check-fast.sh --base <ref> --no-server-go`):
+  the privacy scan, the scripts suites a path selects, the web tests `vitest related` picks, site, sdk/ts, integrations,
+  the ratchets.
+- **Full lanes instead**: a change to what selects or runs the checks (`affected.py`'s `FULL`: `scripts/ci/`, the
+  workflows, `go.mod`/`go.sum`, `build-tags.txt`, the test environment helpers) or one check-fast cannot plan.
+
+```sh
+python3 scripts/ci/affected.py plan                     # what this branch would run
+python3 scripts/ci/affected.py gates                    # the whole-lane gate groups that cover it
+git diff --name-only origin/main... | python3 scripts/ci/affected.py plan --changed-from -
+bash scripts/ci/affected.sh                             # run it (Docker for Postgres)
+bash scripts/ci/full.sh [server-node web ...]           # every lane, or some, one per eight CPUs at a time
+```
+
+`gates` names the existing lanes (`server-build`, `server-managers`, `server-node`, `server-other`, `web`, `scripts`,
+`runtimes`) for a runner that takes whole lanes: the server shards holding an affected package, `web` and `runtimes`
+when the lane selection picks them, and `scripts` when check-fast plans more than the server's Go checks; `all` for a
+full run. The test Postgres runs with `fsync`, `synchronous_commit` and `full_page_writes` off: a disposable database
+needs no durability, and on a busy disk every commit waiting for the disk made the database the slowest part of the
+server shards.
+
+## Count ratchets
+
+A count ratchet keeps a committed number per file or entry and fails only when a count **rises** (#12785). Before, most of them also
+failed when a count fell below its baseline, so a change that took out a sleep had to lower the baseline in the same PR, and one that
+forgot broke `main` for everyone (#2761, #5635, #6676, #10045, #11808). From 2026-11-07 to 2026-11-22, 110 of the 185 commits on
+`main` that edited the portable baselines below only lowered them, each a chance to conflict with another PR. Main verification's
+repair worker may not edit baselines (`docs/operations/main-verification.md`), so such a failure was never repaired automatically.
+
+| Ratchet | Counts | Baseline | Check | Lowered by |
+| --- | --- | --- | --- | --- |
+| Fixed sleeps | `time.Sleep` calls per Go test file under `server/` and `sdk/go/` | `scripts/ci/sleep_baseline.json` | `scripts/ci/sleep_ratchet.py` (guards, check-fast, merge) | `--update` |
+| Web font sizes | hard-coded px font sizes per `web/src` file | `scripts/ci/web_font_baseline.json` | `scripts/ci/web_font_ratchet.py` (guards, merge) | `--update` |
+| Prompt language | CJK prompt templates without language handling | `scripts/ci/prompt_language_baseline.json` | `scripts/ci/prompt_language_ratchet.py` (guards) | `--update` |
+| Migration enums | columns the migrations leave unchecked, named `table.column` per set: a text column named `*status`, `*kind`, `*state`, `*role`, `*phase` or `*outcome` with no CHECK on it (one a later migration adds, `NOT VALID` included, counts), and a `json` / `jsonb` column with neither a CHECK on it nor an `opaque: <reason>` comment on its line, the lines just before it or `COMMENT ON COLUMN`; replayed from the SQL with no database, generated columns left out, no ignore marker (`docs/plans/plan-typed-core.md`, step P9) | `scripts/ci/migration_enum_baseline.json` | `scripts/ci/migration_enum_check.py` (guards) | `--update` |
+| Hub hard-coded text | CJK string literals per hub and command-line file | `server/internal/i18n/hardcoded-baseline.json`, `server/internal/i18n/hardcoded-terminal-baseline.json` | `TestHardcodedChineseBaseline`, `TestHardcodedTerminalBaseline` (server lane) | `UPDATE_I18N_BASELINE=1` |
+| Web hard-coded text | CJK strings per `web/src` file | `web/src/i18n/hardcoded-baseline.json` | `web/src/i18n/catalog.test.ts` (web lane) | `UPDATE_I18N_BASELINE=1` |
+| Prompt sizes | bytes per instruction section, tool description and supervision event | `server/internal/assistant/testdata/prompt_sizes.json` | `TestPromptSizeRatchet` (server lane) | `PROMPT_SIZE_UPDATE=1` |
+| Inbox book readers | places per file that reach the Inbox's in-memory book | `inboxBookReaders` in `server/internal/archguard/inbox_slice_test.go` | `TestInboxBookStaysInTheInbox` (server lane) | by hand |
+| Domain rules | the domain rules' findings per package in server code that predates them, and the application and library packages' exported-field records, named primitive types (adapters' too), `DoneAt` / `DoneBy` writes and uses of an adapter's `Wire` (`docs/server/architecture.md` "Domain model"; its strict rule `contract-bare-id` takes no count and reads the Wire types row's baseline instead: a bare `*ID` field of a contract package fails unless its name is in `scripts/ci/wire_types_baseline.json`) | `server/internal/archguard/testdata/domain_layers/baseline.txt` | `TestDomainLayers` (server lane; check-fast, with its merge base) and each declared package's `rules_test.go` | `DOMAIN_LAYERS_UPDATE=1`, which also takes an allowance whose type landed into its count; `scripts/test/name_freezes.py pending --write --only domain_layers_baseline`, on a checkout of `main`, drops one whose PRs closed; `scripts/test/name_freezes.py moves` carries a moved package's lines |
+| Wire types | weak types in the contract packages (`server/internal/archguard/testdata/contracts.txt`) and the hub's handlers: bare `string` enum and `*ID` fields, `map[string]any`, `json.RawMessage`, `*time.Time` / `*bool` / `*string` `*Error` fields, inline `map[string]any{"type": ...}` events, `writeJSON(map...)` calls, `.Call(ctx, "literal", ...)`; counted with `go/parser` by `server/internal/archguard/wirecount`, as names with an occurrence count and no package, so a type that moves between packages is neutral; the baseline's `wide` counts (the same field names over every non-test package under `server/internal`, modules included) also make a field lifted into a contract package from a Core package or a module neutral, while a field written anew raises both and fails; a rename is a new name (lower the old, add an exception) | `scripts/ci/wire_types_baseline.json` | `scripts/ci/wire_types_ratchet.py` (guards job); `scripts/hooks/merge-pr.sh` counts the merge result with `scripts/ci/merge_wire_types.py` and refuses a weak name the base does not already fail; with a base, both refuse an exception that adds room (an exception may only replace a name the change removed) | `--update`; an exception that must stay goes in the baseline's `exceptions` with a PR reference and a reason |
+| Android text | hard-coded Chinese / Japanese and English UI text per Kotlin file | each module's `i18n-baseline.json` and `i18n-english-baseline.json` | `scripts/app/android_i18n_check.py` (Android lane, check-fast) | `--update` |
+| Android tokens | hard-coded values and Material 3 components per file | `android/core/designsystem/tools/token-baseline.json` | `scripts/app/android_token_baseline.py` (Android lane, check-fast) | `--update-baseline` |
+| Android motion | literal animation specs per file | `android/core/designsystem/tools/motion-baseline.json` | `scripts/app/android_motion_baseline.py` (Android lane, check-fast) | `--update-baseline` |
+| Android slot order | design-system components that end after their slot | `android/core/designsystem/tools/slot-order-baseline.json` | `scripts/app/android_slot_order.py` (Android lane, check-fast) | `--update-baseline` |
+
+- **Only a rise fails.** A count at or under its baseline passes; under it, the check says so and how to lower the baseline.
+  A change that takes sleeps, font sizes or hard-coded text out need not touch the baseline at all, which keeps baseline files out
+  of most PRs and out of their conflicts. A file or entry the baseline does not have starts at zero, so a new file cannot bring any.
+- **With a base, a changed file is held to the lower of its baseline and its count at the merge base.** The sleep, web font and
+  prompt-language ratchets take `--base` (default `CI_BASE_SHA`; a base that does not resolve is an error) and read the merge base
+  through `scripts/ci/ratchet_base.py`. A file the change touches may not rise above its count there, even where the baseline still
+  has room, so the slack a fall leaves under a baseline cannot be spent by the next change. An entry the merge base's baseline does
+  not have yet is the change's own (a file the web font's `--update` let take sizes that moved to it, or a raise the sleep ratchet
+  refuses anyway), and only the baseline holds it. check-fast's diff mode runs the sleep ratchet with `--base` (it does not run
+  the other two), and hosted CI sets `CI_BASE_SHA` for its guards job. archguard's `TestDomainLayers` reads `CI_BASE_SHA`
+  itself and holds the domain counts more strictly: every count, one the merge base's baseline lacks included, may not
+  rise above its count at the merge base, and a name or allowance its lists add over the merge base's, or a count line
+  raised or added so that it gives more room than there, fails unless it followed code that moved
+  (`scripts/test/name_freezes.py moves`; `docs/server/architecture.md` "The rules and their checks").
+  check-fast's diff mode sets it to its merge base for the repo-wide guards, while the hosted server lane, a shallow
+  clone without it, holds them to the baseline only.
+- **With no base, only the baseline holds**, so a full-tree run on `main` checks only `count > baseline`. There is no fallback to
+  the clone's `origin/main`: it is only as fresh as the last fetch, and main verification pins `HEAD` by SHA without moving it
+  (`docs/operations/main-verification.md`), so right after a merge it usually names the parent and would hold the merged files to
+  the parent's counts, a limit `merge-pr.sh` does not apply. A hosted run on `main` gets `origin/main` of its own fresh clone, so
+  its merge base is `HEAD`. The never-raise checks on the baseline files themselves keep their defaults (the clone's default
+  branch for the sleep ratchet, `origin/main` for the prompt-language ratchet). The other ratchets inside `go test`, vitest and the
+  Android scripts know no base and check only the baseline, as does `changed_ratchets.py` at merge time.
+- **Merge time does not hold a file to its merge-base count.** `scripts/hooks/merge-pr.sh` (through `changed_ratchets.py`, which
+  covers the sleep and web font ratchets) refuses a merge that raises a count above its baseline, but one that raises a count back
+  into the room a fall left merges. check-fast's diff mode refuses that for the sleep ratchet; for the web font and prompt-language
+  ratchets only a hosted run on the branch or a run with `--base` does. A merge-time refusal is a separate change.
+- **Lowering is tidying anyone can run.** `python3 scripts/ci/lower_baselines.py` runs each ratchet's own update (all of the table
+  but the Inbox book readers, a Go literal lowered by hand) and keeps the result only if it lowered: no raised number, no new entry, no new file (a removed entry or file is a count gone to zero). A ratchet whose
+  update fails, or would raise or add (a count above its baseline, the web font's moved file, a prompt-size move between pieces), is
+  put back and reported, and the run exits 1; one whose tools are missing here (`go`, or the web's installed packages) is skipped. `--dry-run`
+  writes nothing, `--only sleep,web-font` picks ratchets and `--list` names them. Run it on an up-to-date `main`, weekly or whenever
+  you like, and send the result as a PR of its own; nothing depends on it running.
+- **Not count ratchets.** The permission allowlists stay strict, because a stale line there is a standing permission:
+  `server/internal/hub/testdata/hub_routes_allowed.txt`, `server/internal/hub/testdata/hub_store_methods.txt`, the
+  `server/internal/hub/testdata/route_scopes.txt` golden, `TestMovedClustersStayOut`'s names, `inboxBookBridge`, and the
+  defect sites, `server/internal/archguard/testdata/recover_sites.txt` and
+  `server/internal/archguard/testdata/catch_sites.txt` (`docs/server/architecture.md` "Validated and sealed"). Name lists
+  such as `scripts/test/doc_sections_known.txt` and `scripts/test/committed_screenshots_baseline.txt` keep their own rules.
+- **Apple's ratchets** (`TokenRatchetTests` and the other PersonaTests baselines, `scripts/test/apple_perf_baseline.json`,
+  `scripts/test/apple_state_initial_values_baseline.json`, `scripts/test/apple_isolation_baseline.json`) still fail when a count falls
+  below its baseline; they change in a separate PR verified on a Mac.
 
 ## Bounded server package verification
 
@@ -237,9 +456,13 @@ python3 scripts/heavy_slot.py status    # every kind's slots and who holds them
 ```
 
 - **Who takes one**: `scripts/app/sim.sh` for its xcodebuild (`xcode`), `scripts/app/android.sh` for every Gradle build
-  (`gradle`), and `scripts/check-fast.sh` for each `go test` / `go build` (`go`) and vitest (`web`) step. check-fast
-  takes the slot outside the step's timeout, so time in the queue is not a hung check; a wait past the slot timeout is
-  a TIMEOUT that says the check never ran.
+  (`gradle`), and `scripts/check-fast.sh` for each `go test` / `go build` / `go vet` (`go`) and vitest (`web`) step; its
+  gofmt step compiles nothing and takes none. check-fast takes the slot outside the step's timeout, so time in the queue
+  is not a hung check; a wait past the slot timeout is a TIMEOUT that says the check never ran. While a step waits,
+  check-fast prints the helper's waiting line on stderr at once, and its line when the slot comes free (`check-fast: go
+  test ./...: waiting for a go slot (3 busy, up to 45m)`); the summary counts the wait apart from the check's own time
+  (`PASS     server go test ./... (95s, plus 140s waiting for a go slot)`). With `PERSONA_HEAVY_SLOTS=0`, or without
+  `python3`, check-fast and `android.sh` run the command directly, without the helper.
 - **A slot** is an exclusive `fcntl.flock` on a lock file in a per-user cache directory
   (`~/Library/Caches/persona/slots` on macOS, else `$XDG_CACHE_HOME/persona/slots` or `~/.cache/persona/slots`;
   `PERSONA_HEAVY_SLOT_DIR` moves it). The helper holds the lock and runs the command as its child. The lock is not
@@ -258,12 +481,84 @@ python3 scripts/heavy_slot.py status    # every kind's slots and who holds them
   process, stdio, environment and exit status. On Windows, which has no `fcntl`, it says so in one line and runs the
   command without a slot.
 
-CI does not set `PERSONA_HEAVY_SLOTS=0`. No hosted lane (`.github/workflows/`, `scripts/ci/`) and none of the PR
-watcher's checks run a script that takes a slot: they run their commands directly, so they never queue behind local
-builds. A runner has one job, where a slot would only make that job's own steps wait for each other, so a lane that
-starts to run one of these scripts sets `PERSONA_HEAVY_SLOTS=0`; `scripts/test/test_heavy_slot.py` fails until it does.
-The `xcode-slot` runner that `scripts/release/release.sh` and `sim.sh`'s Rust core build use when it is installed
-(`PERSONA_XCODE_RUNNER`, `docs/operations/release.md`) is a separate lock.
+CI and the PR and main watchers never wait for a slot. A runner has one job, where a slot would only make that job's
+own steps wait for each other, so a hosted lane (`.github/workflows/`, `scripts/ci/`) or a watcher step that runs a
+script taking a slot sets `PERSONA_HEAVY_SLOTS=0` for it. One does today: `scripts/ci/affected_drift.py`, which the
+Scripts tests job runs through its test, starts `check-fast.sh --dry-run`. `scripts/test/test_heavy_slot.py` fails for
+one that does not; it reads the files git tracks among the CI lanes, `scripts/operations/` (the watchers' scripts,
+example configs and services) and both watcher skills under `.claude/skills/`. The `xcode-slot` runner that
+`scripts/release/release.sh` and `sim.sh`'s Rust core build use when it is installed (`PERSONA_XCODE_RUNNER`,
+`docs/operations/release.md`) is a separate lock.
+
+## Development builds
+
+`scripts/app/sim.sh` builds for a development loop, not for shipping (#10713). Nothing it changes reaches CI
+(`scripts/ci/apple.sh`), release (`scripts/release/release.sh`) or the UI tests (`scripts/app/ui-test.sh`):
+
+- **No watch app or share extension.** It generates the project with `PERSONA_LEAN_DEV_BUILD=YES`, so
+  `apple/lean-dev-build.yml` takes the watch app (with its widgets and the watchOS `PersonaWire`) and the share extension
+  out of the iPhone app's dependencies, which `apple/watch-and-share.yml` adds; `Shared/` is then compiled for the iPhone
+  app and its other extensions only. The app needs neither: WatchConnectivity finds no watch app, and Share › Persona is
+  not offered. `--with-watch` builds and embeds both, for anything on the watch or in the share sheet
+  (`./scripts/app/sim.sh --with-watch -openSession <machine>/<id>`); a later build without it first takes them out of the
+  app again, since Xcode leaves in place the watch app it no longer embeds. Nothing else sets the switch, so
+  `xcodegen generate` alone builds the whole project, and every other script that generates it (CI, release, the UI,
+  share-sheet and performance tests) clears it first, whatever the shell exported; `scripts/test/test_apple_dev_build.py`
+  finds them by searching. After `sim.sh`, the project Xcode opens is the lean one until the next `xcodegen generate`,
+  and its Rust core has the simulator slice only (the last item).
+- **The offline hosted test host has its own graph, not the development switch.** `scripts/ci/apple.sh` first generates
+  the unchanged whole `Persona.xcodeproj` for package resolution and the unsigned device build, which still covers the
+  embedded Watch app, Watch widgets and Share extension. Before `build-for-testing`, it resolves that whole spec once
+  with `xcodegen dump`, and `scripts/ci/apple_offline_project.py` creates a separate `PersonaOfflineUnitTests.xcodeproj`
+  in the disposable snapshot. Only this project omits targets the unit-test host cannot reach: Watch/Share, Vision,
+  UI tests and the separate About accessibility host. It retains the real `Persona` host, Widgets, Notify, all package
+  dependencies, and the exact `TEST_HOST` / `BUNDLE_LOADER`. The ordinary `ios`, `ios18` and regression lanes compile
+  every `PersonaTests` source. The explicitly focused `ios-focused` and `ios-ipad-diagnostic` lanes instead pass a
+  named source profile: `-only-testing` restricts execution, not Swift target membership, so the generator validates
+  and includes their executed suites, the TypeScale/regular-About probes, About shared source and `FakeHub` helper.
+  The iPad diagnostic profile also retains its two later HTML batches. Missing files or moved suite declarations fail
+  generation; a reduced project is never produced silently. No profile sets `PERSONA_LEAN_DEV_BUILD`, changes a test
+  selector or alters the default, UI-test or About schemes. Device and simulator DerivedData remain separate because
+  their SDK, signing, graph and testability settings differ. `scripts/test/test_apple_offline_project.py` checks both
+  profiles and generates and inspects the full project when `xcodegen` is installed; the ordinary project still
+  embeds all four targets.
+- **A lean build says when it skipped what the branch changed.** The watch app compiles all of `apple/Shared/` and the
+  `PersonaWire` package (`apple/Packages/PersonaWire/`) for watchOS 10, the share extension compiles them as an app
+  extension, and no hosted CI runs on a PR, so with lean builds alone a change that breaks either would first fail on
+  `main`. When the branch, against its merge base with `origin/main` and with uncommitted and new files counted, changes
+  `apple/Shared/`, `apple/Packages/PersonaWire/`, `apple/PersonaWatch/`, `apple/PersonaWatchWidgets/` or
+  `apple/PersonaShare/`, `sim.sh` prints one line naming the check (`scripts/app/lean-build-note.sh`):
+  `./scripts/app/sim.sh --with-watch` when `Shared/`, `PersonaWire` or the share extension changed (the extension has
+  no scheme of its own), and for the watch alone the cheaper build of its scheme, which works on the lean project too,
+  with the config's Xcode and in an `xcode` slot as `sim.sh` builds:
+  `(eval "$(python3 scripts/persona_config.py env)" && python3 scripts/heavy_slot.py run --kind xcode -- xcodebuild -project apple/Persona.xcodeproj -scheme PersonaWatch -destination 'generic/platform=watchOS Simulator' -derivedDataPath build/DerivedData build)`.
+- **The commit stamp is Release only.** "Stamp the commit" (`apple/project.yml`, the iPhone and Vision apps) does nothing
+  in Debug. A Debug iPhone build gets "Stamp the debug build info" instead (#12926, `scripts/app/stamp_debug_build_info.sh`):
+  the `PersonaBuildInfo` dictionary (commit, branch, dirty, build time, build machine, Xcode, Swift, configuration) that
+  Settings › About › Build (`3518b00185-dirty · 11-22 15:00`) and its Debug Info section read through `BuildInfo`. It
+  writes only when the code was linked again (`Persona.debug.dylib`), the Info.plist was written again or HEAD moved
+  since its marker, and never fails a build (no git: Unknown). `PERSONA_BUILD_MACHINE` names the build machine for
+  captures shown in public. A build with nothing changed writes no Info.plist
+  and signs nothing again, unless the opt-in Siri calls (`apple/siri-calls.yml`) or Meta glasses
+  (`apple/meta-wearables.yml`) include is on: their build phases rewrite the built Info.plist on every build, so the app
+  is signed again each time. Every Release build, and so every TestFlight build, is stamped as before; a Debug build that
+  must name its commit (the README's captures, `scripts/assets/make_readme_assets.py`) passes the build setting
+  `PERSONA_STAMP_COMMIT=YES`.
+- **Generated files are written only when they change.** `scripts/persona_config.py xcconfig` leaves `apple/Config.xcconfig`
+  and the opt-in entitlements file alone when their content is the same: a new modification time alone makes Xcode take
+  every target's settings, or the app's signature, as changed.
+- **The Rust core's simulator slice, shared between worktrees.** `native/app-core/scripts/build-apple.sh --simulator`
+  builds only the slice the simulator runs; without it (release, CI, `swift test` on the Mac) it builds the device,
+  simulator and macOS slices. A built framework is kept in `~/Library/Caches/persona/app-core/<key>/`, keyed by the
+  inputs' content and their paths in the checkout (never the checkout's own path), the Mac's architecture, the Apple SDKs
+  and the caller's `RUSTFLAGS` and deployment targets: another worktree at the same Rust inputs copies it instead of
+  building, and a full entry also serves a simulator request. The newest three keys stay (`PERSONA_APP_CORE_CACHE_KEEP`);
+  `PERSONA_APP_CORE_CACHE=<directory>` moves the cache and `PERSONA_APP_CORE_CACHE=0` turns it off. The cache is best
+  effort: an entry that cannot be read is built again, and a cache that cannot be written keeps the framework in the
+  worktree only, each with one line on stderr. **Before a phone or "My Mac (Designed for iPad)" build in
+  Xcode after `sim.sh`, run `native/app-core/scripts/build-apple.sh` with no flag:** a simulator-only framework has no
+  device slice, so Xcode stops with "no library for this platform was found", which looks like a broken build. The
+  script prints the same reminder whenever it leaves the simulator slice only.
 
 ## Fast local checks (`scripts/check-fast.sh`, #2849)
 
@@ -273,13 +568,20 @@ Runs only relevant second-scale checks based on git changes, with independent ch
 ./scripts/check-fast.sh                  # compare changes from git merge-base HEAD <default branch> to worktree, select by path
 ./scripts/check-fast.sh --base main      # choose a comparison baseline
 ./scripts/check-fast.sh --all            # all fast local checks except full iOS/macOS and server Postgres tests
+./scripts/check-fast.sh --dry-run        # print the plan (queued checks, SKIP and INFO notes) and run nothing
+./scripts/check-fast.sh --dry-run --changed-from <file|->         # plan the listed paths instead of the diff
+./scripts/check-fast.sh --dry-run --changed-from <file|-> --each  # plan each listed path on its own
+./scripts/check-fast.sh --compare-main   # after a failure, rerun only what failed at the merge base and say whose it is
+./scripts/check-fast.sh --compare-tip    # --compare-main, and what the base fails too also at the base ref's tip
 ```
+
+After the plan, an `INFO` line names the CI lanes the change selects that check-fast runs no part of (for example `android`, `core`, `desktop`, or `apple` for a shared fixture), read from `python3 scripts/ci/paths.py --lanes-for`, the selection CI and the PR watcher use; run `bash scripts/ci/<lane>.sh` for one of them before pushing. See "What a change affects" below for how the three selections are kept in step.
 
 Without `--base`, the base is the clone's default branch, read from local refs only (it works offline): `origin/HEAD` if it points at a commit, else `origin/main`, else `origin/master`. With none of them it stops with exit 2 and says how to fix it (`git fetch origin` then `git remote set-head origin --auto`, or `--base <ref>`).
 
-`--all` also runs all `scripts/**/test_*.py` like CI’s Scripts tests job (the same `find`; it skips only tests already covered by dedicated checks: `test_external_service_refs.py`, `test_sdk_bundle.py`, `test_extension_schema.py`, and `scripts/app/test_android_*`, see `script_test_add`; update this skip list when renaming or removing dedicated checks). They run sequentially in one check, each suite from its own directory with its own `CHECK_FAST_TIMEOUT_OTHER`. One failure does not stop the rest; the final summary lists failed and timed-out files. A `test_*.py` that never mentions `unittest` is a verification script, not a suite: like CI (`scripts/ci/python-tests.py`), check-fast prints `SKIP <path> (not a unittest suite)` for it instead of running it, in diff mode too (`python -m unittest` runs no tests there and exits 5, "NO TESTS RAN", from Python 3.12); `scripts/test/test_check_fast.py` compares the `--all` selection with CI's.
+`--all` also runs all `scripts/**/test_*.py` like CI’s Scripts tests job (the same `find`; it skips only tests already covered by dedicated checks: `test_external_service_refs.py`, `test_sdk_bundle.py`, `test_extension_schema.py`, and the four `scripts/app/test_android_*` suites the Android check runs (`test_android_i18n_check.py`, `test_android_token_baseline.py`, `test_android_motion_baseline.py`, `test_android_slot_order.py`), see `script_test_add`; update this skip list when renaming or removing dedicated checks). They run sequentially in one check, each suite from its own directory with its own `CHECK_FAST_TIMEOUT_OTHER`. One failure does not stop the rest; the final summary lists failed and timed-out files. A `test_*.py` that never mentions `unittest` is a verification script, not a suite: like CI (`scripts/ci/python-tests.py`), check-fast prints `SKIP <path> (not a unittest suite)` for it instead of running it, in diff mode too (`python -m unittest` runs no tests there and exits 5, "NO TESTS RAN", from Python 3.12); `scripts/test/test_check_fast.py` compares the `--all` selection with CI's.
 
-Path mapping:
+Path mapping (a new mapping is a rule in check-fast's per-path table, `scripts/ci/check_fast_map.py`; `scripts/test/check-fast.sh` adds only what it finds at run time, such as the Go tests that read a changed fixture, and the frozen-migration and fixed-sleep checks, which also follow a rename):
 
 | Changed path | Checks |
 | --- | --- |
@@ -290,34 +592,56 @@ Path mapping:
 | `sdk/ts/**` | `bun test` (skip with reason if bun absent) |
 | `sdk/ts/src/**` | In addition to the `sdk/ts/**` check, `go test ./internal/extension/denohost/...`: the trusted Deno adapter `server/internal/extension/denohost/adapter.mjs` bundles these sources, and `TestTrustedAdapterMatchesOfficialSDK` fails while the committed one is stale (#4221; regenerate it with `scripts/gen/deno_adapter.sh` and the Bun version `.github/workflows/server-test.yml` pins). Skipped with a reason when bun is absent; `pre-push` is not (see "Trusted Deno adapter" below). CI's server lane runs on these paths too (`scripts/ci/paths.py`) |
 | `sdk/go/**` | `go test ./...` in sdk/go module |
-| `server/internal/foo/**`, `server/cmd/bar/**`, `server/plugins/baz/**` | Affected packages, e.g. `go test ./internal/foo/...`; unmappable server changes fall back to `go build ./...` |
-| `server/**`, `sdk/go/**` | In addition to other checks in this table, the server's repo-wide guards (`job_go_guards` in `scripts/test/check-fast.sh`): `go test` on `internal/lazyre`, `internal/archguard`, `internal/tzguard` and `plugins`, and the named guard tests of `internal/hub` and `internal/assistant`. They read other packages' source, `go list` output, the migrations or `sdk/go`, so they fail on code outside their own package (#1936). The list is curated: not every `*guard*_test.go` is repo-wide. `--all` runs them within `go test ./...` |
+| `server/internal/foo/**`, `server/cmd/bar/**`, `server/plugins/baz/**`, `server/scripts/tool/**` | Affected packages, e.g. `go test ./internal/foo/...`, through `scripts/test/go_test_partitioned.py` (#12765): `./internal/assistant/...` runs `internal/assistant` in its partitions beside its subpackages, inside the same 300 s, since its serial run alone takes longer; `internal/node/...` and every other group run exactly as given (`internal/node`'s `TestMain` splits itself). Unmappable server changes fall back to `go build ./...` |
+| `server/**`, `sdk/go/**` | In addition to other checks in this table, the server's repo-wide guards (`job_go_guards` in `scripts/test/check-fast.sh`): `go test` on `internal/lazyre`, `internal/archguard`, `internal/tzguard`, `plugins`, `internal/i18n` and `internal/prompts`, and named tests of `internal/hub`, `internal/assistant`, `internal/update`, `cmd/persona-hub`, `cmd/persona-manager` and `cmd/persona-node`: the hub's and the assistant's architecture guards, `TestOneBuild`, each program's link guard, and the cross-package contract tests (the prompt and MCP tool goldens `TestGolden.*`, `TestNoWholeListMCPToolGoldens`, `TestWireSamples`, `TestRouteScopes`, `TestEveryExtensionRouteIsBounded`, the prompt and instruction size budgets, and the model purpose, repository guidance and start path contracts). They read other packages' source, `go list` output, the migrations or `sdk/go`, or pin what other packages render, so they fail on code outside their own package (#1936); a change otherwise tests only its own group's subtree, and the Go breakages that reached `main` past a correct check-fast run were, besides gofmt and Windows vet (the next two rows), failures of tests like these outside the touched group (#12842, #10615). All run with `-count=1`. The list is curated: not every `*guard*_test.go` is repo-wide. `scripts/test/test_check_fast_guards.py` fails when an entry of `GO_GUARD_TESTS` names no `func Test…` of the listed packages, since `go test -run` silently matches nothing after a rename. `--all` runs them within `go test ./...` |
+| `server/**`, `sdk/go/**` (vet) | Also `go vet` in a job of its own (`job_go_vet`, #12894): `go vet -ldflags= ./...` over the whole server module, then `GOOS=windows GOARCH=amd64 go vet -ldflags=` on each changed package group (`./internal/foo/...`), or on `./...` for a change outside every group (`server/go.mod`, a file directly in `server/plugins/`, `sdk/go/**`, which the server module imports). CI's server lane vets the module for both (`scripts/ci/server.sh`: "Server vet", "Windows node build and vet"), and Windows vet failures were among the breakages check-fast missed (#10615). The Windows step runs also when the first one failed, and its rerun line keeps its environment (`env GOOS=windows GOARCH=amd64 go vet …`). A group with no package that builds for Windows (every file of `server/scripts/fleetsoak` is `//go:build unix`, `server/cmd/password-wasm` is `js && wasm`), or whose directory is gone, is left out of the Windows step: given only such groups `go vet` says `no packages to vet` and exits 1, where CI's `./...` passes over them. It is left out only when `GOOS=windows go list` says its pattern matched no packages; any other answer, an error included, keeps it in. The PASS line names it (`PASS     server go vet (52s; windows vet left out ./scripts/fleetsoak/...: no package there builds for windows)`), and with no group left the Windows step does not run. Being a separate job, a vet that runs past its timeout on a cold build cache is a `TIMEOUT` of this job alone: in the guard job it would have made that job a `TIMEOUT` and hidden a contract test's `FAIL`. `--all` vets the whole module on both platforms |
+| `server/**/*.go`, `sdk/go/**/*.go` | `python3 scripts/ci/gofmt.py` on the changed `.go` files that still exist (`job_go_fmt`, #12894): the trees CI's Go formatting step covers, `testdata/` included; other `.go` files (`web/e2e/`, `sdk/templates/go/`) are not checked, as in CI. It takes no go slot, since gofmt compiles nothing, so it reports in seconds while the go slots are busy; without `gofmt` on `PATH` it is a `SKIP` line. `--all` checks both trees whole, as CI does |
 | `server/internal/db/migrations/**`, `scripts/ci/migration_freeze.py` | `python3 scripts/ci/migration_freeze.py`: a migration already on the base cannot be edited, deleted or renamed (comment-only and whitespace-only edits pass; a new file may be added, named `YYYYMMDDHHMMSS_<name>.sql` by the UTC second it is written, from 2026-11-18 to a day ahead; a numbered file outside the frozen ones up to `0561` fails). A rename out of the directory counts. `--all` runs it when the script is present |
-| `server/**/*_test.go`, `sdk/go/**/*_test.go`, `scripts/ci/sleep_ratchet.py`, `scripts/ci/sleep_baseline.json` | `python3 scripts/ci/sleep_ratchet.py`: the number of `time.Sleep` calls in each Go test file may stay or fall, never rise (comments, string literals and a `// sleep-ok: <reason>` line do not count; a new file starts at zero). `--update` only lowers the baseline. A rename out of those trees counts. `--all` runs it when the script is present |
-| `spec/fixtures/**`, `schema/extension/**`, `schema/wire/**`, `integrations/**`, `docs/<file>`, `scripts/test/server_test_env.py` | In addition to other checks in this table, `go test ./internal/<package>/...` for server packages reading these files (repository inputs covered by `server-test.yml` filters). At runtime, `git grep` finds packages referencing the path in `server/**/*_test.go` (strings or `filepath.Join` components; `//` comment lines excluded), so new readers need no script changes; other `spec/` files remain unmapped |
-| `android/**`, `scripts/app/*android*` (including both `test_android_*` self-tests) | `scripts/app/android_i18n_check.py` and Android checker unittests (i18n, token and motion baselines; no Gradle build) |
+| `server/**/*_test.go`, `sdk/go/**/*_test.go`, `scripts/ci/sleep_ratchet.py`, `scripts/ci/sleep_baseline.json` | `python3 scripts/ci/sleep_ratchet.py`: the number of `time.Sleep` calls in each Go test file may stay or fall, never rise (comments, string literals and a `// sleep-ok: <reason>` line do not count; a new file starts at zero). `--update` only lowers the baseline. A rename out of those trees counts; a file git sees as moved within them keeps its entry under its new path, so moving a package is no raise (#13431). `--all` runs it when the script is present |
+| `spec/fixtures/**`, `schema/<dir>/**` (each schema family: `extension`, `wire`, `configuration`), `integrations/**`, `docs/<file>`, `scripts/test/server_test_env.py` | In addition to other checks in this table, `go test ./internal/<package>/...` for server packages reading these files (repository inputs covered by `server-test.yml` filters). At runtime, `git grep` finds packages referencing the path in `server/**/*_test.go` (strings or `filepath.Join` components; `//` comment lines excluded), so new readers need no script changes; other `spec/` files remain unmapped |
+| `apple/**`, `android/**` | In addition to other checks in this table, `go test` on the server packages whose tests name the changed file whole, in quotes (`internal/proto` reads `"apple/Shared/Models.swift"` for its Swift contract checks; a longer string such as a wire sample's `"apple/Shared/Models.swift: Fold"` does not count). One search lists every client path the server tests name, and the changed paths are matched against it, so a change of thousands of client files costs the same (#11250). CI's server lane covers these client sources too (`SERVER_CLIENT_INPUTS` in `scripts/ci/paths.py`) |
+| `spec/**`, `schema/**` read by a runtime package | In addition to other checks in this table, the tests of each `integrations/<pkg>` and of `sdk/ts` whose files name the changed path or a directory it is in, outside a comment line (`integrations/runtime-sdk` reads `spec/fixtures/input-clip/cases.json`, `sdk/ts` reads `schema/extension/examples/`). Found at run time with `git grep`; CI's runtimes lane runs for all of `spec/` and `schema/` |
+| `android/**`, `scripts/app/*android*` (including the `test_android_*` self-tests) | `scripts/app/android_i18n_check.py` and Android checker unittests (i18n, token and motion baselines; no Gradle build) |
 | `.github/**` | `scripts/test/pr_needs_issue_test.mjs` |
+| `.github/workflows/*.yml`, `scripts/ci/*.sh`, `scripts/ci/*.py`, `scripts/operations/*.py`, `scripts/operations/*watch*.json`, `scripts/operations/*watch*.service`, `.claude/skills/pr-review-merge-loop/**`, `.claude/skills/main-verify-fix-loop/**` (not `test_*` files) | Also `scripts/test/test_heavy_slot.py`: a CI lane or a watcher step that names a script taking a heavy slot must set `PERSONA_HEAVY_SLOTS=0` ("Heavy build slots" above). A new lane script once broke it with nothing local running it (#11026) |
 | `schema/**` | `scripts/test/test_extension_schema.py`, `scripts/test/test_sdk_bundle.py`, plus `go test ./...` in sdk/go (the same three checks as CI's Extension schema job) |
-| `schema/wire/**`, `spec/fixtures/**`, `scripts/gen/extension_schema.py`, `scripts/test/test_extension_schema.py` | Also `scripts/test/test_wire_schema.py`: every sample the shared fixtures keep for a wire schema holds to it at any depth, and the generated wire types are current (it imports the extension test's validator). CI's guards step always runs it |
+| `schema/wire/**`, `spec/fixtures/**`, `scripts/gen/extension_schema.py`, `scripts/gen/wiregen/**`, `scripts/test/test_extension_schema.py` | Also `scripts/test/test_wire_schema.py`: every sample the shared fixtures keep for a wire schema holds to it at any depth, and the generated wire types are current (it imports the extension test's validator). CI's guards step always runs it |
 | `spec/fixtures/todo-detail/**`, `spec/fixtures/todo-layout/**`, `spec/fixtures/todo-view/README.md`, `spec/fixtures/agent-names/**`, `schema/wire/todo-view.schema.json`, `server/internal/assistant/todos.go`, `server/internal/assistant/todo_ask.go`, `scripts/test/test_wire_schema.py`, `scripts/test/test_extension_schema.py` | Also `scripts/test/test_todo_fixtures.py`: the to-do page and window fixtures hold to their READMEs' rules, the view schema, the todo-view line keys, the agent names and the fields the hub writes on a listed to-do (it imports the wire and extension schema tests) |
 | `scripts/test/test_external_service_refs.py`, `scripts/{gen,test}/sdk_bundle*` | The scripts' own tests |
-| `scripts/**` | Select second-scale privacy / PR / schema / refs / bundle / i18n checks by path; when uncertain run PR and schema. Also run changed `scripts/<subdirectory>/test_*.py`, and `test_<name>.py` for changed `<name>.py` / `<name>.sh` scripts (`-`→`_`; `.sh` also checks `test_<name>_sh.py`), from the test directory like CI (#3968). `scripts/hooks/**` also runs `scripts/test/test_privacy_check.py` and `scripts/test/test_check_deno_adapter_sh.py` (they run the hooks in their temp repositories; the latter also for `scripts/gen/deno_adapter.sh`); `scripts/privacy_check.py` also runs `scripts/release/test_check_bundle_privacy.py` (it imports `privacy_check`) and `scripts/test/test_merge_pr_sh.py`; `scripts/operations/pr_watch_merge.py`, `scripts/ci/changed_ratchets.py`, `scripts/ci/sleep_ratchet.py` and `scripts/ci/web_font_ratchet.py` also run `scripts/test/test_merge_pr_sh.py` (it copies the scripts into its temp repositories, where `merge-pr.sh` runs them, and checks the watcher's merge lock), and the two ratchets `scripts/ci/test_changed_ratchets.py` (it imports them); `scripts/test/go_trimpath.sh` also runs `scripts/ci/test_ci.py` and `scripts/test/test_check_fast.py` (they run `scripts/ci/server.sh` and `scripts/test/check-fast.sh`, whose `GOFLAGS` it composes); `scripts/release/debug_switches.txt`, `scripts/release/debug_switches.py` and `scripts/release/release.sh` also run `scripts/release/test_debug_switches.py`, `scripts/release/test_release_debug_guard.py` and `scripts/test/test_apple_release_switch_names.py` |
+| `scripts/**` | Select second-scale privacy / PR / schema / refs / bundle / i18n checks by path; when uncertain run PR and schema. Also run changed `scripts/<subdirectory>/test_*.py`, and `test_<name>.py` for changed `<name>.py` / `<name>.sh` scripts (`-`→`_`; `.sh` also checks `test_<name>_sh.py`), from the test directory like CI (#3968). `scripts/hooks/**` also runs `scripts/test/test_privacy_check.py` and `scripts/test/test_check_deno_adapter_sh.py` (they run the hooks in their temp repositories; the latter also for `scripts/gen/deno_adapter.sh`); `scripts/privacy_check.py` also runs `scripts/release/test_check_bundle_privacy.py` (it imports `privacy_check`) and `scripts/test/test_merge_pr_sh.py`; `scripts/operations/pr_watch_merge.py`, `scripts/ci/changed_ratchets.py`, `scripts/ci/sleep_ratchet.py`, `scripts/ci/web_font_ratchet.py` and `scripts/ci/ratchet_base.py` also run `scripts/test/test_merge_pr_sh.py` (it copies the scripts into its temp repositories, where `merge-pr.sh` runs them, and checks the watcher's merge lock), and the two ratchets and `ratchet_base.py` also `scripts/ci/test_changed_ratchets.py` (it imports the ratchets, which import `ratchet_base.py`); `ratchet_base.py` also runs the sleep, web font and prompt-language ratchets' own suites, which load it through their ratchets or copy it, and `scripts/ci/prompt_language_ratchet.py` runs `scripts/test/test_prompt_language_ratchet.py`, which loads it by path; `scripts/test/go_trimpath.sh` also runs `scripts/ci/test_ci.py` and `scripts/test/test_check_fast_inputs.py` (they run `scripts/ci/server.sh` and `scripts/test/check-fast.sh`, whose `GOFLAGS` it composes); `scripts/heavy_slot.py` also runs `scripts/test/test_check_fast_inputs.py` and `scripts/test/test_android_sh.py` (they run `check-fast.sh` and `android.sh` with it); `check-fast.sh` and `scripts/test/test_check_fast.py` also run `scripts/test/test_check_fast_guards.py`, `scripts/test/test_check_fast_inputs.py`, `scripts/test/test_check_fast_base.py`, `scripts/test/test_check_fast_reports.py` and `scripts/test/test_check_fast_callers.py` (check-fast's tests are six files, split so each stays well under the per-suite limit; the other five import `test_check_fast.py`'s fixtures), and `scripts/ci/check_fast_compare.py`, `scripts/test/go_test_partitioned.py` and `scripts/test/go_partitions.py` all three (they copy them into their temp repositories, where every Go group runs through the partitioned runner); `scripts/release/debug_switches.txt`, `scripts/release/debug_switches.py` and `scripts/release/release.sh` also run `scripts/release/test_debug_switches.py`, `scripts/release/test_release_debug_guard.py` and `scripts/test/test_apple_release_switch_names.py`; `scripts/ci/paths.py` also runs `scripts/ci/test_ci.py`, `scripts/test/test_check_fast_inputs.py` and `scripts/ci/test_affected_drift.py`, `scripts/test/check-fast.sh`, `scripts/ci/affected_drift.py` and `scripts/operations/pr_watch_verify.py` also `scripts/ci/test_affected_drift.py`, and each `scripts/operations/pr_watch_*.py` also `scripts/operations/test_pr_watch.py`. A changed `scripts/**/<name>.py` also runs every `scripts/**/test_*.py` that imports it (`import <name>` or `from <name> import` at the start of a line) from its own directory or from a directory it names, found at run time with `git grep`; a suite a dedicated check runs (refs, bundle, extension schema, four Android checker suites) schedules that check instead |
 | `spec/tokens/**`, `apple/Shared/Design/**`, `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt` | `scripts/assets/test_gen_tokens.py`: the token sources against the iOS values and the committed Android `Tokens.kt` |
 | `spec/icons/**`, `apple/Shared/Design/Icons.swift`, `android/core/designsystem/src/main/kotlin/persona/core/designsystem/icons/**` | `scripts/assets/test_gen_icon_meanings.py`: the icon meanings against `Theme.Icon`, the Phosphor glyphs and `PersonaIcons.kt` |
 | `docs/**`, any `*.md` | `scripts/test/test_doc_paths.py`, `scripts/test/test_doc_go_paths.py` (quoted paths and CLAUDE.md documentation index; test_doc_paths.py also fails a table that a blank line splits), `scripts/test/test_doc_sections.py` (section names quoted after a doc path match a heading, a **bold** label, an `<a id>` or a list item's opening phrase of that doc; `scripts/test/doc_sections_known.txt` lists the ones left for now and only shrinks), `scripts/test/test_doc_wire.py` (protocol.md and extensions.md list every WebSocket type, feature flag, extension point and manifest field the code has) |
 | `server/internal/{proto,hub,extension}/**`, `schema/extension/manifest.schema.json` | Also `scripts/test/test_doc_wire.py`: these hold the code side of the lists it compares with the docs |
+| `AGENTS.md`, `CLAUDE.md` | Also `scripts/test/test_agents_md.py`: git records `AGENTS.md` as a symlink (mode 120000) whose target is exactly `CLAUDE.md`, and `CLAUDE.md` as a regular file; it reads the index, so a checkout without symlinks passes too |
 | `server/**`, `web/src/**`, `web/e2e/**`, `scripts/**`, `sdk/**`, `apple/**`, `android/**`, `integrations/**`, `spec/**`, `schema/**` | Also `scripts/test/test_doc_sections.py`: most of the section names it checks are in code comments there |
 | `apple/**` | `scripts/test/test_apple_l10n.py` (complete String Catalogs and Swift Chinese literals included in catalogs) and `scripts/test/test_apple_no_callkit.py` (no CallKit import or link setting; also run for `scripts/persona_config.py`); iOS / macOS builds and tests need a Mac and are reported as skipped |
+| `apple/project.yml` and the includes its tests turn on (`apple/app-entitlements.yml`, `apple/watch-and-share.yml`, `apple/lean-dev-build.yml`, `apple/siri-calls.yml`), `scripts/app/sim.sh`, `scripts/app/ui-test.sh`, `scripts/app/perf-test.sh`, `scripts/app/share-from-apps.sh`, `scripts/app/lean-build-note.sh`, `scripts/app/island_peer.sh`, `scripts/diag/stream-scroll/run-ios.sh`, `scripts/release/release.sh`, `scripts/ci/apple.sh`, `native/iphone-bridge/build.sh` | Also `scripts/test/test_apple_dev_build.py`: the switch that leaves the watch app and the share extension out of a development build, that only `sim.sh` sets it and every other script that generates a project clears it, which slices of the Rust core each build takes, the line a lean build prints, and the Release-only commit stamp ("Development builds"; the project checks need xcodegen). Its searches of the whole tree also catch a new caller, which no row maps |
+| `native/app-core/scripts/build-apple.sh` | `scripts/test/test_app_core_apple_build.py`: the simulator-only build and the XCFramework cache shared between worktrees, with fake cargo and Xcode tools ("Development builds") |
 | `deploy/docker/**`, `docs/operations/docker.md`, root `Dockerfile` | `scripts/test/test_docker_entrypoint.py` (also checks root `Dockerfile`’s `EXPOSE`) |
 | Other paths | No code checks; list unmapped paths individually |
 
-Any changes always run `scripts/privacy_check.py` first: local-only, no network, a few seconds. Every check has a timeout (npm ci 600 s, vitest 300 s, one go test group 300 s, others 120 s; override with `CHECK_FAST_TIMEOUT_NPM_CI` / `CHECK_FAST_TIMEOUT_WEB_TEST` / `CHECK_FAST_TIMEOUT_GO_TEST` / `CHECK_FAST_TIMEOUT_OTHER`). The go and vitest steps first wait for a heavy build slot, outside their timeout ("Heavy build slots" above). Success/failure/timeout each prints a result and duration; the final summary lists passed/skipped (with reasons)/failed/timed-out checks and log directory. Exit: 0 if all pass or none needed; 1 for failure; 124 for timeout without failures (timeouts aren't passes; run full checks to confirm). Ctrl-C, SIGTERM and SIGHUP, sent to the script or to its whole process group (a closed terminal or tmux pane), stop every running check (and its child processes) before exiting with 130, 143 or 129, and keep the log directory. Missing toolchains skip relevant checks with reasons by default; under `--all`, missing core tools (node ≥ 22, go, python3) fail; bun is always optional. Requires GNU `timeout` (coreutils on macOS).
+A search the plan depends on (the `git grep` runs above) that fails, rather than finding nothing, stops check-fast with exit 2 before anything runs: the checks it would have found would otherwise be left out without a word (#11250). So does a diff without `python3` or the table, or a table that fails or names a check the script does not know (#11535).
+
+Any changes always run `scripts/privacy_check.py` first: local-only, no network, a few seconds. Every check has a timeout (npm ci 600 s, vitest 300 s, one go test group or go vet step 300 s, others 120 s; override with `CHECK_FAST_TIMEOUT_NPM_CI` / `CHECK_FAST_TIMEOUT_WEB_TEST` / `CHECK_FAST_TIMEOUT_GO_TEST` / `CHECK_FAST_TIMEOUT_OTHER`). The go and vitest steps first wait for a heavy build slot, outside their timeout ("Heavy build slots" above); gofmt takes none. Success/failure/timeout each prints a result and duration; the final summary lists passed/skipped (with reasons)/failed/timed-out checks and log directory. Exit: 0 if all pass or none needed; 1 for failure; 124 for timeout without failures (timeouts aren't passes; run full checks to confirm). Ctrl-C, SIGTERM and SIGHUP, sent to the script or to its whole process group (a closed terminal or tmux pane), stop every running check (and its child processes) before exiting with 130, 143 or 129, and keep the log directory. Missing toolchains skip relevant checks with reasons by default; under `--all`, missing core tools (node ≥ 22, go, python3) fail; bun is always optional. Requires GNU `timeout` (coreutils on macOS).
+
+**Rerun lines and `--compare-main`** (#12733). Each failed or timed-out check in the summary ends with a `rerun:` line per failure, the command that reruns just that: the failing Go tests of each package (`(cd server && go test -count=1 -run '^(TestA|TestB)$' ./internal/assistant)`), the failing unittest ids (`(cd scripts/test && python3 -B -m unittest -q test_x.T.test_y)`), or the step's own command for anything else, such as the privacy scan or a ratchet. A timed-out check reruns whole.
+
+With `--compare-main`, a run that failed then reruns only those failures at the merge base, in a detached worktree under its log directory (`<log dir>/compare/base`, removed afterwards by that path, also when the run is interrupted), and prints one line per failing test, suite or command:
+
+- `ALREADY`: also fails at the merge base. Main has it, so it is not this change's (on any change under `internal/assistant` while #12596 was red, for example). Like the watcher's, the comparison is by name: the same test fails there, not necessarily the same way.
+- `NEW`: passes at the merge base and fails again when rerun here on its own, so likely caused by this change.
+- `FLAKY`: passes at the merge base and when rerun here on its own: it failed only in the full run (under load, a timing test, or after another test), so the change is not shown to cause it. A failure that passes at the base is always rerun here once before it is called `NEW`.
+- `EDITED`: not attributable, because the change edits that test's files: a `_test.go` or `testdata/` file of its package, the suite or a test module it imports, or a file the command names. The base runs the old test, which says nothing about the new one.
+- `UNKNOWN`: not compared, and why: no named test failed (a build failure), a web step needs its own `npm ci` at the base, the rerun timed out, the base has no such test, or the base has none of the packages a go command checks (packages the change adds).
+
+`--compare-tip` also reruns the `ALREADY` ones at the base ref's tip: `TIP-PASS` means main fixed it after the merge base (merge it), `TIP-FAIL` that it still fails, `TIP-?` that the tip gave no answer (a timeout, no such test there). The rules are the PR watcher's (only named tests are compared; no attribution when the change edits the test), kept in `scripts/ci/check_fast_compare.py`, which does not import the watcher. A guard command is compared by its exit code, and its line names the output lines the base's run does not have, since a change can add to a failure main already has. A go command's package patterns whose directory the base does not have (`./internal/<new>/...`) are left out of its rerun there, since go fails on such a pattern before it checks anything: the Windows vet of a new package and an existing group compares the existing group alone. Go tests rerun with `-count=1` in a go slot, each rerun under its check's timeout. Nothing is decided from hosted CI, whose main runs are hours old. The exit code stays the run's: a failure main already has is still a failure, and the verdict is what to say about it in the PR. `--all --compare-main` finds the merge base and the changed files as diff mode does.
 
 **Web tests a change reaches** (#10619). In diff mode the web check runs `npx vitest related --run` from the changed files, so a change to one view runs the tests whose imports reach it (about 56 for `web/src/views/chat/ChatView.tsx`) instead of all ~1,360 test files. `python3 scripts/ci/paths.py --web-plan` makes the plan from one scan of `web/src` and every web test, done at run time, nothing listed by hand:
 
 - Every related run also includes each test that reads files from disk (`fs`, `node:fs`, `fs/promises`, `node:fs/promises`, `readFileSync`, `import.meta.glob`, a `?raw` or other query import; about 85): vitest related follows only imports whose id is a file on disk, so it never sees what they read. So does each test that builds or serves through a Vite config (it imports `vite` or `vitest/node`): `web/scripts/public-share-build.test.mjs` builds the public viewer, whose config reads `web/src/styles.css` with `readFileSync`. A `web/src` module that reads through `fs` brings the tests that import it, and a module that reads through Vite joins when a file it names changes (`web/src/lib/html-runtime/host.ts` for its `frame.js`).
-- The whole suite (`npm test`) runs instead for a change to `web/src/lib/store.ts`, `web/src/lib/api.ts`, `web/src/ui/atoms.tsx` or `web/src/i18n/` (most tests import them: about 825, 1,040, 930 and 1,190), to a `web/src` module the Vite configs import, to anything the vitest setup files reach, or to anything in `web/` outside `web/src` (the Vite and TypeScript configs, `package.json`, `package-lock.json`, `scripts/`, `e2e/`), and always with `--all`. The setup files are the `setupFiles` and `globalSetup` the Vite configs name; what they reach is each of them, what it reads, and each module it imports, followed to the end (`web/src/i18n/test-setup.ts` loads `web/src/admin/catalog.ts`). Every test runs them first, but vitest related follows only a test's own imports. Without python3, or when the scan fails, a `web/` change runs the whole suite.
-- Files outside `web/`: every path a scanned file names relative to itself that leads out of `web/` (`"../../../spec/fixtures/forward/cases.json"`, `` new URL(`../../../schema/extension/examples/View.v8-${name}.json`, import.meta.url) ``, `join(__dirname, "..", "..", "..", "spec", …)`) is an input. A file counts as itself; a directory, a glob or a path with a `${…}` part as everything under its literal part; a JSON Schema also brings the files its `$ref`s name. A path built from the working directory or from a variable root is not seen. `python3 scripts/ci/paths.py --web-inputs` prints the list; CI's web lane takes the same one, so the two agree by construction. `scripts/test/test_check_fast.py` holds the scan to a sample tree in each form and to the real reads.
+- The whole suite (`npm test`) runs instead for a change to `web/src/lib/store.ts`, `web/src/lib/api.ts`, `web/src/ui/atoms.tsx` or `web/src/i18n/` (most tests import them: about 825, 1,040, 930 and 1,190), to a `web/src` module the Vite configs import, to anything the vitest setup files reach, or to anything in `web/` outside `web/src` (the Vite and TypeScript configs, `package.json`, `package-lock.json`, `scripts/`, `e2e/`), and always with `--all`. The setup files are the `setupFiles` and `globalSetup` the Vite configs name; what they reach is each of them, what it reads, and each module it imports, followed to the end (`web/src/i18n/test-setup.ts` loads `web/src/admin/catalog.ts`). Every test runs them first, but vitest related follows only a test's own imports. When the scan fails, a `web/` change runs the whole suite.
+- Files outside `web/`: every path a scanned file names relative to itself that leads out of `web/` (`"../../../spec/fixtures/forward/cases.json"`, `` new URL(`../../../schema/extension/examples/View.v8-${name}.json`, import.meta.url) ``, `join(__dirname, "..", "..", "..", "spec", …)`) is an input. A file counts as itself; a directory, a glob or a path with a `${…}` part as everything under its literal part; a JSON Schema also brings the files its `$ref`s name. A path built from the working directory or from a variable root is not seen. `python3 scripts/ci/paths.py --web-inputs` prints the list; CI's web lane takes the same one, so the two agree by construction. `scripts/test/test_check_fast_inputs.py` holds the scan to a sample tree in each form and to the real reads.
 
 Not covered:
 
@@ -334,11 +658,18 @@ it isn't in `PersonaTests`; the Apple CI script runs its SwiftPM tests separatel
 - Moved types and App-used members must be `public` (structs need `public init`); App files using them add `import PersonaKit`. Package tests still use `@testable import PersonaKit`.
 - Assertions needing App types (views, `FilePaths`) stay in `PersonaTests`, also adding `import PersonaKit`.
 - Package code must build with Foundation only: no SwiftUI / UIKit imports, App `Theme` or `AppModel`. Design-system source checks (`TokenRatchetTests`, etc.) don't scan it.
-- On a Mac still on macOS 15 the test bundle builds but does not load (`Symbol not found … built for macOS 26.0 which is newer than running OS`: the package targets macOS 26). Build it for the running system in a separate build folder: `swift test --scratch-path /tmp/personakit-macos15 -Xswiftc -target -Xswiftc arm64-apple-macosx15.0`.
+- The package declares macOS 15, so its test bundle also loads on a macOS 15 host without a target override. To check that deployment target from a newer Apple-silicon Mac, use a separate build folder: `swift test --scratch-path /tmp/personakit-macos15 -Xswiftc -target -Xswiftc arm64-apple-macosx15.0` (use `x86_64-apple-macosx15.0` on Intel). `scripts/test/test_apple_ci.py` guards the macOS floors of all tracked local Swift packages.
+
+**PersonaWire** (`apple/Packages/PersonaWire`, #7895): the Foundation-only wire layer every app target links, the watch,
+widgets and extensions included. Its tests run with `xcrun swift test --package-path apple/Packages/PersonaWire -Xswiftc
+-warnings-as-errors`, as the `packages` lane of `scripts/ci/apple.sh` runs them (#12734). The flag on the command line also
+applies to a package's dependencies, so PersonaWire must build without warnings for any package that depends on it to pass
+the same flag; a file inside the package never imports `PersonaWire` itself.
 
 **PersonaCore** (`apple/Packages/PersonaCore`, #6871): the iOS-only binding of the shared Rust continuity core. Run
 `native/app-core/scripts/build-apple.sh` before XcodeGen / package resolution, then `xcrun swift test --package-path
-apple/Packages/PersonaCore -Xswiftc -warnings-as-errors`. The XCFramework and Cargo output stay ignored; generated Swift
+apple/Packages/PersonaCore -Xswiftc -warnings-as-errors` (after `sim.sh`, whose `--simulator` build has no macOS slice,
+the builder without it adds the other slices; "Development builds"). The XCFramework and Cargo output stay ignored; generated Swift
 codecs are committed and `cargo run -p persona-core-typegen -- --check` checks both Swift and Kotlin. The package uses
 Swift 6 strict concurrency. The real-C replay and native `ChatStore` comparison are in
 `PersonaTests/PersonaCoreContinuityTests.swift`; the package and fixtures alone are not a physical-device performance,
@@ -346,10 +677,117 @@ launch, memory or download-size result. Watch, widgets, Vision, Persona Link and
 
 Transcript parsing uses real-sample golden tests (`server/internal/transcript/testdata/`, `fixtures_test.go`): each sample's parse result,
 "incremental read while writing = one full read", and "backward paging has no gaps/duplicates". After parsing changes run `go test ./internal/transcript -run Fixture -update` and review the golden diff.
-Before adding samples, redact with `scripts/diag/redact_transcript.py`, then manually review (`testdata/README.md`). After Claude Code / Codex upgrades, run
-`scripts/diag/transcript_stats.py` to find new types the parser doesn't recognize.
+Before adding samples, redact with `scripts/diag/redact_transcript.py`, then manually review (`testdata/README.md`). Use
+`scripts/diag/transcript_stats.py` to see observed record kinds and a local sample path for each. To compare two scans,
+save the baseline before changing the runtime, then scan again after the change with the same roots:
+
+```sh
+python3 scripts/diag/transcript_stats.py --json > before-upgrade.json
+python3 scripts/diag/transcript_stats.py --compare before-upgrade.json
+```
+
+The versioned JSON snapshot contains file and line totals and counts by record kind and runtime version. It omits
+sample paths and message bodies. The comparison marks kinds and versions as added (`+`), missing (`-`) or changed
+(`~`). An added kind is newly observed in the selected transcripts. Check its local sample before deciding whether
+the parser needs a new fixture or handling. Pass transcript directories to either command to limit the scan.
+
+To compare scans saved on different machines or review them later, create both snapshots with `--json`. Compare the
+saved counts without copying the transcripts or passing transcript directories:
+
+```sh
+python3 scripts/diag/transcript_stats.py --compare before-upgrade.json --against after-upgrade.json
+```
+
+The offline command validates both snapshots, leaves them unchanged and reads no transcript directories.
 
 API smoke tests: `curl -H "Authorization: Bearer $TOKEN" …/api/v1/machines`, `…/api/v1/sessions?machine_id=<machine>`.
+
+### What a change affects: CI lanes, check-fast and the watcher (#11026)
+
+Three selections decide what a change affects: `scripts/ci/paths.py` picks CI's lanes, `scripts/test/check-fast.sh` picks the local fast checks, and the PR watcher runs the lanes `paths.py` picks (`watcher_lanes` in `scripts/operations/pr_watch_verify.py`: CI's wildcard scripts lane only for a change under `scripts/` or `.github/`, a test-only test/fix PR's changed tests instead of its web, scripts and server lanes, no image or apple lane). check-fast keeps its own table (`scripts/ci/check_fast_map.py`), because it picks single packages and suites where CI picks whole lanes, and asks `paths.py` for its web plan and for the lanes it names but does not run. The table is a module of its own because importing `paths.py` scans `web/`.
+
+`python3 scripts/ci/affected_drift.py` compares the three for each tracked file (`--table <file>` writes the per-path table; paths as arguments compare only those). It checks two things:
+
+- **Lanes.** A check-fast check counts for a lane when it runs a fast part of that lane's work: the web check for web, Go tests and builds for server, the integration and `sdk/ts` tests for runtimes. Every difference must be listed in its `ALLOWED` table with the reason: check-fast never runs Gradle, cargo, Electron, Xcode or the image build; CI runs the server and runtimes lanes for whole directories of client contract sources, fixtures, schemas and protocol docs where check-fast runs only the tests that read the changed file; check-fast's doc search also runs Go tests that only mention a doc; a lane's own runner and workflow. A CI lane check-fast runs no part of must also be named in its plan (the `INFO` line, or the apple `SKIP` line).
+- **Readers.** Where CI runs a whole lane and check-fast runs only what reads the changed file, the readers are worked out in Python from the tests themselves (`Readers`), not from check-fast's rules, and each must be in check-fast's plan: the Go packages whose `_test.go` files name a file of the server lane's inputs outside `server/` (or anywhere under `apple/` and `android/`) as a string, as `filepath.Join` elements or as a directory it is in; the `integrations/<pkg>` and `sdk/ts` packages that name a fixture or schema; the `scripts/**/test_*.py` suites that import a scripts module from their own directory or from one they name. CI must select the lane of each Go reader too. These have no `ALLOWED` rows, apart from the two client files `internal/hub`'s wire samples name as consumers.
+
+`scripts/ci/test_affected_drift.py` runs the comparison on a derived probe set (two files per CI lane pattern, the first file of each directory and of each one below it, every path check-fast names, every path that has a reader) and fails on an unlisted difference. It also takes the line each fix of #11026 added out of a real plan and checks that the comparison then fails: the Go tests reading client sources, a schema family's Go reader, a runtime package reading a fixture, a suite importing a watcher module, and the `INFO` line.
+
+What it does not see: a suite that runs or reads a script by its path instead of importing it (the suite rules of check-fast's table cover those); a Go test that builds a path from variables; and a file outside the server lane's inputs and `apple/`, `android/` that a Go test reads, such as `web/src/i18n/locales/` (`internal/kb`), which neither CI's server lane nor check-fast runs today.
+
+## Module e2e gate
+
+A module move (#13430) merges only after `scripts/ci/module-e2e.py` passes on its branch on the hub machine (#14417):
+unit tests and the core-only smoke test show each half alone, this shows the switch end to end on a real hub with the
+real web app.
+
+```bash
+DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,recording \
+    [--checkout <dir>] [--shots ~/persona-pr-shots/<pr>] [--evidence <file>] [--strict-before-hello]
+
+# The core alone against a client: build with -tags persona_core_only and check every module is off (#16243).
+DOCKER=<docker client> python3 scripts/ci/module-e2e.py --core-only [--no-build-web] [--shots <dir>]
+```
+
+- **Start-up**: builds `personad`, `persona-hub`, `persona-manager` and `persona-node` (a default build) and the web app
+  (`npm run build`; `--no-build-web` serves the existing `web/dist`, `--npm-ci` installs first) from the checkout, then
+  starts a disposable `postgres:18-alpine` container on a private port and `persona-hub run` in a temporary home with
+  its own `hub.json` and token and a clean environment, as `scripts/ci/core-only-smoke.py` does (its helpers are
+  reused). The hub serves that web build. Nothing of this machine's own hub is read or touched. `DOCKER` names a wrapper
+  where the shell is not in the `docker` group (`sg docker -c "docker …"`).
+- **Phases**: `on` (default), `off` (the `modules` row `{"disabled": [ids]}` written into the disposable manager
+  database, `persona_manager.settings`, and the hub restarted), `back-on` (the row deleted, restarted), then
+  `older-hub` and `mock-flags-off`: the same web build (`vite preview`) against `scripts/mock/mock_hub.py` without the
+  `modules` marker (everything on) and with the marker and every flag but the modules' (them off). The mock hub has
+  conversations, so the composer's voice button is checked there; the test hub has no computer or model.
+- **Checks**, in each phase: the core (health, `/api/v1/managers`, the hello's `modules` marker, the main chat's
+  composer and the Agents page in Chrome, no page or console error); per module, the hello flag, the manager's
+  `modules: loaded …` line, its server-side parts (extensions, connectors, routes; table `SERVER`) and its web entry
+  (table `WEB`: a selector or text on a page, what clicking it opens, an address of its own that answers like a removed
+  page while off; an entry that is data the user already has carries an `off` block instead of "absent while off",
+  below) in light and dark, and its chunks: none may be requested once the app has the hello. A chunk an off
+  module's page fetches during a reload, before the hello is applied, is a `WARN` (#14431); `--strict-before-hello`
+  makes it a failure.
+- **What the user already has stays** (#13430, `docs/architecture/core-and-modules.md` "A module that is off keeps
+  what the user has"): for `recording`, two recordings written by the knowledge base and the recording module's writers
+  (`TestWriteRecordingFixture` in `server/internal/modules/recording/writers`, run with `PERSONA_RECORDING_FIXTURE_DIR`) are in the temporary
+  home's knowledge base before the hub first starts: a meeting with its transcript and minutes, and one whose minutes
+  were still to be written. In every phase they are listed, opened and found by search through the knowledge base's
+  own routes; while off, the opened recording's detail equals the `on` phase's, the one in flight says
+  `paused: "module_off"`, and every file under `recordings/` is byte for byte what it was when the phase began.
+  `scripts/ci/core-only-smoke.py` checks the same on a core-only hub and with `--switched-off recording`. The web row
+  asserts the same rule in the browser (the `off` block of the `recording` entry in `WEB`, #15530): while the module
+  is off the recording uploaded during the `on` phase and the seeded meeting with minutes are still listed under
+  Knowledge › Meetings, each opens in the default panel's read-only detail and shows its transcript (the seeded one
+  its minutes too), none of the module's controls is on that page (rename, make or regenerate minutes, hand to an Agent, the private
+  mark, the questions asked in the meeting), and none of the module's chunks is requested, the detail opened inside
+  the app included. `on` and `back-on` are as for every entry: present, opens, its chunk loads.
+  Mail has the same kind of row against the mock hub (#15995, the `Inbox mail item` entry): with `module.mail` off the
+  mock answers 404 on `/api/v1/mail/…` as the hub does and keeps the item's stored text on `GET /api/v1/inbox/{id}`
+  (`scripts/mock/mail_mock.py`, with `mail_body_truncated` as the text is: `MOCK_MAIL_STORED_TEXT=clipped` makes every
+  stored mail a long one cut at 3,000 characters, `=unknown` leaves the key out); the mail is still listed in the Inbox, opens with that text and the line saying mail
+  is off, and shows no reply, AI draft reply, attachment or error. On the older hub it opens the whole message.
+- **Output**: a `PASS` / `WARN` / `FAIL` line per phase, module and check, the evidence JSON (`--evidence`, default
+  `<shots>/evidence.json`: commit, the settings row, the manager line, the hello's module flags, what the browser got and
+  requested), and screenshots `<phase>-<scheme>-<name>.png` in `--shots` (this machine's name is masked; never commit
+  or push them). The last line is the verdict (`PASS`, `FAIL` or `TIMEOUT` after `--timeout`, default 40 minutes); the
+  exit code is non-zero unless it is `PASS`. A run takes about four to six minutes after the builds.
+- **A module the tables lack** is still checked for its hello flag and the manager line, and the run says so: the PR
+  that moves a module adds its rows (what the hub has of it, what the web app shows of it). A module with nothing of its
+  own on a hub (only its flag and the manager line) gets the honest empty `SERVER` row `{}`, not a missing one; a module
+  the web gates nothing on may have no `WEB` row (only a `NOTE`), or a chunks-only one (its chunks must not be requested
+  while it is off).
+- **Row forms that are not "on or absent"**: `off_stays` is a page the default panel keeps for existing data while the
+  module is off (`health`'s `/health` is the read-only archive, #15704): it stays and shows what it stores, with none of
+  the module's controls. `needs_on` on a kept item is data only the `on` phase makes (the recording the gate uploads),
+  skipped in a run with no `on` phase.
+- **The core-only mode** (`--core-only`, #16243) is the one check that runs a client against a hub built with
+  `-tags persona_core_only` instead of a default build with modules switched off. It builds the four programs with the
+  tag (its own `persona_core_only` build, `--no-build-web` serving the existing `web/dist`), starts a disposable hub the
+  same way, and runs the browser half with **every** module expected off: the hello carries the `modules` marker and no
+  built-in flag, the manager says `modules: loaded none`, the core's pages render with no page or console error, no
+  module's entry, address or chunk is there, and stored recordings stay readable. `--modules` is optional (every module
+  by default). It has no `on`/`off`/`back-on` and no mock phases; the full gate above covers those.
 
 ## End-to-end (verified 2026-10-24)
 
@@ -371,6 +809,24 @@ API smoke tests: `curl -H "Authorization: Bearer $TOKEN" …/api/v1/machines`, `
 - Watch: list, interaction details, Inbox details (AI reply), session details.
 
 Simulator limits: computer-use can't click simulators while the screen is locked; use DEBUG launch arguments to open pages directly. Push, real HealthKit data and WatchConnectivity sync need devices.
+
+## Android Inbox Agent handoff to a named manager
+
+Run `python3 scripts/test/android-named-inbox-handoff.py --report /tmp/persona-handoff.json` from the repository root with Docker, Go and the Android build toolchain available. The fixture creates a loopback hub, two managers with separate PostgreSQL stores, and two controlled target machines. Seed data and credentials live in its temporary directory.
+
+The fixture runs `persona.core.data.NamedManagerInboxHandoffLiveTest` in `:core:data:testDebugUnitTest`. The Android repository reads the merged Inbox and hands the named manager's item to the target session. Each of two attempts uses a fresh Room outbox and reply journal so the same operation crosses HTTP twice. The session-message route names the manager's machine, and the Inbox record request names the manager. The test compares the complete returned handoff, including the original Agent chain entry. The report includes the request and response hashes for each observed route, delivery counts for both machines, and handoff and chain counts from both databases. Ordinary Android test runs skip this fixture unless `PERSONA_ANDROID_HANDOFF_FIXTURE` names its private configuration file.
+
+## Android Inbox Agent handoff to a running engine
+
+Run `python3 scripts/test/android-engine-inbox-handoff.py --model <installed-model> --report /tmp/engine-handoff.json`
+with Docker, Go, the Android SDK and JDK, Node 22+, Codex CLI and a local Ollama model that supports the Responses API
+on port 11434. Use `--codex <path>` to select a CLI that writes session items Persona can read. Codex CLI 0.169.1
+was verified with `gemma4:e4b`. The test creates a disposable Codex profile, thread, loopback hub, default manager and PostgreSQL store.
+
+Android sends one synthetic Inbox instruction through its real outbox. At the injected HTTP 409 the driver inspects
+the engine transcript and the Inbox database before allowing the composer to retry. It then checks the single completed
+engine turn, the returned reply in Android's session history and the handoff recorded under the original client ID.
+The report contains HTTP receipts, counts and SHA-256 digests. The separate named-manager test covers cross-manager routing.
 
 ## Android screenshots
 
@@ -403,9 +859,10 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   uninstall/reinstall to photograph the chat tab (the fresh-install default).
 - Home greeting follows the simulator's actual time ("Good evening"); status-bar time should be current too, not fixed at 9:41.
 - For the shared Inbox showcase, start the mock with `MOCK_INBOX_SHOWCASE=1` and launch with `SIMCTL_CHILD_TZ=UTC xcrun simctl launch … -showClockAt 2026-01-01T12:00:00Z` (DEBUG only) to pin the Inbox display clock to the fixture's `now_clock`.
-- Held-push screenshots (#7782): start the mock with `MOCK_LN=1` so `GET /api/v1/push/ln-mode` returns enabled and `GET /api/v1/push/intercepts` returns synthetic rows: two P1 and one P2 of the local day (the first P1 links the /orders investigation to-do through `todo_id`, a source the clients follow; the others have no source) and one P1 of yesterday that clients leave out. Today's rows are hours before the request, or just after midnight when that was another day (wall-clock time, so a DST transition keeps them today), so a mock left running still has them. `GET /mock/ln?on=0|1` switches the mode while the mock runs and `/mock/reset` puts back how it started; the rows are there with the mode off too, as on the hub, and clients don't read them then. Then add `-openPushIntercepts YES` to the launch command. The switch opens the held-push tray once and is removed from `UserDefaults`; no real push content is used.
-  UI suite `PushInterceptsUITests` (`TEST_RUNNER_PERSONA_MOCK_HUB`; it switches the mode itself and puts it back) taps the entry, checks P1's rows with P2 folded, checks the tray opens above the action bar's row at the bar's width with Needs You and In Progress on the entry's row (`midY` within 0.5 pt) and that Needs You's tray takes its place, one at a time (#8223), opens P2, follows the linked row to its to-do, and checks there is no entry with the mode off, light and dark; `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `held-pushes-<light|dark>-<entry|tray|p2-folded|p2-open|source|ln-off>.png` (`p2-folded` when the folded P2 header is below the tray's fold).
+- Held-push screenshots (#7782): `MOCK_LN`, `/mock/ln`, and `/api/v1/push/ln-mode` are compatibility identifiers for push grading. Start the mock with `MOCK_LN=1` so `GET /api/v1/push/ln-mode` returns enabled and `GET /api/v1/push/intercepts` returns synthetic rows: two P1 and one P2 of the local day (the first P1 links the /orders investigation to-do through `todo_id`, a source the clients follow; the others have no source) and one P1 of yesterday that clients leave out. Today's rows are hours before the request, or just after midnight when that was another day (wall-clock time, so a DST transition keeps them today), so a mock left running still has them. `GET /mock/ln?on=0|1` switches push grading while the mock runs and `/mock/reset` puts back how it started; the rows are there with push grading off too, as on the hub, and clients don't read them then. Then add `-openPushIntercepts YES` to the launch command. The switch opens the held-push tray once and is removed from `UserDefaults`; no real push content is used.
+  UI suite `PushInterceptsUITests` (`TEST_RUNNER_PERSONA_MOCK_HUB`; it switches push grading itself and puts it back) taps the entry, checks P1's rows with P2 folded, checks the tray opens above the action bar's row at the bar's width with Needs You and In Progress on the entry's row (`midY` within 0.5 pt) and that Needs You's tray takes its place, one at a time (#8223), opens P2, follows the linked row to its to-do, and checks there is no entry with push grading off, light and dark; `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `held-pushes-<light|dark>-<entry|tray|p2-folded|p2-open|source|ln-off>.png` (`p2-folded` when the folded P2 header is below the tray's fold).
 - Main-chat model choice screenshots (#6542, #7857): start the mock with `MOCK_MODEL_PICK=1` so `features` carries `assistant_model_pick` and the main conversation's launchers (`?purpose=assistant`) list Claude Code (Opus on the Main Chat default, with Fable, Sonnet 5.5 and Haiku 5.5 among its models), a launcher that fixes its own model, a direct API and Codex, plus unavailable entries; `PUT`/`DELETE /api/v1/assistant/conversations/<id>/model` keep or drop the conversation's own pick; `GET /mock/model_pick` lists every PUT and DELETE since the mock started, and `?reset=1` also drops every conversation's pick (the list is kept). UI suite `AssistantModelPickerUITests` (`TEST_RUNNER_PERSONA_MOCK_HUB`, `TEST_RUNNER_PERSONA_SHOTS=<dir>`) opens the main conversation, opens the composer menu's Change Model… sheet, picks Haiku and checks the button renames and the hub records the PUT, light and dark; it keeps `model-picker-<1-entry|2-menu|3-sheet|4-picked>-<light|dark>.png`. Without `MOCK_MODEL_PICK` (or `PERSONA_MOCK_HUB`) it skips rather than fails.
+- Main-chat Codex Speed (#10244): with the same `MOCK_MODEL_PICK=1`, `GET /mock/model_pick?reset=1&speed=idle|working|no-tier|ack|pending|refusal|timeout` makes the main conversation a Codex chat with its own model pick. Every case except `no-tier` advertises Standard and Fast and starts acknowledged at Standard. `ack` answers a speed POST without changing the session until `GET /mock/model_pick?speed_ack=1`; `pending` holds the POST itself for up to 15 seconds so the menu can show why its actions are disabled, and the same acknowledgment releases it. `refusal` returns 409 and `timeout` an immediate 504 with `code: "timeout"`, neither changing the acknowledged tier. `speed_requests` in the same response records each fixture `/modes` call as `{method, path, body}`, including an effort change; a reset without `speed` restores the ordinary Claude model-picker fixture and clears that log. Summary rows omit both speed fields as the hub's do, exercising detail preservation. `AssistantModelPickerUITests` covers Standard → Fast → Standard, working/effort independence, no tiers, pending and delayed acknowledgment and both failures; `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `model-picker-speed-<idle|working>-<light|dark>.png` and, at the largest accessibility text size, `model-picker-speed-<idle|working>-largest-<light|dark>.png`.
 - Dark: `xcrun simctl ui $SIM appearance dark`.
 - A background task that reports back after a newer answer (#9140): `MOCK_WAKE_AFTER_ANSWER=1` makes Persona's main conversation one where three background checks were started, another question was asked and answered in full, and each check's notification then woke the assistant (three `wake` notices with no message of the user's). The answer to the second question stays on screen and each woken turn follows under its notice, with its own work line.
 - `MOCK_TOPBAR=1|3|long`: sub-Agents of the weather-widget session for the chat header's status line (`docs/archive/apple/plan-chat-topbar.md`): `1` one running and one ended (`-openAgent tb1` reads it, with a conversation); `3` three running (`tb3` newest); `long` a sub-Agent title of about 40 characters and a very long tab name (truncation). Add `-holdChromeOpen YES` so the header does not fold before the screenshot.
@@ -415,6 +872,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - A reply's Markdown as written (#3863, `CJKEmphasis` in PersonaKit and `MarkdownTable.swift`): `MOCK_REPLY_MARKDOWN=1` adds MacBook's "导出耗时整理" (`macbook/a1f3c2d4-0000-4000-8000-0000000c3863`) and puts the same turn at the end of Persona's conversation: a table whose delimiter row aligns its columns (the seconds right-aligned so the decimals line up, the result centered), headings at levels 4 to 6, and bold labels next to full-width punctuation (`**注意：**后文`, `**「必须」**`), which render bold with no asterisks left over.
 - Paths with non-ASCII names in a reply (#8386, `PathRefs` in PersonaKit and `web/src/lib/path-refs.ts`): `MOCK_CJK_PATHS=1` adds MacBook's "报表整理" (`macbook/a1f3c2d4-0000-4000-8000-000000008386`) and puts the same turn at the end of Persona's conversation: bare paths to files with Chinese and Japanese names, which are there (so they link), one glued to the sentence after its extension and one before a full-width full stop.
 - Tool outcomes (#4303, `ToolOutcomeText` in `apple/Persona/Views/Chat/ToolOutcomeViews.swift`): `MOCK_TOOL_OUTCOMES=1` adds MacBook's "Why the last export batch goes missing" (`macbook/a1f3c2d4-0000-4000-8000-0000000c4303`), one turn whose tool results carry the node's `outcome`: a test run that failed with exit code 1 and an output the page cut (its last lines in `tail`), an edit the user denied, a write refused before it ran, a command the user interrupted and one that timed out and went on in the background. Only the failed run is red; the others say in gray what stopped them. The failed run and the denied edit also end chats of their own (`…c4304`, `…c4305`): `-openSession macbook/<id> -openAllWork YES -showToolDetails YES` shows "Exit code 1" with "End of output" under the cut output, or "Denied".
+- Full access by a restart (#6476, #6513): `MOCK_BYPASS_PENDING=1` gives the widget agent (`macbook/a1f3c2d4-0000-4000-8000-000000000001`, working in Auto-Edit) `bypass_pending`, a restart into Full access that waits for its turn to end, so the clients' pending state can be screenshotted without picking it. Any other mock agent in a pane takes a Full access pick by a restart (`MOCK_BYPASS_RESTART_SECONDS`).
 - Permission mode change lines (#10297, `docs/protocol/protocol.md` "Session mode changes"): `GET …/mode-changes` returns what the mock's `/modes` took (from, to, applied `now` or `restart`, by "Phone") and what became of a restart into Full access. `MOCK_MODE_CHANGES=1` starts the widget agent (`macbook/a1f3c2d4-0000-4000-8000-000000000001`) with three: iPhone's pick of Auto-Edit before its exchange, MacBook's pick of Full access by a restart after it, and that restart called off because the session runs in another process now.
 - A file tool's change on its permission card (#4621, `PermissionDiff` in `apple/Persona/Views/Interactions/PermissionDiff.swift`): `MOCK_PERMISSION_DIFF=1` adds two MacBook chats that wait on a Claude Code permission card, as a hub sends it: "Keep the last export batch" (`macbook/a1f3c2d4-0000-4000-8000-0000000c4621`), an Edit whose diff is longer than the card shows (Show All 15 Lines), and "Test the last export batch" (`…c4622`), a Write of a short test file. `-openSession macbook/<id>` shows the card under the chat.
 - Cron scheduled tasks (#4399, `docs/assistant/assistant.md` "Scheduled tasks"): `MOCK_CRON=1` adds the `task_cron` feature and a cron task (every 30 minutes in work hours on weekdays, `rt_cron`), and answers `GET /api/v1/assistant/tasks/cron` for the web editor's examples (anything else gets the hub's kind of refusal). iOS: `-tab assistant -openAssistantPage routines` shows it in the list, `-openAssistantPage cronTask` opens it. Web: `node web/e2e/task-cron.mjs` (`docs/web/web.md`).
@@ -442,8 +900,8 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   `GET /mock/iphone?reset=1` starts it over. `-tab settings -openIPhoneSetup YES` opens the guide. `IPhoneSetupUITests.testTheWholeGuide` walks it with `TEST_RUNNER_PERSONA_IPHONE_SETUP_HUB`, once per look in `TEST_RUNNER_PERSONA_UI_LOOKS` (`name=args;…`, the mock starting over before each), saving `PERSONA_SHOTS`. Unit tests: `IPhoneSetupTests`.
 - Cards on no session (#4059): `MOCK_SCRIPT_ASK=1` adds a question card with an empty `session_id`, like `personad ask` run outside herdr;
   Agents' needs-you list and the inbox both list it, and tapping it opens the card in a sheet (`-tab mail -openInboxAsk ix_script_ask` opens it directly).
-- Password card (`secret_run`, #1137, `docs/assistant/assistant.md` "Password card"): `MOCK_SECRET_RUN=pending|ran|withheld|long` puts it in Persona's main conversation: `pending` waits for the password (two commands on the Mac Studio); `ran` is answered, every command exited 0; `withheld` the same with the first command's output withheld (it held the password); `long` the second command failed with a long output (the app reads the whole result).
-  UI suite `SecretRunUITests` (`TEST_RUNNER_PERSONA_SECRET_RUN_HUB=<mock URL>` with `MOCK_SECRET_RUN=pending`): the commands verbatim, Run only once a password is typed, the answer carrying exactly that password.
+- Password card (`secret_run`, #1137, `docs/assistant/assistant.md` "Password card"): `MOCK_SECRET_RUN=pending|ran|withheld|long|env` puts it in Persona's main conversation: `pending` waits for the password (two commands on the Mac Studio); `ran` is answered, every command exited 0; `withheld` the same with the first command's output withheld (it held the password); `long` the second command failed with a long output (the app reads the whole result); `env` waits with explicit non-sudo `delivery: "env"`, two commands using `PERSONA_SECRET` and the encoded-output warning; its mock also refuses approvals that omit `X-Persona-Features: secret_run_env`.
+  UI suite `SecretRunUITests` (`TEST_RUNNER_PERSONA_SECRET_RUN_HUB=<mock URL>` with `MOCK_SECRET_RUN=pending`): the commands verbatim, Run only once a password is typed, the answer carrying exactly that password, and no env warning for stdin. Its env case uses `TEST_RUNNER_PERSONA_SECRET_RUN_ENV_HUB=<mock URL>` with `MOCK_SECRET_RUN=env`, checks the warning and one fresh answer, and honors `TEST_RUNNER_PERSONA_SHOTS`, `PERSONA_SHOTS_APPEARANCE=light|dark` and `PERSONA_SHOTS_LARGE=1` for default/largest-text captures.
 - Questions the assistant sees first (web #544): `MOCK_DELEGATE=1` marks `ix_tests` and `ix_release_delegate` ("整理发布说明") `delegating`, gives `ix_review_delegate` ("检查 PR #42 的改动") `delegate` context recommending one of its choices, and adds one delegated answer to `GET /interactions/history` in the hub's row shape (`{interaction, status, resolution, resolved_at}`).
   `GET /mock/delegate?answer=<id>` answers a looking card as the assistant (`interaction_resolved` with `answered_by` / `reason` / `answers`, then into history), `?handover=<id>` hands it to you (sent again without `delegating`, with context).
   `POST /interactions/{id}/reanswer` answers like the hub (409 not answered by the assistant, 400 no answers) and broadcasts `interaction_reanswered`; `GET /mock/reanswered` shows what arrived. There is no reset: restart the mock between runs.
@@ -453,6 +911,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   answered questions, receipts, direct task messages and a final unstarted plan. `MOCK_TASKS_AT=<minutes>` cuts newer items so earlier portions sit at the bottom without scrolling.
   `MOCK_TASKS_NO_ASKS=1` suppresses task-Agent questions above input. `MOCK_TASKS_DOCK=2` keeps two working tasks (two dock capsules, then two manual Agents); `=pair` one task + one manual Agent waiting for you; `=many` adds four tasks (dock wider than screen, "All" fixed left); `=multi` keeps only "Fix widget landscape crash" with two Agents (task-title ⌄ switch, `TaskSheetHeaderTests` with `TEST_RUNNER_PERSONA_TASK_MULTI=1` and `MOCK_MANAGERS=1`); `=long` keeps two overlong titles (parallel capsules, no overlapping truncation; `simctl ui <udid> content_size extra-extra-extra-large`, #3010). Default: four unfinished tasks + two manual Agents (#1113). `-showTaskDetail <to-do id>` (e.g. `todo_task_widget`) opens details; `-showTaskBoard YES` opens board.
   `TaskSheetHeaderTests` (a task's sheet has one header, the Agent chat's: ✕, the title button `chat.title`, ⋯, no ‹, no space tabs; #3255) runs on `MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_MANAGERS=1`:
+  Start remedies (#10365): add `MOCK_START_REMEDIES=1` to advertise `task_retry_launcher`, `start_continue` and `todo_start_answer`. Three final failed-task fixtures cover terminal `launcher_missing` with `retry_with: [codex]`, `worktree_path_taken` on a to-do without `plan_id`, and a task `shell_waiting` question; Agent `macbook/a1f3c2d4-0000-4000-8000-000000000104` has the session question. Ordinary Retry stays bodyless, the alternative sends only `launcher`, and the two answer routes accept only an offered choice. `GET /mock/start-remedies` records their raw bodies. `MOCK_TOOL_SEARCH=1` independently gives the populated main chat the raw-400 `tool_search_unsupported` turn error for its dedicated Retry card.
   with the default mock's several assistants the MacBook, where the tasks' Agents run, is another assistant's, the app lists only the current one's sessions (#5587),
   and the sheet, with no Agent page to show, draws its own header with the title as text (#10253). The test stops at launch on a hub with several, naming `MOCK_MANAGERS=1`.
   Its newest line is a morning routine's `brief` item (#2320): a waiting card that names its chat and one that doesn't, failed and done rows past what is listed, a deployed to-do and a decision to verify, two questions that can wait and two to-dos in progress. `TEST_RUNNER_PERSONA_MOCK_HUB=<address> xcodebuild test … -only-testing:PersonaUITests/BriefCardUITests` (with `MOCK_TASKS_NO_ASKS=1`) checks the iPhone's folded rows, Accept, Handled and Open; `TEST_RUNNER_PERSONA_SHOTS` / `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE` save the card folded, unfolded and answered.
@@ -469,13 +928,17 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   The hub's notice line (#4305): `MOCK_TASKS=1 MOCK_TASKS_NOTICE=1 MOCK_TASKS_NO_ASKS=1` adds "电脑和模型接好了，定时任务恢复运行，这次是「早报」" as the conversation's last line, small and centered.
   What didn't go through overnight on the Today card (#4124): `MOCK_TODAY_FAILED=1` (with `MOCK_TASKS=1`) adds a task whose Agent didn't start, a failed scheduled run and a skipped one, with `failed_total` 5, so the row says how many in all and "2 more"; without it the card is as before.
   Message card states (#4797): `MOCK_TASKS_MESSAGE=filed` marks the card about the widget task as handled elsewhere (`filed_at`): no Send, the draft greyed out with a line saying it wasn't sent. `MOCK_TASKS_MESSAGE=sent` marks it as replied from the card (`sent_at`).
+- Question cards over the composer (#9392, #12306): `QuestionCardFoldTests` lists its mock hubs in its class comment. `MOCK_TASK_ASK_LONG=1` (with `MOCK_TASKS=1`) gives the task's question four options with long descriptions; with `MOCK_ASK_LONG=source MOCK_CARD_SOURCE=1` beside it (`TEST_RUNNER_PERSONA_BOTH_LONG_HUB`) the tests check, on the task's question as the pager's second card (#12831), that the grabber makes it taller, shorter, the tallest and the default, the height kept after a relaunch. The iPhone app is portrait only, so the open Duo held sideways is checked on the device. `-ui.questionCardHeight ""` starts the app from the default height.
+- The assistant's To Decide pager (#12831): `QuestionDockTests` (UI) runs against one mock hub with `MOCK_AGENTS=1 MOCK_TASKS=1 MOCK_ASK_LONG=source MOCK_CARD_SOURCE=1 MOCK_DOCK=1`: `MOCK_DOCK=1` adds a tool approval on the widget task and a question read off the blog task's terminal, so the pager holds the conversation's own question, the task's question, the approval and the terminal question; `/mock/reset` puts them back. The pager's rules are unit-tested in `PersonaTests/QuestionDockTests`.
 - A reply's code block on the iPhone Duo (#8212, `docs/lessons/ios.md` "A sideways scroll view draws into the safe area beside it"): `MOCK_CODE_WIDE=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` adds `macbook/a1f3c2d4-0000-4000-8000-0000000c1e30`, an answer with a code block and a table far wider than any column. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/CodeBlockOverflowUITests` on the Duo simulator, folded or open on its side, checks that no code is drawn past the block's trailing edge; `TEST_RUNNER_PERSONA_SHOTS=<directory>` saves the screen.
 - Typing a model ID (#1644, `docs/assistant/model-config.md` "Typing a model ID"): `MOCK_CUSTOM_MODELS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` lists IDs typed before after the Claude Code / Codex lists (`custom: true`), takes Forget (`DELETE …/models/custom?model=`) and remembers a start's or a `…/modes` typed model; `=forgetfail` makes Forget answer 500 (the row comes back), `=empty` gives Claude Code an empty list ("Enter Model ID…"), `=fail` a 502 for every list; `GET /mock/custom_models` shows what is remembered (`?reset=1` puts the first IDs back). `TEST_RUNNER_PERSONA_CUSTOM_MODELS_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/CustomModelUITests` walks New Agent (typed IDs, Forget, the reason under a bad ID, the pick in the start), a running session's "Other Model…" (`POST …/modes`, then the menu ticking it with the ID once the session runs it) and the Persona chat's launcher menu (against `=1`), New Agent's "Enter Model ID…" beside a list that couldn't be read and its clear button (against `=fail`), the empty list (`=empty`) and a refused Forget (`=forgetfail`); each test skips the other modes. `TEST_RUNNER_PERSONA_SHOTS` / `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE` save the screenshots. The mock lists `typed_models` in its features in every mode (the chat's "Other Model…" needs it). The web's: `node web/e2e/custom-model.mjs <web URL> --hub <mock URL> [--shots <dir>]` follows the mock's mode: New Agent, a session's model panel (the composer's model pill: the IDs typed before with Forget, "Use “…”" from the search, #5032) and a Persona chat's (#5033) (`=1`), a refused Forget in New Agent and the model panel (`=forgetfail`), New Agent without a list (`=empty`, `=fail`: the group's error and Retry, still the launcher's Default row and "Use “…”" from the search, #5104); light and dark.
+- A new Persona conversation's model menu (#11472, `docs/apple/ios.md` "New shell"): `MOCK_MODEL_DEFAULTS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` answers `?purpose=assistant` with Main chat's `default`. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/StarterModelMenuUITests` sets Main chat to the mock's `claude` launcher with `sonnet` (`PATCH …/model-config/purposes/assistant`; the launcher's own model is `opus`), then checks, light and dark, that the button names Sonnet, that `claude` lists its models a level down with Sonnet ticked, that picking Fable names the button, and that Follow Main Chat default goes back. `TEST_RUNNER_PERSONA_SHOTS=<directory>` keeps `starter-model-iphone-<look>-<step>.png`. `PersonaTests/AssistantStarterChoiceTests` covers the start request (nothing picked names neither launcher nor model; a model goes with its launcher; a Default entry sends none), the title and the effort levels.
 - Main chat already running on the other agent kind (#4662, `docs/assistant/model-config.md` "A conversation's own model"): `MOCK_MAIN_ACTIONS=1 MOCK_MODEL_PICK=otherkind PORT=<dedicated port> python3 scripts/mock/mock_hub.py` keeps Main chat's default on Claude while the current main conversation runs Codex and advertises the existing New main action. `node web/e2e/main-chat-agent-notice.mjs <web URL> --hub <mock URL> [--shots <dir>] [--chromium <executable>]` checks the actual Codex model pill, the notice, the existing New main dialog, and the Main chat editor's draft-dependent explanation. It also selects Codex to suppress the editor notice, selects Claude to restore it, and uses `GET /mock/model_pick?default=codex` / `?default=gone` / `?default=claude` with pushed session revisions to check live same-kind suppression, unknown-default silence, and mismatch restoration without reloading the chat. Runs light and dark at desktop standard text and phone large text; screenshots stay outside git and no live hub is used.
 - Claude Code ultracode (#1307, `docs/apple/ios.md` "Claude Code ultracode"): `MOCK_ULTRACODE=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` (the states are listed in the mock's help: on, queued, turned off by a resume, the node's reason, off, offline, Codex at `ultra`, Mac Studio's old Claude Code). `TEST_RUNNER_PERSONA_ULTRACODE_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/UltracodeUITests` checks the model menu's switch and its line, the marks on the model button and the Agents rows, the requests (`GET /mock/ultracode`; each test resets the states with `?reset=1`), the resume line's Turn Back On and ×, a refusal, and New Agent (off each time, grayed for a too-old Claude Code). `TEST_RUNNER_PERSONA_SHOTS=<directory>` and `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=light|dark` save the screenshots; switch the simulator's appearance with `simctl ui`.
 - Launcher health in New Agent (#1643, `docs/server/launcher-health.md` "In the App"): `MOCK_LAUNCHER_HEALTH=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` gives every computer's launcher list `work_gw` blocked as not in the terminal and `team_gw` blocked on its key (claude checked fine),
   a start that runs `work_gw` fails with the hub's coded sentence, and `macbook/f1643000-0000-4000-8000-000000000001` is a chat that already failed so. `MOCK_LAUNCHER_HEALTH=default` also makes `work_gw` Model Settings' New Agent default.
   `MOCK_LANG=en|ja` writes the hub's start-failure sentence in that language (from the hub's own catalogs; default zh-Hans), for screenshots in that language. With `MOCK_TERMINAL_PANES=1` the computers have free shells for Run Agent Here.
+- Agent folders (#8578, #10053, `docs/protocol/protocol.md` "Agent directory visibility"): every mock serves `GET`/`PUT /api/v1/machines/{mid}/agent-dirs/hidden`; rows whose `cwd` an enabled hide rule matches (a rule without an `action` hides) carry `hidden_by_directory` (bounded lists leave them out unless `include_hidden=1`), rows and cards an enabled block rule matches are left out entirely, as a node that blocks them sends none, and a change pushes that computer's rows and replays its pending cards, which never leave the inventory. `GET /mock/agent_dirs_fail?n=<count>` makes the next reads answer 503. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/HiddenAgentDirsUITests` hides Mac Studio's `~/code/photo-sync` (one Agent with three cards), checks the list and Needs You, the Agents menu's Show hidden sessions / Hide directory matches, a relaunch with the rule on, the settings page (picker, rules, inline error, load failure and Retry), switching the rule off and allowing the returned approval, opens Blocked Config Folders, then blocks the folder (gone even from Show hidden sessions) and switches the rule to Hide from its action picker. It answers that approval, so restart the mock before each run; `TEST_RUNNER_PERSONA_LOOKS=light|dark|ax5` picks the looks (set the simulator's text size with `simctl ui <udid> content_size` for `ax5`) and `TEST_RUNNER_PERSONA_SHOTS=<directory>` keeps `hidden-dirs-<look>-<step>.png`.
 - Terminal-only Agent (#6170): `MOCK_TERMINAL_ONLY=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` lists a Kiro CLI in a herdr pane (`macbook/c0de0000-0000-4000-8000-000000000002`, with a `read_only_reason` as the node sets it). `-openSession macbook/c0de0000-0000-4000-8000-000000000002` shows the Terminal button over its composer (`chat.terminalOnly.terminal`).
   iOS / Mac: `-showNewChat YES -openLauncherPicker YES` opens the launcher list once the computer's launchers are in, `-showLauncherHelp <name>` that launcher's help over it (`-openLauncherDetails YES` with Details open); `-openSession macbook/f1643000-…` shows the failed start; with `MOCK_TERMINAL_PANES=1`, `-tab dev -showRunAgentHere macbook` opens Run Agent Here for that computer's first herdr space (`-showRunHereLauncher work_gw` with it picked, since a picker menu's items take no synthesized tap); `-tab dev -showPushAsk macbook` asks that space's Git ▸ Push question (#1883). With `MOCK_GIT_READ_FAIL=1`, `-openPane git -showGitReload YES` refreshes a session's Git tab and loads earlier commits once after the first read, both failing (#1889).
   Web: `node web/e2e/launcher-health.mjs <web URL> --shots <dir> [--locale en-US]` against the same mock (wide / 390 × light / dark: the model panel's groups for blocked launchers with their rows off, their reasons and How to fix, the line under the first message box when what runs this time is blocked (#5104), the chat's coded failure, and, with `MOCK_TERMINAL_PANES=1`, the Run agent here menu).
@@ -483,8 +946,11 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - MCP forms and links on iOS (#2322, `docs/apple/ios.md` "MCP forms and links"): `MOCK_ELICITATION=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` puts a form and a link on the PR review chat; `GET /mock/hello` returns the last `client_hello`'s `features` / `platform` / `version` and the `X-Persona-Client` of the last `GET /api/v1/interactions`. `TEST_RUNNER_PERSONA_ELICITATION_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/ElicitationCardTests/testFormAndLink` checks that the hello declares the cards with the header's platform and version, the form's order, a bad value blocking Submit, every kind of field in the answer (`GET /mock/resolved`), and the link's Continue waiting for Open Link and the app's link card. Against `MOCK_ELICITATION=unsupported`, `TEST_RUNNER_PERSONA_ELICITATION_UNSUPPORTED_HUB=… -only-testing:PersonaUITests/ElicitationCardTests/testUnsupportedFormDeclinesAndLinkCancels` checks the hand-back note, Decline and Cancel. Answered cards leave the mock: restart it before another run. `TEST_RUNNER_PERSONA_SHOTS=<directory>` and `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=light|dark` save the screens.
 - MCP form pushes on iOS (#2433, `docs/apple/ios.md` "Data flow", interaction pushes): against `MOCK_ELICITATION=1`, `TEST_RUNNER_PERSONA_ELICITATION_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/ElicitationPushTests` posts what the hub's push looks like (`-showTestNotification elicitation -showTestNotificationIn <machine>/<session>`, category `INTERACTION_ELICITATION`), taps it from the background and finds the conversation open with the form; then launches once more without `-pairURL` so the app registers for pushes, and reads the registration's `features` from `GET /mock/devices` (it skips that part when the simulator gives no APNs token). Run on a `--profile stock` simulator: it answers the notification question.
 - A retired push registration on iOS (#9612): `TEST_RUNNER_PERSONA_PUSH_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/PushReregisterTests` pairs, launches without `-pairURL` so the app registers, retires that registration in the mock (`GET /mock/devices/retire?on=1`: prefs writes answer 409 `push_registration_required` until the next `POST /api/v1/devices`), switches Quiet Hours in Settings › Notifications and expects exactly one more registration and the switch's new state at the mock. It skips when the simulator gives no APNs token. Run on a `--profile stock` simulator.
+- The push-health notice outside Settings (#9612 item 4): `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/PushHealthNoticeUITests` uses `-showPushHealth unreachable` and `direct`, so no APNs token is needed. It checks the main-screen notice, healthy-state silence, plain language, the single action into Settings › Notifications and the ✕ (#12319: remembered on the next launch, shown again for another cause or after a recovery; launches pass `-pushNotice.dismissed {}` to start with none closed), then captures light and dark at default text and the largest accessibility size. `TEST_RUNNER_PERSONA_SHOTS=<directory>` saves those PNGs outside the repository. `PersonaTests/PushNoticeDismissalTests` covers when a closed notice comes back, `PersonaTests/PushHealthTests` the confirmed-missing-route state and `PersonaTests/PushRegistrarTests` the foreground permission refresh.
 - The composer's @ list (#2319, workspaces #2599; `docs/apple/ios.md` "Typing @ offers files, folders, workspaces and sessions"): `MOCK_MENTIONS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` has the review agent (`macbook/a1f3c2d4-0000-4000-8000-000000000006`) read `README.md` and `WeatherWidget/Provider.swift` in calls the hub leaves unfolded, so they are that chat's files; its folder is the mock's file tree. The same mock serves four workspaces, including `weather-app` on `macbook` at `/Users/me/code/weather-app` on `main`. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/MentionMenuTests` checks the rows and their order, filtering, an e-mail address opening nothing, browsing `@Sources/` and picking a folder and then a file, a session quoted and sent with the message, the + menu's @, and a new conversation's workspaces before sessions. It also picks `weather-app` in Persona's main and non-main conversations and a new conversation, then reads `/mock/sent` for a leading `kind="workspace"` block with the raw `machine`, `cwd` and `branch`; an Agent chat has no workspace rows. `PersonaTests/MentionMenuTests` covers matching/ranking/deduplication, the eight-row cap, one read per opening, 404/503 fallback, and XML/Codable attribute round trips. `TEST_RUNNER_PERSONA_SHOTS=<directory>` and `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=light|dark` save the screenshots (iPhone and iPad); `-openMentionMenu YES` opens the list by hand. The mock records the client-authored tag but does not perform the real manager's workspace expansion.
-- New Agent's attachments (#2321, `docs/apple/ios.md` "Attachments in New Agent"): `MOCK_UPLOAD_KBPS=96 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` makes an upload take half a minute. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/NewAgentAttachmentsTests` attaches with `-openNewAgentAttachments` (a simulator's photo and file pickers can't be driven) and checks Start Chat waiting for the upload, the add menu, the first message's photo and path (`GET /mock/sent`; `/mock/uploads` also names each upload's computer), another computer taking the files out with its note, a Codex launcher refusing a photo, and a to-do handoff keeping its context block first. `TEST_RUNNER_PERSONA_SHOTS=<directory>` and `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=light|dark` save the screenshots; switch the simulator's appearance with `simctl ui`.
+- New Agent's attachments (#2321, `docs/apple/ios.md` "Attachments in New Agent"): `MOCK_UPLOAD_KBPS=96 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` makes an upload take half a minute. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/NewAgentAttachmentsTests` attaches with `-openNewAgentAttachments` (a simulator's photo and file pickers can't be driven) and checks Start Chat waiting for the upload, the add menu, the first message's photo and path (`GET /mock/sent`; `/mock/uploads` also names each upload's computer), another computer taking the files out with its note, a Codex launcher refusing a photo, and a to-do handoff keeping its context block first. With `MOCK_OMP=1` too, the mock lists an `omp` launcher and `testOmpStartsWithItsFirstMessageAndNoOptions` checks that omp gets no Permissions & Thinking and no attachments, and that its start carries the first message and no mode, effort, model or `async` (`docs/integrations/omp.md` "Starting from the apps"); without it that test skips. `TEST_RUNNER_PERSONA_SHOTS=<directory>` and `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=light|dark` save the screenshots; switch the simulator's appearance with `simctl ui`.
+- Load that queues while CPU stays moderate (#12519, `docs/server/machines.md` ("What load counts")): `MOCK_LOAD_QUEUE=<id>[,<id>…] PORT=<dedicated port> python3 scripts/mock/mock_hub.py` gives those machines about 1.4 per core of load at about 40 % CPU, the case where load reads as a wrong number: the card says "Load 1.4 per core" under CPU with a High load chip, the machine page the raw value with the per-core figure under it, and both pages say what load counts under their numbers. `-tab settings -openMachines YES` (`-openMachinesFootnote YES` at the page's foot; with `-openMachineDetail <id>` that machine's page, and `-openMachineMonitor top|load` scrolled to its Monitor or to the definition under the charts) opens them for light and dark screenshots; the web's Machines page and the load alert sheet read the same mock.
+- An offline machine beside an online one (#11283): `MOCK_OFFLINE_MACHINES=<id>[,<id>…] PORT=<dedicated port> python3 scripts/mock/mock_hub.py` takes those machines offline and keeps what they run (`studio` offline beside the online MacBook, both macOS; `server`, the assistant's own computer, turns the persona's face offline). `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/OfflineFaceShotsTests` holds the face offline (`-showPersonaState offline`), folds the sidebar column where there is one so the top bar shows the face, and saves `offline-face-<device>-<appearance>.png` to `TEST_RUNNER_PERSONA_SHOTS` (`…_SHOTS_DEVICE`, `…_SHOTS_APPEARANCE`; on the open iPhone Duo `TEST_RUNNER_PERSONA_SHOTS_EXTERNAL=1` has the host take it with `simctl io … screenshot` when the test names it in `<dir>/want`). `PersonaTests/OfflineFaceEdgeTests` keeps the dark offline face's edge as clear as the online one's.
 - Recent setups in New Agent (#2134, `docs/apple/ios.md` "Recent setups in New Agent"): `MOCK_MACHINES=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_RECENTS_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/RecentSetupsUITests` starts three Agents through the form (MacBook in Allow Everything with a model, Codex on Mac Studio, the lab machine after `POST …/machines/lab/reconnect`; `/mock/reset` takes it offline again), reopens New Agent and checks the three cards (the offline one not pickable), a machine card restoring its model, two cards filling every field with nothing started (`GET /mock/started`), Remove from Recent and Clear Recent Setups. `TEST_RUNNER_PERSONA_SHOTS=<directory>` and `TEST_RUNNER_PERSONA_RECENTS_APPEARANCE=light|dark` save the screens; switch the simulator's appearance with `simctl ui`.
 - Away recap in message flow (#1360): `MOCK_RECAP_LONG=1` adds eight turns before "Review PR #42 changes", taller than one screen, ending in a recap. `TEST_RUNNER_PERSONA_MOCK_HUB=<address> xcodebuild test … -only-testing:PersonaUITests/RecapInFlowTests` checks expanded recap between reply/input, scrolling away, tap-to-collapse, remaining closed after reopening (`-openRecapsFresh YES` forgets closures). `TEST_RUNNER_PERSONA_SHOTS=<directory>` and `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=light|dark` save expanded/collapsed × bottom/scrolled-up, four shots. `MOCK_RECAPS=1` keeps the earlier two as small bars when three are folded to one line.
 - Truncated output: `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000002 -openAllWork YES -showFullOutput card` (expand Run card,
@@ -539,7 +1005,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   - Uploads accept `transcription` and `timeline`; every meeting upload's `200` names the effective mode, with `transcription_problem: unavailable` when hub mode could not be chosen. The first named mode stays fixed. Non-meetings requesting hub mode get `device` / `not_meeting`. Timeline roles merge by position (latest wins); speaking spans are `{"start", "end", "text"?}` objects (the text cut at 4000 bytes) and merge when they overlap or touch, their texts joined in time order (a span received again counts once); an invalid timeline (a span as a `[from, to]` pair included) is ignored whole.
   - `GET /api/v1/recordings/{id}/audio` upgrades to a WebSocket. Caller and manager refusals are HTTP `403` / `503`; recording refusals are the first fatal `error` frame after upgrade. Send `start` with `at` and `timeline`, wait for `ready {from, gaps, next}`, then send PCM16 LE mono at 16 kHz, at most 64 KiB per frame (a text frame at most 8.5 MiB). `seek`, `role`, `speaking` (on with the answer's `text`) and `end` work on the recording clock; a second socket replaces the first with `replaced`. `ack` comes every five seconds of received audio and on `end`. Per four seconds of audio, growing `interim` captions become one made-up Chinese/English or English `line`, unchanged by the recording's language. Speaking spans hold back the sentences after they began, then mark Persona's echo by the hub's rule (a line overlapping the span widened by 0.5 s whose words are 60% of the answer's character bigrams; a span without text keeps the time rule): an echo sentence stays in the hub's transcript (`detail.segments`, `echo: true`) and never reaches a `line`, the live log or the room, while anything else said during the answer goes out as usual. A `start.timeline` that has the open span closed ends the hold at once, and so does an upload `timeline` once the socket that sent the span's `speaking` on is gone. A span open for 180 seconds of audio is assumed open from then on: what it held and every sentence after it are judged with the answer it carried, no caption goes out, and a late `speaking` off still writes it to the timeline; a `speaking` on at a later time ends the open span there for what it held, and a span open at `end` is judged up to `end.at`. An end the mock assumed is never written to the timeline. Role `off` keeps hub text but emits no live line. `POST …/live` refuses hub meetings with `409 hub_transcribes` after the attendance check. A heard `…/ask` (with `at`) first flushes the scripted sentence the audio is in, cut at `at`, once the audio reaches it, and waits for sentences held for a speaking span; in the fallback it waits for an upload whose segments reach `at` (at most 15 seconds either way).
   - `PUT …/audio?at=<seconds>` fills gaps (whole PCM samples, at most 10 MiB). `GET …/live` and `detail.meta` carry `transcription`; its revision and `?parts=transcription` work, as do `interim` and `?parts=interim`. Content-free `meeting_live` events name the changed parts. After the complete upload, `finishing` waits for the socket to close and gaps to be filled (or the 30-minute deadline), then the scripted final pass takes two seconds; it makes hub text only while the chosen contribution is ready and the upstream works, else it keeps the live sentences, and either way marks what the complete upload's timeline says is Persona's echo (`final` with only echo sentences, `failed` only with none). `detail.segments` use hub text with device text in uncovered spans (`source: hub|device`), echo marks kept; `chars`, the summary and the mock minutes leave Persona's echo out (a meeting of only echo gets none); the held audio spans are then cleared. In the fallback a device segment that is Persona's echo (marked by the phone, or by the rule against the timeline) never joins the live log. The mock does not list `meeting_echo` (nor did it before): a device-mode upload's `echo` marks are kept as sent (left out of `chars` and the minutes), and `spoken` is ignored. The trim keeps transcription mode and state. A fatal upstream error enables device fallback immediately; a disconnected or degraded uplink does so after 30 seconds.
-  - `POST /mock/meeting_transcription` changes only the fields supplied: `{"on": true, "ready": true, "upstream": "ok", "fatal": "", "line_seconds": 4, "final_seconds": 2}`. `upstream` also accepts `unavailable`, `failed`, or `no_interim`; `fatal` injects a fatal error code (empty clears it). A degraded switch shows its `problem` at once; back to `ok`, the standing problem ends (`problem` `null`) only once a hub sentence comes again (a caption, for `no_interim`). `GET` shows the switches and each recording's received frames, byte count, timeline, gaps, held spans, whether a socket is up (`socket`) and transcription state. `POST /mock/recording_minutes` resets recordings and closes their sockets. `MOCK_NO_MEETING_TRANSCRIPTION=1` simulates an older manager: no feature or settings, upload fields ignored, audio routes `404`.
+  - `POST /mock/meeting_transcription` changes only the fields supplied: `{"on": true, "ready": true, "upstream": "ok", "fatal": "", "line_seconds": 4, "final_seconds": 2}`. `upstream` also accepts `forbidden`, `busy`, `unavailable`, `failed`, or `no_interim` (the `problem` codes `upstream_forbidden`, `upstream_busy`, `upstream_unavailable`, `upstream_failed`, `no_interim`, #13446); `fatal` injects a fatal error code (empty clears it). A degraded switch shows its `problem` at once; back to `ok`, the standing problem ends (`problem` `null`) only once a hub sentence comes again (a caption, for `no_interim`). `GET` shows the switches and each recording's received frames, byte count, timeline, gaps, held spans, whether a socket is up (`socket`) and transcription state. `POST /mock/recording_minutes` resets recordings and closes their sockets. `MOCK_NO_MEETING_TRANSCRIPTION=1` simulates an older manager: no feature or settings, upload fields ignored, audio routes `404`.
   - A long meeting in the background (#9108): `MeetingBackgroundRecordingUITests` records a real hub-mode room meeting with the
     simulator's microphone (`xcrun simctl privacy <udid> grant microphone <bundle id>` first), sends the app to the background
     for `TEST_RUNNER_PERSONA_LONG_RECORDING_MINUTES` minutes (unset: skipped; 10 or more for a release check) and fails as soon
@@ -622,7 +1088,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Hand to AI per source (#2121): `MOCK_INBOX_EVENTS=1 MOCK_EVENT_MUTES=1` gives three events their mute options. The two mail notifications ("构建失败：主分支" and "会议室变更通知") share one sender, so handing one off preselects that target, marked Last time, on the other (`InboxHandOffBarTests`). With `MOCK_INBOX_EVENTS=legacy MOCK_EVENT_MUTES=1` the same two open as plain item pages, and `InboxHandOffSheetTests` checks the Hand to AI sheet the same way.
 - GitHub thread page (#1055): `MOCK_GITHUB_INBOX=1`, `-tab mail -openInboxItem github:review12` opens fictional example-org/example-repo#12:
   header (status/branches/three labels), Markdown description, request-changes/approve reviews, inline comment/reply, three checks (failed test logs), events.
-  Comments are in `/mock/sent` and appended to timeline. `github:ci7` (CI failure) isn't a PR, opens hub-collected text. Data: `gh_thread_page` in `mock_hub.py`.
+  Comments are in `/mock/sent` and appended to timeline. `github:ci7` (CI failure) isn't a PR, opens hub-collected text. Data: `gh_thread_page` in `scripts/mock/github_mock.py`.
 - Lark via lark-cli (飞书 · 我的消息): `MOCK_LARKCLI_INBOX=1`, `-tab mail -openInboxItem larkcli:example_oncall` opens a mention in a made-up on-call group as its conversation: a post's Markdown with a picture by image key, an interactive message's `<card title=…>` and an untitled one, plain text. `MOCK_LARKCLI_INBOX=legacy` gives the page as an older hub did (empty kind and name), which the apps still draw as a chat. Data: `larkcli_thread_page` in `mock_hub.py`.
 - Lark conversation page: `-tab mail -openInboxItem lark:f3:300` (Weekend hiking group) opens full chat: three days/date separators, over a page before first unread (scroll up, `has_older`),
   images, quoted/emoji replies, bots, 75-reply thread with paged sheet; 12 unread from message 300, read through 299 (`read_position`).
@@ -631,6 +1097,108 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   Avatars: Tom's f3 loads, weather assistant returns 404 (initial fallback), others none.
   Mentions: f2/f3 members (`GET …/members`, Tom/Mia avatars, Ajie's group nickname "Jay"); sends/replies with `mentions` store `@name` text as `at` segments.
   Thread group (#1087): `MOCK_LARK_TOPIC=1`, `-tab mail -openInboxItem lark:f4:405` opens Release group (also in Messages): bot posts three topics two minutes apart (individual cards), long >320 pt collapsible card, own topic, linked topic, 0/1/2/6 replies, recalled topics (gateway retained and unretained), edited topic (latest reply recalled), for the "Fengling Yueying" style. Like gateway, replies return topic first then latest `limit`. With `MOCK_LARK=1` as well (the perf `inbox` suite), the Feishu page lists Release too and its threads come from the topic group.
+
+### Mock hub domains (`scripts/mock/mock_domains.py`, #11016)
+
+`mock_hub.py` is one long file that most mock changes edit, so a new made-up area of the hub goes into a module of its own
+(a *domain*) instead. The module has a `register(d)` function and gets one line in `DOMAINS` in `scripts/mock/mock_domains.py`;
+`mock_hub.py` does not change. `register(d)` declares what the domain needs:
+
+- `d.route("GET" | "POST" | "PUT" | "PATCH" | "DELETE" | [...], r"<path regex>", handler)`: `handler(h, req)` answers with
+  `h.send_json(obj, status)`; `req` has `method`, `path`, `query`, `match` (the regex's groups), `body` and `json()`. Routes run
+  after the token check (and a GET's hit count) and before the route chains of `H.do_GET` and `H.do_POST`; a handler that returns
+  `False` hands the request on. A route outside `/mock/` gets the simulated network faults first, as the built-in `/api` routes
+  do: `/mock/down` closes the connection unanswered and `/mock/delay` (or `MOCK_DELAY`) waits, once a request even when the
+  route hands it on; `/mock/reject` and the token checks come before the routes, and a lost receipt (`POST /mock/fault`)
+  reaches them through `h.send_json`.
+- `d.ws("<message type>", handler)` and `d.on_ws_close(handler)`: `handler(ws, msg)` and `handler(ws)`, where `ws` has `connection`,
+  `send(obj)`, `client` (its role and declared features) and `asked`. Messages reach the domains before the built-in handlers. A
+  close handler that raises is logged on stderr; the other domains' close handlers and the hub's own cleanup of the socket still run.
+- `d.feature(*names, when=None)` and `d.drop_feature(*names, when=None)`: the hello's and `/api/v1/health`'s `features`, applied after
+  the built-in ones (`drop_feature` plays an older hub); `when` is asked each time. A block moved out of `mock_hub.py` into a domain
+  can so move its features later in the list (with `MOCK_DESKTOPS=1` and `MOCK_AGENT_ARCHIVES=1`, `desktops` and
+  `desktop_unregister` now follow `agent_session_archives` and `agent_session_archive_close`); the clients read the list as a set.
+- `d.help("MOCK_X=1  what it does")` for `mock_hub.py --help`, and `d.on_reset(hook)` for `GET /mock/reset`, after the built-in
+  reset, so a hook can put back a fixture the reset rebuilt.
+- `d.hub.<NAME>`: `mock_hub.py`'s globals, read when used (`SESSIONS`, `ITEMS`, `CLIENTS`, `broadcast(msg)`, `push_machine(id)`, …).
+
+Domains load in list order after every built-in switch has built its fixtures, and before the To-dos view
+(`todo_view_mock.py`), which replaces the to-dos. A process that loads `mock_hub.py` again (`runpy` in a test) runs each domain
+module again too, so its module-level state starts over as `mock_hub.py`'s globals do. A domain reads its `MOCK_*` switch from
+`os.environ`; what exists only with the switch is registered only when it is on (the help line always), so with it off the hub
+answers as before. The domains on the registry are desktop registration (`scripts/mock/desktops_mock.py`, #11053), GitHub's
+sign-ins and thread page (`scripts/mock/github_mock.py`), Settings › Knowledge selection (`scripts/mock/kb_selection_mock.py`)
+and mail's accounts and write paths (`scripts/mock/mail_mock.py`), moved out of `mock_hub.py` in #11543, and the hub's own
+update (`scripts/mock/hub_update_mock.py`), Messages' reader (`scripts/mock/imessage_mock.py`; its connector stays in
+`mock_hub.py`) and Settings › Saved Prompts (`scripts/mock/saved_prompts_mock.py`), moved in #11649, and a project's lessons from
+finished tasks (`scripts/mock/project_lessons_mock.py`, #12295; `MOCK_PROJECT_LESSONS=none|missing`, driven by
+`scripts/mock/test_project_lessons_mock.py` and `web/e2e/project-lessons.mjs`). The opt-in SSH → Persona
+Link scenarios live in `scripts/mock/link_switch_mock.py` (#10671): `MOCK_LINK_SWITCH=1` makes `server` an eligible Linux SSH
+computer, and `GET /mock/link_switch?state=available|checking|installing|connecting|rolling_back|succeeded|failed|unconfirmed|unavailable|refused|forbidden|uncertain|hold|old`
+changes the fixture and pushes the machine list. `hold` keeps the POST answer out until `?release=1`; the no-query response reports
+the state and start-attempt count. With the switch off, existing mock screens do not change.
+`scripts/mock/test_mock_domains.py` checks every hook against a running mock. A block that moves out of `mock_hub.py` lists
+the names it took in that test's `MOVED`: a branch from before the move that kept the old block when it resolved its conflict
+then fails there, with the module to edit instead
+(`docs/lessons/testing.md`, "A moved file or block needs a test that fails when the old copy comes back").
+
+`MOCK_OUTSIDE_DIRECTIONS=1` (`scripts/mock/outside_directions_mock.py`, #8236) is a read-only, three-row direction
+fixture: one existing conversation, one outside direction bound to an existing coding Agent, and one targetless outside
+direction with a long name. The two outside ids are not Persona conversations; `/assistant`, `/leaders` and
+`/directions/tree` keep the same order and metadata. The bound Agent's own to-do stays under Secretary and its idle state
+does not drive the direction's running mark. It is off by default and composes with `MOCK_LEGACY_HUB=1` by leaving the
+legacy 404 intact. `python3 -I scripts/mock/test_direction_tree_mock.py` checks the fixture and its reset behavior.
+`OutsideDirectionsUITests` uses it through `PERSONA_OUTSIDE_DIRECTIONS_HUB` for the mixed sidebar's interactions and for
+sidebar / To-dos / Agents captures in light and dark, at default and AX5 text (`PERSONA_SHOTS` saves them).
+
+`MOCK_DASHBOARDS=1|off|empty|removed|pinned` (`scripts/mock/dashboards_mock.py`, #15017) plays the default manager's
+Dashboards for the clients: the `assistant_pages` feature, the `dashboards` switch in `GET`/`PUT /api/v1/assistant`, the
+`-pages` places appended to `GET /api/v1/extensions/-/ui` (the index while a page is kept or one waits in Recently
+removed, then up to three pinned pages) and their pages over `POST /api/v1/extensions/-pages/-/ui/{index|pg_…}`. A tap on
+the running page's Done today answers the toast and a footer line "Received"; `GET /mock/dashboards?advance=1` moves it
+on to delivered, working and the page's update. Pinning, removing and the switch push `assistant_pages` and
+`extension_ui {invalidate}`. `off` keeps the pages with the switch off and `empty` has the switch on with nothing kept:
+both list nothing, for before / after captures; `removed` lists the index alone; `pinned` three pinned pages. Without
+`MOCK_EXTENSIONS=1` it also announces UI slots and lists only its own places. `python3 scripts/mock/test_dashboards_mock.py`
+checks it.
+
+**No new switch in `mock_hub.py` (#12737).** Most of what `mock_hub.py` gains comes with a new `MOCK_*` switch (89 of the 195
+commits that changed it from 2026-11-14 to 2026-11-22 added one, with 72% of its net added lines), so its switch names are
+frozen. It may read only the names in `scripts/mock/mock_hub_switches.txt`: the ones it read when the freeze landed, then the
+ones the PRs open that day were adding, each with its PR. Both parts are written on the day the freeze lands, after
+`origin/main` is merged in, by `python3 scripts/mock/mock_hub_switches.py pending --write`: the names `origin/main` reads,
+including a pending one whose PR has merged by then, and the names open PRs add, keeping a listed one while its PR is open.
+Once the list is on `main` the command writes nothing, so it is not how a later PR gets a name on the list.
+`scripts/mock/test_mock_hub.py` parses the file and fails on any other
+`MOCK_*` name it reads through `os.environ.get`, `os.environ[...]`, `os.getenv` or `in os.environ`, or has as a whole string
+anywhere (a copy of the environment read later, a helper given the name), and on an environment read whose name is not a
+literal; a listed name the file no longer reads is a notice. Check-fast runs the test for every change to `mock_hub.py`.
+
+A new switch is therefore a domain module, and so is **a new value on an existing switch**: `MOCK_INBOX=rules` next to
+`MOCK_INBOX=empty` is as new as `MOCK_INBOX_RULES` would be. The domain module reads the switch itself, registers its routes
+only for that value, and answers there first; a handler that returns `False` for a request it leaves alone hands it on to
+`mock_hub.py`, which keeps serving the switch's other values:
+
+```python
+# scripts/mock/inbox_rules_mock.py, with one line in DOMAINS
+import os
+
+RULES = os.environ.get("MOCK_INBOX") == "rules"
+
+
+def register(d):
+    d.help("MOCK_INBOX=rules  the Inbox with filing rules (#<issue>)")
+    if not RULES:
+        return  # any other value: mock_hub.py answers as before
+    d.route("GET", "/api/v1/inbox/policies", policies)  # policies(h, req): h.send_json({...})
+    d.route("GET", "/api/v1/inbox", page)               # page(h, req): False for a request it does not change
+```
+
+(`policies` and `page` are the module's own functions.)
+
+Editing an existing switch's code in `mock_hub.py` is fine; the freeze is on names, not lines. A block that moves into a
+domain module takes its names off the list in the same change (the notice says which). A line ceiling is worth another look
+only if the file keeps growing by more than about 150 lines a week without new switches.
 
 ### Readiness scenarios (`MOCK_READINESS`, #287)
 
@@ -665,6 +1233,12 @@ For the probe's client boundaries (#1892), `MOCK_READINESS_PROBE_DELAY=<seconds>
 For the iPhone rate-limit card (#5658), start `mock_scenarios.py --scenario readiness-rate_limited` and set `TEST_RUNNER_PERSONA_READINESS=rate_limited`, `TEST_RUNNER_PERSONA_MAIN=<main session key>` and `TEST_RUNNER_PERSONA_READINESS_CONTROL=http://127.0.0.1:<control port>` in addition to the usual hub / screenshot variables. `ReadinessUITests/testUsageLimitDismissalSurvivesPollingAndRecovery` chooses Codex and `GPT-5.5-Codex`, sends synthetic content, checks the recorded launcher/model and that Claude remains limited, then exercises Later across a real polling refresh, a `readiness-full` recovery and a subsequent `readiness-rate_limited` failure observed by a foreground revisit (full stops the poller; the app process and its dismissal / draft / launcher pick stay alive). Both refresh checkpoints use `/mock/hits` to prove a request actually landed rather than passing during a fixed sleep. The mock's fixed `occurrence` keeps the failure identity stable; the Apple and Go suites separately cover a later identity with identical words and repeated health checks within one reset window. Run it once in light and once in dark; `TEST_RUNNER_PERSONA_SHOTS` saves the initial, scoped, answered, dismissed and new-failure screens.
 Gmail sign-in (#2442): `GET /api/v1/mail/oauth/google/config` says `configured: false` and `google/start` answers 400 `google_not_configured` (text contains "not configured"), so the add-Gmail page offers the app-password form; `MOCK_GOOGLE=1` says `configured: true` and `start` answers with a made-up URL, so the page shows Sign In with Google.
 
+The iPhone Add Provider tests (`ProviderPasteUITests`, #5219) use a local `scripts/mock/mock_hub.py` with
+`MOCK_PROVIDERS=1 MOCK_MANAGERS=1` so the current assistant owns the fixture computer. Set
+`TEST_RUNNER_PERSONA_PROVIDER_PASTE_HUB=http://127.0.0.1:<port>` for the UI tests.
+`TEST_RUNNER_PERSONA_SHOTS=<directory>` saves the chooser, selected alias and paste review in light and dark at both text sizes.
+`ProviderPasteTests` uses an in-memory hub for the parser answer, editor and import request bodies.
+
 iOS add-computer (`AddComputerTests`, #4196): `python3 scripts/mock/mock_scenarios.py --port <port> --control <control port>`,
 `TEST_RUNNER_PERSONA_ADD_HUB=http://127.0.0.1:<port> TEST_RUNNER_PERSONA_ADD_CONTROL=http://127.0.0.1:<control port>`. Tests switch `MOCK_READINESS=zero` / `MOCK_ADD_COMPUTER=seed`,
 `MOCK_PAIR_SECONDS` as needed: zero → add → wait → confirm → online, Linux row, expiry/regeneration, pending/error_code in list, rejection removes row, Agents zero-computer state; `TEST_RUNNER_PERSONA_SHOTS=<directory>` saves light/dark.
@@ -691,7 +1265,9 @@ Settings navigation and its assistant switcher (`SettingsNavigationUITests`) use
 `TEST_RUNNER_PERSONA_SETTINGS_HUB=http://127.0.0.1:<dedicated port>` with an ordinary isolated `mock_hub.py`. The single-assistant
 case reads `PERSONA_SETTINGS_SINGLE_HUB` (`TEST_RUNNER_PERSONA_SETTINGS_SINGLE_HUB` in the command) and skips without it; point it to a
 second mock started with `MOCK_MANAGERS=1 PORT=<other dedicated port> python3 scripts/mock/mock_hub.py`. Select the suite with
-`-only-testing:PersonaUITests/SettingsNavigationUITests`.
+`-only-testing:PersonaUITests/SettingsNavigationUITests`. Run the suite on an iPad simulator as well (#12035): there Settings is a sheet split into
+the list and the page, where a page the list opens must open its own pages and a page a launch switch opens must stay (`testLegacySettingsPathsStillOpen`);
+`testAppearancePagesOpenAndComeBack` runs in portrait, then in landscape.
 
 Agents tab navigation (#5641): `AgentsTabNavigationTests/testDispatchBackThenAgentsAlwaysShowsList` opens a dispatched
 Agent from Assistant, goes Back, and selects Agents five times; it checks the list's visible control, navigation root
@@ -827,7 +1403,9 @@ opens it with the revised one shown struck through; `-openSession studio/a1f3c2d
 `MOCK_REQUEST_GRAPH=1` (with `MOCK_TASKS=1`) adds requests in pieces (to-dos with `part_of` / `after`) for the To-dos page's "By request" grouping: the search page in six pieces shaped like a diamond (one done, the back end working on Codex with a helper Agent beside it, the front end asking a decision, the end-to-end tests waiting for both, the docs waiting for the tests, the tracking ready with nobody on it), an open plan of three tasks waiting for Start, and a finished request of two pieces (`docs/web/web.md` "Todos").
 Record / Revise / the row's ⋯ write into the mock (the to-do's `updated_at` moves, `todos` is pushed); `MOCK_LEGACY_HUB=1` answers the route-level 404 and the section is hidden. `python3 -I scripts/mock/test_todo_decisions_mock.py` checks the routes.
 
-To-dos view (#10465, `scripts/mock/todo_view_mock.py`): `MOCK_TODO_VIEW=1` replaces the mock's to-dos with the design prototype's (`docs/design/prototypes/todos/data/todos.js`, T01 to T14; the steps of T01, T02 and T12 as to-dos of their own; the Weather App runs' sessions on the MacBook, the Widget run's plan as a card) and serves them as a hub with the view does: the features `todo_view` and `todo_places`; every row of `GET /api/v1/todos` with its `view`, the list's `counts` and the hub's ETag (304 while nothing changed); `GET /api/v1/todos/{id}`; `GET /api/v1/todos/places`; `PUT`/`DELETE …/someday` and `PUT …/restored`. Today's answers work on these to-dos whatever `MOCK_TASKS` says: `POST …/accept` takes T01's decision (an option or the plain press: Persona books it, as the prototype draws it answered; `explain_first` keeps the round waiting; the other fixed answers end it; a stale `asked_at` is 409), `…/decision-dismiss` and `…/decision-undo-dismiss` put its review round aside and back, `…/retry` starts T03's failed start again on the MacBook, and answering the Widget's plan card sets that run working. Ticks, edits, deletes and seen stay the mock's own routes, with the hub's rules applied once a PATCH is taken (a tick on a failed start closes it now; a reopen leaves Someday and the start error), and the views follow every write (a tick goes to Just finished, a seen one to Done, Someday and back, a parent led by its steps). The mock's start plays the prototype's now (Wednesday 10:14), so a row's age matches its V1 frame when the screenshot is taken right after the start; launch with `-AppleLanguages "(en)"` to compare. `MOCK_TODO_VIEW=old` is a hub from before the view: no `view`, `counts`, `someday_until` or `restored_at`, 405 for the item and places routes, 404 for Someday and restore. `MOCK_TODO_VIEW=late` names the view in the hello only after a reconnect: once an app connects, the mock closes its socket three times, `MOCK_TODO_VIEW_LATE_SECONDS` (default 5) apart, and the hellos lack, have, lack and have `todo_view` and `todo_places`, while the routes answer as under 1; `/mock/reset` starts the sequence again. `MOCK_TODO_MANAGERS=2` makes the Weather App's to-dos the second manager's (every row stamped, the counts added up, the places merged as the hub merges them). `GET /mock/churn?todos=1&n=20&ms=3000` moves the newsletter's working line and pushes `todos` each round, for measuring a push's cost on the list; `GET /mock/todo-view` says the mode, the late phase and the managers. Where it is not a hub: the churn pushes on a line-only change, which a hub never does (a worst case; the hub pushes when a row is filed elsewhere, #10528), nothing is pushed when a row's `next_change_at` passes, and ranks keep the prototype's order, not the hub's (`server/internal/assistant/todo/projection/list.go`), so never hold an app's order against this mock as the hub's. `MOCK_TODO_VIEW` answers as one manager whatever the roster lists, and the mock's default roster lists several, so an app counts the to-dos from its rows; `MOCK_MANAGERS=1` gives the one-manager path, which reads the hub's counts and places as sent. `python3 -B scripts/mock/test_todo_view_mock.py` holds every answer to `schema/wire/todo-view.schema.json`, the counts to the rows and to the prototype's own numbers (read with Node), and checks the writes, the three modes and two managers.
+To-dos view (#10465, `scripts/mock/todo_view_mock.py`): `MOCK_TODO_VIEW=1` replaces the mock's to-dos with the design prototype's (`docs/design/prototypes/todos/data/todos.js`, T01 to T14; the steps of T01, T02 and T12 as to-dos of their own; the Weather App runs' sessions on the MacBook, the Widget run's plan as a card) and serves them as a hub with the view does: the features `todo_view` and `todo_places`; every row of `GET /api/v1/todos` with its `view`, the list's `counts` and the hub's ETag (304 while nothing changed); `GET /api/v1/todos/{id}`; `GET /api/v1/todos/places`; `PUT`/`DELETE …/someday` and `PUT …/restored`. Today's answers work on these to-dos whatever `MOCK_TASKS` says: `POST …/accept` takes T01's decision (an option or the plain press: Persona books it, as the prototype draws it answered; `explain_first` keeps the round waiting; the other fixed answers end it; a stale `asked_at` is 409), `…/decision-dismiss` and `…/decision-undo-dismiss` put its review round aside and back, `…/retry` starts T03's failed start again on the MacBook, and answering the Widget's plan card sets that run working. Ticks, edits, deletes and seen stay the mock's own routes, with the hub's rules applied once a PATCH is taken (a tick on a failed start closes it now; a reopen leaves Someday and the start error), and the views follow every write (a tick goes to Just finished, a seen one to Done, Someday and back, a parent led by its steps). The mock's start plays the prototype's now (Wednesday 10:14), so a row's age matches its V1 frame when the screenshot is taken right after the start; launch with `-AppleLanguages "(en)"` to compare. `MOCK_TODO_VIEW=old` is a hub from before the view: no `view`, `counts`, `someday_until` or `restored_at`, 405 for the item and places routes, 404 for Someday and restore. `MOCK_TODO_VIEW=late` names the view in the hello only after a reconnect: once an app connects, the mock closes its socket three times, `MOCK_TODO_VIEW_LATE_SECONDS` (default 5) apart, and the hellos lack, have, lack and have `todo_view` and `todo_places`, while the routes answer as under 1; `/mock/reset` starts the sequence again. `MOCK_TODO_MANAGERS=2` makes the Weather App's to-dos the second manager's (every row stamped, the counts added up, the places merged as the hub merges them). `GET /mock/churn?todos=1&n=20&ms=3000` moves the newsletter's working line and pushes `todos` each round, for measuring a push's cost on the list; `GET /mock/todo-view` says the mode, the late phase and the managers. Under `MOCK_TODO_VIEW`, send receipts (`docs/protocol/protocol.md` "Message feedback (#5258)"): the hello carries `message_send_state: 1`, and `todo_send_state: 1` except under `old`; a session's message with a `client_msg_id` says `message_send_state` `processing` to the session's subscribers before it is relayed, then `delivered`, `kept`, `failed` or `unknown` as the hub reads its answer, once per id that was taken; a message on a to-do's conversation route (served with `MOCK_TASKS=1`) under `X-Persona-Op-Id` says `todo_send_state` the same way to the full devices that declared it. As on the hub, only the request that claimed the id says anything: the same op id waits up to 10 s for the first answer and gets it back (then `202 {"state":"pending"}`), the same `client_msg_id` in flight waits for the first answer, and what the hub refuses before claiming the id (an op id that is not a UUID, a read-only device's message to a to-do) says nothing. `MOCK_SEND_DELAY_MS` holds the to-do's message as long as a session's, so Processing shows. The hello also lists `todo_asks` (unless `MOCK_TODO_VIEW_ASKS=0`, a hub whose managers answer only through today's routes, which answers the route 404) and `POST /api/v1/todos/{id}/asks/{ask}/answer` answers the asks the views list as the hub does: T01's decision (an option, a fixed answer, `later`, `decline` with a receipt and its `undo`; 400 for no answer at all, as the hub's `errAnswerNeeded`) and T03's retry; 409 `ask_stale` with the row once an ask no longer waits, `answer_in_session` for a run's ask, 404 `ask_not_found` or `todo_not_found`; under `X-Persona-Op-Id` it says `todo_send_state` and answers a repeat with the first reply, as the conversation route does. Each ask in a view says its `risk` and `lockscreen` (T01's decision and T03's retry safe, the Widget's plan open, with its card's id as `interaction`). Where it is not a hub: the churn pushes on a line-only change, which a hub never does (a worst case; the hub pushes when a row is filed elsewhere, #10528), nothing is pushed when a row's `next_change_at` passes, and ranks keep the prototype's order, not the hub's (`server/internal/assistant/todo/projection/list.go`), so never hold an app's order against this mock as the hub's. `MOCK_TODO_VIEW` answers as one manager whatever the roster lists, and the mock's default roster lists several, so an app counts the to-dos from its rows; `MOCK_MANAGERS=1` gives the one-manager path, which reads the hub's counts as sent and counts each project's part of N from the rows. Its knowledge base has the projects Kyoto trip, Weather App, Home and Garden; Garden has no to-dos, an empty project's place. `python3 -B scripts/mock/test_todo_view_mock.py` holds every answer to `schema/wire/todo-view.schema.json`, the counts to the rows and to the prototype's own numbers (read with Node), and checks the writes, the three modes, two managers, the send receipts and the asks route.
+
+Move To… and a direction's page (#11516, `scripts/mock/direction_sessions_mock.py`, a mock domain): with `MOCK_LEADERS=1`, `MOCK_DIRECTION_SESSIONS=1` lists `direction_sessions`, answers `PUT /api/v1/assistant/sessions/{mid}/{sid}/direction` (with its refusals in the request's language and Undo's `null`) and `GET /api/v1/assistant/directions/{id}`, and adds the live filed sessions to the tree. The first leader starts with a session of every standing (two chats, an Agent the owner filed, one its leader opened, one stopped, and `computer_offline`, `list_unknown`, `not_listed`, `computer_removed`), nine in all. It answers as the hub does: placed sessions by computer, then session id; refusals with the hub's own sentences in the request's language (read from `server/internal/i18n/locales`); a null write decided before any check; Undo putting back the replaced entry with its title and filing time; On Its Own without the row for a session already filed, every other write but an Undo needing its row; the background supervisor refused (with `MOCK_BACKGROUND_SUPERVISOR=1`); a listed session filed with its row's title; an ended direction refused with 409 `direction_ended` (an Undo into it excepted); `directions` pushed when a write changed the book, as the hub publishes. With it on, the mock gives the second manager (工作) one conversation of its own in `GET /api/v1/assistant`, which the app does not show on 工作's page, before #11516 and after it, so that page's one conversation row is its Main Chat. `DirectionScreensUITests`' "manager" off case (`PERSONA_OFF_CASE=manager`) compares that page's sidebar, its Main Chat row (whose long press opens the chat; it has no menu), the title menu and an Agent's ⋯ menu. It runs on a second mock started with `MOCK_LEADERS=1 MOCK_DIRECTION_SESSIONS=1 MOCK_SESSIONS_LIST=1`, named by `PERSONA_OFF_MANAGER_HUB`, and fails saying so without it. The paged list brings nothing to that page; the second mock keeps the case on the setup its main-vs-branch pairs were taken with (#12603), so a later run compares like with like. `PERSONA_SHOT_NAV` pins the layout of its runs (`sidebar`, `separate`; `auto` leaves the app's default, Merged on an iPad). An unpin made in the app (`POST …/directions/{id}/end`) ends the direction for the mock's writes and reads as `ended=<id>` does; `…/make` takes it back. `MOCK_DIRECTION_SESSIONS=missing` lists the feature but answers the routes 404 without their codes; unset, the hub has neither route. `GET /mock/direction_sessions?routes=missing|on&feature=off|on&refuse=<code>&read=fail|gone|ok&delay=<s>&put_delay=<s>&sessions_unavailable=1&ended=<id>` changes how it answers until `/mock/reset` (`ended` unpins: out of the leaders and the tree, `directions` pushed, the single read with `ended_at`, writes into it 409 `direction_ended` but an Undo); a lost answer is `POST /mock/fault {"fault":"lost_receipt"}`. `DirectionRowsUITests` turns the feature on and off this way (`PERSONA_LEADERS_HUB`); `python3 -m unittest scripts/mock/test_direction_tree_mock.py` checks the mock.
 
 Port forwarding (`PortForwardTests`, `docs/operations/ports.md`): `:<port>` badges in chat header/replies include page titles; stopped gray. Open loads mock's page through
 `…/ports/{port}/connect` (`GET /mock/ports` records connections); gray says No longer listening:
@@ -962,13 +1540,13 @@ At rest, frames check filter bar touches navigation/search, **and screenshot pix
 so frame-only checks missed TestFlight 35 / 38 gaps. Search tests first pull open drawer, not mistake collapsed search for absent list.
 Long-scroll uses `XCTOSSignpostMetric`; simulator reports duration, not dropped frames; inspect device too.
 
-- Mock: `PORT=18775 MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py &` (~130 sessions: platform 3 Needs you / 35 Unread / 12 Working,
+- Mock: `PORT=18775 MOCK_AGENTS=1 MOCK_MANAGERS=1 python3 scripts/mock/mock_hub.py &` (one manager, #13155: without `MOCK_MANAGERS=1` the MacBook belongs to a second manager and the default assistant does not list it; ~130 sessions: platform 3 Needs you / 35 Unread / 12 Working,
   plus mostly/all-idle spaces; `seen` WS or POST changes Unread→Seen, `GET /mock/seen`, `/mock/reset`),
   `TEST_RUNNER_PERSONA_AGENTS_HUB=http://127.0.0.1:18775 TEST_RUNNER_PERSONA_SHOTS=<directory> TEST_RUNNER_PERSONA_STYLE=light … -only-testing:PersonaUITests/AgentsListTests`, repeat dark.
 - `-openDraftsFresh YES` empties every chat's saved draft at launch: `SelectTextTests` read a copy by pasting it into the composer (the runner may not read the app's pasteboard), and a long draft left behind makes the composer tall and moves the chat.
 - `-openAgentsFresh YES` clears remembered filter/grouping/compact/collapse at launch. Tests must change these via UI, not fixed launch args which override saved values.
-- Grouping menu and long-run cap (`AgentsGroupingTests`, #5766): `PORT=<port> MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_GROUPING_HUB=<mock URL>`; each grouping from the capsule beside the quick filters, By Status kept after a restart, Unread's Show all; `TEST_RUNNER_PERSONA_SHOTS=<directory>` + `TEST_RUNNER_PERSONA_SCHEME=light|dark` + `TEST_RUNNER_PERSONA_STYLE=<name>` for the shots.
-- Touch targets (`AgentsTouchTargetUITests`, #3753): `PORT=<port> MOCK_AGENTS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 MOCK_DESKTOP_APPS=1 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_TOUCH_HUB=<mock URL>`; every grouping in every display, scrolled from the top, checks that each row, heading and fold control is at least 44 pt tall (the fold chevron 44 pt wide too) and prints the heights it found; a second test taps 3 pt inside the top and bottom edges of a repository header, the machine heading, a state's heading, a Codex chat's Subtasks row and N more idle. `TEST_RUNNER_PERSONA_TOUCH_GROUPINGS=repo,state` and `TEST_RUNNER_PERSONA_TOUCH_DISPLAYS=avatar,list` narrow the matrix (28 lists, 7 groupings × 4 displays, take about 15 minutes); it launches in English.
+- Grouping menu and long-run cap (`AgentsGroupingTests`, #5766): `PORT=<port> MOCK_AGENTS=1 MOCK_MANAGERS=1 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_GROUPING_HUB=<mock URL>`; each grouping from the capsule beside the quick filters, By Status kept after a restart, Unread's Show all; `TEST_RUNNER_PERSONA_SHOTS=<directory>` + `TEST_RUNNER_PERSONA_SCHEME=light|dark` + `TEST_RUNNER_PERSONA_STYLE=<name>` for the shots.
+- Touch targets (`AgentsTouchTargetUITests`, #3753): `PORT=<port> MOCK_AGENTS=1 MOCK_MANAGERS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 MOCK_DESKTOP_APPS=1 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_TOUCH_HUB=<mock URL>`; every grouping in every display, scrolled from the top, checks that each row, heading and fold control is at least 44 pt tall (the fold chevron 44 pt wide too) and prints the heights it found; a second test taps 3 pt inside the top and bottom edges of a repository header, the machine heading, a state's heading, a Codex chat's Subtasks row and N more idle. `TEST_RUNNER_PERSONA_TOUCH_GROUPINGS=repo,state` and `TEST_RUNNER_PERSONA_TOUCH_DISPLAYS=avatar,list` narrow the matrix (28 lists, 7 groupings × 4 displays, take about 15 minutes); it launches in English.
 - Inbox title targets (`InboxTitleTargetUITests`, #6576): `PORT=<port> MOCK_MANAGERS=0 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_MOCK_HUB=<mock URL>`; from the top of the inbox to the end of Done, checks that each section title, Mark All Seen / Clear All, group title, Done's title and Jump To is at least 44 pt tall, and each group's tick while selecting (also at least 44 pt wide, #6658); a second test taps 20 pt from the middle of Needs You's, FYI's, Done's and a group's titles, Jump To and a group's tick (and 18 pt left of the tick's middle), and checks that a tap on Jump To opens its menu without folding Done. It undoes the folds it makes. `TEST_RUNNER_PERSONA_UI_SCHEME=dark`, `TEST_RUNNER_PERSONA_TEXT_SIZE=<UIContentSizeCategory name>` and `TEST_RUNNER_PERSONA_SHOTS=<dir>` for screenshots; about 2 minutes.
 - Inbox Jump To races (`InboxJumpToRaceUITests`, #6661): `PORT=<port> MOCK_MANAGERS=0 MOCK_INBOX_HISTORY=busy python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_MOCK_HUB=<mock URL>`. `GET /mock/inbox_done_hold` makes the mock hold every Done page asked with `before` (a group's page) until `GET /mock/inbox_done_release` (at most 60 s), and the app waits that long for it with the DEBUG `-inboxJumpWait <seconds>` (5 s otherwise). It jumps to Done's oldest group with its page held, then jumps to the newest group, drags the list or opens an item over it, lets the page go, and checks the list stayed where it was sent last; about 5 minutes.
 - Recent flat mode (`RecentAgentsTests`): ordinary mock (no `MOCK_AGENTS`), `TEST_RUNNER_PERSONA_RECENT_HUB=<mock URL>`,
@@ -1149,6 +1727,23 @@ TEST_RUNNER_PERSONA_HUB_A=http://127.0.0.1:18760 TEST_RUNNER_PERSONA_HUB_B=http:
   repeat after, pixel compare. Repeated shots from same build identify noise (system spinner/Liquid Glass highlights vary per launch); exclude noise, inspect remaining differences.
   Only allowed change: hub row added to Settings Server section.
 
+### Switching hubs (`HubSwitchSidebarTests`, #11657)
+
+Two mock hubs, each a group of its own with data of its own, check that the iPhone's sidebar follows the current hub in both layouts: Persona's chats
+(Home's mock titles, Work's `MOCK_TITLES=1` titles) and the Agents list narrowed to one hub (`服务器 · Home`, `Work server · Work`).
+The hub is switched in the sidebar's assistant switcher (its hub group, #12594), and the conversation's menu is checked to have no hub section.
+
+```sh
+PORT=18870 MOCK_HUB_ID=hub-home MOCK_HUB_NAME=Home python3 scripts/mock/mock_hub.py &
+PORT=18871 MOCK_HUB_ID=hub-work MOCK_HUB_NAME=Work MOCK_TITLES=1 \
+  MOCK_MACHINE_NAMES='{"server":"Work server","macbook":"Work MacBook"}' python3 scripts/mock/mock_hub.py &
+TEST_RUNNER_PERSONA_HUB_A=http://127.0.0.1:18870 TEST_RUNNER_PERSONA_HUB_B=http://127.0.0.1:18871 TEST_RUNNER_PERSONA_HUB_B_TITLES=1 \
+  TEST_RUNNER_PERSONA_SCHEME=light TEST_RUNNER_PERSONA_SHOTS=<directory> \
+  xcodebuild test … -only-testing:PersonaUITests/HubSwitchSidebarTests
+```
+
+Both hubs also run with `MOCK_SESSIONS_LIST=1` (bounded lists, as current hubs have them); the test is the same.
+
 ### All-day recording (`RecordingDayUITests`)
 
 The phone's side of all-day recording (`docs/apple/recording.md` "All-day recording (Apple)") against the mock hub, with made-up days standing in for the watch: a simulator pair can't record a day or deliver its files.
@@ -1167,6 +1762,9 @@ TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> TEST_RUNNER_PERSONA_SHOTS=<
 ## SSH tunnels (`apple/Packages/PersonaSSH`, [network.md](network.md#经-ssh-隧道连-hub直连不通时的后备))
 
 **Package tests** (real sshd + mock hub, no root, no local SSH-config changes):
+
+Apple CI runs this complete suite in `scripts/ci/apple.sh`'s `all`, `ios` and `packages` lanes before the app builds (#11671),
+from its disposable source snapshot with a separate SwiftPM scratch directory. No integration case is skipped or allowed to fail.
 
 ```sh
 cd apple/Packages/PersonaSSH
@@ -1342,7 +1940,7 @@ Not private: loopback (`127.0.0.0/8`, `::1`, `localhost`, including protocol/por
 backtick paths/commands/config keys in `CLAUDE.local.md` (only ID/host/email/IP-like values count), and `site/` contact/site domain
 (`app_store.feedback_email`, `privacy_url`, already public for App Store/OAuth). Docs say hub machine/another Mac;
 example machine ids `server` / `laptop`. `release.sh` scans before packaging;
-precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, plus `scripts/assets/gen_tokens.py --check` and the token drift tests when `spec/tokens`, `apple/Shared/Design` or the generated Android tokens are staged; `commit-msg` commit message, `pre-push` changed files/messages against the first of `origin/HEAD`, `origin/main`, `origin/master` that shares history with the pushed commit, every file and message of an orphan branch; `pre-push` also checks the trusted Deno adapter, see "Trusted Deno adapter").
+precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, plus `scripts/assets/gen_tokens.py --check` and the token drift tests when `spec/tokens`, `apple/Shared/Design` or the generated Android tokens are staged; `commit-msg` commit message, `pre-push` changed files/messages against the first of `origin/HEAD`, `origin/main`, `origin/master` that shares history with the pushed commit, every file and message of an orphan branch; `pre-push` also checks the trusted Deno adapter, see "Trusted Deno adapter", and refuses a branch under `artifacts/` or `pr-assets/`, see `docs/operations/collaboration.md`, "Screenshots in PRs").
 **Message lines** (#1107): `--message <file>` checks every line, Markdown headings included (a PR's title and body become the squash commit's message as they are).
 `commit-msg` passes `--commit-msg`, which checks only what `git commit` records: when git opened an editor it skips the comment lines (hints, branch, paths) and everything from the scissors line down (the `commit -v` diff);
 a `-m` / `-F` message keeps its `#` lines, so they are checked. It follows git's comment string and `commit.cleanup` (`commit_msg_lines`), but cannot see `--cleanup` or `-v` on the command line; `pre-push` still reads every recorded line.
@@ -1683,12 +2281,14 @@ Simulator runs Mac CPU, absolute times smaller than device; compare relative cha
 
 Compare same real pushes before/after hub session-list/Live Activity timing changes:
 
-1. Record on hub: `cd server && go run ./cmd/pushrec 20m ~/push.jsonl`. App-like hub connection (token from `~/.persona/hub.json`, never printed; `listen` address, `PERSONA_LISTEN` / `PERSONA_LISTEN` override),
+1. Record on hub: `cd server && go run ./scripts/pushrec 20m ~/push.jsonl`. App-like hub connection (token from `~/.persona/hub.json`, never printed; `listen` address, `PERSONA_LISTEN` / `PERSONA_LISTEN` override),
    no phone/desktop registration or chat opening, `{"t": milliseconds, "msg": original}` per message. Contains real session titles/last lines, 0600, **stays on that machine**, never copied/committed.
 2. Replay `PERSONA_PUSH_RECORDING=~/push.jsonl go test ./internal/hub -run TestPushReplay -v`: before-recorded/after-generated
    counts/bytes per minute; timestamped Live Activity changes pass through coalescing/throttling, report notifications/hour with App closed and longest island/hub mismatch, fail beyond limits.
 3. Real `broadcastSessions` decides sends, matches byte-comparison results (decode retains fields); parallel incremental App (`sessions_delta`) counted.
 4. Background `AgentSync` fetches: `python3 scripts/diag/agentsync_replay.py ~/push.jsonl`, recorded rev/state (45/min→9/min, `docs/apple/ios.md` ("Information architecture")).
+   The replay uses recorded session state and falls back to status for older recordings. A session that stops working
+   releases its pending pull without adding a transcript change to the rate window.
 
 19-minute recording 2026-11-02 (battery investigation, `docs/apple/live-activity.md` ("Push cadence"), `docs/server/server.md` ("Traffic pushed to the app")):
 
@@ -1724,7 +2324,38 @@ How often a client reads `GET /api/v1/sessions`, and what kind of read, while it
 - A real hub's `traffic` journal lines count by route template, not query: there a complete list and a delta are told
   apart only by `body_bytes / count`.
 
-## Fleet soak (`server/internal/fleetsoak`, #3197)
+## Slow link soak (`server/internal/slowlinksoak`, #13677)
+
+Whether a computer on Persona Link stays online behind a slow, long link while a chat opens a large session of it:
+a transcript of several MB, mostly screenshots, that grew while nobody looked. For a change to the node connection,
+the session's pushes or the heartbeats, run it on the base and on the change and put both results in the PR.
+
+```sh
+cd server
+go build -o <dir>/personad ./cmd/personad && go build -o <dir>/persona-link ./cmd/persona-link
+go run ./internal/slowlinksoak -bin <dir> -pg <directory with initdb, pg_ctl and postgres> -label after
+go run ./internal/slowlinksoak -bin <base dir> -node-bin <a release's dir> -pg <…> -label before
+```
+
+- Everything is throwaway and local: a hub with its built-in manager under a home directory of its own, a Postgres
+  cluster of its own (`initdb` into the working directory, trust on loopback), a resident node (`personad node
+  --attach`) and `persona-link run` under a second home directory. Ports: `-port-base` (18871) for the hub's HTTP,
+  +1 its TLS, +2 the shaping proxy, +3 Postgres. Every process gets an environment made by the soak; the machine's own
+  installation is neither read nor written.
+- The hub advertises its TLS port only through the proxy, and the link's only candidate is the proxy: every
+  connection Persona Link opens goes through a link of its own shaped by `netshape` each way: `-rate` (100 KB/s),
+  `-rtt` (300 ms) and `-queue` (256 KiB the path buffers before a writer waits, the sockets' share). Loss and
+  retransmits are not played, nor one bottleneck shared by the link's connections.
+- An app connection opens the session while it is small and one more line comes (the hub then knows how far it has
+  read), closes it, the transcript grows to `-session-mb` (5) with `-shots` screenshots (20, random bytes), and the
+  app opens it again and reads `items?after_seq=` every 3 s, as the web app does, for `-watch` (3 minutes).
+- `-node-bin` runs the computer's side from other binaries, such as a release, to play a computer that has not been
+  updated.
+- It prints and writes `report.json` (offline transitions and their reasons, dropped connections, timed-out watches,
+  how long until the app had every item, image bytes it was pushed, the reads' outcomes and the slowest, the bytes the
+  computer sent through the proxy) and keeps the logs in the working directory. It ends with one `RESULT` line.
+
+## Fleet soak (`server/scripts/fleetsoak`, #3197)
 
 What a fleet's churn costs the hub and its manager, per minute: bytes and objects allocated, CPU time, live heap.
 For a change that claims to make the manager or the hub cheaper under load, run it on the base and on the change and
@@ -1732,9 +2363,9 @@ put both in the PR.
 
 ```sh
 cd server
-go run ./internal/fleetsoak -label head -minutes 20 -out <directory>
-go run ./internal/fleetsoak -label base -minutes 20 -out <directory> -tree <a worktree of the base commit>/server
-go run ./internal/fleetsoak -compare <base directory>/report.json <head directory>/report.json
+go run ./scripts/fleetsoak -label head -minutes 20 -out <directory>
+go run ./scripts/fleetsoak -label base -minutes 20 -out <directory> -tree <a worktree of the base commit>/server
+go run ./scripts/fleetsoak -compare <base directory>/report.json <head directory>/report.json
 ```
 
 - It builds `personad` from `-tree` and runs a throwaway hub with its manager: a home directory of its own under
@@ -1801,19 +2432,19 @@ What a large request body costs the hub's slot and the manager it is relayed to,
 
 Hub transcription (`docs/assistant/meeting-minutes.md`, "Phase 5: hub transcription") against a real service, for what
 the tests' scripted contribution cannot tell: how well the words come back, how soon, and what it costs.
-`server/internal/transcribelive` plays the phone against a running test hub whose voice extension is set up with a
+`server/scripts/transcribelive` plays the phone against a running test hub whose voice extension is set up with a
 GPT-Live-compatible upstream (the contribution chosen for transcription, `meeting_transcription_ready` true; it also
 reads the meeting aloud through that extension's speech). Run it on the hub machine, from `server/`:
 
 ```sh
 cd server
-go run ./internal/transcribelive -hub <hub address> -token-file <file> -kb <PERSONA_HOME>/data -lang zh-CN -out <directory>
+go run ./scripts/transcribelive -hub <hub address> -token-file <file> -kb <PERSONA_HOME>/data -lang zh-CN -out <directory>
 ```
 
 - Without `-hub` and `-token-file` it takes `public_url` and `token` from `$PERSONA_HOME/hub.json` (`-kb` defaults to
   `$PERSONA_HOME/data`, where it reads the meeting's files). Never point it at a hub in use: it also sets the hub's
   `meeting_glossary` to the script's terms.
-- The meeting is made up (`server/internal/transcribelive/testdata/mixed_meeting.json`): a third Chinese, a third
+- The meeting is made up (`server/scripts/transcribelive/testdata/mixed_meeting.json`): a third Chinese, a third
   English, a third both in one sentence, and one line said by "Persona". The hub reads each line aloud
   (`POST /api/v1/extensions/voice/speak`, `-voices F=<id>,M=<id>,E=<id>,P=<id>` picks the voices); the audio and the
   script with each line's times go to `<out>/meeting.pcm` and `<out>/script.json`, which a later run reuses

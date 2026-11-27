@@ -197,23 +197,14 @@ struct FeishuDocReader: View {
                 jump = rowID(for: item)
             }
             .presentationDetents([.medium, .large])
-            #if os(macOS)
-            .macSheet()
-            #endif
         }
         .sheet(isPresented: $showComments) {
             NavigationStack { FeishuDocsCommentsView(url: url, title: docTitle, manager: manager) }
                 .presentationDetents([.large])
-                #if os(macOS)
-                .macSheet()
-                #endif
         }
         .sheet(item: $passage) { p in
             NavigationStack { FeishuDocsCommentsView(url: url, title: docTitle, passage: .passage(quote: p.quote, blockID: p.blockID), manager: manager) }
                 .presentationDetents([.large])
-                #if os(macOS)
-                .macSheet()
-                #endif
         }
         .fullScreenCover(item: $gallery) { g in ImageViewer(urls: g.urls.map(media), index: g.index) }
     }
@@ -248,7 +239,8 @@ struct FeishuDocReader: View {
                         if let id = owner.id { open?(.profile(LarkPersonRef(id: id, name: owner.name, avatar: owner.avatarUrl), manager: manager)) }
                     } label: {
                         HStack(spacing: Theme.Space.sm) {
-                            LarkAvatarImage(name: owner.name, url: owner.avatarUrl.map(media), size: 22)
+                            LarkAvatarImage(name: owner.name, url: owner.avatarUrl, size: 22)
+                                .environment(\.larkManager, manager)
                             Text(owner.name).font(Theme.Font.captionMedium).foregroundStyle(.primary).lineLimit(1)
                         }
                     }
@@ -414,11 +406,7 @@ struct FeishuDocReader: View {
             open(.doc(url: link.absoluteString, title: nil, manager: manager))
             return .handled
         }
-        #if os(macOS)
-        return LinkPolicy.system(link) // NSWorkspace would run any scheme it names
-        #else
         return .systemAction
-        #endif
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -25,16 +26,17 @@ const remoteRaw = "11111111-2222-3333-4444-555555555555"
 const remoteOther = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 type remoteFixture struct {
-	mu         sync.Mutex
-	home       string
-	threads    []string
-	got        []codexMessage
-	socket     *websocket.Conn
-	replies    []codexMessage
-	drop       string
-	reject     string
-	rejectCode int    // the error code a rejected call gets; 0: -32600
-	hangup     string // a call to it closes the connection instead of an answer
+	mu            sync.Mutex
+	home          string
+	threads       []string
+	got           []codexMessage
+	socket        *websocket.Conn
+	replies       []codexMessage
+	drop          string
+	reject        string
+	rejectCode    int    // the error code a rejected call gets; 0: -32600
+	rejectMessage string // the error text a rejected call gets; empty: "rejected"
+	hangup        string // a call to it closes the connection instead of an answer
 	// slowRead: threads whose thread/read is never answered, as an app-server too slow for it.
 	slowRead      map[string]bool
 	resumeRequest bool
@@ -50,6 +52,9 @@ type remoteFixture struct {
 	backgroundReply map[string]any
 	backgroundPages map[string]map[string]any
 	response        func(string, map[string]any) (any, bool)
+	// open: the connections being served now; accepted: every connection served so far. A connection stops counting
+	// as open only once all it carried is in got.
+	open, accepted int
 }
 
 func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +65,14 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 	defer c.CloseNow()
 	f.mu.Lock()
 	f.socket = c
+	f.open++
+	f.accepted++
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.open--
+		f.mu.Unlock()
+	}()
 	for {
 		_, b, err := c.Read(r.Context())
 		if err != nil {
@@ -73,7 +85,7 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.got = append(f.got, m)
 		ids := append([]string(nil), f.threads...)
-		drop, reject, code, ephemeral, hangup := f.drop, f.reject, f.rejectCode, f.ephemeral, f.hangup
+		drop, reject, code, rejectMessage, ephemeral, hangup := f.drop, f.reject, f.rejectCode, f.rejectMessage, f.ephemeral, f.hangup
 		models, model, effort, archive := f.models, f.threadModel, f.threadEffort, f.archive
 		background := f.backgroundReply
 		backgroundPages := f.backgroundPages
@@ -109,7 +121,10 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 			archive(m.Method, p.ThreadID)
 		}
 		if m.Method == reject {
-			f.push(map[string]any{"id": m.ID, "error": map[string]any{"code": code, "message": "rejected"}})
+			if rejectMessage == "" {
+				rejectMessage = "rejected"
+			}
+			f.push(map[string]any{"id": m.ID, "error": map[string]any{"code": code, "message": rejectMessage}})
 			continue
 		}
 		var p map[string]any
@@ -125,7 +140,11 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if response != nil {
 			if value, handled := response(m.Method, p); handled {
-				f.push(map[string]any{"id": m.ID, "result": value})
+				if rpcErr, ok := value.(*codexError); ok {
+					f.push(map[string]any{"id": m.ID, "error": rpcErr})
+				} else {
+					f.push(map[string]any{"id": m.ID, "result": value})
+				}
 				continue
 			}
 		}
@@ -168,11 +187,14 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 			result = map[string]any{"turn": map[string]any{"id": "turn-1"}}
 			fallthrough // its effort is the thread's from then on, as a settings update's
 		case "thread/settings/update":
-			if e, ok := p["effort"].(string); ok {
-				f.mu.Lock()
-				f.threadEffort = e
-				f.mu.Unlock()
+			f.mu.Lock()
+			if mod, ok := p["model"].(string); ok {
+				f.threadModel = mod
 			}
+			if e, ok := p["effort"].(string); ok {
+				f.threadEffort = e
+			}
+			f.mu.Unlock()
 		case "model/list":
 			if models != nil {
 				result = models
@@ -217,6 +239,8 @@ func remoteTestNode(t *testing.T) *Node {
 	n, home := testNode(t)
 	n.codices = newCodexRegistry()
 	n.codices.scan = func() []codexProcess { return nil }
+	n.codices.checked = func() ([]codexProcess, bool) { return n.codices.scan(), true }
+	fixtureCodexIndex(n.codices)
 	n.logger = log.New(io.Discard, "", 0)
 	n.metas = map[string]quickMeta{}
 	n.bgScans = map[string]*bgScan{}
@@ -225,14 +249,38 @@ func remoteTestNode(t *testing.T) *Node {
 	return n
 }
 
+// fixtureCodexIndex gives a fixture node's Codex home index room to finish a cold scan of a healthy test home, which can
+// invoke several sqlite3 subprocesses (desktop projects and sidebar threads). Under multi-shard CPU contention that
+// scan can outlast the production 100ms/300ms budgets, and a list that stops waiting leaves the home's threads out of
+// its rows (#15981, #15990). Stall-isolation tests use boundedTestNode to keep the production budgets.
+func fixtureCodexIndex(r *codexRegistry) {
+	r.index.scanWait = 5 * time.Second
+	r.index.listWait = 5 * time.Second
+}
+
+// boundedTestNode returns a remoteTestNode with the production Codex home index wait budgets
+// (codexHomeScanWait and codexHomeListWait), for tests that deliberately block a home's scan.
+func boundedTestNode(t *testing.T) *Node {
+	t.Helper()
+	n := remoteTestNode(t)
+	n.codices.index.scanWait = 0
+	n.codices.index.listWait = 0
+	return n
+}
+
 func connectRemoteFixture(t *testing.T, n *Node, home, id string, threads ...string) (*remoteFixture, *codexRemote) {
 	t.Helper()
 	f := &remoteFixture{home: home, threads: threads}
 	server := httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(server.Close)
+	c := connectFixtureEndpoint(t, n, home, id, "ws"+strings.TrimPrefix(server.URL, "http"))
+	return f, c
+}
+
+func connectFixtureEndpoint(t *testing.T, n *Node, home, id, endpoint string) *codexRemote {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	// The node canonicalizes every server's home before it dials (configureCodex, discoverCodex); macOS's TempDir
-	// lives under the /var -> /private/var symlink, so a raw home never matches the app-server's codexHome.
-	spec := proto.CodexServer{ID: id, Home: canonicalCodexHome(home, n.home), Endpoint: "ws" + strings.TrimPrefix(server.URL, "http")}
+	spec := proto.CodexServer{ID: id, Home: canonicalCodexHome(home, n.home), Endpoint: endpoint}
 	n.ensureCodexRemote(ctx, spec)
 	waitFor(t, "remote connected", func() bool {
 		n.codices.mu.Lock()
@@ -248,8 +296,8 @@ func connectRemoteFixture(t *testing.T, n *Node, home, id string, threads ...str
 	n.codices.mu.Lock()
 	c := n.codices.remotes[id]
 	n.codices.mu.Unlock()
-	t.Cleanup(func() { cancel(); c.close(); server.Close() })
-	return f, c
+	t.Cleanup(func() { cancel(); c.close() })
+	return c
 }
 
 func TestCodexRemoteIdentityAndOnlyReadDiscovery(t *testing.T) {
@@ -278,6 +326,50 @@ func TestCodexRemoteIdentityAndOnlyReadDiscovery(t *testing.T) {
 	}
 	if _, _, err := n.codexOwner(id1); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCodexSharedOriginKeepsTheLiveOwnerRoute(t *testing.T) {
+	n := remoteTestNode(t)
+	home, bus := startFakeCodexBus(t, remoteRaw)
+	state := fmt.Sprintf(`{"projectless-thread-ids":[%q]}`, remoteRaw)
+	if err := os.WriteFile(filepath.Join(home, ".codex-global-state.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(home, "rollout-"+remoteRaw+".jsonl")
+	meta := `{"type":"session_meta","payload":{"originator":"persona","source":"vscode"}}` + "\n"
+	if err := os.WriteFile(rollout, []byte(meta), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id := n.registerCodex(home, remoteRaw, rollout)
+	if err := n.send(context.Background(), id, "App fallback", nil, sendOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-bus.turns:
+	default:
+		t.Fatal("the App window did not take the fallback send")
+	}
+
+	remote, _ := connectRemoteFixture(t, n, home, "shared", remoteRaw)
+	if err := n.send(context.Background(), id, "Live owner", nil, sendOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if remote.count("turn/start") != 1 {
+		t.Fatal("the live owner did not take the send")
+	}
+	select {
+	case <-bus.turns:
+		t.Fatal("a send with a live owner went through the App fallback")
+	default:
+	}
+
+	other, _ := connectRemoteFixture(t, n, home, "other", remoteRaw)
+	if err := modesCall(t, n, id, map[string]any{"model": "gpt-y"}); refusalCode(err) != "codex_read_only" {
+		t.Fatalf("settings with conflicting owners = %v, want codex_read_only", err)
+	}
+	if len(bus.settings) != 0 || remote.count("thread/settings/update") != 0 || other.count("thread/settings/update") != 0 {
+		t.Fatal("settings reached an endpoint despite the owner conflict")
 	}
 }
 
@@ -402,6 +494,56 @@ func TestCodexRemoteOwnerConflictAndStdioRefuse(t *testing.T) {
 	}
 	if p := n.transcriptPath("c0de-00000000000000000000000000000000"); p != "" {
 		t.Fatal("unknown opaque key fell through")
+	}
+}
+
+func TestCodexRemoteActiveWriterIsAnUndeliveredConflict(t *testing.T) {
+	for _, method := range []string{"thread/resume", "turn/start"} {
+		t.Run(method, func(t *testing.T) {
+			n := remoteTestNode(t)
+			home := t.TempDir()
+			owner, _ := connectRemoteFixture(t, n, home, "owner", remoteRaw)
+			other, _ := connectRemoteFixture(t, n, home, "other")
+			id := n.registerCodex(home, remoteRaw, "")
+			owner.mu.Lock()
+			owner.reject = method
+			owner.rejectMessage = "thread " + remoteRaw + " already has an active writer"
+			owner.mu.Unlock()
+
+			err := n.send(context.Background(), id, "follow up once", nil, sendOpts{})
+			code, data := refusalOf(t, err)
+			if code != "codex_writer_busy" || data["delivered"] != "none" {
+				t.Fatalf("active writer refusal = %s %v (%v)", code, data, err)
+			}
+			if !strings.Contains(err.Error(), "原 Codex") || !strings.Contains(fmt.Sprint(data["detail"]), "active writer") {
+				t.Fatalf("conflict does not explain recovery and retain its diagnostic: %v %v", err, data)
+			}
+			wantStarts := 1
+			if method == "thread/resume" {
+				wantStarts = 0
+			}
+			if owner.count(method) != 1 || owner.count("turn/start") != wantStarts {
+				t.Fatalf("owning writer calls: resume=%d start=%d", owner.count("thread/resume"), owner.count("turn/start"))
+			}
+			if other.count("thread/resume")+other.count("turn/start") != 0 {
+				t.Fatal("active writer fell back to a competing app-server")
+			}
+		})
+	}
+}
+
+func TestCodexRemoteOtherInvalidRequestStaysUnknown(t *testing.T) {
+	n := remoteTestNode(t)
+	home := t.TempDir()
+	f, _ := connectRemoteFixture(t, n, home, "one", remoteRaw)
+	id := n.registerCodex(home, remoteRaw, "")
+	f.mu.Lock()
+	f.reject = "turn/start"
+	f.rejectMessage = "another invalid request"
+	f.mu.Unlock()
+	_, data := refusalOf(t, n.send(context.Background(), id, "follow up once", nil, sendOpts{}))
+	if data["delivered"] != "unknown" {
+		t.Fatalf("an unrelated invalid request became safe to retry: %v", data)
 	}
 }
 
@@ -697,7 +839,8 @@ func TestCodexRemoteSlowReadsTimeOutAlone(t *testing.T) {
 }
 
 // A refresh whose own time runs out stops asking: threads not read in time keep their last copy and are not backed off
-// as slow, while those whose own read timed out are.
+// as slow, while those whose own read timed out are. Reads go out never read first (readOrder): the nine new threads
+// in list order, then the known one, read when the connection came up.
 func TestCodexRemoteRefreshBudgetStopsReads(t *testing.T) {
 	n := remoteTestNode(t)
 	logs := &syncBuffer{}
@@ -717,23 +860,27 @@ func TestCodexRemoteRefreshBudgetStopsReads(t *testing.T) {
 		f.slowRead[raw] = true
 	}
 	f.mu.Unlock()
+	order := slices.Concat(slow[1:], slow[:1])
 
+	before := f.readCounts()
 	if err := c.refresh(); err != nil {
 		t.Fatal(err)
 	}
+	after := f.readCounts()
 	c.mu.Lock()
 	_, kept := c.threads[remoteRaw]
+	_, knownBackedOff := c.slow[remoteRaw]
 	backedOff := len(c.slow)
-	_, first := c.slow[remoteRaw]
+	_, first := c.slow[order[0]]
 	c.mu.Unlock()
-	if !kept {
-		t.Fatal("a known thread was dropped")
+	if !kept || knownBackedOff {
+		t.Fatalf("known thread not read in time: kept %v, backed off %v", kept, knownBackedOff)
 	}
 	if backedOff != codexReadWorkers || !first {
 		t.Fatalf("%d threads backed off (first %v), want the %d whose own read timed out", backedOff, first, codexReadWorkers)
 	}
-	for _, raw := range slow[2*codexReadWorkers:] {
-		if got := f.readCount(raw); got != 0 {
+	for _, raw := range order[2*codexReadWorkers:] {
+		if got := after[raw] - before[raw]; got != 0 {
 			t.Fatalf("%s asked %d times after the refresh ran out of time", raw, got)
 		}
 	}

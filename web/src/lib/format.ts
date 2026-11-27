@@ -1,6 +1,8 @@
-import type { AgentState, Interaction, Session, SessionCapabilities } from "./types";
+import { parseAgentPhase, type AgentPhase, type AgentView } from "./agent-view-wire";
+import { inferAgentView } from "./legacy-agent-view";
+import type { AgentState, StatusMarkState, Interaction, Session, SessionCapabilities } from "./types";
 import { formatDate, formatRelative, t } from "../i18n";
-import { sessionAgentName } from "./agent-kind";
+import { normalizeTraeCliName, sessionAgentName } from "./agent-kind";
 import { usageLimitLabel } from "./usage-limit";
 import { workLine } from "./work";
 import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
@@ -64,9 +66,9 @@ export function sourceSubtitle(s?: Session): string {
     : s.source_kind === "claude_cli" ? t("lib-format.source_claude_terminal")
     // an agent runtime's session (docs/integrations/runtimes.md): its own name, else its agent's ("Claude Code", a Paseo
     // provider's), never a raw id (#8142)
-    : s.source_kind === "runtime" ? s.agent_label || sessionAgentName(s)
+    : s.source_kind === "runtime" ? normalizeTraeCliName(s.agent_label) || sessionAgentName(s)
     : s.source_kind;
-  const detail = s.source_kind !== "identity_conflict" && s.agent_name ? ` · ${s.agent_name}` : "";
+  const detail = s.source_kind !== "identity_conflict" && s.agent_name ? ` · ${normalizeTraeCliName(s.agent_name)}` : "";
   if (sessionCan(s, "send")) return label + detail;
   const given = s.read_only_reason ?? "";
   const reason = (given.startsWith(NODE_READ_ONLY_PREFIX) ? given.slice(NODE_READ_ONLY_PREFIX.length) : given).trim();
@@ -98,7 +100,7 @@ export function sessionMenuActions(s: Session): string[] {
     ...(sessionCan(s, "attach") ? ["attach"] : []),
     ...(stateOf(s) === "working" && sessionCan(s, "interrupt") ? ["stop"] : []),
     ...(sessionCan(s, "terminal") ? ["resume"] : []),
-    ...(!s.assistant && stateOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
+    ...(!s.assistant && activityOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
   ];
 }
 
@@ -111,40 +113,45 @@ export function sessionDeletable(s: Session): boolean {
   return !s.assistant && DELETABLE_STATUSES.has(s.status) && !s.starting;
 }
 
-// docs/protocol/agent-states.md: needs you → unread → awaiting reply (seen, awaiting the user's reply, #5096) → working →
-// just finished (done before anybody looked, #9751) → idle → unknown → offline
-const RANK: Record<AgentState, number> = { needs_you: 0, unread: 1, working: 3, idle: 5, unknown: 6, offline: 7 };
-
-// A seen agent awaiting the user's reply ranks between unread and working, a just finished one between working and the
-// seen ones. The comparator has no mutes: a muted one ranks so here too (the sidebar's By Status sections and folds go
-// by lib/agent-groups.ts awaitsReply and justFinished).
-function rankOf(s: Session): number {
-  const st = stateOf(s);
-  if (st === "idle" && s.awaits_reply) return 2;
-  if (st === "idle" && s.work?.just_finished) return 4;
-  return RANK[st];
+/** A rolling upgrade can mix rows from old and new managers in one response. */
+export function viewOf(s: Session): AgentView {
+  if (!s.view) return inferAgentView(s);
+  if (typeof parseAgentPhase(s.view.phase) === "string") return s.view;
+  return { ...s.view, phase: "idle", reason: { kind: "host_unknown" } };
 }
 
-export function stateOf(s: Session): AgentState {
-  if (s.state) return s.state;
-  if (s.status === "offline") return "offline";
-  if (s.status === "working") return "working";
-  if (s.status === "blocked" || (s.pending_interactions ?? 0) > 0) return "needs_you";
+export function stateOf(s: Session): AgentPhase {
+  return viewOf(s).phase;
+}
+
+/** The older host vocabulary used by read receipts, notification transitions and terminal controls.
+ * Done alone cannot tell these callers whether a reply is unread or a process is running. */
+export function activityOf(s: Session): AgentState {
+  if (!s.view && s.state) return s.state;
+  const { phase, reason } = viewOf(s);
+  if (phase === "working" || phase === "needs_you") return phase;
+  if (phase === "done" && s.locallySeen) return "idle";
+  if (reason?.kind === "unseen" || (reason?.kind === "asks" && reason.unseen)) return "unread";
+  if (reason?.kind === "not_running") return "offline";
+  if (reason?.kind === "host_unknown") return "unknown";
   return "idle";
 }
 
-/** Working only because its background commands wait (#6045, Session.background_waiting): its own state is still
- *  "working" (older apps show that); the web shows it as "Waiting in the background", apart from Working. */
 export function backgroundWaiting(s: Session): boolean {
-  return stateOf(s) === "working" && Boolean(s.background_waiting);
+  if (!s.view && s.background_waiting && s.background_working === undefined) return stateOf(s) === "working";
+  const reason = viewOf(s).reason;
+  return reason?.kind === "background" && reason.waiting === true;
 }
 
-export function stateColor(st: AgentState): string {
+export function stateColor(st: StatusMarkState): string {
   switch (st) {
     case "needs_you":
       return "var(--status-needs)";
     case "working":
       return "var(--status-working)";
+    case "error":
+      return "var(--red)";
+    case "done":
     case "unread":
       return "var(--status-unread)";
     case "offline":
@@ -155,7 +162,7 @@ export function stateColor(st: AgentState): string {
 }
 
 export function byAttention(a: Session, b: Session): number {
-  const d = rankOf(a) - rankOf(b);
+  const d = viewOf(a).rank - viewOf(b).rank;
   if (d) return d;
   const ta = stateOf(a) === "working" ? a.state_since || a.updated_at : a.updated_at;
   const tb = stateOf(b) === "working" ? b.state_since || b.updated_at : b.updated_at;
@@ -210,18 +217,45 @@ export function externalLink(s?: Pick<Session, "external_url">): string | undefi
   }
 }
 
-export function sessionTitle(s: Pick<Session, "title" | "cwd">): string {
-  return s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
+type SessionNameFields = Pick<Session, "title" | "cwd" | "assistant" | "slot_name" | "slot_id" | "tab_id" | "space_kind" | "host">;
+
+export function herdrTabName(s: SessionNameFields): string {
+  const kind = s.space_kind || s.host;
+  if (s.assistant || !(s.slot_id || s.tab_id) || (kind && kind !== "herdr" && kind !== "herdr-core")) return "";
+  return s.slot_name?.trim() || "";
+}
+
+// Keep the terminal prompt recognizer in sync with server/internal/proto/session_name.go.
+const SHELL_PROMPT_TITLE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*@[A-Za-z0-9_][A-Za-z0-9_.-]*:(?:[ \t]+[^\r\n]+|[~/][^\r\n]*)$/;
+
+export function sessionDisplayTab(s: SessionNameFields, preferTab = false): string {
+  const title = s.title?.trim() || "";
+  return preferTab || !title || SHELL_PROMPT_TITLE.test(title) ? herdrTabName(s) : "";
+}
+
+export function sessionTitle(s: SessionNameFields, preferTab = false): string {
+  return sessionDisplayTab(s, preferTab) || s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
+}
+
+export function sessionTitleDetail(s: SessionNameFields, preferTab: boolean): string {
+  const tab = preferTab ? herdrTabName(s) : "";
+  const title = s.title?.trim() || "";
+  return tab && tab !== title ? title : "";
 }
 
 // A path from a Windows computer: a drive letter or a UNC share. Only there is a backslash a separator; in any other
 // path it is a character of a name.
-const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\/;
+export const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\|^\/\/[^\\/]+[\\/]/;
 
 export function baseName(p?: string): string {
   if (!p) return "";
-  const parts = (WINDOWS_PATH.test(p) ? p.replace(/\\/g, "/") : p).replace(/\/+$/, "").split("/");
+  const parts = pathSlashes(p).replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || p;
+}
+
+/** Remote Windows paths use either separator. A backslash inside a POSIX filename stays literal. */
+export function pathSlashes(path: string): string {
+  return WINDOWS_PATH.test(path) ? path.replaceAll("\\", "/") : path;
 }
 
 export function tabLabel(s: Session): string {
@@ -292,6 +326,20 @@ export function clock(iso?: string): string {
   const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   if (d.toDateString() === today.toDateString()) return hm;
   return t("lib-format.date_time", { date: formatDate(d, { month: "short", day: "numeric" }), time: hm });
+}
+
+/** 18:20 today, "Yesterday", "Wed" within the week, "Oct 28" this year, else 2025-10-28 (LarkTime.short). */
+export function shortTime(iso?: string, now = new Date()): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return "";
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((day(now) - day(d)) / 86400_000);
+  if (days <= 0) return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (days === 1) return t("lib-inbox.yesterday");
+  if (now.getTime() - d.getTime() < 6 * 86400_000) return formatDate(d, { weekday: "short" });
+  if (d.getFullYear() === now.getFullYear()) return formatDate(d, { month: "short", day: "numeric" });
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 /** "512 B", "1.5 KB", "250 MB". The unit and the decimal follow the figure as it is shown, after rounding, as the

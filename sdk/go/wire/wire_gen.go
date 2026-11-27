@@ -5,6 +5,7 @@ package wire
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -49,7 +50,8 @@ type Manifest struct {
 	// An extension pack (docs "Extension packs"): installing it installs these. A pack has no runtime and no contributes
 	// of its own.
 	ExtensionPack []PackMember `json:"extension_pack,omitempty"`
-	// The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form subset").
+	// The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+	// clients draw declared entry lists after opting in; other clients receive compatibility projections.
 	Configuration json.RawMessage `json:"configuration,omitempty"`
 	Secrets       []SecretSpec    `json:"secrets,omitempty"`
 	// The program checks a change of its settings or secrets before the hub saves it (settings.check).
@@ -62,6 +64,7 @@ type Manifest struct {
 	// Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
 	// executable; writes and arbitrary command lines are not part of this contract.
 	HostIntegrations []HostIntegrationSpec `json:"host_integrations,omitempty"`
+	Upgrade          *UpgradeSpec          `json:"upgrade,omitempty"`
 }
 
 // HostIntegrationSpec: A configured CLI integration, selected by a closed ID rather than by an extension-provided
@@ -121,6 +124,19 @@ type AuthSpec struct {
 	// An extension_page (plugin_page) ui contribution: its own sign-in page for apps that do not know auth; apps that do
 	// leave it out of its pages.
 	Page string `json:"page,omitempty"`
+}
+
+// UpgradeSpec: what the extension asks of the hub around an automatic upgrade (docs "Backup before an upgrade"). The
+// hub snapshots the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse
+// the manifest.
+type UpgradeSpec struct {
+	// auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade.
+	Backup string `json:"backup,omitempty"`
+	// Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the upgrade.
+	Prepare bool `json:"prepare,omitempty"`
+	// Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the
+	// snapshot.
+	HealthCheck bool `json:"health_check,omitempty"`
 }
 
 type Dependency struct {
@@ -272,11 +288,13 @@ type Contributes struct {
 	Browser             []NamedItem              `json:"browser,omitempty"`
 	Iphone              []NamedItem              `json:"iphone,omitempty"`
 	Quota               []QuotaItem              `json:"quota,omitempty"`
+	Usage               []UsageItem              `json:"usage,omitempty"`
 	Providers           []ProviderItem           `json:"providers,omitempty"`
 	API                 []APIItem                `json:"api,omitempty"`
 	Assistant           []AssistantItem          `json:"assistant,omitempty"`
 	McpServers          []MCPServerItem          `json:"mcp_servers,omitempty"`
 	UI                  []UIItem                 `json:"ui,omitempty"`
+	TrackKinds          []TrackKindItem          `json:"track_kinds,omitempty"`
 	AgentSources        []AgentSourceItem        `json:"agent_sources,omitempty"`
 	Channel             []ChannelItem            `json:"channel,omitempty"`
 	Events              []EventsItem             `json:"events,omitempty"`
@@ -292,6 +310,8 @@ type Contributes struct {
 	AuthRelay           []AuthRelayItem          `json:"auth_relay,omitempty"`
 	SecretProviders     []SecretProviderItem     `json:"secret_providers,omitempty"`
 	RepositoryProviders []RepositoryProviderItem `json:"repository_providers,omitempty"`
+	MemorySources       []MemorySourceItem       `json:"memory_sources,omitempty"`
+	DiskOffload         []DiskOffloadItem        `json:"disk_offload,omitempty"`
 	Messaging           []MessagingItem          `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
@@ -303,7 +323,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -335,7 +355,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -349,6 +369,8 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 // 256 KB and 32 skills per extension).
 type SkillItem struct {
 	ID string `json:"id"`
+	// What the extension's contributions list calls it; the id when absent.
+	Title string `json:"title,omitempty"`
 	// The directory, relative to the package (or to the data directory with source data).
 	Dir    string `json:"dir"`
 	Source string `json:"source,omitempty"`
@@ -588,7 +610,54 @@ type RepositoryProviderItem struct {
 	// What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels: the
 	// kinds stay issue and pull_request.
 	LinkKinds []RepositoryLinkLabel `json:"link_kinds,omitempty"`
+	// What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+	// (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
+
+// DiskOffloadItem: A provider that moves items from a computer to storage elsewhere, lists what it already holds and
+// brings items back (docs/server/machine-usage-map.md "Extension point disk_offload"): the disk usage map draws its
+// inventory beside the computer's disk and offers Offload; the manager asks the program (offload.inventory,
+// offload.run, offload.job, offload.cancel; offload.schema.json) after the user confirmed. Needs the program to speak
+// the protocol.
+type DiskOffloadItem struct {
+	ID string `json:"id"`
+	// What the map and its menus call the provider (Offload to Example Cloud). Not only spaces, no control characters.
+	Name string `json:"name"`
+	// What it takes from the map; without it, files and folders.
+	Kinds []string `json:"kinds,omitempty"`
+	// Items it holds can be brought back (Restore on the map's cloud side).
+	Restore bool `json:"restore,omitempty"`
+}
+
+// DiskOffloadKind: what a disk_offload provider takes: file, dir (a folder) or app (a macOS app bundle).
+const (
+	DiskOffloadKindFile = "file"
+	DiskOffloadKindDir  = "dir"
+	DiskOffloadKindApp  = "app"
+)
+
+// DiskOffloadKinds are the values of DiskOffloadKind, in order.
+var DiskOffloadKinds = []string{"file", "dir", "app"}
+
+// MemorySourceItem: the extension's memory, read by the manager one entry at a time (memory.entries;
+// memory.schema.json) so the hub decides which entries reach which scene (a conversation's standing context, a
+// recall, a dispatched task, the Inbox's helper). Needs the program to speak the protocol; one per extension. Once
+// declared, the hub stops delivering the extension's own text outlets (its assistant instructions, project context,
+// Inbox context and its connectors' read tools in the assistant's conversations) directly.
+type MemorySourceItem struct {
+	ID string `json:"id"`
+	// What settings call the source (My memory). Not only spaces, no control characters.
+	Name string `json:"name"`
+}
+
+// RepositoryCapability: A repository provider's optional answer: pr_status (repo.pr_status).
+const (
+	RepositoryCapabilityPrStatus = "pr_status"
+)
+
+// RepositoryCapabilities are the values of RepositoryCapability, in order.
+var RepositoryCapabilities = []string{"pr_status"}
 
 // RepositoryLinkLabel: the word a repository provider shows for one kind of its links (MR for a pull_request).
 type RepositoryLinkLabel struct {
@@ -664,6 +733,41 @@ type ConnectorItem struct {
 	SendsAsUser bool `json:"sends_as_user,omitempty"`
 }
 
+type TrackAttention struct {
+	PushCap     string `json:"push_cap,omitempty"`
+	DeepDefault string `json:"deep_default,omitempty"`
+	EnterMode   string `json:"enter_mode,omitempty"`
+}
+
+type TrackSidebar struct {
+	Group string `json:"group,omitempty"`
+	Order int    `json:"order,omitempty"`
+	Icon  string `json:"icon,omitempty"`
+}
+
+type TrackKindConfig struct {
+	Schema            int                          `json:"schema"`
+	Template          string                       `json:"template"`
+	UserInstructions  string                       `json:"user_instructions,omitempty"`
+	Context           string                       `json:"context"`
+	DefaultCategories []string                     `json:"default_categories"`
+	TagFocus          []string                     `json:"tag_focus"`
+	Rhythms           []map[string]json.RawMessage `json:"rhythms"`
+	Attention         TrackAttention               `json:"attention"`
+	Supervision       string                       `json:"supervision"`
+	Usage             []map[string]json.RawMessage `json:"usage"`
+	Assembly          string                       `json:"assembly"`
+	CaptureTarget     bool                         `json:"capture_target,omitempty"`
+	Channels          []string                     `json:"channels"`
+	Sidebar           TrackSidebar                 `json:"sidebar"`
+}
+
+type TrackKindItem struct {
+	ID     string          `json:"id"`
+	Title  string          `json:"title"`
+	Config TrackKindConfig `json:"config"`
+}
+
 // NamedItem: A contribution with only an id and a name: voice, transcription, speech, computer, browser.
 type NamedItem struct {
 	ID   string `json:"id"`
@@ -671,6 +775,12 @@ type NamedItem struct {
 }
 
 type QuotaItem struct {
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Hosts []string `json:"hosts,omitempty"`
+}
+
+type UsageItem struct {
 	ID    string   `json:"id"`
 	Name  string   `json:"name"`
 	Hosts []string `json:"hosts,omitempty"`
@@ -710,7 +820,9 @@ type APIReceipt struct {
 }
 
 type AssistantItem struct {
-	ID           string   `json:"id"`
+	ID string `json:"id"`
+	// What the extension's contributions list calls it; the id when absent.
+	Title        string   `json:"title,omitempty"`
 	Skills       []string `json:"skills,omitempty"`
 	Instructions string   `json:"instructions,omitempty"`
 	Gate         string   `json:"gate,omitempty"`
@@ -722,6 +834,8 @@ type AssistantItem struct {
 type MCPServerItem struct {
 	// The server's name for the assistant; not persona or persona.
 	ID string `json:"id"`
+	// What the extension's contributions list calls it; the id when absent.
+	Title string `json:"title,omitempty"`
 	// Looked up on PATH, then in ~/bin.
 	Command string `json:"command"`
 	// A PERSONA_ variable (PERSONA_ read too) that, when set, replaces the lookup: a path, or "" / 0 / off / false to
@@ -745,6 +859,9 @@ type UIItem struct {
 	Hosts []string `json:"hosts,omitempty"`
 	// nav_page only.
 	Icon string `json:"icon,omitempty"`
+	// nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the
+	// owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+	IconColor string `json:"icon_color,omitempty"`
 	// overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension.
 	Opens string `json:"opens,omitempty"`
 	// inbox_item only: one of the extension's own connectors.
@@ -781,16 +898,22 @@ type ChannelItem struct {
 }
 
 type ChannelCapabilities struct {
-	ImagesIn bool   `json:"images_in,omitempty"`
-	FilesIn  bool   `json:"files_in,omitempty"`
-	VoiceIn  bool   `json:"voice_in,omitempty"`
-	Format   string `json:"format,omitempty"`
-	MaxText  int    `json:"max_text,omitempty"`
-	Asks     string `json:"asks,omitempty"`
-	Push     bool   `json:"push,omitempty"`
-	Typing   bool   `json:"typing,omitempty"`
-	Progress bool   `json:"progress,omitempty"`
-	Threads  bool   `json:"threads,omitempty"`
+	ImagesIn bool `json:"images_in,omitempty"`
+	// It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+	// Markdown in the text.
+	ImagesOut bool   `json:"images_out,omitempty"`
+	FilesIn   bool   `json:"files_in,omitempty"`
+	VoiceIn   bool   `json:"voice_in,omitempty"`
+	Format    string `json:"format,omitempty"`
+	MaxText   int    `json:"max_text,omitempty"`
+	Asks      string `json:"asks,omitempty"`
+	Push      bool   `json:"push,omitempty"`
+	// It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without reply_to;
+	// testing checks connectivity instead of calling channel.send.
+	ReplyOnly bool `json:"reply_only,omitempty"`
+	Typing    bool `json:"typing,omitempty"`
+	Progress  bool `json:"progress,omitempty"`
+	Threads   bool `json:"threads,omitempty"`
 }
 
 type EventsItem struct {
@@ -960,10 +1083,11 @@ const (
 	HubCapabilityInboxGroup      = "inbox_group"
 	HubCapabilityInboxGroupState = "inbox_group_state"
 	HubCapabilityToolImages      = "tool_images"
+	HubCapabilityToolViews       = "tool_views"
 )
 
 // HubCapabilities are the values of HubCapability, in order.
-var HubCapabilities = []string{"inbox_group", "inbox_group_state", "tool_images"}
+var HubCapabilities = []string{"inbox_group", "inbox_group_state", "tool_images", "tool_views"}
 
 // InitializeParams: what the hub sends first. The extension is under extension; hubs before the rename (#1844) send
 // it as plugin, newer hubs send both.
@@ -973,9 +1097,12 @@ type InitializeParams struct {
 	Extension *ExtensionInfo `json:"extension,omitempty"`
 	Plugin    *ExtensionInfo `json:"plugin,omitempty"`
 	// The configuration with the schema's defaults filled in.
-	Config  json.RawMessage   `json:"config,omitempty"`
-	Secrets map[string]string `json:"secrets,omitempty"`
-	Granted Permissions       `json:"granted"`
+	Config json.RawMessage `json:"config,omitempty"`
+	// The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+	// authorization input, not extension settings persisted in the extension registry.
+	InboxVisibility json.RawMessage   `json:"inbox_visibility,omitempty"`
+	Secrets         map[string]string `json:"secrets,omitempty"`
+	Granted         Permissions       `json:"granted"`
 	// The contributions this run is for, by extension point.
 	Active map[string][]string `json:"active,omitempty"`
 	// The contributions of the other extensions that are on to the points it exports, by its point id (event
@@ -1109,6 +1236,9 @@ type UIContext struct {
 	Locale    string `json:"locale,omitempty"`
 	Platform  string `json:"platform,omitempty"`
 	UIVersion int    `json:"ui_version,omitempty"`
+	// Component types this client cannot draw even within ui_version (such as ["scene"] while rendering v12 "map"). The
+	// hub downgrades each listed type in place.
+	Unsupported []string `json:"unsupported,omitempty"`
 	// Explicit stream opt-in, independent of ui_version. Absent means snapshot-only. Contract only: no current client or
 	// hub advertises it.
 	Stream *UIStreamCapability `json:"stream,omitempty"`
@@ -1139,6 +1269,8 @@ type UIPlace struct {
 	Connector     string `json:"connector,omitempty"`
 	// A nav_page's sidebar group, its title in the request's language (#9071).
 	Group *UIGroup `json:"group,omitempty"`
+	// A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822).
+	IconColor string `json:"icon_color,omitempty"`
 }
 
 type UIPlaces struct {
@@ -1429,6 +1561,43 @@ type SecretsResolveParams struct {
 // rate_limited (data.retry_after), refused.
 type SecretsResolveResult struct {
 	Value string `json:"value"`
+}
+
+// SecretStoreField: A public field name/type; never a value or source path.
+type SecretStoreField struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+// SecretStoreTarget: the canonical public target approved on the secret storage card.
+type SecretStoreTarget struct {
+	Operation string             `json:"operation"`
+	Vault     string             `json:"vault"`
+	Item      string             `json:"item,omitempty"`
+	Title     string             `json:"title,omitempty"`
+	Category  string             `json:"category,omitempty"`
+	Fields    []SecretStoreField `json:"fields"`
+}
+
+// SecretStoreParams: secrets.store: describe metadata, prepare an expiring node HPKE key after explicit approval,
+// commit one encrypted payload.
+type SecretStoreParams struct {
+	Contribution string            `json:"contribution,omitempty"`
+	Phase        string            `json:"phase"`
+	Target       SecretStoreTarget `json:"target"`
+	Machine      string            `json:"machine"`
+	Session      string            `json:"session"`
+	KeyID        string            `json:"key_id,omitempty"`
+	Sealed       string            `json:"sealed,omitempty"`
+}
+
+// SecretStoreResult: metadata and a recipient key, or references of written fields. Never values.
+type SecretStoreResult struct {
+	Target     SecretStoreTarget `json:"target"`
+	VaultName  string            `json:"vault_name,omitempty"`
+	Key        string            `json:"key,omitempty"`
+	KeyID      string            `json:"key_id,omitempty"`
+	References map[string]string `json:"references,omitempty"`
 }
 
 // SecretsUsedEvent: secrets.used (an event to the provider, no answer): a reference it resolved was used, for the
@@ -1838,10 +2007,33 @@ type Component struct {
 	Aspect string `json:"aspect,omitempty"`
 	Fit    string `json:"fit,omitempty"`
 	// Tapping does nothing (else it shows the picture full screen).
-	NoZoom     bool   `json:"no_zoom,omitempty"`
-	Tiles      []Tile `json:"tiles,omitempty"`
-	MaxColumns int    `json:"max_columns,omitempty"`
-	Width      string `json:"width,omitempty"`
+	NoZoom     bool        `json:"no_zoom,omitempty"`
+	Tiles      []Tile      `json:"tiles,omitempty"`
+	MaxColumns int         `json:"max_columns,omitempty"`
+	Width      string      `json:"width,omitempty"`
+	Nodes      []GraphNode `json:"nodes,omitempty"`
+	Edges      []GraphEdge `json:"edges,omitempty"`
+	Layout     string      `json:"layout,omitempty"`
+	Direction  string      `json:"direction,omitempty"`
+	// Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for
+	// this key.
+	Folded []string `json:"folded,omitempty"`
+	// A picture of the model for an older app (an image in its place) and for share as image. Without it an older app
+	// gets a row per pin.
+	Poster   *ImageSource `json:"poster,omitempty"`
+	Camera   *SceneCamera `json:"camera,omitempty"`
+	Shapes   []SceneShape `json:"shapes,omitempty"`
+	Labels   []SceneLabel `json:"labels,omitempty"`
+	Pins     []ScenePin   `json:"pins,omitempty"`
+	Viewport *MapViewport `json:"viewport,omitempty"`
+	Markers  []MapMarker  `json:"markers,omitempty"`
+	Routes   []MapRoute   `json:"routes,omitempty"`
+	Links    []MapLink    `json:"links,omitempty"`
+	// When true, stays a non-interactive snapshot and does not open an interactive sheet.
+	Static bool `json:"static,omitempty"`
+	// When true (or when multiple routes/stops exist without a compact override), shows a companion route/stop list
+	// beneath the map.
+	ShowList bool `json:"show_list,omitempty"`
 }
 
 // Component types.
@@ -1872,13 +2064,245 @@ const (
 	ComponentImage         = "image"
 	ComponentGrid          = "grid"
 	ComponentCarousel      = "carousel"
+	ComponentGraph         = "graph"
+	ComponentScene         = "scene"
+	ComponentMap           = "map"
 )
 
 // ComponentTypes are the types of Component, in order.
-var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel"}
+var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene", "map"}
 
 // ComponentSince is the UI version that brought each type.
-var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6}
+var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6, "graph": 10, "scene": 11, "map": 12}
+
+// GraphNode: one node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress
+// bar, in tone's role color or color's named color (never both), with optional timing and inspector details.
+type GraphNode struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle,omitempty"`
+	Badge    *Badge `json:"badge,omitempty"`
+	Tone     string `json:"tone,omitempty"`
+	Color    string `json:"color,omitempty"`
+	Icon     string `json:"icon,omitempty"`
+	// A thin bar along the node's foot, 0 to 1.
+	Progress *float64 `json:"progress,omitempty"`
+	// Nodes with the same parents and the same group sit next to each other inside one frame titled with it (the same
+	// task tried several ways).
+	Group  string  `json:"group,omitempty"`
+	Action *Action `json:"action,omitempty"`
+	// Unix timestamp in seconds when this node started.
+	StartedAt *float64 `json:"started_at,omitempty"`
+	// Unix timestamp in seconds when this node ended; omitted while still running.
+	EndedAt *float64 `json:"ended_at,omitempty"`
+	// Short label/value readings shown in the node inspector.
+	Facts []Fact `json:"facts,omitempty"`
+	// Plain-text summary, verifier feedback or error shown in the node inspector.
+	Detail string `json:"detail,omitempty"`
+	// HTTPS links shown in the node inspector (for example work and verifier sessions across attempts).
+	Links []GraphNodeLink `json:"links,omitempty"`
+}
+
+// GraphNodeLink: an https link shown in a graph node's inspector (UI version 10).
+type GraphNodeLink struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+// GraphEdge: an edge from one node to another (UI version 10): from is the parent, to the child.
+type GraphEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// GraphLayout: tree (the default): every node has at most one parent, children under it, a parent centred over its
+// children. layered: a node may have several parents; each node sits one layer past its furthest parent (a plan whose
+// steps wait for several others).
+const (
+	GraphLayoutTree    = "tree"
+	GraphLayoutLayered = "layered"
+)
+
+// GraphLayouts are the values of GraphLayout, in order.
+var GraphLayouts = []string{"tree", "layered"}
+
+// GraphDirection: right (the default): roots at the start, children after them, so a wide fan-out reads down the
+// screen like an outline. down: roots at the top, children below.
+const (
+	GraphDirectionRight = "right"
+	GraphDirectionDown  = "down"
+)
+
+// GraphDirections are the values of GraphDirection, in order.
+var GraphDirections = []string{"right", "down"}
+
+// SceneCamera: where the model is first seen from (UI version 11), orthographic, around the centre of the shapes'
+// bounding box. Each field has its default when absent.
+type SceneCamera struct {
+	// The camera's direction from the centre, in degrees counter-clockwise from +x (east): 225 (the default) stands
+	// south-west, looking north-east.
+	Yaw *float64 `json:"yaw,omitempty"`
+	// Degrees above the floor plane: 35 by default, 90 straight down.
+	Pitch *float64 `json:"pitch,omitempty"`
+	// 1 (the default) fits the shapes' bounding box in the view; 2 draws it twice as large.
+	Zoom *float64 `json:"zoom,omitempty"`
+}
+
+// SceneShape: one shape of a scene (UI version 11), told apart by kind: a box, a cylinder or a prism, standing from
+// bottom to top (metres above the floor, at least 0.005 apart). Without color, the material's own. One struct for
+// every variant: kind says which fields mean something.
+type SceneShape struct {
+	Kind     string      `json:"kind"`
+	Center   []float64   `json:"center,omitempty"`
+	Size     []float64   `json:"size,omitempty"`
+	Yaw      *float64    `json:"yaw,omitempty"`
+	Round    *float64    `json:"round,omitempty"`
+	Bottom   *float64    `json:"bottom,omitempty"`
+	Top      *float64    `json:"top,omitempty"`
+	Color    string      `json:"color,omitempty"`
+	Material string      `json:"material,omitempty"`
+	Wall     bool        `json:"wall,omitempty"`
+	Radius   float64     `json:"radius,omitempty"`
+	Points   [][]float64 `json:"points,omitempty"`
+}
+
+// SceneShape kinds.
+const (
+	SceneShapeBox      = "box"
+	SceneShapeCylinder = "cylinder"
+	SceneShapePrism    = "prism"
+)
+
+// SceneShapeKinds are the kinds of SceneShape, in order.
+var SceneShapeKinds = []string{"box", "cylinder", "prism"}
+
+// SceneMaterial: how a shape's surface looks (UI version 11): matte (the default), glass (see-through), metal, screen
+// (dark and glossy), tile and wood (the app's own pattern, in metres, in the shape's color).
+const (
+	SceneMaterialMatte  = "matte"
+	SceneMaterialGlass  = "glass"
+	SceneMaterialMetal  = "metal"
+	SceneMaterialScreen = "screen"
+	SceneMaterialTile   = "tile"
+	SceneMaterialWood   = "wood"
+)
+
+// SceneMaterials are the values of SceneMaterial, in order.
+var SceneMaterials = []string{"matte", "glass", "metal", "screen", "tile", "wood"}
+
+// SceneLabel: A quiet name on the floor (UI version 11): a room's. Not tappable and not a component of the page; read
+// out after alt.
+type SceneLabel struct {
+	Text   string    `json:"text"`
+	At     []float64 `json:"at"`
+	Height *float64  `json:"height,omitempty"`
+}
+
+// ScenePin: A device in the model (UI version 11): a pin at its place with its label and state, in tone's role color
+// or color's named color (never both); with light on, the model lights up around it. Tapping it does its action, as a
+// tile's. state is required when a tone other than neutral, a color or a light that is on says something, so it never
+// rides on color or light alone. A scene has at most 16 pins with a light on.
+type ScenePin struct {
+	ID string    `json:"id"`
+	At []float64 `json:"at"`
+	// Metres above the floor: a ceiling lamp's 2.4, an AC's 2.2. 0 when absent.
+	Height *float64 `json:"height,omitempty"`
+	Label  string   `json:"label"`
+	// In plain words: On, Off, 26 °C.
+	State  string      `json:"state,omitempty"`
+	Icon   string      `json:"icon,omitempty"`
+	Tone   string      `json:"tone,omitempty"`
+	Color  string      `json:"color,omitempty"`
+	Light  *SceneLight `json:"light,omitempty"`
+	Action *Action     `json:"action,omitempty"`
+}
+
+// SceneLight: A lamp's light (UI version 11): when on, the model is lit around the pin, warm or cool. Off (the
+// default) adds no light.
+type SceneLight struct {
+	On     bool   `json:"on,omitempty"`
+	Warmth string `json:"warmth,omitempty"`
+}
+
+// SceneWarmth: warm (the default): a lamp's yellow light; cool: a white one.
+const (
+	SceneWarmthWarm = "warm"
+	SceneWarmthCool = "cool"
+)
+
+// SceneWarmths are the values of SceneWarmth, in order.
+var SceneWarmths = []string{"warm", "cool"}
+
+// MapTravelMode: travel mode of a route polyline (UI version 12).
+const (
+	MapTravelModeDriving = "driving"
+	MapTravelModeWalking = "walking"
+	MapTravelModeTransit = "transit"
+	MapTravelModeCycling = "cycling"
+)
+
+// MapTravelModes are the values of MapTravelMode, in order.
+var MapTravelModes = []string{"driving", "walking", "transit", "cycling"}
+
+// MapMarkerKind: semantic role of a marker on a map (UI version 12).
+const (
+	MapMarkerKindOrigin      = "origin"
+	MapMarkerKindDestination = "destination"
+	MapMarkerKindWaypoint    = "waypoint"
+	MapMarkerKindPin         = "pin"
+	MapMarkerKindUser        = "user"
+)
+
+// MapMarkerKinds are the values of MapMarkerKind, in order.
+var MapMarkerKinds = []string{"origin", "destination", "waypoint", "pin", "user"}
+
+// MapCoordinate: A geographic point in WGS-84 (UI version 12).
+type MapCoordinate struct {
+	Lat *float64 `json:"lat"`
+	Lon *float64 `json:"lon"`
+}
+
+// MapViewport: initial map framing in WGS-84 when not auto-fitted to markers and routes (UI version 12).
+type MapViewport struct {
+	Center  MapCoordinate `json:"center"`
+	SpanLat *float64      `json:"span_lat,omitempty"`
+	SpanLon *float64      `json:"span_lon,omitempty"`
+}
+
+// MapMarker: one location pin on a map (UI version 12), in tone's role color or color's named color (never both).
+type MapMarker struct {
+	ID       string   `json:"id"`
+	Lat      *float64 `json:"lat"`
+	Lon      *float64 `json:"lon"`
+	Kind     string   `json:"kind,omitempty"`
+	Label    string   `json:"label"`
+	Subtitle string   `json:"subtitle,omitempty"`
+	Detail   string   `json:"detail,omitempty"`
+	Icon     string   `json:"icon,omitempty"`
+	Tone     string   `json:"tone,omitempty"`
+	Color    string   `json:"color,omitempty"`
+	Action   *Action  `json:"action,omitempty"`
+}
+
+// MapRoute: one route polyline on a map (UI version 12), in WGS-84 coordinates.
+type MapRoute struct {
+	ID              string          `json:"id"`
+	Label           string          `json:"label,omitempty"`
+	Mode            string          `json:"mode,omitempty"`
+	DistanceMeters  *int            `json:"distance_meters,omitempty"`
+	DurationSeconds *int            `json:"duration_seconds,omitempty"`
+	Summary         string          `json:"summary,omitempty"`
+	Selected        bool            `json:"selected,omitempty"`
+	Tone            string          `json:"tone,omitempty"`
+	Color           string          `json:"color,omitempty"`
+	Points          []MapCoordinate `json:"points"`
+}
+
+// MapLink: an https link shown beside or inside a map component (UI version 12).
+type MapLink struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
 
 // ImageSource: where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref
 // the extension serves itself (ui.image) through the hub; exactly one. path is written by the hub only, for a ref:
@@ -2291,8 +2715,8 @@ type Action struct {
 	// Assistant only: send this text back to the same conversation. The hub reads it from the saved view, not from the
 	// client.
 	Reply string `json:"reply,omitempty"`
-	// Assistant only: an https URL or a validated persona/persona session, task, kb or file target, opened inside the
-	// app.
+	// Assistant only, except that a full extension page may open persona://session/<machine>/<session> or
+	// persona://task/<id>: an https URL or a validated persona session, task, kb or file target, opened inside the app.
 	Open string `json:"open,omitempty"`
 	// Assistant only: return one page within the card.
 	Pop bool `json:"pop,omitempty"`
@@ -2605,12 +3029,14 @@ type MessagingMe struct {
 }
 
 type MessagingAccount struct {
-	ID       string `json:"id"`
-	Name     string `json:"name,omitempty"`
-	Avatar   string `json:"avatar,omitempty"`
-	Tenant   string `json:"tenant,omitempty"`
-	SignedIn bool   `json:"signed_in"`
-	Unread   int    `json:"unread,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL string `json:"avatar_url,omitempty"`
+	Tenant    string `json:"tenant,omitempty"`
+	SignedIn  bool   `json:"signed_in"`
+	Unread    int    `json:"unread,omitempty"`
 }
 
 type MessagingAccounts struct {
@@ -2630,9 +3056,11 @@ const (
 var MessagingConversationKinds = []string{"direct", "group", "topic_group", "bot"}
 
 type MessagingConversation struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Avatar          string    `json:"avatar,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL       string    `json:"avatar_url,omitempty"`
 	Kind            string    `json:"kind"`
 	Unread          int       `json:"unread"`
 	MarkedUnread    bool      `json:"marked_unread,omitempty"`
@@ -2657,7 +3085,9 @@ type MessagingPerson struct {
 	ID     string `json:"id,omitempty"`
 	Name   string `json:"name"`
 	Avatar string `json:"avatar,omitempty"`
-	Kind   string `json:"kind,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL string `json:"avatar_url,omitempty"`
+	Kind      string `json:"kind,omitempty"`
 }
 
 type MessagingMembers struct {
@@ -2977,9 +3407,11 @@ type MessagingProfileField struct {
 }
 
 type MessagingProfile struct {
-	ID          string                  `json:"id"`
-	Name        string                  `json:"name"`
-	Avatar      string                  `json:"avatar,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL   string                  `json:"avatar_url,omitempty"`
 	Cover       string                  `json:"cover,omitempty"`
 	Kind        string                  `json:"kind,omitempty"`
 	Subtitle    string                  `json:"subtitle,omitempty"`
@@ -3175,8 +3607,8 @@ type ConnectorCatalogCallParams struct {
 }
 
 // ConnectorSubscriptionMode: items: new items, each kept once; snapshot: the answer as one state, kept when it
-// changes; things: the answer lists Inbox rows ready-made (ConnectorInboxThing), kept and handed to the Inbox as they
-// are.
+// changes; things: the answer lists Inbox rows ready-made (ConnectorInboxThing), and the Inbox gets the latest
+// answer's rows as they are, in its order.
 const (
 	ConnectorSubscriptionModeItems    = "items"
 	ConnectorSubscriptionModeSnapshot = "snapshot"
@@ -3285,31 +3717,32 @@ var ConnectorErrorCodes = []string{"rate_limited", "no_machine", "offline", "nod
 // read-only sources and calls their short tool names. An extension's connector with one this hub does not know loses
 // only that capability.
 const (
-	ConnectorCapabilityStatus         = "status"
-	ConnectorCapabilityTools          = "tools"
-	ConnectorCapabilityActions        = "actions"
-	ConnectorCapabilityEvents         = "events"
-	ConnectorCapabilityInbox          = "inbox"
-	ConnectorCapabilitySettle         = "settle"
-	ConnectorCapabilityArchive        = "archive"
-	ConnectorCapabilityChats          = "chats"
-	ConnectorCapabilityItems          = "items"
-	ConnectorCapabilityLogin          = "login"
-	ConnectorCapabilityOptions        = "options"
-	ConnectorCapabilityThreads        = "threads"
-	ConnectorCapabilitySnapshot       = "snapshot"
-	ConnectorCapabilityGroup          = "group"
-	ConnectorCapabilityMeta           = "meta"
-	ConnectorCapabilityFallback       = "fallback"
-	ConnectorCapabilityMachines       = "machines"
-	ConnectorCapabilityRecall         = "recall"
-	ConnectorCapabilityHistory        = "history"
-	ConnectorCapabilityHistoryAnchors = "history_anchors"
-	ConnectorCapabilityCatalog        = "catalog"
+	ConnectorCapabilityStatus          = "status"
+	ConnectorCapabilityTools           = "tools"
+	ConnectorCapabilityActions         = "actions"
+	ConnectorCapabilityEvents          = "events"
+	ConnectorCapabilityInbox           = "inbox"
+	ConnectorCapabilitySettle          = "settle"
+	ConnectorCapabilityArchive         = "archive"
+	ConnectorCapabilityChats           = "chats"
+	ConnectorCapabilityItems           = "items"
+	ConnectorCapabilityLogin           = "login"
+	ConnectorCapabilityOptions         = "options"
+	ConnectorCapabilityThreads         = "threads"
+	ConnectorCapabilitySnapshot        = "snapshot"
+	ConnectorCapabilityGroup           = "group"
+	ConnectorCapabilityMeta            = "meta"
+	ConnectorCapabilityFallback        = "fallback"
+	ConnectorCapabilityMachines        = "machines"
+	ConnectorCapabilityRecall          = "recall"
+	ConnectorCapabilityHistory         = "history"
+	ConnectorCapabilityHistoryAnchors  = "history_anchors"
+	ConnectorCapabilityCatalog         = "catalog"
+	ConnectorCapabilityInboxVisibility = "inbox_visibility"
 )
 
 // ConnectorCapabilities are the values of ConnectorCapability, in order.
-var ConnectorCapabilities = []string{"status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog"}
+var ConnectorCapabilities = []string{"status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog", "inbox_visibility"}
 
 // ConnectorState: connectorStatus.state. disabled is the hub's own (the user switched it off); a program never
 // answers it.
@@ -3402,6 +3835,26 @@ const (
 // ConnectorGroupTools are the values of ConnectorGroupTool, in order.
 var ConnectorGroupTools = []string{"messages_before", "messages_around", "search"}
 
+// ConnectorApprovalMode: how the hub's write gate authorized actions.do besides an ordinary phone card or
+// connector_gate allow rule: auto_confirm means the hub accepted the short-lived credential actions.describe returned
+// under an explicit hub-side guarded auto-confirm policy.
+const (
+	ConnectorApprovalModeAutoConfirm = "auto_confirm"
+)
+
+// ConnectorApprovalModes are the values of ConnectorApprovalMode, in order.
+var ConnectorApprovalModes = []string{"auto_confirm"}
+
+// ConnectorAutoConfirm: short-lived, single-use credential returned from actions.describe when the hub negotiated
+// approval_protocol and the extension's own guard checks passed. Bound by the extension to the exact action and raw
+// args JSON; ignored unless the hub also authorizes guarded auto-confirm for the call.
+type ConnectorAutoConfirm struct {
+	// Opaque single-use approval token generated by the extension; never logged or persisted by the hub.
+	Token string `json:"token"`
+	// RFC 3339 timestamp after which the token is no longer valid.
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 // Empty: an answer with nothing in it: {}.
 type Empty struct {
 }
@@ -3470,6 +3923,10 @@ type ConnectorTool struct {
 	// with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every list
 	// whatever a connector sent.
 	DeferLoading bool `json:"defer_loading,omitempty"`
+	// Set by Persona itself on the tool list of an assistant conversation with the work guide on: the tool is found on
+	// demand through the guide (#11078). A connector does not need to send it; the manager sets it on every list
+	// whatever a connector sent.
+	WorkGuideTool bool `json:"work_guide_tool,omitempty"`
 }
 
 // ConnectorTools: tools.list and actions.list.
@@ -3482,6 +3939,18 @@ type ConnectorCallParams struct {
 	Contribution string          `json:"contribution"`
 	Name         string          `json:"name"`
 	Args         json.RawMessage `json:"args,omitempty"`
+	// actions.describe only (tools.call never sets and ignores it): the guarded auto-confirm protocol the hub is willing
+	// to accept for this call when a hub-side policy matches (for example guarded-auto-confirm-v1). Absent when no
+	// policy applies or on older hubs.
+	ApprovalProtocol string `json:"approval_protocol,omitempty"`
+	// The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+	Track string `json:"track,omitempty"`
+	// The track's kind; absent when not known (the main track).
+	TrackKind string `json:"track_kind,omitempty"`
+	// The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+	// general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+	// confirms a write stays the hub's decision.
+	Categories []string `json:"categories,omitempty"`
 }
 
 // ConnectorCallResult: tools.call and actions.do.
@@ -3492,6 +3961,10 @@ type ConnectorCallResult struct {
 	// 16, each a whole JPEG, PNG or WebP of at most 1 MiB and 2000 pixels a side, together at most 4 MiB and 8 million
 	// pixels; the hub leaves out any over a limit and says so after the text.
 	Images []ConnectorToolImage `json:"images,omitempty"`
+	// tools.call only (actions.do and catalog.call ignore it): declarative Views rendered out-of-band inline on the tool
+	// call item in chat (never added to the model's context), on a hub whose initialize lists the capability tool_views.
+	// At most 4 views and 128 KiB JSON total; the text must still stand on its own.
+	Views []View `json:"views,omitempty"`
 	// actions.do only (tools.call ignores it): the id, on the other side, of the message the write made, when the
 	// service gave one (a comment's id, a mail's Message-ID, a chat message's id). The hub trims it and keeps it as the
 	// sent-as-user ledger row's message_ref; one longer than 200 characters is dropped (the row has none), not cut.
@@ -3521,6 +3994,9 @@ type ConnectorAction struct {
 type ConnectorDescribeResult struct {
 	Action  ConnectorAction `json:"action"`
 	Summary string          `json:"summary"`
+	// Optional short-lived single-use credential returned only when approval_protocol was negotiated and the extension's
+	// own guard checks passed. Ignored unless the hub also authorizes guarded auto-confirm for this call.
+	AutoConfirm *ConnectorAutoConfirm `json:"auto_confirm,omitempty"`
 }
 
 // ConnectorDoParams: actions.do, only once the hub's gate let the write through: the very args of the card, and the
@@ -3530,6 +4006,20 @@ type ConnectorDoParams struct {
 	Name         string          `json:"name"`
 	Args         json.RawMessage `json:"args,omitempty"`
 	RequestID    string          `json:"request_id"`
+	// Present together with approval_token only when the hub gate let the write through via guarded auto-confirm; absent
+	// for phone-card approvals, connector_gate allow rules and user-initiated writes.
+	ApprovalMode string `json:"approval_mode,omitempty"`
+	// The exact opaque token returned by actions.describe in auto_confirm.token, sent together with approval_mode only
+	// when the hub gate approved guarded auto-confirm.
+	ApprovalToken string `json:"approval_token,omitempty"`
+	// The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+	Track string `json:"track,omitempty"`
+	// The track's kind; absent when not known (the main track).
+	TrackKind string `json:"track_kind,omitempty"`
+	// The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+	// general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+	// confirms a write stays the hub's decision.
+	Categories []string `json:"categories,omitempty"`
 }
 
 // ConnectorRecallParams: recall: take back a message the connector's program sent in the user's name, which the
@@ -3766,11 +4256,17 @@ type ConnectorInboxThing struct {
 	// Marks the newest move: a different last adds to the open item.
 	Last string `json:"last,omitempty"`
 	URL  string `json:"url,omitempty"`
+	// The observed lifecycle of a GitHub pull request: open, closed or merged.
+	ThreadState string `json:"thread_state,omitempty"`
 	// A link the system opens instead (sms:…).
 	OpenURL string `json:"open_url,omitempty"`
 	// Where a reply goes and who sees it.
 	ReplyTo  string `json:"reply_to,omitempty"`
 	CanReply bool   `json:"can_reply,omitempty"`
+	// The thread's picture: one of the connector's own media refs (thread.media, as a ThreadChat's avatar) or an https
+	// address the hub fetches, either always naming the same bytes (docs "Avatars"). The other person of a private chat,
+	// a group's own. The Inbox row draws it; without one, the initial.
+	Avatar string `json:"avatar,omitempty"`
 	// ConnectorTier, or empty for the model.
 	Tier string `json:"tier,omitempty"`
 	Why  string `json:"why,omitempty"`
@@ -3956,6 +4452,8 @@ type ConnectorArchiveChat struct {
 	State string `json:"state,omitempty"`
 	// When the conversation got to state; omitted when unknown.
 	StateAt time.Time `json:"state_at,omitzero"`
+	// Stable HTTP(S) link to the conversation at its source, when available.
+	SourceURL string `json:"source_url,omitempty"`
 }
 
 // ConnectorArchiveMessage: one archived message. The archive only appends: a message without at, or without text and
@@ -4096,18 +4594,39 @@ type ConnectorKBItem struct {
 	// Why it concerns the owner, as far as the program can tell: mentions (the document mentions the owner),
 	// comment_mentions (a comment or reply on it does), authored (the owner owns it), viewed (the owner opened it
 	// recently). The knowledge base's selection keeps documents by them; leave out what the program cannot tell.
-	Signals      []string  `json:"signals,omitempty"`
-	Importance   string    `json:"importance,omitempty"`
-	Relevance    int       `json:"relevance,omitempty"`
-	Tags         []string  `json:"tags,omitempty"`
-	Locked       bool      `json:"locked,omitempty"`
-	TaggedAt     time.Time `json:"tagged_at,omitzero"`
-	Pinned       string    `json:"pinned,omitempty"`
-	LockedFields []string  `json:"locked_fields,omitempty"`
+	Signals []string `json:"signals,omitempty"`
+	// The content's identity across sources (feishu_doc:<obj_token>): items from two sources with the same key are kept
+	// once, with both in sources.
+	CanonicalKey string `json:"canonical_key,omitempty"`
+	// Other ids other sources store the same content under (a wiki node token).
+	Aliases []string `json:"aliases,omitempty"`
+	// Only grows: an item handed over with a lower revision than the stored one does not replace it.
+	Revision int    `json:"revision,omitempty"`
+	BodyHash string `json:"body_hash,omitempty"`
+	// The item's text (a document as Markdown, a meeting's transcript), bounded by the source.
+	Content string `json:"content,omitempty"`
+	// Every place the content was read from.
+	Sources      []ConnectorKBSourceRef `json:"sources,omitempty"`
+	Importance   string                 `json:"importance,omitempty"`
+	Relevance    int                    `json:"relevance,omitempty"`
+	Tags         []string               `json:"tags,omitempty"`
+	Locked       bool                   `json:"locked,omitempty"`
+	TaggedAt     time.Time              `json:"tagged_at,omitzero"`
+	Pinned       string                 `json:"pinned,omitempty"`
+	LockedFields []string               `json:"locked_fields,omitempty"`
 	// The store's: which extension holds a locked field. A connector's is ignored.
 	Provenance map[string]ConnectorKBProvenance `json:"provenance,omitempty"`
 	// The store's: the links the user removed, by list. A connector's is ignored.
 	Excluded map[string][]string `json:"excluded,omitempty"`
+}
+
+// ConnectorKBSourceRef: one place a knowledge-base item was read from.
+type ConnectorKBSourceRef struct {
+	Channel string    `json:"channel"`
+	Binding string    `json:"binding,omitempty"`
+	Account string    `json:"account,omitempty"`
+	Entry   string    `json:"entry,omitempty"`
+	SeenAt  time.Time `json:"seen_at,omitzero"`
 }
 
 // ConnectorKBProvenance: who holds a locked field of a knowledge-base entity, and from what (kb.schema.json
@@ -4435,6 +4954,17 @@ const (
 // ChannelSendKinds are the values of ChannelSendKind, in order.
 var ChannelSendKinds = []string{"answer", "note", "ask", "push"}
 
+// ChannelChatKind: what kind of chat a channel message came from: direct (private chat), group (regular group chat),
+// or topic (a topic or thread inside a group).
+const (
+	ChannelChatKindDirect = "direct"
+	ChannelChatKindGroup  = "group"
+	ChannelChatKindTopic  = "topic"
+)
+
+// ChannelChatKinds are the values of ChannelChatKind, in order.
+var ChannelChatKinds = []string{"direct", "group", "topic"}
+
 // ChannelReceiveParams: channel.receive: one of the owner's messages (only the owner's). Answered once the hub has
 // it, deduplicated by id and queued, not after the turn.
 type ChannelReceiveParams struct {
@@ -4450,6 +4980,22 @@ type ChannelMessage struct {
 	// The chat app's id of the message: the same message delivered again is taken once.
 	ID   string `json:"id"`
 	Text string `json:"text,omitempty"`
+	// The chat where the owner invoked a mention channel, as display context rather than an instruction.
+	Chat string `json:"chat,omitempty"`
+	// The topic or thread within chat, when the request came from one.
+	Topic string `json:"topic,omitempty"`
+	// Opaque chat or group identifier for conversation routing when integrations_v2 is enabled.
+	ChatID string `json:"chat_id,omitempty"`
+	// Kind of chat the message came from (direct, group, or topic), when known.
+	ChatKind string `json:"chat_kind,omitempty"`
+	// Opaque topic or thread identifier within chat_id for conversation routing when integrations_v2 is enabled.
+	TopicID string `json:"topic_id,omitempty"`
+	// Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
+	// instructions.
+	Context string `json:"context,omitempty"`
+	// The extension's attestation that this is the owner's own request. A mention channel must send true; false or
+	// omitted is refused. Optional for an im channel's older messages.
+	Owner *bool `json:"owner,omitempty"`
 	// At most 4 are kept.
 	Images []ChannelBlob `json:"images,omitempty"`
 	Files  []ChannelBlob `json:"files,omitempty"`
@@ -4459,6 +5005,10 @@ type ChannelMessage struct {
 	Forward string `json:"forward,omitempty"`
 	// The chat app's id of the message it answers.
 	ReplyTo string `json:"reply_to,omitempty"`
+	// The chat app's thread the message is in, as an opaque key. For a channel with capabilities.threads, each thread
+	// has a conversation of its own: its first message starts a new one (the channel's target stays as it is), later
+	// ones continue it. Without it, or without threads, the message goes to the channel's target.
+	Thread string `json:"thread,omitempty"`
 	// What it had that the channel cannot bring, for people (a voice message, a sticker).
 	Unsupported []string `json:"unsupported,omitempty"`
 }
@@ -4496,6 +5046,9 @@ type ChannelSendParams struct {
 	Kind         string `json:"kind"`
 	// The owner's message it answers (ChannelMessage.id).
 	ReplyTo string `json:"reply_to,omitempty"`
+	// Pictures to send after text, in order, to a channel with capabilities.images_out only: JPEG or PNG of at most 3 MB
+	// each. text may then be empty. They belong to this ref: sent once with it, like the text.
+	Images []ChannelBlob `json:"images,omitempty"`
 }
 
 // ChannelSendResult: channel.send's answer: the chat app's id of what was sent, for channel.edit.
@@ -4534,17 +5087,19 @@ var KBKinds = []string{"projects", "chats", "people", "docs", "meetings", "event
 // KBErrorCode: error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing):
 // invalid_params, not_found, assistant_offline (the manager is away), kb_unavailable (not open yet), conflict
 // (kb.update touches fields the user or another extension holds; data KBConflict, nothing was written).
-// assistant_offline and kb_unavailable are worth trying again; conflict is for the user to decide.
+// assistant_offline and kb_unavailable are worth trying again; conflict is for the user to decide. deleted:
+// kb.put_recording of a recording the user deleted, which is not made again.
 const (
 	KBErrorCodeInvalidParams    = "invalid_params"
 	KBErrorCodeNotFound         = "not_found"
 	KBErrorCodeAssistantOffline = "assistant_offline"
 	KBErrorCodeKbUnavailable    = "kb_unavailable"
 	KBErrorCodeConflict         = "conflict"
+	KBErrorCodeDeleted          = "deleted"
 )
 
 // KBErrorCodes are the values of KBErrorCode, in order.
-var KBErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict"}
+var KBErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict", "deleted"}
 
 // KBConflict: the data of a conflict error: field → who holds it (user, or ext:<extension id>); a linked entity's
 // field is <kind>/<id>.<field>.
@@ -4617,6 +5172,14 @@ type KBEntry struct {
 	// A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872);
 	// absent on other kinds, before a match and from an older hub.
 	MeetingID string `json:"meeting_id,omitempty"`
+	// A recording whose stored state is in flight (an upload not complete, minutes or a day recap pending, a hub
+	// transcription not final) while nothing can settle it: module_off when the recording module is off. Derived when
+	// read, never stored; absent otherwise and from an older hub.
+	Paused string `json:"paused,omitempty"`
+	// Reference-only for a project that stores pointers. Omitted means full.
+	ProjectMode string              `json:"project_mode,omitempty"`
+	Freshness   *KBProjectFreshness `json:"freshness,omitempty"`
+	Sources     []KBProjectSource   `json:"sources,omitempty"`
 }
 
 // KBRecentParams: kb.recent (kb.read): what came in from every source in [since, until), newest first, across kinds:
@@ -4677,6 +5240,60 @@ type KBDetail struct {
 	// A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
 	// (docs/assistant/knowledge.md "Person profiles").
 	Profiles map[string]KBProfileRecord `json:"profiles,omitempty"`
+	// A recording's in-flight state that nothing can settle, as KBEntry.paused: module_off when the recording module is
+	// off. Derived when read, never stored.
+	Paused string `json:"paused,omitempty"`
+	// Reference-only for a project that stores pointers. Omitted means full.
+	ProjectMode string              `json:"project_mode,omitempty"`
+	Freshness   *KBProjectFreshness `json:"freshness,omitempty"`
+	Sources     []KBProjectSource   `json:"sources,omitempty"`
+}
+
+type KBProjectSource struct {
+	// Canonical source identity shared across project views.
+	ID   string   `json:"id"`
+	URL  string   `json:"url,omitempty"`
+	Refs []string `json:"refs,omitempty"`
+	// State observed at the source, such as merged.
+	DeliveryState string    `json:"delivery_state,omitempty"`
+	DeliveryAt    time.Time `json:"delivery_at,omitzero"`
+	// Unverified when only source delivery facts are available.
+	EnvironmentVerification string `json:"environment_verification,omitempty"`
+}
+
+type KBProjectFreshness struct {
+	NeedsReview bool                               `json:"needs_review"`
+	TimelineEnd int64                              `json:"timeline_end"`
+	Evidence    []KBProjectEvidenceRef             `json:"evidence,omitempty"`
+	Fields      map[string]KBProjectFieldFreshness `json:"fields"`
+}
+
+type KBProjectFieldFreshness struct {
+	// Omitted when historical authorship is unknown.
+	Writer       string           `json:"writer,omitempty"`
+	Source       string           `json:"source,omitempty"`
+	Cutoff       *KBProjectCutoff `json:"cutoff,omitempty"`
+	LockReason   string           `json:"lock_reason,omitempty"`
+	ReviewBy     string           `json:"review_by"`
+	NeedsReview  bool             `json:"needs_review"`
+	ReviewReason string           `json:"review_reason,omitempty"`
+	// Omitted when the gap cannot be counted.
+	UncoveredEvidenceCount *int `json:"uncovered_evidence_count,omitempty"`
+}
+
+type KBProjectCutoff struct {
+	TimelineFrom    int64 `json:"timeline_from"`
+	TimelineThrough int64 `json:"timeline_through"`
+	// True if earlier timeline entries were outside this refresh window.
+	TimelineTruncated bool                   `json:"timeline_truncated,omitempty"`
+	Sources           []KBProjectEvidenceRef `json:"sources,omitempty"`
+}
+
+type KBProjectEvidenceRef struct {
+	Ref string `json:"ref"`
+	// Opaque revision of this input.
+	Position string `json:"position"`
+	SourceID string `json:"source_id,omitempty"`
 }
 
 type KBProfileRecord struct {
@@ -4882,6 +5499,142 @@ type KBUpdateResult struct {
 	Ignored []KBIgnoredField `json:"ignored,omitempty"`
 }
 
+// KBRecordingID: A recording's UUID, picked by the extension so a retry lands on the same recording.
+type KBRecordingID string
+
+// String returns the ID as it is on the wire.
+func (v KBRecordingID) String() string { return string(v) }
+
+// KBMinutesActionID: an action item's id, picked by the extension and stable across writes.
+type KBMinutesActionID string
+
+// String returns the ID as it is on the wire.
+func (v KBMinutesActionID) String() string { return string(v) }
+
+// KBTodoID: A to-do's id, set by the hub when the user makes a to-do of an action item.
+type KBTodoID string
+
+// String returns the ID as it is on the wire.
+func (v KBTodoID) String() string { return string(v) }
+
+// KBRecordingMeetingKind: whether a recording's meeting is a calendar item (events) or an imported meeting
+// (meetings).
+// A value this side does not know keeps its raw string and is not Valid.
+type KBRecordingMeetingKind string
+
+const (
+	KBRecordingMeetingKindEvents   KBRecordingMeetingKind = "events"
+	KBRecordingMeetingKindMeetings KBRecordingMeetingKind = "meetings"
+)
+
+// KBRecordingMeetingKinds are the values of KBRecordingMeetingKind, in order.
+var KBRecordingMeetingKinds = []KBRecordingMeetingKind{KBRecordingMeetingKindEvents, KBRecordingMeetingKindMeetings}
+
+// Valid reports whether v is one of KBRecordingMeetingKinds.
+func (v KBRecordingMeetingKind) Valid() bool {
+	switch v {
+	case KBRecordingMeetingKindEvents, KBRecordingMeetingKindMeetings:
+		return true
+	}
+	return false
+}
+
+// KBRecordingMeetingID: A calendar item's or imported meeting's id in the knowledge base.
+type KBRecordingMeetingID string
+
+// String returns the ID as it is on the wire.
+func (v KBRecordingMeetingID) String() string { return string(v) }
+
+// KBPutRecordingParams: kb.put_recording (kb.write): create or update the extension's own recording with its minutes
+// and, optionally, its transcript (docs/extensions/extensions.md "Writing recordings and minutes"). It is the
+// extension's: no other extension may write it, and no extension a recording the phone uploaded (permission_denied).
+// The same params again change nothing; a recording the user deleted is not made again (deleted). A recording with
+// minutes is kept past recording_days, its minutes until minutes_days.
+type KBPutRecordingParams struct {
+	// A UUID the extension picks; one derived from its own source id makes a retry land on the same recording.
+	ID    KBRecordingID `json:"id"`
+	Title string        `json:"title,omitempty"`
+	// An RFC 3339 time.
+	StartedAt time.Time `json:"started_at"`
+	// An RFC 3339 time, not before started_at.
+	EndedAt time.Time `json:"ended_at,omitzero"`
+	// An i18n code (zh-Hans, en, ja).
+	Language string              `json:"language,omitempty"`
+	Minutes  *KBRecordingMinutes `json:"minutes,omitempty"`
+	// Optional; n, source and echo are the hub's and are dropped. Without minutes, the hub makes minutes of it when the
+	// recording module is on.
+	Transcript []KBRecordingSegment `json:"transcript,omitempty"`
+	// Slugs of existing projects to link it to; a later write never removes a link.
+	Projects []string            `json:"projects,omitempty"`
+	Meeting  *KBRecordingMeeting `json:"meeting,omitempty"`
+}
+
+// KBRecordingMinutes: the minutes the extension wrote, stored as minutes.json and minutes.md. The hub sets version,
+// revision, generated_at, when, start and end. Minutes or a transcript is required.
+type KBRecordingMinutes struct {
+	Title     string            `json:"title,omitempty"`
+	Where     string            `json:"where,omitempty"`
+	Attendees []string          `json:"attendees,omitempty"`
+	Points    []KBMinutesPoint  `json:"points,omitempty"`
+	Decisions []KBMinutesItem   `json:"decisions,omitempty"`
+	Actions   []KBMinutesAction `json:"actions,omitempty"`
+	Open      []KBMinutesItem   `json:"open,omitempty"`
+	// An i18n code: what the minutes are written in.
+	Language string `json:"language,omitempty"`
+	// The minutes as Markdown: minutes.md, what searches and kb.get read. Required, not blank.
+	Markdown string `json:"markdown"`
+}
+
+// KBMinutesItem: A decision or an open question of the minutes.
+type KBMinutesItem struct {
+	Text string `json:"text"`
+	// Seconds from the recording's start.
+	At    float64 `json:"at"`
+	Photo int     `json:"photo,omitempty"`
+}
+
+// KBMinutesPoint: A point discussed; who only when the source names the person.
+type KBMinutesPoint struct {
+	Text string `json:"text"`
+	// Seconds from the recording's start.
+	At    float64 `json:"at"`
+	Photo int     `json:"photo,omitempty"`
+	Who   string  `json:"who,omitempty"`
+}
+
+// KBMinutesAction: an action item. id is the extension's, stable across writes (at most 64 characters): a to-do the
+// user made of it stays on it.
+type KBMinutesAction struct {
+	ID   KBMinutesActionID `json:"id"`
+	Who  string            `json:"who,omitempty"`
+	What string            `json:"what"`
+	// The deadline as said.
+	By string `json:"by,omitempty"`
+	// YYYY-MM-DD, when by is one date.
+	DueDate string `json:"due_date,omitempty"`
+	// Seconds from the recording's start.
+	At    float64 `json:"at"`
+	Photo int     `json:"photo,omitempty"`
+	// The hub's: the to-do made of it.
+	TodoID KBTodoID `json:"todo_id,omitempty"`
+}
+
+// KBRecordingMeeting: the calendar item (events) or imported meeting (meetings) the recording was; it must exist.
+type KBRecordingMeeting struct {
+	Kind KBRecordingMeetingKind `json:"kind"`
+	ID   KBRecordingMeetingID   `json:"id"`
+}
+
+type KBPutRecordingResult struct {
+	ID KBRecordingID `json:"id"`
+	// The hub's revision of the recording: 1 when created, one more for each write that changed it.
+	Revision int  `json:"revision"`
+	Created  bool `json:"created,omitempty"`
+	// The write was the same as the last one; nothing was written.
+	Unchanged      bool `json:"unchanged,omitempty"`
+	MinutesVersion int  `json:"minutes_version,omitempty"`
+}
+
 // KBOwnerParams: kb.owner takes nothing.
 type KBOwnerParams struct {
 }
@@ -4914,24 +5667,35 @@ type TodoEventThread struct {
 	Title    string `json:"title"`
 }
 
+// TodoEventResponsible: an external responsible party on a to-do that is not a Persona-started agent: a long-running
+// session or a person, with optional machine_id and session_id hints.
+type TodoEventResponsible struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	MachineID string `json:"machine_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
 // TodoChangedEvent: event.todo.changed: a to-do was created or deleted, or its title, whether it is done (or failed
-// to start), its supervisor, or the thread it is bound to changed. Changes within about a second of each other are
-// told once, as the to-do is at the end of them. title, thread and done are as after the change (the last ones for a
-// deleted to-do); thread is left out when the to-do has none, done unless the to-do is done (closed, or its task
-// failed to start). supervisor is the conversation that supervises it (the main conversation or a leader, see
-// leaders.schema.json), left out when none does; a change of supervisor (the task moved to another leader) sends it
-// too. kind is concern for something the owner raised in the main conversation and wants an answer to; such a to-do
-// is done only once its outcome was reported to the owner (an event.todo.decision of source reported comes with it),
-// never on its own; kind is left out for a to-do or a task and never changes. Notes, agents and decisions changing do
-// not send it (decisions have event.todo.decision). Read the to-do again if it matters.
+// to start), its supervisor, the thread it is bound to, or its external responsible party changed. Changes within
+// about a second of each other are told once, as the to-do is at the end of them. title, thread, done and responsible
+// are as after the change (the last ones for a deleted to-do); thread and responsible are left out when the to-do has
+// none, done unless the to-do is done (closed, or its task failed to start). supervisor is the conversation that
+// supervises it (the main conversation or a leader, see leaders.schema.json), left out when none does; a change of
+// supervisor (the task moved to another leader) sends it too. kind is concern for something the owner raised in the
+// main conversation and wants an answer to; such a to-do is done only once its outcome was reported to the owner (an
+// event.todo.decision of source reported comes with it), never on its own; kind is left out for a to-do or a task and
+// never changes. Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the
+// to-do again if it matters.
 type TodoChangedEvent struct {
-	ID         string           `json:"id"`
-	Title      string           `json:"title"`
-	Thread     *TodoEventThread `json:"thread,omitempty"`
-	Done       bool             `json:"done,omitempty"`
-	Supervisor string           `json:"supervisor,omitempty"`
-	Kind       string           `json:"kind,omitempty"`
-	What       string           `json:"what"`
+	ID          string                `json:"id"`
+	Title       string                `json:"title"`
+	Thread      *TodoEventThread      `json:"thread,omitempty"`
+	Done        bool                  `json:"done,omitempty"`
+	Supervisor  string                `json:"supervisor,omitempty"`
+	Kind        string                `json:"kind,omitempty"`
+	Responsible *TodoEventResponsible `json:"responsible,omitempty"`
+	What        string                `json:"what"`
 }
 
 // TodoEventDecision: A decision on a to-do: what was asked and chosen (reason and supersedes_id left out when empty),
@@ -4959,13 +5723,13 @@ type TodoDecisionEvent struct {
 	Decision TodoEventDecision `json:"decision"`
 }
 
-// LeaderChangedEvent: event.leader.changed: a leader conversation was made (a side conversation added to
-// assistant.leaders), its title changed, it was filed under another knowledge-base project, it ended (it left
-// assistant.leaders; nothing is deleted) or it was made a leader again. id is the leader conversation's session id,
-// the key a work-log record keeps; title its title as the apps show it; name what the direction is called, to show it
-// by (the name the owner or the secretary gave it, else its knowledge-base project's name, else the title without its
-// "MMDD | kind | " prefix; always sent by a hub that has it, #3679); project the knowledge-base project's slug, left
-// out while it has none; ended true once it is no longer a leader, left out while it is.
+// LeaderChangedEvent: event.leader.changed: a direction was made (an id added to assistant.leaders), its title
+// changed, it was filed under another knowledge-base project, it ended (it left assistant.leaders; nothing is
+// deleted) or it was made current again. id is the stable direction id, the key a work-log record keeps; it is a
+// conversation session id only for a conversation-backed direction. title is its conversation title, or its explicit
+// name when no Persona conversation exists; name is what the direction is called (an explicit name, else its
+// knowledge-base project's name, else the title without its "MMDD | kind | " prefix); project is the knowledge-base
+// project's slug, left out while it has none; ended is true once it is no longer current, left out while it is.
 type LeaderChangedEvent struct {
 	ID      string `json:"id"`
 	Title   string `json:"title"`
@@ -4974,16 +5738,17 @@ type LeaderChangedEvent struct {
 	Ended   bool   `json:"ended,omitempty"`
 }
 
-// LeaderReportEvent: event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it),
-// needs the owner's decision (decision: its review says needs_user, or a plan of the leader's waits for the owner's
-// Start), or is stuck (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours);
-// those are written by the hub from the task's ledger, never by a model. progress (#3679) is the leader's own summary
-// of its direction at the goal level, sent with its leader_progress tool: reached, doing (and where it is stuck),
-// needs_you (what the owner has to do) and links (evidence; link is the first), text the three put together, todo "".
-// id names the report (never sent twice; key on it to be safe), leader the leader conversation's id, todo the task's
-// to-do id (GET /api/v1/todos with todos.read reads it; "" for a plan, which has no to-do until it starts), plan the
-// waiting plan's id (only on a decision about a plan), text at most 300 characters in the owner's language, link the
-// task's PR or delivery link when it has one, at when what it reports happened.
+// LeaderReportEvent: event.leader.report: one of a direction's tasks reached its goal (reached: its review accepted
+// it), needs the owner's decision (decision: its review says needs_user, or a plan of the direction's waits for the
+// owner's Start), or is stuck (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24
+// hours); those are written by the hub from the task's ledger, never by a model. progress (#3679, #8236) is the
+// direction's own summary at the goal level, sent with leader_progress or an authorized leaders.write HTTP / node CLI
+// report: reached, doing (and where it is stuck), needs_you (what the owner has to do) and links (evidence; link is
+// the first), text the three put together, todo "". id names the report (never sent twice; key on it to be safe),
+// leader the stable direction id, todo the task's to-do id (GET /api/v1/todos with todos.read reads it; "" for a
+// plan, which has no to-do until it starts), plan the waiting plan's id (only on a decision about a plan), text at
+// most 300 characters in the owner's language, link the task's PR or delivery link when it has one, at when what it
+// reports happened.
 type LeaderReportEvent struct {
 	ID       string    `json:"id"`
 	Leader   string    `json:"leader"`
@@ -5145,18 +5910,25 @@ type ModelRefusal struct {
 }
 
 // AssistantErrorCode: error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
-// "assistant.memory.read" for assistant.memory): invalid_params; not_found (assistant.messages: no such conversation
-// in the assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
-// computer is not connected or not set up: try again).
+// "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list, or
+// "assistant.events" for assistant.event): invalid_params; not_found (assistant.messages: no such conversation in the
+// assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+// computer is not connected or not set up: try again); assistant.event only: no_main_conversation (the user has no
+// main conversation: nothing was started or changed, do not retry until they have one); rate_limited (data
+// {retry_after} in seconds: too many events from this extension); queue_full (this extension already has the most
+// events waiting behind a running turn: try again later).
 const (
-	AssistantErrorCodeInvalidParams    = "invalid_params"
-	AssistantErrorCodeNotFound         = "not_found"
-	AssistantErrorCodeAssistantOffline = "assistant_offline"
-	AssistantErrorCodeMachineOffline   = "machine_offline"
+	AssistantErrorCodeInvalidParams      = "invalid_params"
+	AssistantErrorCodeNotFound           = "not_found"
+	AssistantErrorCodeAssistantOffline   = "assistant_offline"
+	AssistantErrorCodeMachineOffline     = "machine_offline"
+	AssistantErrorCodeNoMainConversation = "no_main_conversation"
+	AssistantErrorCodeRateLimited        = "rate_limited"
+	AssistantErrorCodeQueueFull          = "queue_full"
 )
 
 // AssistantErrorCodes are the values of AssistantErrorCode, in order.
-var AssistantErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "machine_offline"}
+var AssistantErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "machine_offline", "no_main_conversation", "rate_limited", "queue_full"}
 
 // AssistantConversationsParams: assistant.conversations (assistant.read): the conversations last active at or after
 // since, newest first.
@@ -5248,6 +6020,9 @@ type AssistantMemoryEntry struct {
 	Content string `json:"content,omitempty"`
 	// content was cut or left out for its size.
 	Truncated bool `json:"truncated,omitempty"`
+	// The track whose memory it is; absent for the main track's. Another track's is shown only to an extension that may
+	// read what comes from it: the user's own, or one granted every default category of the track.
+	Track string `json:"track,omitempty"`
 }
 
 // AssistantMemoryResult: an assistant without memory (none written yet, or the feature off) has no entries.
@@ -5260,6 +6035,199 @@ type AssistantMemoryResult struct {
 type AssistantMessagesResult struct {
 	Messages []AssistantMessage `json:"messages"`
 	NextSeq  *int               `json:"next_seq,omitempty"`
+}
+
+// An RFC 3339 expiry timestamp, or null when absent.
+type AssistantEntryNullableTime = json.RawMessage
+
+// Whether the choice is reversible; null means unknown.
+type AssistantEntryNullableBool = json.RawMessage
+
+type AssistantEntrySource struct {
+	Machine string `json:"machine"`
+	Session string `json:"session"`
+	MsgUuid string `json:"msg_uuid,omitempty"`
+	CardID  string `json:"card_id,omitempty"`
+	File    string `json:"file,omitempty"`
+	Line    int    `json:"line,omitempty"`
+}
+
+type AssistantEntryScope struct {
+	Executor string   `json:"executor"`
+	Machine  []string `json:"machine"`
+	Project  []string `json:"project"`
+	Personal bool     `json:"personal"`
+}
+
+type AssistantEntryScopeFilter struct {
+	Executor string   `json:"executor,omitempty"`
+	Machine  []string `json:"machine,omitempty"`
+	Project  []string `json:"project,omitempty"`
+	Personal *bool    `json:"personal,omitempty"`
+}
+
+type AssistantEntryDecision struct {
+	Options    []string        `json:"options"`
+	Selected   []string        `json:"selected"`
+	Rejected   []string        `json:"rejected"`
+	Reason     string          `json:"reason"`
+	Reversible json.RawMessage `json:"reversible"`
+}
+
+type AssistantLedgerEntry struct {
+	ID          string                  `json:"id"`
+	Type        string                  `json:"type"`
+	Text        string                  `json:"text"`
+	Quote       string                  `json:"quote"`
+	Source      AssistantEntrySource    `json:"source"`
+	RelayedVia  []string                `json:"relayed_via"`
+	Scope       AssistantEntryScope     `json:"scope"`
+	At          time.Time               `json:"at"`
+	ExpiresAt   json.RawMessage         `json:"expires_at"`
+	Supersedes  string                  `json:"supersedes"`
+	Trust       string                  `json:"trust"`
+	Status      string                  `json:"status"`
+	By          string                  `json:"by"`
+	Tag         []string                `json:"tag"`
+	Decision    *AssistantEntryDecision `json:"decision,omitempty"`
+	ExtID       string                  `json:"ext_id,omitempty"`
+	OriginSpace string                  `json:"origin_space"`
+	Category    []string                `json:"category"`
+}
+
+type AssistantEntriesParams struct {
+	After  string                     `json:"after,omitempty"`
+	Limit  int                        `json:"limit,omitempty"`
+	By     string                     `json:"by,omitempty"`
+	Trust  string                     `json:"trust,omitempty"`
+	Status string                     `json:"status,omitempty"`
+	Scope  *AssistantEntryScopeFilter `json:"scope,omitempty"`
+	Tag    string                     `json:"tag,omitempty"`
+	Type   string                     `json:"type,omitempty"`
+}
+
+type AssistantEntriesResult struct {
+	Entries []AssistantLedgerEntry `json:"entries"`
+	After   string                 `json:"after"`
+	HasMore bool                   `json:"has_more"`
+}
+
+type AssistantEntriesChangedEvent struct {
+	ID       string `json:"id"`
+	RecordID string `json:"record_id"`
+	Status   string `json:"status"`
+}
+
+// AssistantEventSeverity: how much the user should care. info: tell them only if it matters to what they are doing;
+// warning: they should hear about it; critical: they need to know now.
+const (
+	AssistantEventSeverityInfo     = "info"
+	AssistantEventSeverityWarning  = "warning"
+	AssistantEventSeverityCritical = "critical"
+)
+
+// AssistantEventSeverities are the values of AssistantEventSeverity, in order.
+var AssistantEventSeverities = []string{"info", "warning", "critical"}
+
+// AssistantEventState: where the thing an event's key names is now, in the extension's own words (firing, resolved,
+// ...): a label each extension chooses.
+// It is free text, not a closed set of values.
+type AssistantEventState string
+
+// AssistantEventReplace: whether an event takes the place of one of the extension's with the same key still waiting
+// behind a running turn: absent and true replace, false keeps the earlier one as its own message.
+// It has three values: AssistantEventReplaceDefault (absent from the JSON), AssistantEventReplaceTrue and
+// AssistantEventReplaceFalse.
+type AssistantEventReplace uint8
+
+const (
+	// AssistantEventReplaceDefault: absent.
+	AssistantEventReplaceDefault AssistantEventReplace = iota
+	// AssistantEventReplaceTrue: true.
+	AssistantEventReplaceTrue
+	// AssistantEventReplaceFalse: false.
+	AssistantEventReplaceFalse
+)
+
+// IsZero reports AssistantEventReplaceDefault, which omitzero leaves out of the JSON.
+func (v AssistantEventReplace) IsZero() bool { return v == AssistantEventReplaceDefault }
+
+// Or is the boolean v says, or absent when v is the default.
+func (v AssistantEventReplace) Or(absent bool) bool {
+	switch v {
+	case AssistantEventReplaceTrue:
+		return true
+	case AssistantEventReplaceFalse:
+		return false
+	}
+	return absent
+}
+
+// MarshalJSON writes true or false; AssistantEventReplaceDefault is null (a field tagged omitzero leaves it out
+// instead).
+func (v AssistantEventReplace) MarshalJSON() ([]byte, error) {
+	switch v {
+	case AssistantEventReplaceDefault:
+		return []byte("null"), nil
+	case AssistantEventReplaceTrue:
+		return []byte("true"), nil
+	case AssistantEventReplaceFalse:
+		return []byte("false"), nil
+	}
+	return nil, errors.New("AssistantEventReplace: not one of its three values")
+}
+
+// UnmarshalJSON reads true or false, and null as absent; anything else fails.
+func (v *AssistantEventReplace) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*v = AssistantEventReplaceDefault
+		return nil
+	}
+	var b bool
+	if err := json.Unmarshal(data, &b); err != nil {
+		return err
+	}
+	*v = AssistantEventReplaceFalse
+	if b {
+		*v = AssistantEventReplaceTrue
+	}
+	return nil
+}
+
+// AssistantEventParams: assistant.event (assistant.events): one event for the assistant's main conversation. The
+// assistant gets it as something an extension observed, never as the user's words, and decides what to tell the user.
+// An event with the same key as one of this extension's still waiting behind a running turn replaces it, unless
+// replace is false. Lengths are in characters.
+type AssistantEventParams struct {
+	// What the event is about (one monitored thing). The same extension and key replace an event not yet delivered.
+	Key      string `json:"key"`
+	Severity string `json:"severity,omitempty"`
+	// One line saying what happened.
+	Title string `json:"title"`
+	// The details.
+	Body string `json:"body,omitempty"`
+	// What the extension suggests be done about it: a suggestion for the assistant to weigh, not an order.
+	ActionHint string `json:"action_hint,omitempty"`
+	// Where the thing the key names is now, in the extension's words (firing, resolved, ...).
+	State AssistantEventState `json:"state,omitempty"`
+	// false keeps an earlier event with the same key as its own message instead of replacing it. Absent is true.
+	Replace AssistantEventReplace `json:"replace,omitzero"`
+}
+
+// AssistantEventDelivery: what happened to the event. delivered: sent into the idle main conversation now. queued:
+// the conversation is running (or not reachable just now), so it goes in when its turn ends. replaced: it took the
+// place of an earlier event with the same key that was still queued.
+const (
+	AssistantEventDeliveryDelivered = "delivered"
+	AssistantEventDeliveryQueued    = "queued"
+	AssistantEventDeliveryReplaced  = "replaced"
+)
+
+// AssistantEventDeliveries are the values of AssistantEventDelivery, in order.
+var AssistantEventDeliveries = []string{"delivered", "queued", "replaced"}
+
+type AssistantEventResult struct {
+	Delivery string `json:"delivery"`
 }
 
 // AssistantDataStatusParams: assistant.data_status takes no parameters.
@@ -5336,6 +6304,99 @@ type AssistantDataItem struct {
 
 type AssistantDataStatusResult struct {
 	Items []AssistantDataItem `json:"items"`
+}
+
+// MachinesPairLinkParams: machines.pair_link (machines.pair): request a one-time persona://link?... pairing link for
+// a pending link computer.
+type MachinesPairLinkParams struct {
+	// Optional computer id: re-issues a pairing link when an existing pending link machine matches (with name/os/icon
+	// omitted), or creates a new pending link machine with this id (defaulting name to machine_id when name is omitted).
+	MachineID string `json:"machine_id,omitempty"`
+	// Display name for a newly added computer (defaults to machine_id when machine_id is given; required when machine_id
+	// is omitted).
+	Name string `json:"name,omitempty"`
+	// Target OS hint for install commands.
+	OS string `json:"os,omitempty"`
+	// Optional icon for the computer.
+	Icon string `json:"icon,omitempty"`
+}
+
+type MachinesPairLinkResult struct {
+	// The hub machine id assigned to the computer.
+	MachineID string `json:"machine_id"`
+	// The display name of the computer.
+	Name string `json:"name"`
+	// The one-time persona://link?... pairing URL.
+	Link string `json:"link"`
+	// When the pairing link expires.
+	ExpiresAt time.Time `json:"expires_at"`
+	// Whether the computer is waiting for the owner's confirmation.
+	Pending bool `json:"pending"`
+	// Optional one-line Linux install-and-pair command when the hub knows its publication site.
+	InstallLinux string `json:"install_linux,omitempty"`
+}
+
+// MachinesStatusParams: machines.status (machines.read or machines.pair): read one computer's current connection and
+// confirmation state.
+type MachinesStatusParams struct {
+	// The computer's hub machine id.
+	MachineID string `json:"machine_id"`
+}
+
+type MachinesStatusResult struct {
+	MachineID string `json:"machine_id"`
+	Name      string `json:"name,omitempty"`
+	Exists    bool   `json:"exists"`
+	// Whether the computer's link/connection is currently up.
+	Online bool `json:"online"`
+	// Whether the resident node is connected and responding.
+	NodeOnline bool `json:"node_online"`
+	// Whether the computer is waiting for the owner's confirmation.
+	Pending bool `json:"pending"`
+	// When the computer was last seen online, if ever.
+	LastSeen time.Time `json:"last_seen,omitzero"`
+	// Last connection error, if any.
+	Error string `json:"error,omitempty"`
+}
+
+// BrowserMachinesParams: browser.machines (browser.run): list computers that have a browser backend enabled.
+type BrowserMachinesParams struct {
+	// Optional backend filter (e.g. ego, cdp). Empty returns all backends.
+	Backend string `json:"backend,omitempty"`
+}
+
+type BrowserMachine struct {
+	MachineID string `json:"machine_id"`
+	Name      string `json:"name"`
+	// Browser backend identifier (e.g. ego, cdp).
+	Backend string `json:"backend"`
+	Online  bool   `json:"online"`
+	Ready   bool   `json:"ready"`
+}
+
+type BrowserMachinesResult struct {
+	Machines []BrowserMachine `json:"machines"`
+}
+
+// BrowserRunParams: browser.run (browser.run): run a script inside an extension-isolated browser task space on
+// machine_id.
+type BrowserRunParams struct {
+	MachineID string `json:"machine_id"`
+	// Browser backend to use (default: ego).
+	Backend string `json:"backend,omitempty"`
+	// Logical slot name scoped to this extension (e.g. pac-muse).
+	Slot string `json:"slot"`
+	// Async JS script body executed inside the isolated task space.
+	Script    string `json:"script"`
+	TimeoutMs int    `json:"timeout_ms,omitempty"`
+}
+
+type BrowserRunResult struct {
+	Backend string `json:"backend"`
+	// Raw output / JSON payload returned by the browser backend.
+	Output string `json:"output"`
+	// Script error message, if any.
+	Error string `json:"error,omitempty"`
 }
 
 type StorageEmptyParams struct {
@@ -5441,6 +6502,17 @@ type StorageClaimParams struct {
 // StorageClaimResult: one claimed job; job is absent when no pending job is due.
 type StorageClaimResult struct {
 	Job *StorageJob `json:"job,omitempty"`
+}
+
+// StorageRenewParams: extend only the current run's unexpired lease on this exact key, job and token. The host sets
+// lease_until to the later of its current value and renewal time plus lease_seconds; job state and attempts do not
+// change.
+type StorageRenewParams struct {
+	RequestID    string `json:"request_id"`
+	Key          string `json:"key"`
+	ID           string `json:"id"`
+	Lease        string `json:"lease"`
+	LeaseSeconds int    `json:"lease_seconds"`
 }
 
 type StorageSettleParams struct {
@@ -6085,6 +7157,363 @@ type RepoDescribeResult struct {
 	State string `json:"state,omitempty"`
 }
 
+// RepoPRStatusParams: repo.pr_status (optional; capabilities pr_status, #11584): where a pull request the manager has
+// stored stands, for delivery checks and the status sweep, by its canonical address. Asked about pull_request links
+// only, at most about once a minute each. Answer with the program's own credentials; nothing of the answer reaches a
+// model but its state.
+type RepoPRStatusParams struct {
+	// The repository_providers item's id.
+	Contribution string `json:"contribution"`
+	// The link's canonical_url as repo.link answered it.
+	CanonicalURL string `json:"canonical_url"`
+}
+
+// RepoPRStatusResult: the pull request's state; the rest when the source says it. A value that breaks its rule is
+// dropped, a state outside the enum fails the answer.
+type RepoPRStatusResult struct {
+	State string `json:"state"`
+	// The commit its merge made (merged only).
+	MergeCommit string `json:"merge_commit,omitempty"`
+	// Its head commit.
+	HeadSha string `json:"head_sha,omitempty"`
+	// Its source branch.
+	HeadRef string `json:"head_ref,omitempty"`
+	// Its target branch.
+	BaseRef string `json:"base_ref,omitempty"`
+	// Who opened it, as the source names accounts.
+	Author string `json:"author,omitempty"`
+	// Whether the account the program uses opened it; left out when it cannot tell.
+	ViewerIsAuthor *bool `json:"viewer_is_author,omitempty"`
+}
+
+// MemoryErrorCode: error.code a memory source answers besides the base ErrorCode: not_ready (its entries are not
+// loaded yet; the manager uses none of them this time and asks again at the next assembly), failed (anything else,
+// say why in message).
+const (
+	MemoryErrorCodeNotReady = "not_ready"
+	MemoryErrorCodeFailed   = "failed"
+)
+
+// MemoryErrorCodes are the values of MemoryErrorCode, in order.
+var MemoryErrorCodes = []string{"not_ready", "failed"}
+
+// MemoryEntriesParams: memory.entries: one page of the contribution's entries, most important first (standing ones
+// first, then by rank, then newest). Read-only: answering changes nothing in the program's state.
+type MemoryEntriesParams struct {
+	// The memory_sources item's id.
+	Contribution string `json:"contribution"`
+	// At most this many entries on the page (the manager asks 200). Only a cap: the program ends a page early, with
+	// has_more and after, so the answer stays within 1 MB.
+	Limit int `json:"limit"`
+	// The previous page's after, to read on; empty for the first page.
+	After string `json:"after,omitempty"`
+}
+
+// MemoryEntriesResult: one page of entries. tagged is the program's promise for the whole page: it writes
+// origin_space and categories on every entry and leaves them out only when empty, so a missing origin_space means the
+// main space and missing categories mean general. A program that cannot promise that answers tagged false, and the
+// manager then takes none of its entries for its own track (each is in no track, not known, so the strictest rule
+// holds).
+type MemoryEntriesResult struct {
+	Entries []MemoryEntry `json:"entries"`
+	Tagged  bool          `json:"tagged"`
+	// Another page follows; ask again with after. When true, after must be set: true with an empty after counts as the
+	// end of the entries.
+	HasMore bool `json:"has_more"`
+	// Opaque: what to send as after for the next page; required in practice whenever has_more is true.
+	After string `json:"after,omitempty"`
+	// The bytes of standing entries' text the program wants a standing channel to carry (its own setting, say). The hub
+	// keeps this budget apart from its own memory ledger's, caps it at 8192 and takes the largest any page states; left
+	// out or 0: 4096. Entries past it are left out, the most important kept.
+	StandingBytes int `json:"standing_bytes,omitempty"`
+}
+
+// MemoryEntry: one entry as the program keeps it. Only an active entry is carried; the others may be answered (so a
+// page's order stays the program's) and are skipped. An entry that breaks a rule here is dropped alone, never the
+// page.
+type MemoryEntry struct {
+	// Stable across pages and answers: a to-do's brief names the entries it carried by it (prefixed memory-extension:).
+	ID string `json:"id"`
+	// What the entry says, as the program would render it, on one or a few lines.
+	Text string `json:"text"`
+	// The program's own grouping (preferences, workflow, people…). Used for explicit recall tag matching; it does not
+	// change priority or visibility.
+	Facet string `json:"facet,omitempty"`
+	// active: the program would use it today, whatever it calls that state itself (a program with its own stable or
+	// shifting states answers active for both); candidate: not borne out yet; dormant: not seen lately; retired: no
+	// longer true. Only active entries are carried; an entry with any other value is dropped.
+	Status string `json:"status"`
+	// The slug of the space the entry was first said in; left out for the main space.
+	OriginSpace string `json:"origin_space,omitempty"`
+	// Its information categories (health, finance, relationships, emotion, legal_id); left out for a general entry. A
+	// category the hub does not know makes the entry not known.
+	Categories []string `json:"categories,omitempty"`
+	// The program kept it in every conversation (always in context). Only a standing entry goes to a standing channel
+	// (usage still decides); the others come in only by relevance (their subjects or text) in a recall, a hand-off or
+	// the Inbox.
+	Standing bool `json:"standing,omitempty"`
+	// The program's order among entries alike in standing: higher first. Left out: 0.
+	Rank int `json:"rank,omitempty"`
+	// The names whose mention brings the entry in (a person, a project, a place): what a task's or a message's words are
+	// matched with, besides its text.
+	Subjects []string `json:"subjects,omitempty"`
+}
+
+// OffloadState: whether the provider can work on this computer: ready; needs_install (its tool is not on the
+// computer: the first offload asks to install it, OffloadTool); needs_setup (the user has to set it up first, in the
+// extension's settings: detail says what); unavailable (detail says why).
+const (
+	OffloadStateReady        = "ready"
+	OffloadStateNeedsInstall = "needs_install"
+	OffloadStateNeedsSetup   = "needs_setup"
+	OffloadStateUnavailable  = "unavailable"
+)
+
+// OffloadStates are the values of OffloadState, in order.
+var OffloadStates = []string{"ready", "needs_install", "needs_setup", "unavailable"}
+
+// OffloadItemKind: what an offloaded item was: a file, a dir (folder), an app, an app's data (app_data), a bundle of
+// items moved together, a session archive, or other.
+const (
+	OffloadItemKindFile    = "file"
+	OffloadItemKindDir     = "dir"
+	OffloadItemKindApp     = "app"
+	OffloadItemKindAppData = "app_data"
+	OffloadItemKindBundle  = "bundle"
+	OffloadItemKindSession = "session"
+	OffloadItemKindOther   = "other"
+)
+
+// OffloadItemKinds are the values of OffloadItemKind, in order.
+var OffloadItemKinds = []string{"file", "dir", "app", "app_data", "bundle", "session", "other"}
+
+// OffloadAction: what offload.run does: offload (move paths away) or restore (bring items back by id).
+const (
+	OffloadActionOffload = "offload"
+	OffloadActionRestore = "restore"
+)
+
+// OffloadActions are the values of OffloadAction, in order.
+var OffloadActions = []string{"offload", "restore"}
+
+// OffloadRunStatus: offload.run's answer: started (a job runs: job), needs_install (the tool is missing and install
+// was not given: nothing happened; tool), refused (nothing happened; items say why), ok (a dry run's answer: items).
+const (
+	OffloadRunStatusStarted      = "started"
+	OffloadRunStatusNeedsInstall = "needs_install"
+	OffloadRunStatusRefused      = "refused"
+	OffloadRunStatusOk           = "ok"
+)
+
+// OffloadRunStatuses are the values of OffloadRunStatus, in order.
+var OffloadRunStatuses = []string{"started", "needs_install", "refused", "ok"}
+
+// OffloadJobState: A job: running, done, failed (error says why) or canceled.
+const (
+	OffloadJobStateRunning  = "running"
+	OffloadJobStateDone     = "done"
+	OffloadJobStateFailed   = "failed"
+	OffloadJobStateCanceled = "canceled"
+)
+
+// OffloadJobStates are the values of OffloadJobState, in order.
+var OffloadJobStates = []string{"running", "done", "failed", "canceled"}
+
+// OffloadPhase: what a running job does now: install (its tool), check, upload, verify, cleanup (removing the
+// originals), download (a restore).
+const (
+	OffloadPhaseInstall  = "install"
+	OffloadPhaseCheck    = "check"
+	OffloadPhaseUpload   = "upload"
+	OffloadPhaseVerify   = "verify"
+	OffloadPhaseCleanup  = "cleanup"
+	OffloadPhaseDownload = "download"
+)
+
+// OffloadPhases are the values of OffloadPhase, in order.
+var OffloadPhases = []string{"install", "check", "upload", "verify", "cleanup", "download"}
+
+// OffloadJobItemStatus: one item of a job: pending, running, done, failed or skipped.
+const (
+	OffloadJobItemStatusPending = "pending"
+	OffloadJobItemStatusRunning = "running"
+	OffloadJobItemStatusDone    = "done"
+	OffloadJobItemStatusFailed  = "failed"
+	OffloadJobItemStatusSkipped = "skipped"
+)
+
+// OffloadJobItemStatuses are the values of OffloadJobItemStatus, in order.
+var OffloadJobItemStatuses = []string{"pending", "running", "done", "failed", "skipped"}
+
+// OffloadTool: the program the provider needs on the computer. source is one sentence in the caller's language saying
+// where it comes from and where it is installed; the install confirmation shows it.
+type OffloadTool struct {
+	Name      string `json:"name"`
+	Title     string `json:"title,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Installed bool   `json:"installed"`
+	Source    string `json:"source,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// OffloadItem: one item the provider holds of this computer. bytes is the size it had on disk, what the map draws so
+// both sides share one scale; stored_bytes what it takes where it is stored; origin_path where it was and where a
+// restore puts it; stub_path the placeholder left behind, if any; local_bytes what of it is still on the computer (a
+// cache). Times are Unix seconds.
+type OffloadItem struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Bytes       int64  `json:"bytes"`
+	StoredBytes int64  `json:"stored_bytes,omitempty"`
+	OriginPath  string `json:"origin_path,omitempty"`
+	StubPath    string `json:"stub_path,omitempty"`
+	LocalBytes  int64  `json:"local_bytes,omitempty"`
+	OffloadedAt int64  `json:"offloaded_at,omitempty"`
+	UsedAt      int64  `json:"used_at,omitempty"`
+	// Items moved together share a group (an app and its data).
+	Group      string `json:"group,omitempty"`
+	Restorable bool   `json:"restorable"`
+}
+
+// OffloadMore: what the inventory left out past its 500 largest items.
+type OffloadMore struct {
+	Count int   `json:"count"`
+	Bytes int64 `json:"bytes"`
+}
+
+// OffloadInventoryParams: offload.inventory: what the provider holds of machine. refresh asks it not to answer from
+// its own cache.
+type OffloadInventoryParams struct {
+	Contribution string    `json:"contribution"`
+	Locale       string    `json:"locale"`
+	Machine      UIMachine `json:"machine"`
+	Refresh      bool      `json:"refresh,omitempty"`
+}
+
+// OffloadInventory: what the provider holds of the computer, largest first, at most 500 items (the rest summed in
+// more). at is when it was read (Unix seconds); total_bytes the items' bytes together, stored_bytes what they take
+// where they are stored; partial when the list may be incomplete. items may be left out when there are none; the
+// manager's answer to the apps always has it.
+type OffloadInventory struct {
+	State       string        `json:"state"`
+	Detail      string        `json:"detail,omitempty"`
+	Tool        *OffloadTool  `json:"tool,omitempty"`
+	At          int64         `json:"at"`
+	TotalBytes  int64         `json:"total_bytes"`
+	StoredBytes int64         `json:"stored_bytes,omitempty"`
+	Partial     bool          `json:"partial,omitempty"`
+	Items       []OffloadItem `json:"items,omitempty"`
+	More        *OffloadMore  `json:"more,omitempty"`
+}
+
+// OffloadRunParams: offload.run: offload paths (absolute, on machine, each already agreed by the node's protection
+// rules) or restore items (ids of the inventory), at most 50. dry_run only checks and answers status ok with each
+// item; install lets the job install the tool first (the user agreed to that too). request_id is the same for a retry
+// of the same request.
+type OffloadRunParams struct {
+	Contribution string    `json:"contribution"`
+	Locale       string    `json:"locale"`
+	Machine      UIMachine `json:"machine"`
+	Action       string    `json:"action"`
+	Paths        []string  `json:"paths,omitempty"`
+	Items        []string  `json:"items,omitempty"`
+	DryRun       bool      `json:"dry_run,omitempty"`
+	Install      bool      `json:"install,omitempty"`
+	RequestID    string    `json:"request_id"`
+}
+
+// OffloadRunItem: one path or item of a run's answer: why it is refused (reason, in the caller's language), or a dry
+// run's verdict (ok, bytes). refusal is set only by the manager, when the computer's own protection rules refused the
+// path before the program was asked (a machine.storage.check refusal code: credentials, app_managed, ...).
+type OffloadRunItem struct {
+	Path    string `json:"path,omitempty"`
+	ID      string `json:"id,omitempty"`
+	Ok      bool   `json:"ok,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Refusal string `json:"refusal,omitempty"`
+	Bytes   int64  `json:"bytes,omitempty"`
+}
+
+// OffloadRunResult: offload.run's answer (OffloadRunStatus).
+type OffloadRunResult struct {
+	Status string           `json:"status"`
+	Job    string           `json:"job,omitempty"`
+	Tool   *OffloadTool     `json:"tool,omitempty"`
+	Items  []OffloadRunItem `json:"items,omitempty"`
+}
+
+// OffloadJobParams: offload.job and offload.cancel: the job offload.run started.
+type OffloadJobParams struct {
+	Contribution string    `json:"contribution"`
+	Locale       string    `json:"locale"`
+	Machine      UIMachine `json:"machine"`
+	Job          string    `json:"job"`
+}
+
+// OffloadJobItem: one path (offload) or item (restore) of a job.
+type OffloadJobItem struct {
+	Path   string `json:"path,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	Bytes  int64  `json:"bytes,omitempty"`
+}
+
+// OffloadJob: how a job goes. A job belongs to the extension: a client that lost track asks the inventory again.
+// items may be left out; the manager's answer to the apps always has it.
+type OffloadJob struct {
+	State      string           `json:"state"`
+	Phase      string           `json:"phase,omitempty"`
+	DoneBytes  int64            `json:"done_bytes"`
+	TotalBytes int64            `json:"total_bytes"`
+	FreedBytes int64            `json:"freed_bytes,omitempty"`
+	Error      string           `json:"error,omitempty"`
+	Items      []OffloadJobItem `json:"items,omitempty"`
+}
+
+// OffloadProvider: one enabled disk_offload contribution, as GET /api/v1/extensions/-/offload lists it for the apps.
+type OffloadProvider struct {
+	Extension string   `json:"extension"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Kinds     []string `json:"kinds"`
+	Restore   bool     `json:"restore"`
+}
+
+// OffloadProviders: GET /api/v1/extensions/-/offload?machine=: the providers the map can offer on that computer.
+type OffloadProviders struct {
+	Providers []OffloadProvider `json:"providers"`
+}
+
+// OffloadRunRequest: POST /api/v1/extensions/{id}/-/offload/{cid}/run, an app's request: without dry_run or confirm
+// it is refused (confirmation_required); install only after the user agreed to the tool's install confirmation.
+type OffloadRunRequest struct {
+	Machine string   `json:"machine"`
+	Action  string   `json:"action"`
+	Paths   []string `json:"paths,omitempty"`
+	Items   []string `json:"items,omitempty"`
+	DryRun  bool     `json:"dry_run,omitempty"`
+	Confirm bool     `json:"confirm,omitempty"`
+	Install bool     `json:"install,omitempty"`
+}
+
+// OffloadStarted: the run route's 202 answer: the job to follow with GET …/jobs/{job}.
+type OffloadStarted struct {
+	Job string `json:"job"`
+}
+
+// OffloadError: an offload route's error: error in the reader's language and a code (bad_request,
+// confirmation_required, read_only, not_found, machine_offline, node_outdated, tool_install_required with tool,
+// offload_refused with items, plugin_failed (detail: the provider's own words, one line), usage_failed, deadline).
+type OffloadError struct {
+	Error  string           `json:"error"`
+	Code   string           `json:"code"`
+	Tool   *OffloadTool     `json:"tool,omitempty"`
+	Detail string           `json:"detail,omitempty"`
+	Items  []OffloadRunItem `json:"items,omitempty"`
+}
+
 // requiredJSONComponent preserves required fields only inside stream payloads.
 type requiredJSONComponent Component
 
@@ -6094,186 +7523,514 @@ func (v requiredJSONComponent) MarshalJSON() ([]byte, error) {
 	case "text", "markdown", "code":
 		return json.Marshal(struct {
 			plain
-			Text string `json:"text"`
+			Text   string                   `json:"text"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Text:  v.Text,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "metric":
 		return json.Marshal(struct {
 			plain
-			Label string `json:"label"`
-			Value string `json:"value"`
+			Label  string                   `json:"label"`
+			Value  string                   `json:"value"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Label: v.Label,
 			Value: v.Value,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "progress":
 		return json.Marshal(struct {
 			plain
-			Label string   `json:"label"`
-			Ratio *float64 `json:"ratio"`
+			Label  string                   `json:"label"`
+			Ratio  *float64                 `json:"ratio"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Label: v.Label,
 			Ratio: v.Ratio,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "row", "empty", "header":
 		return json.Marshal(struct {
 			plain
-			Title string `json:"title"`
+			Title  string                   `json:"title"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Title: v.Title,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "button":
 		return json.Marshal(struct {
 			plain
-			Title  string  `json:"title"`
-			Action *Action `json:"action"`
+			Title  string                   `json:"title"`
+			Action *Action                  `json:"action"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:  plain(v),
 			Title:  v.Title,
 			Action: v.Action,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "link":
 		return json.Marshal(struct {
 			plain
-			Title string `json:"title"`
-			URL   string `json:"url"`
+			Title  string                   `json:"title"`
+			URL    string                   `json:"url"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Title: v.Title,
 			URL:   v.URL,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "field":
 		return json.Marshal(struct {
 			plain
-			Label string `json:"label"`
-			Name  string `json:"name"`
-			Kind  string `json:"kind"`
+			Label  string                   `json:"label"`
+			Name   string                   `json:"name"`
+			Kind   string                   `json:"kind"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Label: v.Label,
 			Name:  v.Name,
 			Kind:  v.Kind,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "divider", "loading":
 		return json.Marshal(struct {
 			plain
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "chart":
 		return json.Marshal(struct {
 			plain
-			Kind   string        `json:"kind"`
-			Series []ChartSeries `json:"series"`
+			Kind   string                   `json:"kind"`
+			Series []ChartSeries            `json:"series"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:  plain(v),
 			Kind:   v.Kind,
 			Series: v.Series,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "stat_grid":
 		return json.Marshal(struct {
 			plain
-			Stats []Stat `json:"stats"`
+			Stats  []Stat                   `json:"stats"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Stats: v.Stats,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "segmented":
 		return json.Marshal(struct {
 			plain
-			Value   string   `json:"value"`
-			Action  *Action  `json:"action"`
-			Name    string   `json:"name"`
-			Choices []Choice `json:"choices"`
+			Value   string                   `json:"value"`
+			Action  *Action                  `json:"action"`
+			Name    string                   `json:"name"`
+			Choices []Choice                 `json:"choices"`
+			Shapes  []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:   plain(v),
 			Value:   v.Value,
 			Action:  v.Action,
 			Name:    v.Name,
 			Choices: v.Choices,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "table":
 		return json.Marshal(struct {
 			plain
-			Columns []TableColumn `json:"columns"`
-			Rows    [][]string    `json:"rows"`
+			Columns []TableColumn            `json:"columns"`
+			Rows    [][]string               `json:"rows"`
+			Shapes  []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:   plain(v),
 			Columns: v.Columns,
 			Rows:    v.Rows,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "html":
 		return json.Marshal(struct {
 			plain
-			Html string `json:"html"`
+			Html   string                   `json:"html"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Html:  v.Html,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "breadcrumb":
 		return json.Marshal(struct {
 			plain
-			Crumbs []Crumb `json:"crumbs"`
+			Crumbs []Crumb                  `json:"crumbs"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:  plain(v),
 			Crumbs: v.Crumbs,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "file_tree":
 		return json.Marshal(struct {
 			plain
-			Entries []TreeEntry `json:"entries"`
+			Entries []TreeEntry              `json:"entries"`
+			Shapes  []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:   plain(v),
 			Entries: v.Entries,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "diff":
 		return json.Marshal(struct {
 			plain
-			Path string `json:"path"`
+			Path   string                   `json:"path"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Path:  v.Path,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "comment_thread":
 		return json.Marshal(struct {
 			plain
-			Comments []Comment `json:"comments"`
+			Comments []Comment                `json:"comments"`
+			Shapes   []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:    plain(v),
 			Comments: v.Comments,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "composer":
 		return json.Marshal(struct {
 			plain
-			Name    string           `json:"name"`
-			Buttons []ComposerButton `json:"buttons"`
+			Name    string                   `json:"name"`
+			Buttons []ComposerButton         `json:"buttons"`
+			Shapes  []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:   plain(v),
 			Name:    v.Name,
 			Buttons: v.Buttons,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "image":
 		return json.Marshal(struct {
 			plain
-			Src *ImageSource `json:"src"`
-			Alt string       `json:"alt"`
+			Src    *ImageSource             `json:"src"`
+			Alt    string                   `json:"alt"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Src:   v.Src,
 			Alt:   v.Alt,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "grid", "carousel":
 		return json.Marshal(struct {
 			plain
-			Tiles []Tile `json:"tiles"`
+			Tiles  []Tile                   `json:"tiles"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Tiles: v.Tiles,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
+		})
+	case "graph":
+		return json.Marshal(struct {
+			plain
+			Nodes  []GraphNode              `json:"nodes"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
+		}{
+			plain: plain(v),
+			Nodes: v.Nodes,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
+		})
+	case "scene":
+		return json.Marshal(struct {
+			plain
+			Alt    string                   `json:"alt"`
+			Shapes []requiredJSONSceneShape `json:"shapes"`
+		}{
+			plain: plain(v),
+			Alt:   v.Alt,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
+		})
+	case "map":
+		return json.Marshal(struct {
+			plain
+			Alt    string                   `json:"alt"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
+		}{
+			plain: plain(v),
+			Alt:   v.Alt,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
+		})
+	default:
+		return json.Marshal(plain(v))
+	}
+}
+
+// requiredJSONSceneShape preserves required fields only inside stream payloads.
+type requiredJSONSceneShape SceneShape
+
+func (v requiredJSONSceneShape) MarshalJSON() ([]byte, error) {
+	type plain SceneShape
+	switch v.Kind {
+	case "box":
+		return json.Marshal(struct {
+			plain
+			Center []float64 `json:"center"`
+			Size   []float64 `json:"size"`
+			Bottom *float64  `json:"bottom"`
+			Top    *float64  `json:"top"`
+		}{
+			plain:  plain(v),
+			Center: v.Center,
+			Size:   v.Size,
+			Bottom: v.Bottom,
+			Top:    v.Top,
+		})
+	case "cylinder":
+		return json.Marshal(struct {
+			plain
+			Center []float64 `json:"center"`
+			Bottom *float64  `json:"bottom"`
+			Top    *float64  `json:"top"`
+			Radius float64   `json:"radius"`
+		}{
+			plain:  plain(v),
+			Center: v.Center,
+			Bottom: v.Bottom,
+			Top:    v.Top,
+			Radius: v.Radius,
+		})
+	case "prism":
+		return json.Marshal(struct {
+			plain
+			Bottom *float64    `json:"bottom"`
+			Top    *float64    `json:"top"`
+			Points [][]float64 `json:"points"`
+		}{
+			plain:  plain(v),
+			Bottom: v.Bottom,
+			Top:    v.Top,
+			Points: v.Points,
 		})
 	default:
 		return json.Marshal(plain(v))
@@ -6346,6 +8103,7 @@ var newDef = map[string]func() any{
 	"ToolArchive":                   func() any { return new(ToolArchive) },
 	"ToolNPM":                       func() any { return new(ToolNPM) },
 	"AuthSpec":                      func() any { return new(AuthSpec) },
+	"UpgradeSpec":                   func() any { return new(UpgradeSpec) },
 	"Dependency":                    func() any { return new(Dependency) },
 	"Exports":                       func() any { return new(Exports) },
 	"ExportedPoint":                 func() any { return new(ExportedPoint) },
@@ -6377,13 +8135,20 @@ var newDef = map[string]func() any{
 	"AuthRelayItem":                 func() any { return new(AuthRelayItem) },
 	"SecretProviderItem":            func() any { return new(SecretProviderItem) },
 	"RepositoryProviderItem":        func() any { return new(RepositoryProviderItem) },
+	"DiskOffloadItem":               func() any { return new(DiskOffloadItem) },
+	"MemorySourceItem":              func() any { return new(MemorySourceItem) },
 	"RepositoryLinkLabel":           func() any { return new(RepositoryLinkLabel) },
 	"ErrorReportsItem":              func() any { return new(ErrorReportsItem) },
 	"TunnelItem":                    func() any { return new(TunnelItem) },
 	"AgentFilterItem":               func() any { return new(AgentFilterItem) },
 	"ConnectorItem":                 func() any { return new(ConnectorItem) },
+	"TrackAttention":                func() any { return new(TrackAttention) },
+	"TrackSidebar":                  func() any { return new(TrackSidebar) },
+	"TrackKindConfig":               func() any { return new(TrackKindConfig) },
+	"TrackKindItem":                 func() any { return new(TrackKindItem) },
 	"NamedItem":                     func() any { return new(NamedItem) },
 	"QuotaItem":                     func() any { return new(QuotaItem) },
+	"UsageItem":                     func() any { return new(UsageItem) },
 	"ProviderItem":                  func() any { return new(ProviderItem) },
 	"ProviderModel":                 func() any { return new(ProviderModel) },
 	"APIItem":                       func() any { return new(APIItem) },
@@ -6449,11 +8214,28 @@ var newDef = map[string]func() any{
 	"SecretsDescribeResult":         func() any { return new(SecretsDescribeResult) },
 	"SecretsResolveParams":          func() any { return new(SecretsResolveParams) },
 	"SecretsResolveResult":          func() any { return new(SecretsResolveResult) },
+	"SecretStoreField":              func() any { return new(SecretStoreField) },
+	"SecretStoreTarget":             func() any { return new(SecretStoreTarget) },
+	"SecretStoreParams":             func() any { return new(SecretStoreParams) },
+	"SecretStoreResult":             func() any { return new(SecretStoreResult) },
 	"SecretsUsedEvent":              func() any { return new(SecretsUsedEvent) },
 	"ExtensionNotification":         func() any { return new(ExtensionNotification) },
 	"View":                          func() any { return new(View) },
 	"Section":                       func() any { return new(Section) },
 	"Component":                     func() any { return new(Component) },
+	"GraphNode":                     func() any { return new(GraphNode) },
+	"GraphNodeLink":                 func() any { return new(GraphNodeLink) },
+	"GraphEdge":                     func() any { return new(GraphEdge) },
+	"SceneCamera":                   func() any { return new(SceneCamera) },
+	"SceneShape":                    func() any { return new(SceneShape) },
+	"SceneLabel":                    func() any { return new(SceneLabel) },
+	"ScenePin":                      func() any { return new(ScenePin) },
+	"SceneLight":                    func() any { return new(SceneLight) },
+	"MapCoordinate":                 func() any { return new(MapCoordinate) },
+	"MapViewport":                   func() any { return new(MapViewport) },
+	"MapMarker":                     func() any { return new(MapMarker) },
+	"MapRoute":                      func() any { return new(MapRoute) },
+	"MapLink":                       func() any { return new(MapLink) },
 	"ImageSource":                   func() any { return new(ImageSource) },
 	"RowControl":                    func() any { return new(RowControl) },
 	"RowAction":                     func() any { return new(RowAction) },
@@ -6567,6 +8349,7 @@ var newDef = map[string]func() any{
 	"ConnectorCatalogCallParams":    func() any { return new(ConnectorCatalogCallParams) },
 	"ConnectorSubscriptionFields":   func() any { return new(ConnectorSubscriptionFields) },
 	"ConnectorSubscriptionRecipe":   func() any { return new(ConnectorSubscriptionRecipe) },
+	"ConnectorAutoConfirm":          func() any { return new(ConnectorAutoConfirm) },
 	"Empty":                         func() any { return new(Empty) },
 	"ConnectorInitParams":           func() any { return new(ConnectorInitParams) },
 	"ConnectorManifest":             func() any { return new(ConnectorManifest) },
@@ -6631,6 +8414,7 @@ var newDef = map[string]func() any{
 	"ConnectorHistoryAnchor":        func() any { return new(ConnectorHistoryAnchor) },
 	"ConnectorItems":                func() any { return new(ConnectorItems) },
 	"ConnectorKBItem":               func() any { return new(ConnectorKBItem) },
+	"ConnectorKBSourceRef":          func() any { return new(ConnectorKBSourceRef) },
 	"ConnectorKBProvenance":         func() any { return new(ConnectorKBProvenance) },
 	"ConnectorKBEvidence":           func() any { return new(ConnectorKBEvidence) },
 	"ConnectorDocTitleParams":       func() any { return new(ConnectorDocTitleParams) },
@@ -6688,6 +8472,11 @@ var newDef = map[string]func() any{
 	"KBGetParams":                   func() any { return new(KBGetParams) },
 	"KBGetResult":                   func() any { return new(KBGetResult) },
 	"KBDetail":                      func() any { return new(KBDetail) },
+	"KBProjectSource":               func() any { return new(KBProjectSource) },
+	"KBProjectFreshness":            func() any { return new(KBProjectFreshness) },
+	"KBProjectFieldFreshness":       func() any { return new(KBProjectFieldFreshness) },
+	"KBProjectCutoff":               func() any { return new(KBProjectCutoff) },
+	"KBProjectEvidenceRef":          func() any { return new(KBProjectEvidenceRef) },
 	"KBProfileRecord":               func() any { return new(KBProfileRecord) },
 	"KBPersonProfile":               func() any { return new(KBPersonProfile) },
 	"KBProfileItem":                 func() any { return new(KBProfileItem) },
@@ -6705,11 +8494,19 @@ var newDef = map[string]func() any{
 	"KBHit":                         func() any { return new(KBHit) },
 	"KBUpdateParams":                func() any { return new(KBUpdateParams) },
 	"KBUpdateResult":                func() any { return new(KBUpdateResult) },
+	"KBPutRecordingParams":          func() any { return new(KBPutRecordingParams) },
+	"KBRecordingMinutes":            func() any { return new(KBRecordingMinutes) },
+	"KBMinutesItem":                 func() any { return new(KBMinutesItem) },
+	"KBMinutesPoint":                func() any { return new(KBMinutesPoint) },
+	"KBMinutesAction":               func() any { return new(KBMinutesAction) },
+	"KBRecordingMeeting":            func() any { return new(KBRecordingMeeting) },
+	"KBPutRecordingResult":          func() any { return new(KBPutRecordingResult) },
 	"KBOwnerParams":                 func() any { return new(KBOwnerParams) },
 	"KBOwner":                       func() any { return new(KBOwner) },
 	"KBChangedEvent":                func() any { return new(KBChangedEvent) },
 	"KBForgottenEvent":              func() any { return new(KBForgottenEvent) },
 	"TodoEventThread":               func() any { return new(TodoEventThread) },
+	"TodoEventResponsible":          func() any { return new(TodoEventResponsible) },
 	"TodoChangedEvent":              func() any { return new(TodoChangedEvent) },
 	"TodoEventDecision":             func() any { return new(TodoEventDecision) },
 	"TodoDecisionEvent":             func() any { return new(TodoDecisionEvent) },
@@ -6734,9 +8531,28 @@ var newDef = map[string]func() any{
 	"AssistantMemoryEntry":          func() any { return new(AssistantMemoryEntry) },
 	"AssistantMemoryResult":         func() any { return new(AssistantMemoryResult) },
 	"AssistantMessagesResult":       func() any { return new(AssistantMessagesResult) },
+	"AssistantEntrySource":          func() any { return new(AssistantEntrySource) },
+	"AssistantEntryScope":           func() any { return new(AssistantEntryScope) },
+	"AssistantEntryScopeFilter":     func() any { return new(AssistantEntryScopeFilter) },
+	"AssistantEntryDecision":        func() any { return new(AssistantEntryDecision) },
+	"AssistantLedgerEntry":          func() any { return new(AssistantLedgerEntry) },
+	"AssistantEntriesParams":        func() any { return new(AssistantEntriesParams) },
+	"AssistantEntriesResult":        func() any { return new(AssistantEntriesResult) },
+	"AssistantEntriesChangedEvent":  func() any { return new(AssistantEntriesChangedEvent) },
+	"AssistantEventParams":          func() any { return new(AssistantEventParams) },
+	"AssistantEventResult":          func() any { return new(AssistantEventResult) },
 	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
 	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
 	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
+	"MachinesPairLinkParams":        func() any { return new(MachinesPairLinkParams) },
+	"MachinesPairLinkResult":        func() any { return new(MachinesPairLinkResult) },
+	"MachinesStatusParams":          func() any { return new(MachinesStatusParams) },
+	"MachinesStatusResult":          func() any { return new(MachinesStatusResult) },
+	"BrowserMachinesParams":         func() any { return new(BrowserMachinesParams) },
+	"BrowserMachine":                func() any { return new(BrowserMachine) },
+	"BrowserMachinesResult":         func() any { return new(BrowserMachinesResult) },
+	"BrowserRunParams":              func() any { return new(BrowserRunParams) },
+	"BrowserRunResult":              func() any { return new(BrowserRunResult) },
 	"StorageEmptyParams":            func() any { return new(StorageEmptyParams) },
 	"StorageRequestResult":          func() any { return new(StorageRequestResult) },
 	"StorageKeyParams":              func() any { return new(StorageKeyParams) },
@@ -6754,6 +8570,7 @@ var newDef = map[string]func() any{
 	"StorageJobResult":              func() any { return new(StorageJobResult) },
 	"StorageClaimParams":            func() any { return new(StorageClaimParams) },
 	"StorageClaimResult":            func() any { return new(StorageClaimResult) },
+	"StorageRenewParams":            func() any { return new(StorageRenewParams) },
 	"StorageSettleParams":           func() any { return new(StorageSettleParams) },
 	"StorageRetryParams":            func() any { return new(StorageRetryParams) },
 	"StorageDeleteResult":           func() any { return new(StorageDeleteResult) },
@@ -6794,6 +8611,27 @@ var newDef = map[string]func() any{
 	"RepoLinkResult":                func() any { return new(RepoLinkResult) },
 	"RepoDescribeParams":            func() any { return new(RepoDescribeParams) },
 	"RepoDescribeResult":            func() any { return new(RepoDescribeResult) },
+	"RepoPRStatusParams":            func() any { return new(RepoPRStatusParams) },
+	"RepoPRStatusResult":            func() any { return new(RepoPRStatusResult) },
+	"MemoryEntriesParams":           func() any { return new(MemoryEntriesParams) },
+	"MemoryEntriesResult":           func() any { return new(MemoryEntriesResult) },
+	"MemoryEntry":                   func() any { return new(MemoryEntry) },
+	"OffloadTool":                   func() any { return new(OffloadTool) },
+	"OffloadItem":                   func() any { return new(OffloadItem) },
+	"OffloadMore":                   func() any { return new(OffloadMore) },
+	"OffloadInventoryParams":        func() any { return new(OffloadInventoryParams) },
+	"OffloadInventory":              func() any { return new(OffloadInventory) },
+	"OffloadRunParams":              func() any { return new(OffloadRunParams) },
+	"OffloadRunItem":                func() any { return new(OffloadRunItem) },
+	"OffloadRunResult":              func() any { return new(OffloadRunResult) },
+	"OffloadJobParams":              func() any { return new(OffloadJobParams) },
+	"OffloadJobItem":                func() any { return new(OffloadJobItem) },
+	"OffloadJob":                    func() any { return new(OffloadJob) },
+	"OffloadProvider":               func() any { return new(OffloadProvider) },
+	"OffloadProviders":              func() any { return new(OffloadProviders) },
+	"OffloadRunRequest":             func() any { return new(OffloadRunRequest) },
+	"OffloadStarted":                func() any { return new(OffloadStarted) },
+	"OffloadError":                  func() any { return new(OffloadError) },
 }
 
 // Call is one call or event of an extension point's protocol (the schemas' x-methods and x-events): who
@@ -6806,95 +8644,110 @@ type Call struct {
 
 // Calls are the calls and events the schemas describe, by name as on the wire.
 var Calls = map[string]Call{
-	"connector.status":               {Name: "connector.status", From: "hub", Params: "ConnectorParams", Result: "ConnectorStatus"},
-	"connector.manifest":             {Name: "connector.manifest", From: "hub", Params: "ConnectorParams", Result: "ConnectorManifest"},
-	"connector.catalog.list":         {Name: "connector.catalog.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorCatalog"},
-	"connector.catalog.call":         {Name: "connector.catalog.call", From: "hub", Params: "ConnectorCatalogCallParams", Result: "ConnectorCallResult"},
-	"connector.tools.list":           {Name: "connector.tools.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorTools"},
-	"connector.tools.call":           {Name: "connector.tools.call", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorCallResult"},
-	"connector.actions.list":         {Name: "connector.actions.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorTools"},
-	"connector.actions.describe":     {Name: "connector.actions.describe", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorDescribeResult"},
-	"connector.actions.do":           {Name: "connector.actions.do", From: "hub", Params: "ConnectorDoParams", Result: "ConnectorCallResult"},
-	"connector.recall":               {Name: "connector.recall", From: "hub", Params: "ConnectorRecallParams", Result: "ConnectorRecallResult"},
-	"connector.recall.can":           {Name: "connector.recall.can", From: "hub", Params: "ConnectorRecallCanParams", Result: "ConnectorRecallCanResult"},
-	"connector.recall.do":            {Name: "connector.recall.do", From: "hub", Params: "ConnectorRecallDoParams", Result: "ConnectorRecallDoResult"},
-	"connector.thread.page":          {Name: "connector.thread.page", From: "hub", Params: "ConnectorThreadParams", Result: "ConnectorThreadPage"},
-	"connector.thread.media":         {Name: "connector.thread.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
-	"connector.inbox.collect":        {Name: "connector.inbox.collect", From: "hub", Params: "ConnectorParams", Result: "ConnectorCollectResult"},
-	"connector.inbox.reply":          {Name: "connector.inbox.reply", From: "hub", Params: "ConnectorInboxReply", Result: "Empty"},
-	"connector.inbox.settle":         {Name: "connector.inbox.settle", From: "hub", Params: "ConnectorSettleParams", Result: "ConnectorSettled"},
-	"connector.archive.changes":      {Name: "connector.archive.changes", From: "hub", Params: "ConnectorChangesParams", Result: "ConnectorChangesResult"},
-	"connector.archive.media":        {Name: "connector.archive.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
-	"connector.history.chats":        {Name: "connector.history.chats", From: "hub", Params: "ConnectorParams", Result: "ConnectorHistoryChats"},
-	"connector.archive.history":      {Name: "connector.archive.history", From: "hub", Params: "ConnectorHistoryParams", Result: "ConnectorHistoryPage"},
-	"connector.history.anchors":      {Name: "connector.history.anchors", From: "hub", Params: "ConnectorHistoryAnchorsParams", Result: "ConnectorHistoryAnchors"},
-	"connector.items.list":           {Name: "connector.items.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorItems"},
-	"connector.items.doc_title":      {Name: "connector.items.doc_title", From: "hub", Params: "ConnectorDocTitleParams", Result: "ConnectorDocTitle"},
-	"connector.snapshot.get":         {Name: "connector.snapshot.get", From: "hub", Params: "ConnectorSnapshotParams", Result: "ConnectorSnapshot"},
-	"connector.group.tool":           {Name: "connector.group.tool", From: "hub", Params: "ConnectorGroupToolParams", Result: ""},
-	"connector.group.append":         {Name: "connector.group.append", From: "hub", Params: "ConnectorGroupAppendParams", Result: "ConnectorInboxThing"},
-	"connector.group.fallback":       {Name: "connector.group.fallback", From: "hub", Params: "ConnectorGroupFallbackParams", Result: "ConnectorGroupFallback"},
-	"connector.login.step":           {Name: "connector.login.step", From: "hub", Params: "ConnectorLoginParams", Result: "ConnectorPrompt"},
-	"connector.logout":               {Name: "connector.logout", From: "hub", Params: "ConnectorParams", Result: "Empty"},
-	"connector.options.get":          {Name: "connector.options.get", From: "hub", Params: "ConnectorParams", Result: "ConnectorOptions"},
-	"connector.options.set":          {Name: "connector.options.set", From: "hub", Params: "ConnectorOptionsParams", Result: "Empty"},
-	"connector.machines.online":      {Name: "connector.machines.online", From: "hub", Params: "ConnectorMachineParams", Result: "Empty"},
-	"connector.auth.get":             {Name: "connector.auth.get", From: "hub", Params: "ConnectorParams", Result: "ConnectorAuth"},
-	"connector.auth.set":             {Name: "connector.auth.set", From: "hub", Params: "ConnectorAuthSource", Result: "ConnectorAuth"},
-	"connector.secrets.load":         {Name: "connector.secrets.load", From: "program", Params: "ConnectorParams", Result: "ConnectorSecret"},
-	"connector.secrets.save":         {Name: "connector.secrets.save", From: "program", Params: "ConnectorSecretSaveParams", Result: "Empty"},
-	"connector.secrets.delete":       {Name: "connector.secrets.delete", From: "program", Params: "ConnectorParams", Result: "Empty"},
-	"connector.posts.put":            {Name: "connector.posts.put", From: "program", Params: "ConnectorPostsPutParams", Result: "ConnectorPostsPut"},
-	"connector.posts.comments":       {Name: "connector.posts.comments", From: "program", Params: "ConnectorPostsCommentsParams", Result: "Empty"},
-	"connector.posts.pending":        {Name: "connector.posts.pending", From: "program", Params: "ConnectorPostsPendingParams", Result: "ConnectorPostsPending"},
-	"connector.archive.chats":        {Name: "connector.archive.chats", From: "program", Params: "ConnectorArchiveChatsParams", Result: "ConnectorArchivedChats"},
-	"connector.credentials.gh_token": {Name: "connector.credentials.gh_token", From: "program", Params: "ConnectorGhTokenParams", Result: "ConnectorGhToken"},
-	"sent.record":                    {Name: "sent.record", From: "program", Params: "ConnectorSentRecordParams", Result: "Empty"},
-	"connector.changed":              {Name: "connector.changed", From: "program", Params: "ConnectorChangedEvent", Result: "", Event: true},
-	"channel.receive":                {Name: "channel.receive", From: "program", Params: "ChannelReceiveParams", Result: "Empty"},
-	"channel.status":                 {Name: "channel.status", From: "program", Params: "ChannelStatusParams", Result: "Empty"},
-	"channel.send":                   {Name: "channel.send", From: "hub", Params: "ChannelSendParams", Result: "ChannelSendResult"},
-	"channel.typing":                 {Name: "channel.typing", From: "hub", Params: "ChannelTypingParams", Result: "Empty"},
-	"channel.edit":                   {Name: "channel.edit", From: "hub", Params: "ChannelEditParams", Result: "Empty"},
-	"kb.list":                        {Name: "kb.list", From: "program", Params: "KBListParams", Result: "KBListResult"},
-	"kb.get":                         {Name: "kb.get", From: "program", Params: "KBGetParams", Result: "KBGetResult"},
-	"kb.day":                         {Name: "kb.day", From: "program", Params: "KBDayParams", Result: "KBDayResult"},
-	"kb.search":                      {Name: "kb.search", From: "program", Params: "KBSearchParams", Result: "KBSearchResult"},
-	"kb.update":                      {Name: "kb.update", From: "program", Params: "KBUpdateParams", Result: "KBUpdateResult"},
-	"kb.owner":                       {Name: "kb.owner", From: "program", Params: "KBOwnerParams", Result: "KBOwner"},
-	"kb.recent":                      {Name: "kb.recent", From: "program", Params: "KBRecentParams", Result: "KBRecentResult"},
-	"event.kb.changed":               {Name: "event.kb.changed", From: "hub", Params: "KBChangedEvent", Result: "", Event: true},
-	"event.kb.forgotten":             {Name: "event.kb.forgotten", From: "hub", Params: "KBForgottenEvent", Result: "", Event: true},
-	"event.todo.changed":             {Name: "event.todo.changed", From: "hub", Params: "TodoChangedEvent", Result: "", Event: true},
-	"event.todo.decision":            {Name: "event.todo.decision", From: "hub", Params: "TodoDecisionEvent", Result: "", Event: true},
-	"event.leader.changed":           {Name: "event.leader.changed", From: "hub", Params: "LeaderChangedEvent", Result: "", Event: true},
-	"event.leader.report":            {Name: "event.leader.report", From: "hub", Params: "LeaderReportEvent", Result: "", Event: true},
-	"model.complete":                 {Name: "model.complete", From: "program", Params: "ModelCompleteParams", Result: "ModelCompleteResult"},
-	"assistant.conversations":        {Name: "assistant.conversations", From: "program", Params: "AssistantConversationsParams", Result: "AssistantConversationsResult"},
-	"assistant.messages":             {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
-	"assistant.memory":               {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
-	"assistant.data_status":          {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
-	"storage.request":                {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},
-	"storage.get":                    {Name: "storage.get", From: "program", Params: "StorageKeyParams", Result: "StorageEntry"},
-	"storage.list":                   {Name: "storage.list", From: "program", Params: "StorageListParams", Result: "StorageListResult"},
-	"storage.transaction":            {Name: "storage.transaction", From: "program", Params: "StorageTransactionParams", Result: "StorageTransactionResult"},
-	"storage.queue.list":             {Name: "storage.queue.list", From: "program", Params: "StorageQueueListParams", Result: "StorageQueueListResult"},
-	"storage.queue.enqueue":          {Name: "storage.queue.enqueue", From: "program", Params: "StorageEnqueueParams", Result: "StorageJobResult"},
-	"storage.queue.claim":            {Name: "storage.queue.claim", From: "program", Params: "StorageClaimParams", Result: "StorageClaimResult"},
-	"storage.queue.ack":              {Name: "storage.queue.ack", From: "program", Params: "StorageSettleParams", Result: "StorageJobResult"},
-	"storage.queue.forget":           {Name: "storage.queue.forget", From: "program", Params: "StorageSettleParams", Result: "StorageDeleteResult"},
-	"storage.queue.retry":            {Name: "storage.queue.retry", From: "program", Params: "StorageRetryParams", Result: "StorageJobResult"},
-	"storage.blob.create":            {Name: "storage.blob.create", From: "program", Params: "StorageBlobCreateParams", Result: "StorageBlobCreateResult"},
-	"storage.blob.write":             {Name: "storage.blob.write", From: "program", Params: "StorageBlobWriteParams", Result: "StorageBlobWriteResult"},
-	"storage.blob.finish":            {Name: "storage.blob.finish", From: "program", Params: "StorageBlobMutateParams", Result: "StorageBlobFinishResult"},
-	"storage.blob.delete":            {Name: "storage.blob.delete", From: "program", Params: "StorageBlobMutateParams", Result: "StorageDeleteResult"},
-	"storage.blob.read":              {Name: "storage.blob.read", From: "program", Params: "StorageBlobReadParams", Result: "StorageBlobReadResult"},
-	"transcription.start":            {Name: "transcription.start", From: "program", Params: "TranscriptionStartParams", Result: "TranscriptionStartResult"},
-	"transcription.audio":            {Name: "transcription.audio", From: "program", Params: "TranscriptionAudioParams", Result: "Empty"},
-	"transcription.finish":           {Name: "transcription.finish", From: "program", Params: "TranscriptionJobParams", Result: "TranscriptionFinishResult"},
-	"transcription.cancel":           {Name: "transcription.cancel", From: "program", Params: "TranscriptionJobParams", Result: "Empty"},
-	"repo.parse":                     {Name: "repo.parse", From: "hub", Params: "RepoParseParams", Result: "RepoParseResult"},
-	"repo.check":                     {Name: "repo.check", From: "hub", Params: "RepoCheckParams", Result: "Empty"},
-	"repo.link":                      {Name: "repo.link", From: "hub", Params: "RepoLinkParams", Result: "RepoLinkResult"},
-	"repo.describe":                  {Name: "repo.describe", From: "hub", Params: "RepoDescribeParams", Result: "RepoDescribeResult"},
+	"connector.status":                {Name: "connector.status", From: "hub", Params: "ConnectorParams", Result: "ConnectorStatus"},
+	"connector.manifest":              {Name: "connector.manifest", From: "hub", Params: "ConnectorParams", Result: "ConnectorManifest"},
+	"connector.catalog.list":          {Name: "connector.catalog.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorCatalog"},
+	"connector.catalog.call":          {Name: "connector.catalog.call", From: "hub", Params: "ConnectorCatalogCallParams", Result: "ConnectorCallResult"},
+	"connector.tools.list":            {Name: "connector.tools.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorTools"},
+	"connector.tools.call":            {Name: "connector.tools.call", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorCallResult"},
+	"connector.actions.list":          {Name: "connector.actions.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorTools"},
+	"connector.actions.describe":      {Name: "connector.actions.describe", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorDescribeResult"},
+	"connector.actions.do":            {Name: "connector.actions.do", From: "hub", Params: "ConnectorDoParams", Result: "ConnectorCallResult"},
+	"connector.recall":                {Name: "connector.recall", From: "hub", Params: "ConnectorRecallParams", Result: "ConnectorRecallResult"},
+	"connector.recall.can":            {Name: "connector.recall.can", From: "hub", Params: "ConnectorRecallCanParams", Result: "ConnectorRecallCanResult"},
+	"connector.recall.do":             {Name: "connector.recall.do", From: "hub", Params: "ConnectorRecallDoParams", Result: "ConnectorRecallDoResult"},
+	"connector.thread.page":           {Name: "connector.thread.page", From: "hub", Params: "ConnectorThreadParams", Result: "ConnectorThreadPage"},
+	"connector.thread.media":          {Name: "connector.thread.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
+	"connector.inbox.collect":         {Name: "connector.inbox.collect", From: "hub", Params: "ConnectorParams", Result: "ConnectorCollectResult"},
+	"connector.inbox.reply":           {Name: "connector.inbox.reply", From: "hub", Params: "ConnectorInboxReply", Result: "Empty"},
+	"connector.inbox.settle":          {Name: "connector.inbox.settle", From: "hub", Params: "ConnectorSettleParams", Result: "ConnectorSettled"},
+	"connector.archive.changes":       {Name: "connector.archive.changes", From: "hub", Params: "ConnectorChangesParams", Result: "ConnectorChangesResult"},
+	"connector.archive.media":         {Name: "connector.archive.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
+	"connector.history.chats":         {Name: "connector.history.chats", From: "hub", Params: "ConnectorParams", Result: "ConnectorHistoryChats"},
+	"connector.archive.history":       {Name: "connector.archive.history", From: "hub", Params: "ConnectorHistoryParams", Result: "ConnectorHistoryPage"},
+	"connector.history.anchors":       {Name: "connector.history.anchors", From: "hub", Params: "ConnectorHistoryAnchorsParams", Result: "ConnectorHistoryAnchors"},
+	"connector.items.list":            {Name: "connector.items.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorItems"},
+	"connector.items.doc_title":       {Name: "connector.items.doc_title", From: "hub", Params: "ConnectorDocTitleParams", Result: "ConnectorDocTitle"},
+	"connector.snapshot.get":          {Name: "connector.snapshot.get", From: "hub", Params: "ConnectorSnapshotParams", Result: "ConnectorSnapshot"},
+	"connector.group.tool":            {Name: "connector.group.tool", From: "hub", Params: "ConnectorGroupToolParams", Result: ""},
+	"connector.group.append":          {Name: "connector.group.append", From: "hub", Params: "ConnectorGroupAppendParams", Result: "ConnectorInboxThing"},
+	"connector.group.fallback":        {Name: "connector.group.fallback", From: "hub", Params: "ConnectorGroupFallbackParams", Result: "ConnectorGroupFallback"},
+	"connector.login.step":            {Name: "connector.login.step", From: "hub", Params: "ConnectorLoginParams", Result: "ConnectorPrompt"},
+	"connector.logout":                {Name: "connector.logout", From: "hub", Params: "ConnectorParams", Result: "Empty"},
+	"connector.options.get":           {Name: "connector.options.get", From: "hub", Params: "ConnectorParams", Result: "ConnectorOptions"},
+	"connector.options.set":           {Name: "connector.options.set", From: "hub", Params: "ConnectorOptionsParams", Result: "Empty"},
+	"connector.machines.online":       {Name: "connector.machines.online", From: "hub", Params: "ConnectorMachineParams", Result: "Empty"},
+	"connector.auth.get":              {Name: "connector.auth.get", From: "hub", Params: "ConnectorParams", Result: "ConnectorAuth"},
+	"connector.auth.set":              {Name: "connector.auth.set", From: "hub", Params: "ConnectorAuthSource", Result: "ConnectorAuth"},
+	"connector.secrets.load":          {Name: "connector.secrets.load", From: "program", Params: "ConnectorParams", Result: "ConnectorSecret"},
+	"connector.secrets.save":          {Name: "connector.secrets.save", From: "program", Params: "ConnectorSecretSaveParams", Result: "Empty"},
+	"connector.secrets.delete":        {Name: "connector.secrets.delete", From: "program", Params: "ConnectorParams", Result: "Empty"},
+	"connector.posts.put":             {Name: "connector.posts.put", From: "program", Params: "ConnectorPostsPutParams", Result: "ConnectorPostsPut"},
+	"connector.posts.comments":        {Name: "connector.posts.comments", From: "program", Params: "ConnectorPostsCommentsParams", Result: "Empty"},
+	"connector.posts.pending":         {Name: "connector.posts.pending", From: "program", Params: "ConnectorPostsPendingParams", Result: "ConnectorPostsPending"},
+	"connector.archive.chats":         {Name: "connector.archive.chats", From: "program", Params: "ConnectorArchiveChatsParams", Result: "ConnectorArchivedChats"},
+	"connector.credentials.gh_token":  {Name: "connector.credentials.gh_token", From: "program", Params: "ConnectorGhTokenParams", Result: "ConnectorGhToken"},
+	"sent.record":                     {Name: "sent.record", From: "program", Params: "ConnectorSentRecordParams", Result: "Empty"},
+	"connector.changed":               {Name: "connector.changed", From: "program", Params: "ConnectorChangedEvent", Result: "", Event: true},
+	"channel.receive":                 {Name: "channel.receive", From: "program", Params: "ChannelReceiveParams", Result: "Empty"},
+	"channel.status":                  {Name: "channel.status", From: "program", Params: "ChannelStatusParams", Result: "Empty"},
+	"channel.send":                    {Name: "channel.send", From: "hub", Params: "ChannelSendParams", Result: "ChannelSendResult"},
+	"channel.typing":                  {Name: "channel.typing", From: "hub", Params: "ChannelTypingParams", Result: "Empty"},
+	"channel.edit":                    {Name: "channel.edit", From: "hub", Params: "ChannelEditParams", Result: "Empty"},
+	"kb.list":                         {Name: "kb.list", From: "program", Params: "KBListParams", Result: "KBListResult"},
+	"kb.get":                          {Name: "kb.get", From: "program", Params: "KBGetParams", Result: "KBGetResult"},
+	"kb.day":                          {Name: "kb.day", From: "program", Params: "KBDayParams", Result: "KBDayResult"},
+	"kb.search":                       {Name: "kb.search", From: "program", Params: "KBSearchParams", Result: "KBSearchResult"},
+	"kb.update":                       {Name: "kb.update", From: "program", Params: "KBUpdateParams", Result: "KBUpdateResult"},
+	"kb.owner":                        {Name: "kb.owner", From: "program", Params: "KBOwnerParams", Result: "KBOwner"},
+	"kb.recent":                       {Name: "kb.recent", From: "program", Params: "KBRecentParams", Result: "KBRecentResult"},
+	"kb.put_recording":                {Name: "kb.put_recording", From: "program", Params: "KBPutRecordingParams", Result: "KBPutRecordingResult"},
+	"event.kb.changed":                {Name: "event.kb.changed", From: "hub", Params: "KBChangedEvent", Result: "", Event: true},
+	"event.kb.forgotten":              {Name: "event.kb.forgotten", From: "hub", Params: "KBForgottenEvent", Result: "", Event: true},
+	"event.todo.changed":              {Name: "event.todo.changed", From: "hub", Params: "TodoChangedEvent", Result: "", Event: true},
+	"event.todo.decision":             {Name: "event.todo.decision", From: "hub", Params: "TodoDecisionEvent", Result: "", Event: true},
+	"event.leader.changed":            {Name: "event.leader.changed", From: "hub", Params: "LeaderChangedEvent", Result: "", Event: true},
+	"event.leader.report":             {Name: "event.leader.report", From: "hub", Params: "LeaderReportEvent", Result: "", Event: true},
+	"model.complete":                  {Name: "model.complete", From: "program", Params: "ModelCompleteParams", Result: "ModelCompleteResult"},
+	"assistant.conversations":         {Name: "assistant.conversations", From: "program", Params: "AssistantConversationsParams", Result: "AssistantConversationsResult"},
+	"assistant.messages":              {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
+	"assistant.memory":                {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
+	"assistant.entries.list":          {Name: "assistant.entries.list", From: "program", Params: "AssistantEntriesParams", Result: "AssistantEntriesResult"},
+	"assistant.event":                 {Name: "assistant.event", From: "program", Params: "AssistantEventParams", Result: "AssistantEventResult"},
+	"event.assistant.entries.changed": {Name: "event.assistant.entries.changed", From: "hub", Params: "AssistantEntriesChangedEvent", Result: "", Event: true},
+	"assistant.data_status":           {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
+	"machines.pair_link":              {Name: "machines.pair_link", From: "program", Params: "MachinesPairLinkParams", Result: "MachinesPairLinkResult"},
+	"machines.status":                 {Name: "machines.status", From: "program", Params: "MachinesStatusParams", Result: "MachinesStatusResult"},
+	"browser.machines":                {Name: "browser.machines", From: "program", Params: "BrowserMachinesParams", Result: "BrowserMachinesResult"},
+	"browser.run":                     {Name: "browser.run", From: "program", Params: "BrowserRunParams", Result: "BrowserRunResult"},
+	"storage.request":                 {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},
+	"storage.get":                     {Name: "storage.get", From: "program", Params: "StorageKeyParams", Result: "StorageEntry"},
+	"storage.list":                    {Name: "storage.list", From: "program", Params: "StorageListParams", Result: "StorageListResult"},
+	"storage.transaction":             {Name: "storage.transaction", From: "program", Params: "StorageTransactionParams", Result: "StorageTransactionResult"},
+	"storage.queue.list":              {Name: "storage.queue.list", From: "program", Params: "StorageQueueListParams", Result: "StorageQueueListResult"},
+	"storage.queue.enqueue":           {Name: "storage.queue.enqueue", From: "program", Params: "StorageEnqueueParams", Result: "StorageJobResult"},
+	"storage.queue.claim":             {Name: "storage.queue.claim", From: "program", Params: "StorageClaimParams", Result: "StorageClaimResult"},
+	"storage.queue.renew":             {Name: "storage.queue.renew", From: "program", Params: "StorageRenewParams", Result: "StorageJobResult"},
+	"storage.queue.ack":               {Name: "storage.queue.ack", From: "program", Params: "StorageSettleParams", Result: "StorageJobResult"},
+	"storage.queue.forget":            {Name: "storage.queue.forget", From: "program", Params: "StorageSettleParams", Result: "StorageDeleteResult"},
+	"storage.queue.retry":             {Name: "storage.queue.retry", From: "program", Params: "StorageRetryParams", Result: "StorageJobResult"},
+	"storage.blob.create":             {Name: "storage.blob.create", From: "program", Params: "StorageBlobCreateParams", Result: "StorageBlobCreateResult"},
+	"storage.blob.write":              {Name: "storage.blob.write", From: "program", Params: "StorageBlobWriteParams", Result: "StorageBlobWriteResult"},
+	"storage.blob.finish":             {Name: "storage.blob.finish", From: "program", Params: "StorageBlobMutateParams", Result: "StorageBlobFinishResult"},
+	"storage.blob.delete":             {Name: "storage.blob.delete", From: "program", Params: "StorageBlobMutateParams", Result: "StorageDeleteResult"},
+	"storage.blob.read":               {Name: "storage.blob.read", From: "program", Params: "StorageBlobReadParams", Result: "StorageBlobReadResult"},
+	"transcription.start":             {Name: "transcription.start", From: "program", Params: "TranscriptionStartParams", Result: "TranscriptionStartResult"},
+	"transcription.audio":             {Name: "transcription.audio", From: "program", Params: "TranscriptionAudioParams", Result: "Empty"},
+	"transcription.finish":            {Name: "transcription.finish", From: "program", Params: "TranscriptionJobParams", Result: "TranscriptionFinishResult"},
+	"transcription.cancel":            {Name: "transcription.cancel", From: "program", Params: "TranscriptionJobParams", Result: "Empty"},
+	"repo.parse":                      {Name: "repo.parse", From: "hub", Params: "RepoParseParams", Result: "RepoParseResult"},
+	"repo.check":                      {Name: "repo.check", From: "hub", Params: "RepoCheckParams", Result: "Empty"},
+	"repo.link":                       {Name: "repo.link", From: "hub", Params: "RepoLinkParams", Result: "RepoLinkResult"},
+	"repo.describe":                   {Name: "repo.describe", From: "hub", Params: "RepoDescribeParams", Result: "RepoDescribeResult"},
+	"repo.pr_status":                  {Name: "repo.pr_status", From: "hub", Params: "RepoPRStatusParams", Result: "RepoPRStatusResult"},
+	"memory.entries":                  {Name: "memory.entries", From: "hub", Params: "MemoryEntriesParams", Result: "MemoryEntriesResult"},
+	"offload.inventory":               {Name: "offload.inventory", From: "hub", Params: "OffloadInventoryParams", Result: "OffloadInventory"},
+	"offload.run":                     {Name: "offload.run", From: "hub", Params: "OffloadRunParams", Result: "OffloadRunResult"},
+	"offload.job":                     {Name: "offload.job", From: "hub", Params: "OffloadJobParams", Result: "OffloadJob"},
+	"offload.cancel":                  {Name: "offload.cancel", From: "hub", Params: "OffloadJobParams", Result: "Empty"},
 }

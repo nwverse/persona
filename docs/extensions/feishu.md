@@ -14,6 +14,8 @@ Verification: `LarkUnreadTests` covers scope/cursor isolation, late replies, man
 
 For a visibility check, add `MOCK_LARK_UNREAD_PAGE_DELAY=0.5` to the long generic fixture. Switch to Assistant after cursor 60 starts: the in-flight page may finish, but cursor 120 must not start until Messages is visible again. Scans use live mounted/tab/scene state and pause while a chat is open.
 
+**Android Messages (#511)**: Settings › Connectors › Lark has the same off-by-default **Show messages on home** choice, stored on this device under `integrations.lark.enabled`. While on and native Lark chats are available, Messages is an optional place in the shared Assistant sidebar; a real pairing's initial null repository is loading and preserves restored routes until DI publishes it, while demo mode has no repository and hides both the switch and destination. Assistant and Agents remain the only primary destinations. It pages the default account's direct and group chats through the existing `scope=chats` transport and opens the existing native chat with Back to Messages. Rows show avatar, name, time, preview, unread / marked-unread and mute state. Loading, empty and failed first reads are distinct; retained rows survive refresh / tail failures and pagination stops on a repeated cursor. Disabling restores the retained Assistant path even behind Agents without switching tabs. There is no chat-body prefetch. This Android slice intentionally has no account chips, pinned shelf, All / Unread filter, deep search or conversation-list disk cache. Tests are `LarkMessagesRepositoryTest`, `LarkMessagesViewModelTest`, `LarkHomePreferenceTest`, `LarkMessagesNavigationTest`, and the native JVM `LarkMessagesShotsTest`, `LarkHomeShotsTest` and `LarkMessagesShellShotsTest`; details are in `docs/android/android.md` "Optional Lark Messages on home (#511)".
+
 Three optional hub integrations: Lark gateway (third-party user-authenticated web client through private extension), official `lark-cli` (`docs/plans/plan-lark-cli.md`), and a private Lark Agent extension. This document covers gateway; its deployment / variables / commands in extension instructions.
 
 ## What stays
@@ -36,6 +38,30 @@ Three optional hub integrations: Lark gateway (third-party user-authenticated we
 - **Assistant calls gateway itself** (2026-10-30), gateway skill from extension since #1571, no repo copy. Commands directly call agent API for reads / writes; node gate confirms externally visible writes on phone. `docs/assistant/assistant.md` “Lark: skill supplied by the Lark extension”. Quick reference below supplements local tests; gateway skill references more complete and authoritative.
 - Chats / messages / read / send / reactions / card buttons use dedicated hub routes (`docs/protocol/protocol.md` Lark APIs).
 - **Without gateway, official `lark-cli`** (`docs/plans/plan-lark-cli.md`,#273): assistant integration and the `larkcli` connector are available, with `lark.cli` in the manager's manager.json, assistant PATH, and the same write gate (`docs/assistant/assistant.md` “Lark: `lark-cli`”). Watched document comments enter the Inbox as `kind: "doc"` (#2691); chat Inbox / knowledge / `/agent` / app Lark pages are added progressively in the L4 branch and later plan steps.
+
+## Reading message images in a conversation
+
+When the running Lark extension provides both the Messaging source and the read tool
+`lark_messages`, the assistant also has `lark_image`. Pass a message ID as
+`message` to inspect that message. If the extension's text listing only shows
+`[Image]`, pass the Inbox item's `chat_id`, or a topic's root ID as `thread`.
+A page reads up to ten messages, newest shown first, with their IDs.
+Use its `before` cursor for older messages or pass a listed ID to narrow the read.
+
+Each call attempts at most three top-level image parts, newest message first.
+The manager uses GET for the message and its source-relative media, including
+`messages/<id>/media/<key>`. It sends the selected account on every media read.
+On a multi-account source, omitting `account` looks up the default with
+`GET accounts` and pins both reads to it. If the default lookup fails, retry
+with an explicit account. A missing or oversized image leaves the message text
+available. Each image is limited to 1 MiB and 2000 pixels a side, with at most
+8 million pixels combined. Supported formats are JPEG, PNG and WebP. Recalled
+or private messages and external media addresses are skipped.
+
+The extension must serve Messaging message reads with image parts and relative
+media references. To support a direct lookup from every `lark_messages` row,
+its renderer must include the source message ID. The page form of `lark_image`
+works from the conversation ID alone. The CLI connector uses separate IDs.
 
 ## Gateway and hub on separate computers
 

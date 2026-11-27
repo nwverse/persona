@@ -39,6 +39,7 @@ import persona.android.platform.PlatformPairing
 import persona.android.platform.PlatformRoot
 import persona.android.ui.AppServices
 import persona.android.ui.AppearanceOverride
+import persona.feature.assistant.conversationOpeningSource
 import persona.core.contracts.LarkFeatures
 import persona.core.contracts.api.HubConnection
 import persona.core.designsystem.GlassThrottle
@@ -49,6 +50,7 @@ import persona.core.designsystem.LocalPersonaDesign
 import persona.core.designsystem.dense
 import persona.core.designsystem.keepAmbientLightMoving
 import persona.core.navigation.*
+import persona.feature.settings.ProviderImportRequests
 import persona.feature.settings.SettingsServices
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -67,6 +69,8 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var settingsServices: SettingsServices
     /** The hubs' channels, for the "From WeChat" marks on messages and conversations (docs/extensions/channels.md "Source markers"). */
     @Inject lateinit var channelDirectory: persona.core.contracts.api.ChannelDirectory
+    /** The installed extensions' icons, for the marks of conversations an extension opened (#10358). */
+    @Inject lateinit var openerIcons: persona.feature.assistant.OpenerIcons
     @Inject lateinit var connection: HubConnection
     @Inject lateinit var shell: AppServices
     @Inject lateinit var platformPairing: PlatformPairing
@@ -124,7 +128,11 @@ class MainActivity : ComponentActivity() {
             val features by remember(app) {
                 app.hub.flatMapLatest { it?.connection?.serverFeatures ?: flowOf(emptySet()) }.distinctUntilChanged()
             }.collectAsStateWithLifecycle(emptySet())
+            val imageLimits by remember(app) {
+                app.hub.flatMapLatest { it?.connection?.imageLimits ?: flowOf(persona.core.contracts.ImageLimitsTable.Standard) }.distinctUntilChanged()
+            }.collectAsStateWithLifecycle(persona.core.contracts.ImageLimitsTable.Standard)
             val lark = remember(features) { LarkFeatures.of(features) }
+            val mail = remember(features) { persona.android.ui.mailAccessOf(features) }
             // The selected hub's managers: pages group by them when there are several (docs/assistant/managers.md step 4).
             val managers by managerRoster.roster.collectAsStateWithLifecycle()
             val managerGroup by managerRoster.group.collectAsStateWithLifecycle()
@@ -132,8 +140,12 @@ class MainActivity : ComponentActivity() {
                 LocalDeveloperTools provides launchAdapter?.tools,
                 persona.core.designsystem.LocalLanguageHost provides this@MainActivity,
                 persona.core.designsystem.LocalChannels provides channels,
+                persona.feature.assistant.LocalOpenerIcons provides openerIcons,
+                persona.feature.chat.LocalOpeningMessageSource provides ::conversationOpeningSource,
                 persona.core.designsystem.LocalLarkFeatures provides lark,
+                persona.core.designsystem.LocalMailAccess provides mail,
                 persona.core.designsystem.LocalHubFeatures provides features,
+                persona.core.designsystem.LocalHubImageLimits provides imageLimits,
                 persona.core.designsystem.LocalManagerRoster provides managers,
                 persona.core.designsystem.LocalManagerGroup provides managerGroup,
                 persona.feature.inbox.LocalTranslator provides translator,
@@ -268,6 +280,12 @@ class MainActivity : ComponentActivity() {
             pendingPairLink.value = uri.toString()
             return
         }
+        if (uri.scheme == "persona" && uri.host == "provider" && uri.path == "/import") {
+            // A gateway's or a shared provider import link (#5428): the providers page reads it through the hub.
+            ProviderImportRequests.pending.value = uri.toString()
+            openNavigation.value = focusing { router -> router.parse(RouteInput.Internal(SettingsPageRoute(SettingsPage.Providers))) }
+            return
+        }
         val link = uri.toString()
         val notification = notificationRoute(uri)
         val terminal = terminalLink(link)
@@ -293,6 +311,8 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_SESSION = "session"
         const val EXTRA_CAPSULE_URL = "persona.capsule.url"
         val pendingCapsuleUrl = mutableStateOf<String?>(null)
+        /** A message link waiting for its hub group and replacement session; survives the shell's identity change. */
+        val pendingHubLink = mutableStateOf<String?>(null)
         /** A pairing link the activity was opened with, for the pairing screen to confirm. */
         val pendingPairLink = mutableStateOf<String?>(null)
     }

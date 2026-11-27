@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -200,8 +201,8 @@ func mayAsk(sess *proto.Session, triage bool) bool {
 // replyWaits: sess is an agent the user looked at that still waits on their answer, and one to remind of: not muted,
 // not one whose news goes elsewhere (an inbox draft, a Feishu thread, a quiet task's conversation), not too old.
 func (s *Service) replyWaits(machine string, sess proto.Session, now time.Time) bool {
-	if !sess.AwaitsReply || sess.State != proto.StateIdle || now.Sub(sess.UpdatedAt) > replyOldest ||
-		spaceOf(sess) == SpaceHealth { // its questions are not for the lock screen (doneAlert)
+	if sess.HiddenByDirectory() || !sess.AwaitsReply || sess.State != proto.StateIdle || now.Sub(sess.UpdatedAt) > replyOldest ||
+		spaceOf(sess) != "" { // a space's questions are not for the lock screen (doneAlert); no ctx here, so any space
 		return false
 	}
 	return !s.mutedAs(machine, sess.SessionID, sess.SpaceName) && !s.isInboxAgent(sess.SessionID) &&
@@ -217,15 +218,36 @@ func (s *Service) replySince(machine string, sess proto.Session) time.Time {
 	return sess.UpdatedAt
 }
 
-// remindReply pushes that sess still waits on the user's answer, to the devices that take Needs You pushes.
+// remindReply routes an agent waiting for a reply to its supervisor or the main conversation instead of pushing
+// to the owner; only when neither a supervisor nor a main conversation is configured does it fall back to a push.
 func (s *Service) remindReply(machine string, sess proto.Session) error {
+	if s.directoryHiddenSession(machine, sess.SessionID) {
+		return nil
+	}
 	head, body := replyAlert(s.lang(context.Background()), sess)
 	s.logf("reply reminder %s/%s: %s", machine, short(sess.SessionID), body)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: Notification{ID: "ntf_" + randomHex(8),
+	if to, _ := s.nonOwnerCardTarget(ctx, machine, sess.SessionID); to != "" {
+		text := fmt.Sprintf("Agent waiting for a reply (machine=%s session_id=%s): %s\n%s", machine, sess.SessionID, head, body)
+		if _, kept := s.keepRelayLater(to, relayMsg{
+			From:      cardAgentReply,
+			FromTitle: head,
+			Tool:      cardAgentReply,
+			Text:      text,
+			At:        time.Now().UTC(),
+		}); kept {
+			s.publish(ctx)
+		}
+		return nil
+	}
+	n := Notification{ID: "ntf_" + randomHex(8),
 		Kind: assistantwire.NotifyReply, DeviceID: machine, SessionID: sess.SessionID, Subtitle: s.pushPlace(machine, sess),
-		Title: head, Body: body, RelatedKey: replyRelatedKey(sess)}})
+		Title: head, Body: body, RelatedKey: replyRelatedKey(sess)}
+	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	if err == nil {
+		s.noteCardResult(ctx, cardAgentReply, n, res)
+	}
 	return err
 }
 

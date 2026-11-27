@@ -17,12 +17,8 @@ import (
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
-// ItemSource lists documents, meetings and calendar events (Feishu through the Lark extension).
-type ItemSource interface {
-	Items(ctx context.Context) ([]kbwire.Item, error)
-	// DocTitle looks up a document's title by its link ("" when it cannot).
-	DocTitle(ctx context.Context, url string) string
-}
+// ItemSource is defined in the contract package kbwire; the old name stays.
+type ItemSource = kbwire.ItemSource
 
 // CollectItems stores new meetings and events and fills in titles of documents seen in chats. With a selection
 // (Engine.Selection), a document is stored only when it selects it (Selection.DocSelected): one it does not select is
@@ -41,6 +37,7 @@ func (e *Engine) CollectItems(ctx context.Context, src ItemSource, sources ...st
 	}
 	now := time.Now().UTC()
 	sel, ret := e.selection(), e.Retention()
+	var aligned itemTokens // built once, on the first item with a canonical key that has no stored copy under its ID
 	for _, w := range items {
 		it := ItemFromWire(w)
 		it.Source = source
@@ -48,6 +45,32 @@ func (e *Engine) CollectItems(ctx context.Context, src ItemSource, sources ...st
 			continue
 		}
 		old, ok := e.Store.Item(it.Kind, it.ID)
+		if it.CanonicalKey != "" {
+			// The same content from several sources (the Lark user sync's bindings, the Lark gateway): one item, kept
+			// under the ID and owner it was first stored with (items_canonical.go).
+			if !ok {
+				old, ok = aligned.find(e.Store, &it)
+			}
+			if ok {
+				merged, err := e.mergeCanonical(old, &it, source)
+				if err != nil {
+					return err
+				}
+				aligned.add(merged) // the names it gained find it for the items after it
+				continue
+			}
+			it.Seen = now
+			if it.Kind == KindDoc && sel != nil {
+				if days, ok := sel.DocDays(DocFacts{Source: source, ID: it.ID, Signals: it.Signals}); ok && docExpired(&it, now, days) {
+					continue
+				}
+			}
+			if err := e.Store.PutItem(&it); err != nil {
+				return err
+			}
+			aligned.add(&it)
+			continue
+		}
 		if ok {
 			// An ID alone cannot identify an owner: legacy or colliding items stay
 			// with their original source unless a stored chat proves ownership.
@@ -65,7 +88,13 @@ func (e *Engine) CollectItems(ctx context.Context, src ItemSource, sources ...st
 				}
 				continue
 			}
+			if it.Revision < old.Revision {
+				// An older revision arrived late: what is stored stays (a source that sends no revisions sends 0 for
+				// every item, so this never holds for it).
+				continue
+			}
 			carryOver(&it, old)
+			keepCanonical(&it, old)
 		} else {
 			it.Seen = now
 			if it.Kind == KindDoc && sel != nil {
@@ -160,7 +189,8 @@ func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 		batch := todo[:min(tagItemsBatch, len(todo))]
 		todo = todo[len(batch):]
 		byID := map[string]*Item{}
-		in := prompts.KBItemsInput{Projects: e.knownProjects(), Tags: e.TopTags(40)}
+		owner := e.knowledgeOwner()
+		in := prompts.KBItemsInput{Language: owner.Language, Projects: e.knownProjects(), Tags: e.TopTags(40)}
 		for _, it := range batch {
 			key := it.Kind + "/" + it.ID
 			byID[key] = it
@@ -176,7 +206,7 @@ func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 		}
 		var out itemTags
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBItemsInput(in), 6000, &out)
+		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(owner), prompts.RenderKBItemsInput(in), 6000, &out)
 		cancel()
 		if err != nil {
 			if deferred(ctx, err) {
@@ -494,10 +524,10 @@ func (e *Engine) List(kind, tag string) []Entry {
 	}
 	switch kind {
 	case KindProject:
+		catalog := e.projectSourceLookup()
 		for _, p := range e.Store.Projects() {
 			if has(p.Tags) && p.Live() {
-				out = append(out, Entry{Kind: kind, ID: p.Slug, Name: p.Name, OneLine: p.OneLine, Importance: p.Importance,
-					Relevance: p.Relevance, Tags: p.Tags, Updated: p.Updated, Extra: p.Kind + " · " + p.Status})
+				out = append(out, e.projectEntry(p, catalog))
 			}
 		}
 	case KindChat:
@@ -523,7 +553,7 @@ func (e *Engine) List(kind, tag string) []Entry {
 	case KindRecording:
 		for _, r := range e.Store.Recordings() {
 			if has(r.Tags) {
-				out = append(out, recordingEntry(r))
+				out = append(out, e.recordingEntryOf(r))
 			}
 		}
 	case KindTopic:
@@ -553,7 +583,7 @@ func recordingEntry(r *Recording) Entry {
 
 // Prompt is a short Markdown digest of the most important projects and chats, for the assistant's live snapshot.
 func (e *Engine) Prompt(projects, chats int) string {
-	var d prompts.KBDigest
+	d := prompts.KBDigest{Language: e.knowledgeOwner().Language}
 	// What has ended stays out (#9427): a done project, one whose chats have all ended at their source though it is not
 	// finished yet, and a chat that ended there (a pull request merged or closed).
 	for _, p := range e.List(KindProject, "") {
@@ -567,6 +597,9 @@ func (e *Engine) Prompt(projects, chats int) string {
 			if ended, _ := e.projectEnded(pr); ended {
 				continue
 			}
+		}
+		if p.ProjectMode == referenceOnly || p.Freshness != nil && p.Freshness.Fields["one_line"].NeedsReview {
+			p.OneLine = ""
 		}
 		d.Projects = append(d.Projects, digestEntry(p))
 	}

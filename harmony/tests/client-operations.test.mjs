@@ -5,9 +5,15 @@ import { readFileSync, existsSync } from 'node:fs';
 
 registerHooks({
   resolve(specifier, context, next) {
+    if (context.parentURL?.endsWith('/ClientModel.ets') && specifier === '../core/PhoneInterfaceStyle')
+      return {url:new URL('../core/PhoneInterfaceStyle.ts',context.parentURL).href,shortCircuit:true};
+    if ((context.parentURL?.endsWith('/Compatibility.ets') || context.parentURL?.endsWith('/ClientModel.ets')) && specifier === '../core/ChatForwardWire')
+      return {url:new URL('../core/ChatForwardWire.ts',context.parentURL).href,shortCircuit:true};
+    if (context.parentURL?.endsWith('/ClientModel.ets') && specifier === '../core/Markdown')
+      return {url:new URL('../core/Markdown.ts',context.parentURL).href,shortCircuit:true};
     if (specifier === '@kit.ArkTS') return {url:'client-boundary:'+specifier,shortCircuit:true};
     if (context.parentURL?.endsWith('/ClientModel.ets')) {
-      if (['./Wire', './AssistantView', './DemoRepository', './NavigationContext', './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility', './InteractionDecision', '../core/ClientLocale', '../core/ClientLocale', '../core/Domain', '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent', '../core/TranscriptCache'].includes(specifier)) {
+      if (['../core/BackgroundActivity', '../core/ChatSendFeedback', '../core/DictationLanguage', './Wire', './AgentAttention', './AssistantView', './DemoRepository', './NavigationContext', './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility', './InteractionDecision', '../core/ClientLocale', '../core/Domain', '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent', '../core/TranscriptCache', '../core/XiaoYiActions'].includes(specifier)) {
         const base = new URL(specifier, context.parentURL);
         return {url: base.href + (existsSync(new URL(base.href + '.ts')) ? '.ts' : '.ets'), shortCircuit: true};
       }
@@ -22,14 +28,14 @@ registerHooks({
       if (specifier==='../core/StorageOwnership') return {url:new URL(specifier+'.ts',context.parentURL).href,shortCircuit:true};
       return {url:'client-boundary:'+specifier,shortCircuit:true};
     }
-    if (context.parentURL?.endsWith('/InboxWorkspace.ets') || context.parentURL?.endsWith('/TodoWorkspace.ets') ||
+    if (context.parentURL?.endsWith('/InboxWorkspace.ets') || context.parentURL?.endsWith('/TodoWorkspace.ets') || context.parentURL?.endsWith('/TodoHubView.ets') || context.parentURL?.endsWith('/TodoPhoneSections.ets') || context.parentURL?.endsWith('/PhoneTodoDetailEditor.ets') ||
       context.parentURL?.endsWith('/MessageImage.ets') || context.parentURL?.endsWith('/RemoteDocument.ets')) {
       if (specifier === '@kit.ArkTS' || specifier === '../platform/HubTransport') return {url:'client-boundary:'+specifier,shortCircuit:true};
       if (specifier.startsWith('.')) return {url:new URL(specifier.endsWith('.ets') || specifier.endsWith('.ts') ? specifier : specifier + '.ets',context.parentURL).href,shortCircuit:true};
     }
     if((context.parentURL?.endsWith('/NavigationContext.ets')||context.parentURL?.endsWith('/ChatDraftStore.ets')||context.parentURL?.endsWith('/Compatibility.ets'))&&specifier==='./Wire')return {url:new URL('./Wire.ets',context.parentURL).href,shortCircuit:true};
     if(context.parentURL?.endsWith('/QuestionWorkspace.ets') && specifier==='./Wire')return {url:new URL('./Wire.ets',context.parentURL).href,shortCircuit:true};
-    if(context.parentURL?.endsWith('/InteractionDecision.ets')&&specifier.startsWith('.'))return {url:new URL(specifier+'.ets',context.parentURL).href,shortCircuit:true};
+    if(context.parentURL?.endsWith('/AgentAttention.ets') || context.parentURL?.endsWith('/InteractionDecision.ets')&&specifier.startsWith('.'))return {url:new URL(specifier+'.ets',context.parentURL).href,shortCircuit:true};
     return next(specifier, context);
   },
   load(url, context, next) {
@@ -40,6 +46,7 @@ registerHooks({
       export class HubRepository {} export class TranscriptModel {} export class SessionWorkspace {}
       export class SshTunnel { initialize(){} stop(){} async bind(client){this.client=client;} async acquire(){if(globalThis.clientSshAcquire)return globalThis.clientSshAcquire(this.client);return undefined;} async forget(){} }
       export class KnowledgeRecording { static async forgetProfile(){} }
+      export const dictationPreference = {choice:"auto",last:"",load(){},remember(){}};
       export const deviceLook = {async forgetHub(){}};
       export class Pairing {static async reachable(primary,...args){return globalThis.clientPairingAddress ? globalThis.clientPairingAddress(primary,...args) : primary;}} export class PairingTarget {} export class MutationRecord {} export class MutationStore { static forgetHub() {} }
       export class ChatAttachments { static allowHub() {} static async forgetHub() {} static suppressStoredSnapshot(...args) {globalThis.clientAttachmentSuppressed?.push(args);} static async commitStoredSnapshot(...args) {globalThis.clientAttachmentCommits?.push(args);if(globalThis.clientAttachmentCommitGate)await globalThis.clientAttachmentCommitGate();} }
@@ -52,6 +59,7 @@ registerHooks({
       export const withSourceContext = text => text;
       export const messageDisplay = text => text;
       export const nativeNotifications = {async clear(){},features(){return ['elicitation'];}};
+      export const nativeLiveView = {async initialize(){},async receiveFleetEvent(){},async syncFromModel(){},async stopNow(){},setForeground(){}};
     `};
     if (url.endsWith('.ets')) return {format:'module', shortCircuit:true, source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};
     return next(url, context);
@@ -61,7 +69,7 @@ const {isHubStateKey}=await import('../entry/src/main/ets/core/StorageOwnership.
 const contextReference=JSON.stringify({kind:'todo',id:'source',title:'Source'});
 globalThis.clientTestUUID=0;
 const { ClientModel } = await import('../entry/src/main/ets/models/ClientModel.ets');
-const { HubProfile, ResourceRow, Decision } = await import('../entry/src/main/ets/models/Wire.ets');
+const { HubProfile, ResourceRow, Decision, ChatMessage } = await import('../entry/src/main/ets/models/Wire.ets');
 const { HttpFailure } = await import('client-boundary:../platform/HubTransport');
 const { InboxWorkspace } = await import('../entry/src/main/ets/models/InboxWorkspace.ets');
 const { TodoWorkspace } = await import('../entry/src/main/ets/models/TodoWorkspace.ets');
@@ -80,8 +88,909 @@ function fixture() {
   model.loadChat=async()=>{};
   return {model,writes};
 }
+test('an accepted hub hello selects picture limits by the destination session agent', () => {
+  const model = new ClientModel();
+  model.profile.hubId = 'hub-a';
+  model.refresh = async () => {};
+  const hello = (limits, hub = 'hub-a') => model.event(JSON.stringify({type: 'hello', hub_id: hub, image_limits: limits}));
+  const values = row => {
+    const limits = model.imageLimits(row);
+    return [limits.requestBytes, limits.imageBytes, limits.maxSide, limits.perMessage];
+  };
+  const standard = [33554432, 3750000, 1600, 20];
+  const row = ResourceRow.from({id: 'one', machine_id: 'machine', agent: 'codex'}, 'session');
+  assert.deepEqual(values(row), standard);
+  hello({request_bytes: 7340032, image_bytes: 100000, max_side: 1024, per_message: 7,
+    agents: {codex: {per_message: 2, max_side: 600}, claude: {per_message: 4}, pi: 'invalid'}});
+  assert.deepEqual(values(row), [standard[0], standard[1], 600, 2]);
+  assert.deepEqual(values(), [standard[0], standard[1], standard[2], 4]);
+  model.sessions = [ResourceRow.from({id: 'one', machine_id: 'machine', agent: 'pi', launcher: 'codex'}, 'session')];
+  assert.deepEqual(values(row), [7340032, 100000, 1024, 7]);
+  // An assistant conversation names its agent under `launcher`, not `agent`.
+  const conversation = ResourceRow.from({id: 'conv', machine_id: 'machine', launcher: 'codex'}, 'conversation');
+  assert.deepEqual(values(conversation), [standard[0], standard[1], 600, 2]);
+  hello({per_message: 13}, 'another-hub');
+  assert.deepEqual(values(row), [7340032, 100000, 1024, 7]);
+  hello({request_bytes: 'wrong', image_bytes: -1, max_side: 0, per_message: 1e30});
+  assert.deepEqual(values(row), standard);
+  hello(undefined);
+  assert.deepEqual(values(row), standard);
+});
+
+test('whole and partial quotes retain their source and other draft references across the chat wire',async()=>{
+  const {model}=fixture();model.features=['persona_contracts_v1'];
+  const message=new ChatMessage('visible-answer','assistant','Use **the cache** and `max-age`.');
+  message.itemId='answer-source';message.ownerTarget=model.target();model.messages=[message];model.draft='Existing words';
+  const original={kind:'todo',id:'task',title:'Existing task'};model.sourceContext=JSON.stringify(original);
+  let writes=0;model.persistDraft=async()=>{writes++;};
+  assert.equal(await model.quoteMessageContext(message,'Claude','the cache and max-age'),true);
+  const refs=JSON.parse(model.sourceContext).contexts;
+  assert.deepEqual(refs[0],original);assert.deepEqual(refs[1],{kind:'quote',title:'Claude',url:'',msg:'answer-source',text:'the cache and max-age',part:'selection'});
+  assert.deepEqual(model.draftMessageQuotes(),[refs[1]]);assert.equal(model.otherContextTitle(),'Existing task');
+  assert.equal(model.draft,'Existing words');assert.equal(writes,1);
+  assert.ok(model.prepareMessageText().includes('<persona-context kind="quote" title="Claude" url="" msg="answer-source" part="selection">\nthe cache and max-age\n</persona-context>'));
+  for(const sample of ['the cache and max-age','other words'])await model.quoteMessageContext(message,'Claude',sample);
+  assert.equal(writes,1);
+  await model.quoteMessageContext(message,'Claude');assert.equal(writes,2);assert.equal(model.draftMessageQuotes().length,2);
+  await model.quoteMessageContext(message,'Claude','max-age');assert.equal(writes,3);assert.equal(model.draftMessageQuotes().length,3);
+  model.removeMessageQuote(refs[1]);assert.equal(model.draftMessageQuotes().length,2);assert.equal(model.otherContextTitle(),'Existing task');
+  const after=writes;model.messages=[];await model.quoteMessageContext(message,'Claude','cache');assert.equal(writes,after);
+  model.messages=[message];message.ownerTarget='another chat';await model.quoteMessageContext(message,'Claude','cache');assert.equal(writes,after);
+});
+
+
+test('only an identity-matched hello on the current live scope and connection generation supplies a feature version',()=>{
+ const {model}=fixture();
+ model.profile.hubId='verified-id';
+ model.repository.transport={hello(){}};
+ model.repository.close=()=>{};model.reconcileWrites=async()=>{};model.refresh=async()=>{};model.flushNotification=async()=>{};
+ const send=fields=>model.event(JSON.stringify({type:'hello',hub_id:'verified-id',server_version:'0.9.1',features:['client_ops'],...fields}));
+ send({});assert.equal(model.verifiedServerVersion('client_ops'),'0.9.1');assert.equal(model.verifiedServerVersion('missing'),'');
+ model.generation++;assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({});model.profile.manager='work';assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({});model.profile.hubId='another';assert.equal(model.verifiedServerVersion('client_ops'),'');
+ model.profile.hubId='verified-id';send({hub_id:'foreign'});assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({hub_id:''});assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({server_version:''});assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({features:[]});assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({});model.connected=false;assert.equal(model.verifiedServerVersion('client_ops'),'');
+});
 function decision(model,id='request-one') { const value=new Decision(); value.id=id; value.kind='permission'; value.raw=JSON.stringify({id}); model.decision=value; return value; }
 function deferred() { let resolve,reject; const promise=new Promise((yes,no)=>{resolve=yes;reject=no;}); return {promise,resolve,reject}; }
+
+test('send feedback belongs to the current input and distinguishes acceptance, transcript echo and actual reply', async () => {
+  const {model} = fixture(), received = deferred(), response = deferred();
+  model.sourceContext = ''; model.draft = 'same request text';
+  model.repository.send = async (_row, _text, uuid) => { received.resolve(uuid); await response.promise; return {ok:true}; };
+  const turn = model.send();
+  assert.equal(model.sendFeedbackPhase(), 'sending');
+  const id = await received.promise, target = model.target(), original = model.selected;
+  const post = (seq,role,kind,text,id) => ({id:'item-'+seq,seq,role,kind,text,client_msg_id:id});
+  const rows = [post(40,'user','text','same request text','another-device'),post(41,'assistant','text','older answer')];
+  model.publishTranscript(rows,false);
+  assert.equal(model.sendFeedbackPhase(), 'sending');
+  rows.push(post(42,'user','text','same request text',id));
+  model.publishTranscript(rows,false);
+  assert.equal(model.sendFeedbackPhase(), 'sending', 'a transcript echo alone cannot accept this request');
+  model.selected = new ResourceRow('other','Other','session');
+  response.resolve(); assert.equal(await turn,true); assert.equal(model.sendFeedbackPhase(),'');
+  model.selected = original; assert.equal(model.target(),target); assert.equal(model.sendFeedbackPhase(),'processing');
+  rows.push(post(43,'assistant','thinking','thinking'),post(44,'assistant','tool_use','tool'));
+  model.publishTranscript(rows,false); assert.equal(model.sendFeedbackPhase(),'processing');
+  rows.push(post(45,'assistant','text','answer'));
+  model.publishTranscript(rows,false); assert.equal(model.sendFeedbackPhase(),'');
+  model.publishTranscript(rows,false); await model.restoreLocalDelivery(); assert.equal(model.sendFeedbackPhase(),'');
+});
+
+test('rejected, held and stopped sends keep their native recovery paths and release only the matching activity', async () => {
+  const {model} = fixture(); model.sourceContext = '';
+  model.repository.send = async () => { throw new Error('offline'); };
+  assert.equal(await model.send(), false); assert.equal(model.sendFeedbackPhase(),'');
+  const rejected = model.messages.find(m=>m.localOperation); assert.ok(rejected);
+  assert.equal(model.draft,'exact draft ');
+  const {model:heldModel} = heldFixture();
+  heldModel.draft='for offline machine';
+  heldModel.repository.send=async (_row,text,id)=>({delivered:'later',undelivered:{id,text,state:'waiting',ts:'2026-01-01T00:00:00Z'}});
+  assert.equal(await heldModel.send(),true); assert.equal(heldModel.sendFeedbackPhase(),'');
+  const {model:live} = fixture(); live.sourceContext='';
+  await live.send(); assert.equal(live.sendFeedbackPhase(),'processing');
+  live.selected.state='working';
+  const stop=deferred(), entered=deferred();
+  live.repository.stop=async()=>{entered.resolve();await stop.promise;};
+  const stopping=live.stop();await entered.promise;
+  live.draft='newer request'; await live.send(); stop.resolve(); await stopping;
+  assert.equal(live.sendFeedbackPhase(),'processing','the prior stop cannot finish a newer local attempt');
+  await live.stop(); assert.equal(live.sendFeedbackPhase(),'');
+});
+
+test('cold chat restores only an accepted outbox operation for its owner without resending', async () => {
+  const {model} = fixture(); model.sourceContext='';
+  await model.send();
+  const cold=fixture().model; cold.local=model.local;
+  let writes=0; cold.repository.send=async()=>{writes++;};
+  cold.profile.manager='other-manager';
+  await cold.restoreLocalDelivery(); assert.equal(cold.sendFeedbackPhase(),'');
+  cold.profile.manager='personal'; await cold.restoreLocalDelivery();
+  assert.equal(cold.sendFeedbackPhase(),'processing'); assert.equal(writes,0);
+  cold.selected.state='working'; await cold.stop();
+  const reopened=fixture().model; reopened.local=model.local; await reopened.restoreLocalDelivery();
+  assert.equal(reopened.sendFeedbackPhase(),'');
+  const {ChatDraftStore,ChatOutboxEntry}=await import('../entry/src/main/ets/models/ChatDraftStore.ets');
+  const legacy=new ChatOutboxEntry();legacy.id='old-done';legacy.target=reopened.target();legacy.at=Date.now();legacy.state='done';
+  await new ChatDraftStore(reopened.local).stage(reopened.scope(),legacy);
+  await reopened.restoreLocalDelivery();assert.equal(reopened.sendFeedbackPhase(),'');
+});
+
+test('the accepted window starts on the receipt and fresh terminal snapshots alone can retire it', async () => {
+  const {ChatSendFeedback}=await import('../entry/src/main/ets/core/ChatSendFeedback.ts');
+  const activity=()=>new ChatSendFeedback('local','machine','session',10,1000,'idle','old failure','yesterday');
+  const first=activity();assert.equal(first.visible(1000000),'sending');
+  first.observeSession('offline','','');assert.equal(first.visible(1000000),'sending');
+  first.accept(1000000);first.accept(1001000);assert.equal(first.visible(1059999),'processing');assert.equal(first.visible(1060000),'');
+  const fresh=activity();fresh.accept(1200);fresh.observeSession('idle','old failure','yesterday');assert.equal(fresh.visible(1300),'processing');
+  fresh.observeSession('working','','');fresh.observeSession('idle','','');assert.equal(fresh.visible(1400),'processing');
+  fresh.observeItems([{id:'own',role:'user',kind:'text',seq:11,client_msg_id:'LOCAL'}]);
+  fresh.observeSession('working','','');fresh.observeSession('idle','','');assert.equal(fresh.visible(1500),'');
+  fresh.accept(1600);assert.equal(fresh.visible(1700),'');
+  const failed=activity();failed.accept(1200);failed.observeSession('idle','old failure','today');assert.equal(failed.visible(1500),'');
+  const blocked=activity();blocked.accept(1200);blocked.observeSession('blocked','','');assert.equal(blocked.visible(1500),'');
+});
+
+test('the Beautiful work header starts only after the accepted send has its own visible transcript echo', async () => {
+  const {model}=fixture(),entered=deferred(),reply=deferred();model.sourceContext='';
+  model.repository.send=async (_row,_text,id)=>{entered.resolve(id);await reply.promise;return {ok:true};};
+  const turn=model.send(),id=await entered.promise;assert.equal(model.sendFeedbackWorkHeader(),false);
+  reply.resolve();await turn;assert.equal(model.sendFeedbackPhase(),'processing');assert.equal(model.sendFeedbackWorkHeader(),false);
+  const echo={id:'same-text',seq:4,role:'user',kind:'text',text:model.draft,client_msg_id:'some-other-send'};
+  model.publishTranscript([echo],false);assert.equal(model.sendFeedbackWorkHeader(),false);
+  model.publishTranscript([{...echo,client_msg_id:id}],false);assert.equal(model.sendFeedbackWorkHeader(),true);
+  model.publishTranscript([{...echo,client_msg_id:id},{id:'answer',seq:5,role:'assistant',kind:'text',text:'done'}],false);
+  assert.equal(model.sendFeedbackWorkHeader(),false);
+});
+
+test('a follow-up during Agent approvals sends once to the active session and leaves every request unanswered', async () => {
+  const { model, writes } = fixture();
+  delete model.canSend;
+  model.canCompose = () => true;
+  model.sourceContext = '';
+  model.selected.raw = JSON.stringify({ status: 'blocked' });
+  const request = id => ({ id, kind: 'permission', machine_id: model.selected.machine, session_id: model.selected.session });
+  const raw = [request('approve-build'), request('approve-format')];
+  model.repository.resolve = () => { throw new Error('A note must never resolve a permission'); };
+  model.decisionRefreshSequence = 1;
+  model.replacePendingDecisions(raw, model.selected, model.target(), model.connectionGeneration(), model.scope(), 1);
+  assert.equal(model.agentQueuesMessages(), true);
+  assert.equal(model.decisionBlocksMessage(), false);
+  model.draft = 'Please keep both originals';
+  assert.equal(await model.send(), true);
+  assert.deepEqual(writes.map(([row, text]) => [row.machine, row.session, text]), [['machine-one', 'chat-one', 'Please keep both originals']]);
+  assert.deepEqual(model.pendingDecisions.map(r => [r.id, r.status]), [['approve-build', 'open'], ['approve-format', 'open']]);
+  model.draft = 'A later draft';
+  model.selected = new ResourceRow('other', 'Other', 'session');
+  assert.equal(model.decisionBlocksMessage(), true);
+  assert.equal(await model.send(), false);
+  assert.equal(writes.length, 1);
+});
+
+test('the global Agent badge keeps the newest owned snapshot across out-of-order reads and assistant switches', async () => {
+  const {model} = fixture();
+  const old = deferred(), replaced = deferred();
+  const card = id => ({machine_id: 'test-mac', interaction: {id, kind: 'question'}});
+  const muted = () => false;
+  model.repository.decisions = () => old.promise;
+  const oldRead = model.readInteractionSnapshot();
+  model.repository.decisions = async () => [card('current-a'), card('current-b')];
+  await model.readInteractionSnapshot();
+  old.resolve([card('late')]);
+  await oldRead;
+  assert.equal(model.phoneAgentBadge(muted), 2);
+
+  model.repository.decisions = () => replaced.promise;
+  const replacedRead = model.readInteractionSnapshot();
+  model.profile.manager = 'new-assistant';
+  replaced.resolve([card('previous-owner')]);
+  await replacedRead;
+  assert.equal(model.phoneAgentBadge(muted), 0);
+  model.repository.decisions = async () => [card('my-request')];
+  await model.readInteractionSnapshot();
+  assert.equal(model.phoneAgentBadge(muted), 1);
+  model.connected = false;
+  assert.equal(model.phoneAgentBadge(muted), 0);
+});
+
+test('directory traffic reaches observers without redispatch to phone tools', () => {
+  const {model}=fixture();
+  const observed=[],commands=[];
+  const off=model.observeEvents((raw,type)=>observed.push([type,raw]));
+  model.setDeviceEvents(raw=>commands.push(raw));
+  const directory=JSON.stringify({type:'catalog_preview',sessions:[{session_id:'sample'}]});
+  const tool=JSON.stringify({type:'tool_call',call_id:'one',name:'phone_device_info',args:{}});
+  model.event(directory);
+  model.event(tool);
+  off();
+  model.event(directory);
+  assert.deepEqual(observed,[['catalog_preview',directory],['tool_call',tool]]);
+  assert.deepEqual(commands,[tool]);
+});
+
+test('the phone drawer reads current non-quiet open to-dos before opening the list and coalesces refreshes', async () => {
+  const {model} = fixture();
+  const reads = [], repo = {todos() { const result = deferred(); reads.push(result); return result.promise; }};
+  const row = (id, extra={}) => ResourceRow.from({id,manager:'personal',...extra},'todo');
+  const refresh = () => model.refreshPhoneList('todo', repo, model.generation, model.scope(), false);
+  const first = refresh(), concurrent = refresh();
+  assert.equal(reads.length, 1);
+  reads[0].resolve([row('open'),row('quiet',{quiet:true}),row('closed',{done_at:'2026-11-01'}),row('other',{manager:'other'})]);
+  await Promise.all([first,concurrent]);
+  assert.equal(model.phoneTodoBadge(), 1);
+  await refresh();
+  assert.equal(reads.length, 1);
+  model.todoRead.change++;
+  const delayed = refresh();
+  model.todoRead.change++;
+  const latest = refresh();
+  reads[2].resolve([row('open'),row('another')]);
+  await latest;
+  reads[1].resolve([]);
+  await delayed;
+  assert.equal(model.phoneTodoBadge(), 2);
+  model.profile.manager = 'other';
+  assert.equal(model.phoneTodoBadge(), 0);
+});
+
+function heldFixture() {
+  const {model} = fixture();
+  delete model.canSend;
+  model.features = ['agent_message_hold'];
+  model.selected.manager = 'personal';
+  model.selected.machine = 'my laptop';
+  model.selected.session = model.selected.id = 'chat/one';
+  model.sessions = [model.selected];
+  model.decisionReadyTarget = model.target();
+  model.machines = [ResourceRow.from({id:'my laptop',name:'Desk',online:false}, 'machine')];
+  const held = (id, state = 'waiting', error = 'Will send when Desk is back.', extra = {}) =>
+    ({id, state, error, text:'Original words', computer:'Desk', at:'2026-11-01T12:00:00Z', ...extra});
+  const update = (entries, extra = {}) => {
+    model.selected.raw = JSON.stringify({undelivered:entries, ...extra});
+    model.publishMessages();
+  };
+  return {model, held, update};
+}
+
+function heldDeleteView(model, translate = key => key) {
+  const source = readFileSync(new URL('../entry/src/main/ets/components/Conversation.ets',import.meta.url),'utf8');
+  assert.match(source,/onClick\(\(\) => this\.confirmHeldDelete\(message\)\)\.id\('chat\.held\.cancel\.'/);
+  const method = source.match(/^  private confirmHeldDelete\(message: ChatMessage\): void \{[\s\S]*?^  \}/m);
+  assert.ok(method);
+  const View = new Function('tr','return '+stripTypeScriptTypes('class HeldView { '+method[0]+' }'))(translate);
+  const view = new View();
+  view.model=model; view.sendCurrent=()=>true; view.revisionVisibilityRevision=1;
+  view.getUIContext=()=>({showAlertDialog:dialog=>{view.dialog=dialog;}});
+  return view;
+}
+
+test('held Agent native delete confirmation keeps the held message on dismissal and deletes only once on confirmation',async()=>{
+  const {model,held,update}=heldFixture(), view=heldDeleteView(model), calls=[];
+  const entry=held('op/1','failed','Might not have arrived. Retry checks the chat first.'); update([entry]);
+  model.repository.call=async(path,method,_body,_id,admit)=>{ assert.ok(admit()); calls.push([path,method]); return {ok:true}; };
+  model.refresh=async()=>{};
+  const message=model.messages[0]; view.confirmHeldDelete(message);
+  assert.equal(view.dialog.title,'agent_delete_held_title'); assert.equal(view.dialog.message,message.text);
+  assert.equal(view.dialog.primaryButton.value,'cancel'); assert.equal(view.dialog.secondaryButton.value,'delete');
+  assert.ok(view.dialog.primaryButton.defaultFocus);
+  assert.equal(calls.length,0); await view.dialog.primaryButton.action();
+  assert.deepEqual(model.selected.data().undelivered,[entry]); assert.equal(calls.length,0);
+  view.confirmHeldDelete(model.messages[0]); await Promise.all([view.dialog.secondaryButton.action(),view.dialog.secondaryButton.action()]);
+  assert.deepEqual(calls,[['/api/v1/sessions/my%20laptop/chat%2Fone/held/op%2F1','DELETE']]);
+  assert.equal(model.messages.length,0);
+});
+
+test('held Agent native delete confirmation rechecks manager state, ownership and visible route',async()=>{
+  for(const change of ['row','removed','reconnect','hidden-and-shown','route','read-only','model']) {
+    const {model,held,update}=heldFixture(), view=heldDeleteView(model), entry=held('x');
+    update([entry]); let deletes=0;
+    model.repository.call=async()=>{deletes++;return {ok:true};};
+    model.refresh=async()=>{};
+    view.confirmHeldDelete(model.messages[0]);
+    if(change==='row')update([held('x','failed','Not sent.')]);
+    if(change==='removed')update([]);
+    if(change==='reconnect')model.generation++;
+    if(change==='hidden-and-shown')view.revisionVisibilityRevision++;
+    if(change==='route')view.sendCurrent=()=>false;
+    if(change==='read-only')update([entry],{read_only:true});
+    if(change==='model')view.model=heldFixture().model;
+    await view.dialog.secondaryButton.action(); assert.equal(deletes,0,change);
+  }
+});
+
+for (const [field, changed] of Object.entries({
+  text: 'Revised message', images: 2, computer: 'Other desk', at: '2026-11-01T12:00:00.000000002Z'
+})) {
+  test('held Agent open confirmation rejects a change only to ' + field, async () => {
+    const {model, held, update} = heldFixture(), view = heldDeleteView(model), writes = [];
+    const original = held('same', 'failed', 'Retry checks the chat first.', {images: 1, at: '2026-11-01T12:00:00.000000001Z'});
+    model.queueRefresh = () => {};
+    model.repository.call = async (_path, method) => { writes.push(method); return {ok: true}; };
+    update([original]);
+    const captured = model.messages[0];
+    view.confirmHeldDelete(captured);
+    update([{...original, [field]: changed}]);
+    await view.dialog.secondaryButton.action();
+    assert.deepEqual(writes, [], 'the old confirmation sent DELETE');
+    await model.actOnHeld(captured, true);
+    assert.deepEqual(writes, [], 'the old Retry sent POST');
+    view.confirmHeldDelete(model.messages[0]);
+    await view.dialog.secondaryButton.action();
+    assert.deepEqual(writes, ['DELETE']);
+  });
+}
+
+test('held Agent open confirmation describes image-only and mixed messages in the selected language', () => {
+  for (const [locale, photos] of [['en_US','Photos'], ['zh_CN','照片'], ['ja_JP','写真']]) {
+    const {model, held, update} = heldFixture();
+    const file = new URL('../entry/src/main/resources/' + locale + '/element/string.json', import.meta.url);
+    const strings = new Map(JSON.parse(readFileSync(file)).string.map(({name, value}) => [name, value]));
+    const view = heldDeleteView(model, key => strings.get(key));
+    for (const [text, expected] of [['', photos + ' · 2'], ['Keep these', 'Keep these\n' + photos + ' · 2']]) {
+      update([held('pictures', 'waiting', 'Will send later.', {text, images: 2})]);
+      view.confirmHeldDelete(model.messages[0]);
+      assert.equal(view.dialog.message, expected, locale);
+      assert.ok(view.dialog.primaryButton.defaultFocus);
+    }
+  }
+});
+
+test('held Agent accepted Retry survives content changes during the POST and on later reads', async () => {
+  const {model, held} = heldFixture(), entered = deferred(), receipt = deferred(), posts = [];
+  const original = held('same', 'failed', 'Retry checks the chat first.');
+  let current = original;
+  model.queueRefresh = () => {};
+  model.repository.machines = async () => model.machines;
+  model.repository.sessions = async () => [heldSession([current])];
+  model.repository.call = async (path, method) => {
+    if (method === 'POST') { posts.push(path); entered.resolve(); await receipt.promise; }
+    return {ok: true};
+  };
+  await model.refresh();
+  const retry = model.actOnHeld(model.messages[0], true);
+  await entered.promise;
+  current = {...original, text: 'Revised text'};
+  await model.refresh();
+  receipt.resolve(); await retry;
+  assert.equal(model.heldRetryPending(model.messages[0]), true);
+  current = {...current, images: 3, computer: 'Renamed desk', at: '2026-11-02T12:00:00Z'};
+  await model.refresh();
+  await model.actOnHeld(model.messages[0], true);
+  assert.equal(posts.length, 1);
+  assert.equal(model.canActOnHeld(model.messages[0], false), true);
+  current = {...current, error: 'Retry sends it anyway.'};
+  await model.refresh();
+  assert.equal(model.canActOnHeld(model.messages[0], true), true);
+});
+
+test('held Agent rows show the exact manager line once and give way to the same transcript operation', () => {
+  const {model, held, update} = heldFixture();
+  const first = held('wire/one', 'waiting', 'Will check the chat when Desk is back.', {images:2});
+  const second = held('two', 'failed', 'Not sent: Desk was away for 24 hours.');
+  const third = held('three', 'failed', 'May have arrived. Check the chat first.');
+  update([first, first, second, third, {...second,id:'persona',computer:''}]);
+  assert.deepEqual(model.messages.map(m => [m.role,m.text,m.held?.line,m.localImageCount]),
+    [first,second,third].map(h => ['user',h.text,h.error,h.images || 0]));
+  model.publishTranscript([{id:'landed',role:'user',kind:'text',text:'Original words',client_msg_id:'two'}], false);
+  assert.deepEqual(model.messages.map(m => m.held?.id || m.id), ['landed','wire/one','three']);
+  update([]);
+  assert.deepEqual(model.messages.map(m => m.id), ['landed']);
+});
+
+test('held Agent first receipt takes over the optimistic operation and retires its durable outbox copy', async () => {
+  const {model, held, update} = heldFixture();
+  let posted = 0;
+  model.repository.send = async (_row, _text, id) => { posted++; return {delivered:'later',undelivered:held(id)}; };
+  assert.equal(await model.send(), true);
+  assert.equal(posted, 1);
+  assert.deepEqual(model.messages.map(m => [m.text,m.held?.state,m.held?.line]), [['Original words','waiting','Will send when Desk is back.']]);
+  assert.equal(model.draft, '');
+  update([]);
+  await model.restoreLocalDelivery();
+  assert.deepEqual(model.messages, []);
+  assert.equal(posted, 1);
+});
+
+test('held Agent late first receipt rechecks a cancellation already made on the other device', async () => {
+  const {model, held} = heldFixture(), received = deferred(), mayReply = deferred();
+  model.repository.send = async (_row, _text, id) => {
+    received.resolve(); await mayReply.promise;
+    return {delivered:'later', undelivered:held(id)};
+  };
+  model.repository.sessions = async () => [ResourceRow.from({machine_id:'my laptop', session_id:'chat/one', manager:'personal'}, 'session')];
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async () => ({conversations:[]});
+  const send = model.send(); await received.promise;
+  await model.refresh(); // The latest list already omits the operation. The initial HTTP reply arrives later.
+  mayReply.resolve(); assert.ok(await send);
+  assert.equal(model.messages[0]?.held?.state,'waiting');
+  for (let i = 0; i < 100 && model.messages.length; i++) await new Promise(done => setTimeout(done, 10));
+  assert.deepEqual(model.messages, []);
+  await model.restoreLocalDelivery(); assert.deepEqual(model.messages, []);
+});
+
+test('held Agent input distinguishes the offline computer, a stopped Agent and view-only sources', () => {
+  const {model, update} = heldFixture();
+  assert.equal(model.canSend(), true);
+  assert.equal(model.agentInputNotice(), 'agent_computer_holds');
+  model.features = [];
+  assert.equal(model.canCompose(), false);
+  assert.equal(model.agentInputNotice(), 'agent_computer_offline');
+  model.connected = false;
+  assert.equal(model.agentInputNotice(), '');
+  assert.equal(model.canCompose(), true);
+  assert.equal(model.canSend(), false);
+  model.connected = true;
+  model.features = ['agent_message_hold'];
+  update([], {status:'interrupted', capabilities:{read:true,terminal:true}});
+  assert.equal(model.canSend(), false);
+  assert.equal(model.agentInputNotice(), 'agent_stopped');
+  update([], {source_kind:'history',capabilities:{read:true}});
+  assert.equal(model.canCompose(), false);
+  assert.equal(model.agentInputNotice(), 'read_only');
+  update([], {read_only:true});
+  assert.equal(model.canSend(), false);
+  model.selected.kind = 'conversation';
+  update([]);
+  assert.equal(model.agentInputNotice(), '');
+  assert.equal(model.canCompose(), true);
+});
+
+test('held Agent actions revalidate the current state, suppress double taps and use the owning session', async () => {
+  const {model,held,update} = heldFixture(), calls = [], gate = deferred();
+  update([held('op/1'), held('op/2','failed','Could not confirm delivery.'), held('signed','failed','Sender signed out.',{delete_only:true})]);
+  const [waiting, failed, signed] = model.messages;
+  model.unresolvedWrites = [{path:'/api/v1/sessions/my%20laptop/chat%2Fone/held/op%2F2/retry'}];
+  assert.equal(model.canActOnHeld(failed, true), false);
+  assert.equal(model.canActOnHeld(failed, false), false);
+  assert.equal(model.canActOnHeld(waiting, false), true);
+  model.unresolvedWrites = [];
+  model.repository.call = async (...args) => { calls.push(args); await gate.promise; return {ok:true}; };
+  model.refresh = async () => {};
+  await model.actOnHeld(waiting, true);
+  await model.actOnHeld(signed, true);
+  assert.equal(calls.length, 0);
+  const first = model.actOnHeld(failed, true);
+  await model.actOnHeld(failed, true);
+  assert.equal(calls.length, 1);
+  gate.resolve(); await first;
+  assert.deepEqual(calls.map(c => c.slice(0,2)), [['/api/v1/sessions/my%20laptop/chat%2Fone/held/op%2F2/retry','POST']]);
+  await model.actOnHeld(failed, true);
+  assert.equal(calls.length, 1);
+  await model.actOnHeld(signed, false);
+  assert.deepEqual(calls.at(-1).slice(0,2), ['/api/v1/sessions/my%20laptop/chat%2Fone/held/signed','DELETE']);
+  assert.ok(!model.messages.some(m => m.held?.id === 'signed'));
+  update([], {read_only:true});
+  await model.actOnHeld(waiting, false);
+  assert.equal(calls.length, 2);
+});
+
+test('held Agent changes made on another device reach both chats, including a push during an older snapshot', async () => {
+  const a = heldFixture(), b = heldFixture(), clients = [a.model,b.model];
+  const row = entries => ResourceRow.from({machine_id:'my laptop',session_id:'chat/one',manager:'personal',undelivered:entries}, 'session');
+  const first = a.held('cross','waiting','Waits behind the message above.');
+  const expired = a.held('cross','failed','Not sent. Desk was away for 24 hours.');
+  let records = [first];
+  const reads = new Map();
+  for (const model of clients) {
+    reads.set(model, []);
+    model.repository.sessions = async () => { const result = row(records); reads.get(model).push(result); return [result]; };
+    model.repository.machines = async () => model.machines;
+    model.repository.call = async () => ({conversations:[]});
+    await model.refresh();
+    assert.equal(model.messages[0]?.held?.line, first.error);
+  }
+  const stale = deferred(), entered = deferred(), readSessions = b.model.repository.sessions;
+  b.model.repository.sessions = async () => {
+    b.model.repository.sessions = readSessions;
+    const previous = row(records); entered.resolve(); await stale.promise; return [previous];
+  };
+  const oldRefresh = b.model.refresh(); await entered.promise;
+  records = [expired];
+  const push = () => clients.forEach(model => model.event(JSON.stringify({type:'session',session:records.length ? row(records).data() : row([]).data()})));
+  const eventually = async check => { for(let i=0;i<100 && !check();i++) await new Promise(done => setTimeout(done,10)); assert.ok(check()); };
+  push(); await eventually(() => a.model.messages[0]?.held?.line === expired.error);
+  stale.resolve(); await oldRefresh;
+  await eventually(() => b.model.messages[0]?.held?.line === expired.error);
+  records = []; push(); await eventually(() => clients.every(model => !model.messages.length));
+  assert.ok(clients.every(model => reads.get(model).length >= 3));
+});
+
+test('held Agent retries are explicit again after the manager checks the chat and still cannot confirm', async () => {
+  const {model, held, update} = heldFixture(), calls = [];
+  const uncertain = held('cross','failed','May have arrived. Check the chat first.');
+  const unconfirmed = held('cross','failed','Could not confirm it arrived. Retry to send it anyway, or delete it.');
+  update([uncertain]); model.refresh = async () => {};
+  model.repository.call = async (path, method, _body, _op, admission) => {
+    assert.ok(admission()); calls.push([path,method]);
+    if (calls.length === 1) update([unconfirmed]); // The authoritative push beats the earlier action reply.
+    return {ok:true};
+  };
+  const stale = model.messages[0];
+  await model.actOnHeld(stale, true);
+  assert.equal(model.messages[0].held.line, unconfirmed.error);
+  await model.actOnHeld(stale, true);
+  assert.equal(calls.length, 1);
+  await model.actOnHeld(model.messages[0], true);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(([path,method]) => path.endsWith('/held/cross/retry') && method === 'POST'));
+});
+
+test('held Agent check-only acknowledgment preserves the manager reason through an older list and a failed refresh', async () => {
+  const {model, held, update} = heldFixture(), posts = [], entered = deferred(), beforeAck = deferred();
+  const uncertain = held('cross','failed','Might not have arrived. Retry checks the chat first.');
+  const unconfirmed = held('cross','failed',"Couldn't confirm it arrived. Retry to send it anyway, or delete it.");
+  const row = value => ResourceRow.from({machine_id:'my laptop',session_id:'chat/one',manager:'personal',undelivered:[value]}, 'session');
+  update([uncertain]);
+  model.repository.call = async (path, method) => { if (method === 'POST') { posts.push(path); return {ok:true}; } return {}; };
+  model.repository.machines = async () => model.machines;
+  model.repository.sessions = async () => { entered.resolve(); await beforeAck.promise; return [row(uncertain)]; };
+  const oldRead = model.refresh(); await entered.promise;
+  const original = model.messages[0];
+  await model.actOnHeld(original, true);
+  beforeAck.resolve(); await oldRead;
+  let reads = 0;
+  model.repository.sessions = async () => { reads++; throw new Error('unreachable'); };
+  await model.refresh(); assert.ok(reads);
+  assert.deepEqual([model.messages[0].held.state,model.messages[0].held.line], ['failed',uncertain.error]);
+  assert.equal(model.selected.data().undelivered[0].error, uncertain.error);
+  assert.equal(model.heldRetryPending(model.messages[0]),true);
+  assert.equal(model.canActOnHeld(model.messages[0],true),false);
+  assert.equal(model.canActOnHeld(model.messages[0],false),true);
+  await model.actOnHeld(model.messages[0],true); assert.equal(posts.length,1);
+  model.repository.sessions = async () => [row(unconfirmed)];
+  await model.refresh();
+  assert.equal(model.messages[0].held.line,unconfirmed.error);
+  assert.equal(model.heldRetryPending(model.messages[0]),false);
+  assert.equal(model.canActOnHeld(original,true),false);
+  assert.equal(model.canActOnHeld(model.messages[0],true),true);
+  assert.equal(posts.length,1);
+  await model.actOnHeld(model.messages[0],true); assert.equal(posts.length,2);
+});
+
+function heldSession(entries, session = 'chat/one', manager = 'personal', extra = {}) {
+  return ResourceRow.from({machine_id:'my laptop', session_id:session, manager, undelivered:entries, ...extra}, 'session');
+}
+
+test('held Agent successful stale snapshots cannot rearm the same check-only Retry', async () => {
+  const {model, held} = heldFixture(), calls = [];
+  const uncertain = held('a','failed','Might not have arrived. Retry checks the chat first.');
+  const unconfirmed = {...uncertain, error:'Could not confirm it arrived. Retry to send anyway.'};
+  const other = {...uncertain, id:'b'};
+  let sessions = [heldSession([uncertain, other]), heldSession([uncertain], 'elsewhere')];
+  model.queueRefresh = () => {};
+  model.repository.sessions = async () => sessions;
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async (path, method) => { if (method === 'POST') calls.push(path); return {ok:true}; };
+  await model.refresh();
+  for (const message of model.messages) await model.actOnHeld(message, true);
+  const stale = model.messages[0];
+  // The GET succeeds with a cached row. Another session even has the same operation ID.
+  sessions = [heldSession([uncertain, {...other,error:'Retry can send this other message.'}]),
+    heldSession([unconfirmed],'elsewhere')];
+  await model.refresh();
+  assert.equal(model.heldRetryPending(model.messages[0]), true);
+  assert.equal(model.heldRetryPending(model.messages[1]), false);
+  assert.equal(model.canActOnHeld(model.messages[0], false), true);
+  await model.actOnHeld(stale, true);
+  await model.actOnHeld(model.messages[0], true);
+  assert.equal(calls.length, 2);
+  // A complete snapshot obtained for a different manager cannot consume this manager's receipt.
+  model.profile.manager = 'work';
+  sessions = [heldSession([unconfirmed],'chat/one','work')];
+  await model.refresh();
+  assert.equal(model.heldRetryPending(model.messages[0]), false);
+  model.profile.manager = 'personal';
+  sessions = [heldSession([uncertain])];
+  await model.refresh();
+  assert.equal(model.heldRetryPending(model.messages[0]), true);
+  sessions = [heldSession([unconfirmed])];
+  await model.refresh();
+  await model.actOnHeld(stale, true);
+  assert.equal(calls.length, 2);
+  await model.actOnHeld(model.messages[0], true);
+  assert.equal(calls.length, 3);
+  // The target session reports that this operation has left it.
+  sessions = [heldSession([])]; await model.refresh();
+  sessions = [heldSession([unconfirmed])]; await model.refresh();
+  assert.equal(model.canActOnHeld(model.messages[0], true), true);
+});
+
+for (const action of ['retry','delete']) test('held Agent ' + action + ' receipt survives a whole computer missing from the Hub inventory', async () => {
+  const {HubRepository} = await import('../entry/src/main/ets/models/HubRepository.ets');
+  const {model,held} = heldFixture(), retry = action === 'retry', writes = [];
+  const waiting = held('same','failed','Retry checks the chat first.');
+  const row = {machine_id:'my laptop',session_id:'chat/one',manager:'personal',undelivered:[waiting]};
+  const unrelated = {...row,machine_id:'other computer'};
+  let rows = [row,unrelated], machines = ['my laptop','other computer'];
+  const repo = new HubRepository({managerId:'personal',hubId:model.profile.id});
+  repo.transport.request = async (path,method) => {
+    if (method !== 'GET') { writes.push([method,path]); return JSON.stringify({ok:true}); }
+    if (path === '/api/v1/sessions') return JSON.stringify({sessions:rows});
+    if (path === '/api/v1/machines') return JSON.stringify({machines:machines.map(id=>({id,manager:'personal'}))});
+    assert.equal(path,'/api/v1/assistant'); return JSON.stringify({conversations:[]});
+  };
+  model.repository = repo; model.queueRefresh = () => {};
+  await model.refresh(); await model.actOnHeld(model.messages[0],retry);
+  assert.equal(writes.length,1);
+  // A successful GET describes another computer, which happens to reuse both session and operation IDs.
+  rows = [unrelated]; machines = ['other computer']; await model.refresh();
+  assert.equal(model.messages.length,0);
+  const reopened = heldFixture().model; reopened.local = model.local; reopened.connected = false;
+  await reopened.restoreSnapshot(reopened.connectionGeneration(),reopened.scope());
+  reopened.repository = repo; reopened.queueRefresh = () => {}; reopened.connected = true;
+  rows = [row,unrelated]; machines = ['my laptop','other computer']; await reopened.refresh();
+  if (retry) {
+    assert.equal(reopened.messages[0].held.line,waiting.error);
+    assert.equal(reopened.canActOnHeld(reopened.messages[0],false),true);
+    await reopened.actOnHeld(reopened.messages[0],true);
+    assert.equal(writes.length,1,'the old check-only prompt cannot issue a second POST');
+    rows = [{...row,undelivered:[{...waiting,error:'Could not confirm. Retry to send anyway.'}]}];
+    await reopened.refresh(); await reopened.actOnHeld(reopened.messages[0],true); assert.equal(writes.length,2);
+  } else {
+    assert.deepEqual(reopened.messages,[],'the stale target row cannot bring back the confirmed deletion');
+    assert.deepEqual(writes.map(([m])=>m),['DELETE']);
+  }
+  rows = [{...row,undelivered:[]}]; await reopened.refresh();
+  const known = JSON.parse(await reopened.local.get('snapshot:'+reopened.scope()));
+  assert.deepEqual(known.heldActions,[],'the target itself can acknowledge departure');
+});
+
+test('held Agent forgetting a pairing cleans only its pending receipts and snapshots', async () => {
+  const {model,held,update} = heldFixture();
+  const keeper = new HubProfile(model.profile.id+'-other'); keeper.manager = model.profile.manager;
+  const forgotten = model.profile; model.profiles = [forgotten,keeper]; model.queueRefresh = () => {};
+  model.repository.close = () => {}; model.repository.call = async () => ({ok:true});
+  const scopes = [];
+  for (const profile of [keeper,forgotten]) {
+    model.profile = profile; scopes.push(model.scope());
+    update([held('same','failed','Check first.')]); await model.actOnHeld(model.messages[0],true);
+  }
+  await model.forgetProfile(forgotten.id);
+  assert.equal(await model.local.get('snapshot:'+scopes[1]),'');
+  assert.ok(await model.local.get('snapshot:'+scopes[0]));
+  assert.deepEqual(model.heldReceipts.map(receipt=>receipt.scope),[scopes[0]]);
+  assert.deepEqual(Array.from(model.heldRevisions.keys()),[scopes[0]]);
+});
+
+test('held Agent confirmed receipt and deletion survive offline restart and an outstanding stale snapshot in their own scope', async () => {
+  const {model, held} = heldFixture(), stale = deferred(), readStarted = deferred();
+  const kept = held('keep'), deleted = held('remove'), incoming = [];
+  model.queueRefresh = () => {};
+  model.repository.sessions = async () => [heldSession([kept, deleted])];
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async () => ({ok:true});
+  model.repository.send = async (_row, _text, id) => { const receipt = held(id); incoming.push(receipt); return {delivered:'later',undelivered:receipt}; };
+  await model.refresh();
+  model.repository.sessions = async () => {
+    const previous = [heldSession([kept, deleted])];
+    readStarted.resolve(); await stale.promise; return previous;
+  };
+  const oldRead = model.refresh(); await readStarted.promise;
+  const original = model.messages.find(m => m.held?.id === deleted.id);
+  await model.actOnHeld(original, false);
+  assert.ok(await model.send()); assert.equal(incoming.length,1);
+  stale.resolve(); await oldRead;
+  const restored = async (hub, manager) => {
+    const other = heldFixture().model;
+    other.local = model.local; other.profile = new HubProfile(hub); other.profile.manager = manager;
+    other.selected = new ResourceRow('chat/one','Test','session'); other.selected.machine = 'my laptop';
+    other.selected.session = 'chat/one'; other.sessions = []; other.connected = false;
+    await other.restoreSnapshot(other.connectionGeneration(),other.scope());
+    await other.restoreLocalDelivery(); other.publishMessages();
+    return other.messages.map(m => [m.held?.id,m.held?.line]);
+  };
+  assert.deepEqual(await restored('synthetic-hub','personal'), [kept,incoming[0]].map(m=>[m.id,m.error]));
+  assert.deepEqual(await restored('synthetic-hub','other'), []);
+  assert.deepEqual(await restored('other-hub','personal'), []);
+});
+
+test('held Agent offline restart retains a check-only lock and a confirmed deletion through a cached Hub read', async () => {
+  const {model,held} = heldFixture(), uncertain = held('check','failed','Retry checks the chat first.'), removed = held('gone');
+  let list = [heldSession([uncertain,removed])], posts = 0;
+  const connect = client => {
+    client.queueRefresh = () => {};
+    client.repository.sessions = async () => list;
+    client.repository.machines = async () => client.machines;
+    client.repository.call = async (_path,method) => { if (method === 'POST') posts++; return {ok:true}; };
+  };
+  connect(model); await model.refresh();
+  await model.actOnHeld(model.messages[0],true);
+  await model.actOnHeld(model.messages[1],false);
+  const reopened = heldFixture().model; reopened.local = model.local; reopened.connected = false;
+  await reopened.restoreSnapshot(reopened.connectionGeneration(),reopened.scope()); reopened.publishMessages();
+  assert.deepEqual(reopened.messages.map(m=>m.held?.id),[uncertain.id]);
+  assert.equal(reopened.heldRetryPending(reopened.messages[0]),true);
+  connect(reopened); reopened.connected = true; await reopened.refresh();
+  assert.deepEqual(reopened.messages.map(m=>m.held?.id),[uncertain.id]);
+  await reopened.actOnHeld(reopened.messages[0],true); assert.equal(posts,1);
+  list = [heldSession([{...uncertain,error:'Could not confirm. Retry to send anyway.'}])];
+  await reopened.refresh();
+  assert.equal(reopened.heldRetryPending(reopened.messages[0]),false);
+  await reopened.actOnHeld(reopened.messages[0],true); assert.equal(posts,2);
+  assert.ok(!JSON.stringify(await reopened.local.get('snapshot:'+reopened.scope())).includes(removed.id));
+});
+
+test('held Agent replacement pairing rejects a late response from the previous pairing', async () => {
+  const {model,held} = heldFixture(), waiting = deferred(), entered = deferred();
+  model.queueRefresh = () => {};
+  model.repository.sessions = async () => [heldSession([])];
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async () => ({ok:true});
+  model.repository.send = async (_row,_text,id) => { entered.resolve(); await waiting.promise; return {delivered:'later',undelivered:held(id)}; };
+  await model.refresh();
+  const request = model.send(); await entered.promise;
+  model.retirePairing(model.profile.id); ++model.generation;
+  waiting.resolve(); await request;
+  const saved = JSON.parse(await model.local.get('snapshot:'+model.scope()));
+  assert.deepEqual(JSON.parse(saved.sessions[0].raw).undelivered,[]);
+});
+
+test('held Agent snapshots reject an incomplete sessions envelope without releasing the current row', async () => {
+  const {HubRepository} = await import('../entry/src/main/ets/models/HubRepository.ets');
+  const {model, held, update} = heldFixture();
+  const repo = new HubRepository({managerId:'personal',hubId:model.profile.id});
+  let envelope = {sessions:[{machine_id:'my laptop',session_id:'chat/one',manager:'personal',undelivered:[held('x','failed','Check first.')]}]};
+  repo.call = async (path) => path === '/api/v1/sessions' ? envelope : {ok:true};
+  repo.machines = async () => model.machines;
+  model.queueRefresh = () => {}; model.repository = repo;
+  update([]); await model.refresh(); await model.actOnHeld(model.messages[0],true);
+  const target = {machine_id:'my laptop',session_id:'chat/one',manager:'personal'};
+  for (const malformed of [{},{sessions:null},{sessions:{}},{sessions:[],has_more:true},
+    {sessions:[null]},{sessions:[{...target,undelivered:{}}]},{sessions:[{...target,undelivered:[{}]}]}]) {
+    envelope = malformed; await model.refresh();
+    assert.equal(model.messages[0]?.held?.id,'x'); assert.equal(model.heldRetryPending(model.messages[0]),true);
+  }
+  envelope = {sessions:[]}; await model.refresh(); assert.equal(model.messages.length,0);
+});
+
+test('held Agent confirmed state waits for a stale disk write and stays in the dispatching manager after navigation', async () => {
+  const {model, held} = heldFixture(), disk = deferred(), started = deferred(), reply = deferred(), posted = deferred();
+  const queued = held('delete'), keeper = held('keep');
+  model.queueRefresh = () => {};
+  model.repository.sessions = async () => [heldSession([queued,keeper])];
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async () => ({ok:true});
+  await model.refresh();
+  const scope = model.scope(), key = 'snapshot:' + scope, put = model.local.put.bind(model.local);
+  let delay = true;
+  model.local.put = async (k,v,...rest) => { if (k === key && delay) { delay = false; started.resolve(); await disk.promise; } await put(k,v,...rest); };
+  const writing = model.refresh(); await started.promise;
+  const removing = model.actOnHeld(model.messages[0],false);
+  let wire;
+  model.repository.send = async (_row,_text,id) => { wire = held(id); posted.resolve(); await reply.promise; return {delivered:'later',undelivered:wire}; };
+  const sending = model.send(); await posted.promise;
+  model.profile.manager = 'work'; model.generation++;
+  disk.resolve(); await writing; await removing;
+  reply.resolve(); assert.ok(await sending);
+  const cached = JSON.parse(await model.local.get(key));
+  assert.deepEqual(JSON.parse(cached.sessions[0].raw).undelivered.map(m=>m.id),[keeper.id,wire.id]);
+  assert.equal(await model.local.get('snapshot:'+model.scope()),'');
+});
+
+test('held Agent retired detail receipts survive the replacement workspace view reading the same scope', async () => {
+  const {model:owner,held} = heldFixture(), {model:detail,update} = heldFixture();
+  detail.directoryParent = owner; detail.local = owner.local;
+  const waiting = held('remove'), uncertain = held('check','failed','Retry checks first.');
+  const snapshot = () => [heldSession([waiting,uncertain])];
+  owner.queueRefresh = detail.queueRefresh = () => {};
+  owner.repository.sessions = async () => snapshot();
+  owner.repository.machines = async () => owner.machines;
+  owner.repository.call = async () => ({ok:true});
+  await owner.refresh(); update([waiting,uncertain]);
+  const sent = deferred(), reply = deferred(), started = deferred(), old = deferred(); let actions = 0;
+  detail.repository.call = async (_p,_m,_b,_i,admit) => {
+    assert.ok(admit()); if (++actions === 2) sent.resolve(); await reply.promise; return {ok:true};
+  };
+  const deleted = detail.actOnHeld(detail.messages[0],false), checked = detail.actOnHeld(detail.messages[1],true);
+  await sent.promise; detail.retired = true; detail.generation++;
+  owner.repository.sessions = async () => { started.resolve(); await old.promise; return snapshot(); };
+  const reading = owner.refresh(); await started.promise;
+  reply.resolve(); await Promise.all([deleted,checked]); old.resolve(); await reading;
+  const restored = heldFixture().model; restored.local = owner.local; restored.connected = false;
+  await restored.restoreSnapshot(restored.connectionGeneration(),restored.scope()); restored.publishMessages();
+  assert.deepEqual(restored.messages.map(m=>m.held?.id),[uncertain.id]);
+  assert.equal(restored.heldRetryPending(restored.messages[0]),true);
+  await owner.refresh();
+  assert.deepEqual(owner.messages.map(m=>m.held?.id),[uncertain.id]);
+  assert.equal(owner.canActOnHeld(owner.messages[0],true),false);
+});
+
+test('held Agent manager actions on an offline runtime placeholder are independent of composing a new message', async () => {
+  const {model, held} = heldFixture(), calls = [];
+  const waiting = held('queued'), failed = held('expired','failed','Not sent. Desk was away for 24 hours.');
+  const signedOut = {...failed,id:'delete-only',delete_only:true};
+  const archive = {source_kind:'runtime', agent:'dsh', state:'offline', status:'offline', capabilities:{read:true}};
+  const place = heldSession([waiting, failed, signedOut], 'chat/one', 'personal', archive);
+  model.selected = place; model.sessions = [place]; model.publishMessages();
+  model.queueRefresh = () => {};
+  model.repository.call = async (path, method, _body, _id, admit) => { assert.ok(admit()); calls.push([path,method]); return {ok:true}; };
+  const [queued, expired, signed] = model.messages, view = heldDeleteView(model);
+  assert.equal(model.canCompose(), false); assert.equal(model.canSend(), false);
+  assert.equal(model.offersHeldAction(queued, true), false);
+  assert.equal(model.offersHeldAction(signed, true), false);
+  assert.equal(model.canActOnHeld(expired, true), true);
+  assert.equal(model.canActOnHeld(queued, false), true);
+  assert.equal(model.canActOnHeld(signed, false), true);
+  await model.actOnHeld(expired, true);
+  view.confirmHeldDelete(queued); await view.dialog.primaryButton.action();
+  assert.equal(calls.length, 1); assert.ok(model.messages.some(m => m.held?.id === waiting.id));
+  view.confirmHeldDelete(queued); await view.dialog.secondaryButton.action();
+  assert.deepEqual(calls, [
+    ['/api/v1/sessions/my%20laptop/chat%2Fone/held/expired/retry','POST'],
+    ['/api/v1/sessions/my%20laptop/chat%2Fone/held/queued','DELETE'],
+  ]);
+  for (const override of [{read_only:true},{deleted:true},{source_kind:'identity_conflict'},{source_kind:'history'},
+    {capabilities:{read:false}}, {manager:'other'}]) {
+    const row = heldSession([failed], 'chat/one', 'personal', {...archive,...override});
+    model.sessions = [row]; model.selected = row; model.publishMessages();
+    assert.equal(model.offersHeldAction(model.messages[0], false), false, JSON.stringify(override));
+  }
+});
+
+test('held Agent cold manager placeholder allows cancel while its runtime identity is unavailable', async () => {
+  const {model, held} = heldFixture();
+  const row = heldSession([held('cold')], 'chat/one', 'personal', {status:'offline',state:'offline'});
+  model.sessions = [row]; model.selected = row; model.publishMessages();
+  model.queueRefresh = () => {};
+  let deletes = 0;
+  model.repository.call = async (_path, method, _body, _id, admit) => {
+    assert.equal(method,'DELETE'); assert.ok(admit()); deletes++; return {ok:true};
+  };
+  assert.equal(model.canCompose(), false);
+  assert.equal(model.canActOnHeld(model.messages[0], false), true);
+  const view = heldDeleteView(model); view.confirmHeldDelete(model.messages[0]); await view.dialog.secondaryButton.action();
+  assert.equal(deletes, 1); assert.equal(model.messages.length, 0);
+  assert.equal(model.canCompose(), false);
+});
+
+test('held Agent actions cannot cross a chat, manager, denied route or capability change', async () => {
+  for (const change of ['chat','manager','route','read-only','stopped','disconnected']) {
+    const {model,held,update} = heldFixture();
+    update([held('x','failed','Not delivered.')]); const message = model.messages[0];
+    let posts = 0, route = true;
+    model.repository.call = async (_path, _method, _body, _id, admit) => {
+      if (change === 'chat') model.selected = new ResourceRow('other','Other','session');
+      if (change === 'manager') model.profile.manager = 'other';
+      if (change === 'route') route = false;
+      if (change === 'read-only') update([held('x','failed','Not delivered.')],{read_only:true});
+      if (change === 'stopped') update([held('x','failed','Not delivered.')],{status:'offline',capabilities:{read:true,terminal:true}});
+      if (change === 'disconnected') model.connected = false;
+      if (!admit()) throw new Error('request_updated');
+      posts++; return {ok:true};
+    };
+    model.refresh = async () => {};
+    await model.actOnHeld(message, true, () => route);
+    assert.equal(posts, 0, change);
+  }
+});
+
+test('held Agent retry receipts still guard the owning row when its live connection or view closes after dispatch', async () => {
+  for (const retirement of ['socket','chat']) {
+    const {model,held,update} = heldFixture();
+    update([held('x','failed','Might not have arrived. Retry checks the chat first.')]);
+    const owner = model.selected, message = model.messages[0];
+    let posts = 0;
+    model.repository.call = async (_path,_method,_body,_operation,admit) => {
+      assert.ok(admit()); posts++;
+      if (retirement === 'socket') model.connected = false;
+      else model.selected = new ResourceRow('elsewhere','Another chat','session');
+      return {ok:true};
+    };
+    model.refresh = async () => {};
+    await model.actOnHeld(message,true);
+    model.connected = true; model.selected = owner; model.publishMessages();
+    assert.equal(model.messages[0].held.line,message.held.line);
+    assert.equal(model.canActOnHeld(model.messages[0],true),false,retirement);
+    await model.actOnHeld(model.messages[0],true); assert.equal(posts,1);
+  }
+});
+
 
 test('an acknowledged message stays done when refreshing its transcript fails',async()=>{
   const {model,writes}=fixture(); model.loadChat=async()=>{throw new Error('read failed');};
@@ -507,6 +1416,27 @@ test('enabled SSH startup failures stop Hub discovery before any direct probe or
  finally{delete globalThis.clientSshAcquire;delete globalThis.clientPairingAddress;model.stopReconnect();}
 });
 
+test('explicit SSH policies select the verified route in the configured order on a paired Hub',async()=>{
+ for(const [policy,direct,ssh,expected] of [
+  ['fallback',true,false,['direct','using-direct']],
+  ['fallback',false,true,['direct','ssh','watch-direct']],
+  ['always',true,true,['ssh']],
+  ['always',true,false,['ssh','direct','using-direct']]
+ ]){
+  const model=new ClientModel(), profile=new HubProfile('policy-hub','','https://selected.invalid/');
+  profile.hubId=profile.id;profile.pin='B'.repeat(43);profile.manager='work';
+  model.profile=profile;model.profiles=[profile];model.foreground=true;model.vault={async get(){return 'synthetic';}};
+  const calls=[];
+  model.ssh.configuration={enabled:true,routePolicy:policy};model.ssh.watchDirect=()=>calls.push('watch-direct');
+  model.ssh.usingDirectAddress=()=>calls.push('using-direct');
+  globalThis.clientSshAcquire=async()=>{calls.push('ssh');if(!ssh)throw Error('ssh_connect_failed');return{isCurrent:()=>true};};
+  globalThis.clientPairingAddress=async(address,...params)=>{calls.push('direct');assert.equal(params.at(-1),true);if(!direct)throw Error('unavailable');return address;};
+  globalThis.clientTestRequest=async()=>{throw Error('end of routing probe');};
+  try{await model.selectProfile(profile,true);assert.deepEqual(calls,expected);}
+  finally{model.stopReconnect();delete globalThis.clientSshAcquire;delete globalThis.clientPairingAddress;delete globalThis.clientTestRequest;}
+ }
+});
+
 test('Hub connection retirement closes the active owner and every retained manager while preserving other Hubs',async()=>{
  const {model}=fixture(),row=new ResourceRow('secondary','','conversation');row.manager='work';model.profiles=[model.profile];let rootClosed=0,secondaryClosed=0,foreignClosed=0;model.repository={close(){rootClosed++;}};
  const select=ClientModel.prototype.selectProfile;ClientModel.prototype.selectProfile=async function(profile){this.profile=profile;this.connected=true;};
@@ -673,4 +1603,112 @@ test('question resolution rechecks journal-delayed scope, request, capability an
    if(retirement==='uncertain-refresh')assert.equal(request.status,'unknown','a newer authoritative uncertainty must not reopen after admission fails');
   }finally{gate.resolve();globalThis.clientTestRequest=previous;}
  }
+});
+
+test('assistant selection rechecks the source scope and installed, visible roster at the time of the tap', async () => {
+  const { model } = fixture();
+  const calls = [];
+  model.selectManager = async id => { calls.push(id); };
+  const row = (id, data = {}) => ResourceRow.from({ id, ...data }, 'manager');
+  model.managers = [row('ready'), row('hidden', { hidden: true }),
+    row('installing', { installing: '2026-11-21T10:00:00Z' }), row('legacy', { installing: true })];
+  const source = model.scope();
+  for (const id of ['hidden', 'installing', 'legacy', 'missing', model.profile.manager]) {
+    await model.selectListedManager(id, source);
+  }
+  await model.selectListedManager('ready', source + 'previous');
+  assert.deepEqual(calls, []);
+  await model.selectListedManager('ready', source);
+  assert.deepEqual(calls, ['ready']);
+});
+
+test('cancelled pairing restores the prior complete credential and preserves a later replacement with the same device token', async () => {
+  const {HubAccess} = await import('../entry/src/main/ets/core/HubAccess.ts');
+  const origin='https://hub.invalid:443';
+  for (const superseded of [false, true]) {
+    const {model}=fixture(), profile=model.profile, wait=deferred(), entered=deferred();
+    const previous=HubAccess.fromInput(origin,'client','previous');
+    const candidate=HubAccess.fromInput(origin,'client','candidate');
+    const newer=HubAccess.fromInput(origin,'client','newer');
+    let current=previous, allowed=true;
+    model.profiles=[profile]; model.repository.close=()=>{};
+    model.vault={
+      async get(_id,receive){receive?.(current);return 'same-device-token';},
+      async put(_id,token,edge){
+        assert.equal(token,'same-device-token'); current=edge;
+        if(edge===candidate){entered.resolve();await wait.promise;}
+      },
+      async remove(){assert.fail('an active earlier pairing must remain stored');}
+    };
+    const changing=model.useEndpoint({hubId:profile.id,baseUrl:origin,token:'same-device-token',pin:'',managerId:'',access:candidate},'Hub',()=>allowed);
+    await entered.promise;
+    if(superseded)current=newer;
+    allowed=false;wait.resolve();
+    await assert.rejects(changing,/request_updated/);
+    assert.equal(current,superseded?newer:previous);
+  }
+});
+
+test('a failed device-token write restores pending SSH metadata on the verified Hub only',async()=>{
+  const {model}=fixture();model.foreground=true;
+  // The existing selected Hub belongs to a different pairing context.
+  const base='https://new.synthetic.invalid/',id='verified-synthetic-ssh',pin='A'.repeat(43);
+  const previousScope=model.scope(),settled=[];
+  model.local.allowHub=()=>{};model.local.accepts=()=>true;
+  model.vault={async get(){return null;},async put(){throw Error('synthetic device is locked');}};
+  const route={async install(hub,address,spki,view){
+    assert.equal(hub,id);assert.equal(address,base);assert.equal(spki,pin);
+    await view.write('synthetic-pending-ssh');
+    return async committed=>{settled.push(committed);if(!committed)await view.clearIfUnchanged('synthetic-pending-ssh');};
+  }};
+  await assert.rejects(model.useEndpoint({hubId:id,baseUrl:base,pin,token:'synthetic-new-device'},'Synthetic',()=>true,route),/device is locked/);
+  assert.deepEqual(settled,[false]);assert.equal(model.scope(),previousScope);
+  assert.ok([...model.local.data.values()].every(value=>value!=='synthetic-pending-ssh'));
+});
+
+test('forward recipients recheck the current same-Hub inventory, owner, read-only flag, and live machine before accepting a draft',()=>{
+ const {model}=fixture();
+ function destination(id,attrs={}){
+  const r=ResourceRow.from({session_id:id,machine_id:'studio',title:id,state:'idle',...attrs},'session');
+  r.manager='personal';r.group=model.profile.id;return r;
+ }
+ const target=destination('to'),computer=ResourceRow.from({id:'studio',name:'Studio',online:true},'machine');
+ model.machines=[computer];model.sessions=[model.selected,target];
+ assert.equal(model.canForwardTo(target),true);
+ const cross=destination('to');cross.group='second-pair';assert.equal(model.canForwardTo(cross),false);
+ const foreignOwner=destination('to');foreignOwner.manager='work';assert.equal(model.canForwardTo(foreignOwner),false);
+ for(const disallowed of [{archived:true},{space:'health'},{deleted:true},{read_only:true},{source_kind:'new_source',capabilities:{read:true,send:false}},{capabilities:{send:false}}]){
+  model.sessions=[destination('to',disallowed)];assert.equal(model.canForwardTo(target),false,JSON.stringify(disallowed));
+ }
+ model.sessions=[destination('to',{state:'offline',capabilities:{send:true}})];
+ assert.equal(model.canForwardTo(target,false),false);assert.equal(model.canForwardTo(target,true),true);
+ computer.raw=JSON.stringify({online:false});assert.equal(model.canForwardTo(target,true),false);
+ model.sessions=[];assert.equal(model.canForwardTo(target),false);
+});
+
+test('an exact old rename lookup queries only the current owner, machine and source, and rejects a changed connection',async()=>{
+  const {model}=fixture(), args=[],id='30000000-0000-4000-8000-000000000001',scope=model.scope(),group=model.profile.id;
+  const target=JSON.stringify([scope,group,model.profile.manager,'Test %_ host','herdr','old','/fixture/checkout','rename']);
+  const key=model.captureView('worktree-request:'+target).storageKey;
+  model.local.keys=async(...input)=>{args.push(input);return [key,key.replace(',"rename"]',',"clean"]'),'view:somewhere-else:'+target];};
+  assert.deepEqual(await model.savedRenameTargets(group,model.profile.manager,'Test %_ host','herdr',id),[target]);
+  assert.deepEqual(args,[[ 'view:'+scope+':worktree-request:'+JSON.stringify([scope,group,model.profile.manager,'Test %_ host','herdr']).slice(0,-1)+',',id ]]);
+  model.local.keys=async()=>{model.generation++;return [key];};
+  await assert.rejects(model.savedRenameTargets(group,model.profile.manager,'Test %_ host','herdr',id),/request_updated/);
+});
+
+test('the composer can send a quote without an extra note and keeps attachments ahead of the context-only note', async () => {
+  const {model,writes}=fixture();
+  model.features=['persona_contracts_v1'];model.draft='   ';
+  model.sourceContext=JSON.stringify({contexts:[{kind:'quote',title:'Claude',msg:'reply-42',part:'selection',text:'one selected line'}]});
+  assert.equal(model.hasSendableContext(),true);
+  const prepared=model.prepareMessageText();
+  assert.match(prepared,/<persona-context kind="quote"[^>]*msg="reply-42" part="selection">\none selected line\n<\/persona-context>\n\nchat_context_only_note$/);
+  assert.match(model.prepareMessageText('', 'chat_context_image_note'),/\n\nchat_context_image_note$/);
+  assert.equal(await model.send(),true);
+  assert.equal(writes.length,1);assert.equal(writes[0][1],prepared);
+  for(const context of ['', '{}', '{"contexts":[]}', '{broken']) {
+    model.sourceContext=context;model.draft='';assert.equal(model.hasSendableContext(),false);assert.equal(await model.send(),false);
+  }
+  assert.equal(writes.length,1);
 });

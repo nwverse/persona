@@ -1,7 +1,10 @@
+// @vitest-environment jsdom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 import { buildSpaces } from "./agent-groups";
 import { buildRepoMachineTree } from "./agent-repos";
-import { agentSort, byUpdated, latestOf, machineTreeByUpdate, projectsByUpdate, repoMachinesByUpdate, sortDate, spacesByUpdate } from "./agent-sort";
+import { activityOrder, byUpdated, latestOf, machineTreeByUpdate, projectsByUpdate, repoMachinesByUpdate, sortDate, spacesByUpdate, useActivityDates } from "./agent-sort";
 import { buildMachineTree } from "./herdr-tree";
 import type { AgentState, Machine, Session } from "./types";
 
@@ -15,13 +18,7 @@ const session = (id: string, state: AgentState, hour: number, patch: Partial<Ses
 });
 const ids = (list: { session_id: string }[]) => list.map((s) => s.session_id);
 
-describe("Agent 排序偏好", () => {
-  it("没选过的是状态优先，只认最近更新", () => {
-    expect(agentSort(null)).toBe("state");
-    expect(agentSort("bogus")).toBe("state");
-    expect(agentSort("updated")).toBe("updated");
-  });
-
+describe("the activity clock", () => {
   it("工作中的按开始工作的时间算，其余按更新时间；同一时间按 id 定序", () => {
     const working = session("w", "working", 9, { state_since: date(2) });
     expect(sortDate(working)).toBe(date(2));
@@ -127,5 +124,31 @@ describe("最近更新", () => {
     const parent = sorted[0]!.repos[0]!.worktrees[0]!;
     expect(parent.children.map((w) => w.name)).toEqual(["feature-c", "feature-b"]);
     expect(ids(parent.children[1]!.sessions)).toEqual(["child-new", "child-old"]);
+  });
+});
+
+describe("the clock held while the sidebar is in use", () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  function Probe({ sessions, frozen, out }: { sessions: Session[]; frozen: boolean; out: { current: string[] } }) {
+    const order = activityOrder(useActivityDates(sessions, frozen));
+    out.current = [...sessions].sort(order.byUpdated).map((s) => s.session_id);
+    return null;
+  }
+  it("keeps the times it had while frozen, reads the current ones once released, and reads a new session's own", () => {
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const out = { current: [] as string[] };
+    const render = (sessions: Session[], frozen: boolean) => act(() => root.render(createElement(Probe, { sessions, frozen, out })));
+    const a = session("a", "idle", 1), b = session("b", "idle", 2);
+    render([a, b], false);
+    expect(out.current).toEqual(["b", "a"]);
+    const touched = [session("a", "idle", 5), b];
+    render(touched, true);
+    expect(out.current).toEqual(["b", "a"]); // a is newer now, and does not move
+    render([...touched, session("c", "idle", 9)], true);
+    expect(out.current).toEqual(["c", "b", "a"]); // a new session has no held time: its own
+    render(touched, false);
+    expect(out.current).toEqual(["a", "b"]);
+    act(() => root.unmount());
   });
 });

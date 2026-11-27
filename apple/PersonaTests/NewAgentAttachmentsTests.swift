@@ -30,6 +30,14 @@ struct NewAgentAttachmentsTests {
         #expect(FirstMessage.text(prompt: "", contextBlock: block, paths: [], photos: 1) == block)
     }
 
+    /// #1842's text-only Traex start uses this same composition as its start prompt, not a later ordinary message.
+    @Test func aTraexTextOnlyPromptIsContextThenText() {
+        let block = "<persona-context kind=\"context\" title=\"待办 · 查启动\" url=\"\">Traex</persona-context>"
+        let first = FirstMessage.text(prompt: "  检查启动日志 \n", contextBlock: block, paths: [], photos: 0)
+        #expect(first == "\(block)\n\n检查启动日志")
+        #expect(!first.isEmpty)
+    }
+
     @Test func codexTakesNoAttachmentsAndUploadsHoldTheStart() {
         let codex = String(localized: "Codex takes no attachments")
         let uploading = String(localized: "Waiting for the files to finish uploading")
@@ -61,7 +69,7 @@ struct NewAgentAttachmentsTests {
         a.uploaded(.init(name: "late.log", path: "/tmp/late-1.log", size: 1), on: "macbook")
         #expect(a.files.isEmpty)
         // Switching back finds nothing to take out: no new note.
-        a.add(UIImage(), model: model)
+        a.add(UIImage(), model: model, to: MachineRef(path: "macbook"))
         #expect(a.note == nil)
         a.computerChanged(to: "macbook") { names[$0] }
         #expect(a.note == nil)

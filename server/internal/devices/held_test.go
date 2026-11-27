@@ -17,9 +17,11 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -98,16 +100,27 @@ func (s *heldMem) HoldOperation(_ context.Context, op db.HeldOperation) (db.Held
 // heldShownOf is op with what its row shows of its call (as db.DB reads it in the database).
 func heldShownOf(op db.HeldOperation) db.HeldOperation {
 	var c struct {
-		Params struct {
+		Caller    *devicewire.Caller             `json:"caller"`
+		Principal *devicewire.HeldStartPrincipal `json:"principal"`
+		Meta      json.RawMessage                `json:"meta"`
+		Params    struct {
 			Text   string `json:"text"`
+			Prompt string `json:"prompt"`
 			Images any    `json:"images"`
 		} `json:"params"`
 	}
 	_ = json.Unmarshal(op.Call, &c)
-	op.Text, op.Images = c.Params.Text, 0
+	if c.Caller != nil && c.Caller.CredentialID != "" {
+		op.CredentialID = c.Caller.CredentialID
+	} else if c.Principal != nil {
+		op.CredentialID = c.Principal.ID
+	}
+	op.Text = cmp.Or(c.Params.Text, c.Params.Prompt)
+	op.Images = 0
 	if list, ok := c.Params.Images.([]any); ok {
 		op.Images = len(list)
 	}
+	op.Meta = slices.Clone(c.Meta)
 	return op
 }
 
@@ -290,7 +303,7 @@ func (s *heldMem) RetryHeldOperation(_ context.Context, seq int64, at time.Time)
 		return false, false, s.retryErr
 	}
 	r, ok := s.rows[seq]
-	if !ok || r.State != db.HeldFailed {
+	if !ok || r.State != db.HeldFailed || r.Failure == db.HeldSignedOut {
 		return false, false, nil
 	}
 	check := r.Failure == db.HeldUnclear
@@ -376,7 +389,10 @@ type heldNode struct {
 	peer   *rpc.Peer
 	gate   chan struct{}
 	answer func(params map[string]any) (any, error)
-	listed []string // the sessions it lists; nil: s1 and s2
+	echo   func(proto.SessionEchoParams) proto.SessionEchoState
+	// guarded records sends through session.send_unseen, including ones the node declines.
+	guarded []string
+	listed  []string // the sessions it lists; nil: s1 and s2
 	// items are what session.items answers, by session; reads counts those calls. itemsGate, when set, holds a read
 	// until it is closed (reading is told when one waits there); itemsErr fails the next read.
 	items     map[string][]proto.Item
@@ -422,7 +438,12 @@ func (n *heldNode) dial(context.Context) (net.Conn, error) {
 	p.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		switch method {
 		case "node.info":
-			return proto.NodeInfo{Hostname: "box", OS: "linux", Arch: "amd64", Home: "/home/me", Version: "test"}, nil
+			info := proto.NodeInfo{Hostname: "box", OS: "linux", Arch: "amd64", Home: "/home/me", Version: "test"}
+			if n.echo != nil {
+				info.Protocol = nodeproto.Version
+				info.Capabilities = []string{nodeproto.Sessions, nodeproto.SessionEchoStatus}
+			}
+			return info, nil
 		case "sessions.list":
 			return map[string]any{"sessions": n.sessions()}, nil
 		case "session.items":
@@ -446,10 +467,22 @@ func (n *heldNode) dial(context.Context) (net.Conn, error) {
 			items := n.items[q.SessionID]
 			n.mu.Unlock()
 			return map[string]any{"items": items}, nil
-		case "session.send":
+		case proto.MethodSessionEchoStatus:
+			if n.echo == nil {
+				return nil, fmt.Errorf("unknown method %s", method)
+			}
+			var p proto.SessionEchoParams
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, err
+			}
+			return proto.SessionEchoStatus{State: n.echo(p)}, nil
+		case "session.send", proto.MethodSessionSendUnseen:
 			var m map[string]any
 			_ = json.Unmarshal(params, &m)
 			n.mu.Lock()
+			if method == proto.MethodSessionSendUnseen {
+				n.guarded = append(n.guarded, m["client_msg_id"].(string))
+			}
 			n.sends = append(n.sends, m)
 			gate, answer := n.gate, n.answer
 			n.mu.Unlock()
@@ -771,6 +804,98 @@ func TestHeldMessagesGoWhenTheComputerIsBack(t *testing.T) {
 	}
 	if got := n.sent(); len(got) != 4 || got[3] != "c" {
 		t.Fatalf("sent %v", got)
+	}
+}
+
+func TestHeldMessagesFromSignedOutDeviceAreDeleteOnly(t *testing.T) {
+	for _, event := range []bool{true, false} {
+		name := "received_event"
+		if !event {
+			name = "missed_event"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := newHeldMem()
+			d, _ := heldDevices(t, st, time.Hour)
+			n := &heldNode{}
+			up := make(chan struct{})
+			laterMachine(t, d, "mac", "Studio Mac", n, up)
+
+			for _, id := range []string{"signed-out", "other-device"} {
+				p := heldSend("mac", "s1", id, id)
+				p.Caller.CredentialID = id
+				out, err := d.Call(ctx, p)
+				if row := heldAnswerOf(t, out, err); row.State != proto.UndeliveredWaiting {
+					t.Fatalf("initial row: %+v", row)
+				}
+			}
+			assertFailed := func() {
+				t.Helper()
+				rows := d.HeldMessages("mac", i18n.En)["s1"]
+				if len(rows) == 0 || rows[0].ID != "signed-out" || rows[0].State != proto.UndeliveredFailed ||
+					!rows[0].DeleteOnly || rows[0].Error != "Not sent: the device that sent it was signed out" {
+					t.Fatalf("held rows: %+v", rows)
+				}
+			}
+			host := d.host()
+			if event {
+				raw, err := json.Marshal(bus.DeviceCredential{ID: "signed-out"})
+				if err != nil || !d.Event(bus.EventCredentialRevoked, raw) {
+					t.Fatalf("revocation event: %v", err)
+				}
+				assertFailed()
+				rows := d.HeldMessages("mac", i18n.En)["s1"]
+				if len(rows) != 2 || rows[1].ID != "other-device" || rows[1].State != proto.UndeliveredWaiting || rows[1].DeleteOnly {
+					t.Fatalf("other device's row: %+v", rows)
+				}
+			} else {
+				host.mu.Lock()
+				host.revokedDevices = map[string]bool{"signed-out": true}
+				host.credentialCheckErr = errors.New("hub temporarily unavailable")
+				host.mu.Unlock()
+			}
+
+			close(up)
+			if !event {
+				eventually(t, 5*time.Second, "the first authorization check deferred delivery", func() bool {
+					rows := st.all()
+					return len(rows) == 2 && rows[0].State == db.HeldWaiting && rows[0].Attempts > 0
+				})
+				heldIdle(t, d)
+				if got := n.sent(); len(got) != 0 {
+					t.Fatalf("sent while the credential could not be checked: %q", got)
+				}
+				host.mu.Lock()
+				host.credentialCheckErr = nil
+				host.mu.Unlock()
+				d.heldWake("mac")
+			}
+			eventually(t, 5*time.Second, "only the other device's message delivered", func() bool {
+				return len(n.sent()) > 0
+			})
+			heldIdle(t, d)
+			if got := n.sent(); !slices.Equal(got, []string{"other-device"}) {
+				t.Fatalf("sent %q", got)
+			}
+			assertFailed()
+			if rows := st.all(); len(rows) != 1 || rows[0].Failure != db.HeldSignedOut {
+				t.Fatalf("persisted failure: %+v", rows)
+			}
+
+			mux := d.Handler(http.NotFoundHandler())
+			path := "/api/v1/sessions/mac/s1/held/signed-out"
+			if code, body := personCall(t, mux, http.MethodPost, path+"/retry"); code != http.StatusConflict {
+				t.Fatalf("retry: %d %v", code, body)
+			}
+			if code, body := personCall(t, mux, http.MethodDelete, path); code != http.StatusOK || body["ok"] != true {
+				t.Fatalf("delete: %d %v", code, body)
+			}
+			d.heldWake("mac")
+			heldIdle(t, d)
+			if got := n.sent(); !slices.Equal(got, []string{"other-device"}) || len(d.HeldMessages("mac", i18n.En)) != 0 || len(st.all()) != 0 {
+				t.Fatalf("after delete, sent %q, stored %+v", got, st.all())
+			}
+		})
 	}
 }
 
@@ -1099,6 +1224,31 @@ func TestHeldLinesInEveryLanguage(t *testing.T) {
 			if wantFailed := r.State == db.HeldFailed; (m.State == proto.UndeliveredFailed) != wantFailed {
 				t.Errorf("%s %+v: state %s", l, r.HeldOperation, m.State)
 			}
+		}
+		for _, key := range []string{"rpc-errors.not_delivered", "rpc-errors.not_delivered_finished"} {
+			r := heldRow{HeldOperation: db.HeldOperation{State: db.HeldFailed, Failure: db.HeldRefused, Error: i18n.T(i18n.Default, key)}}
+			m := r.wire(l, "NAME", false)
+			want := i18n.T(l, key)
+			if !strings.Contains(m.Error, want) {
+				t.Errorf("%s %s: %q does not contain %q", l, key, m.Error, want)
+			}
+		}
+		bareDialog := heldRow{HeldOperation: db.HeldOperation{State: db.HeldFailed, Failure: db.HeldRefused,
+			Error: "电脑上的终端正开着一个对话框（确认、选择列表等），这条消息没有发出去：先回答或关掉它再发。"}}
+		if got := bareDialog.wire(l, "NAME", false).Error; l != i18n.ZhHans && !strings.Contains(got, i18n.T(l, "rpc-errors.dialog_open")) {
+			t.Errorf("%s bare dialog: %q", l, got)
+		}
+		titledDialog := heldRow{HeldOperation: db.HeldOperation{State: db.HeldFailed, Failure: db.HeldRefused,
+			Error: "电脑上的终端正开着一个对话框（「Allow command?」），这条消息没有发出去：先回答或关掉它再发。"}}
+		if got := titledDialog.wire(l, "NAME", false).Error; !strings.Contains(got, "Allow command?") ||
+			(l != i18n.ZhHans && !strings.Contains(got, i18n.T(l, "rpc-errors.dialog_open"))) {
+			t.Errorf("%s titled dialog: %q", l, got)
+		}
+		noticeDialog := heldRow{HeldOperation: db.HeldOperation{State: db.HeldFailed, Failure: db.HeldRefused,
+			Error: "电脑上的终端正开着一个对话框（「Session updated」），这条消息没有发出去：它只是一条通知，按回车就关掉，可以让发送先关掉它再发。"}}
+		if got := noticeDialog.wire(l, "NAME", false).Error; !strings.Contains(got, "Session updated") ||
+			(l != i18n.ZhHans && (!strings.Contains(got, i18n.T(l, "rpc-errors.dialog_open_notice")) || strings.Contains(got, i18n.T(l, "rpc-errors.dialog_open")))) {
+			t.Errorf("%s notice dialog: %q", l, got)
 		}
 	}
 }
@@ -1859,7 +2009,8 @@ func TestHeldRepairHoldsOffTheOwner(t *testing.T) {
 	if r := st.all()[0]; r.State != db.HeldFailed || r.Failure != db.HeldRefused {
 		t.Fatalf("repaired %+v", r)
 	}
-	eventually(t, 5*time.Second, "b sent", func() bool { return slices.Equal(n.sent(), []string{"a", "b"}) })
+	// The node has b before the manager hears back and deletes its row: wait for that too, so only a is left.
+	eventually(t, 5*time.Second, "b sent and settled", func() bool { return slices.Equal(n.sent(), []string{"a", "b"}) && len(st.all()) == 1 })
 	if code, body := personCall(t, mux, "DELETE", "/api/v1/sessions/mac/s1/held/a"); code != http.StatusOK || len(st.all()) != 0 {
 		t.Fatalf("delete after: %d %v, %d left", code, body, len(st.all()))
 	}
@@ -2110,6 +2261,88 @@ func TestHeldRetriedUnclearInTheTranscriptIsNotSentAgain(t *testing.T) {
 	heldTicks(t, d, 1)
 	if got, reads := n.sent(), n.itemReads(); !slices.Equal(got, []string{"b"}) || reads != 1 {
 		t.Fatalf("sent %v, %d reads", got, reads)
+	}
+}
+
+func TestHeldRetryUsesNodeEchoStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		state       proto.SessionEchoState
+		guardErr    error
+		calls       []string
+		guarded     []string
+		reads       int
+		unconfirmed bool
+	}{
+		{name: "known unseen", state: proto.EchoKnownUnseen, calls: []string{"a", "b"}, guarded: []string{"a"}},
+		{name: "seen beyond latest turns", state: proto.EchoSeen, calls: []string{"b"}},
+		{name: "unknown", state: proto.EchoUnknown, reads: 1, unconfirmed: true},
+		{name: "legacy node", reads: 1, unconfirmed: true},
+		{name: "evidence lost before retry", state: proto.EchoKnownUnseen, calls: []string{"a"}, guarded: []string{"a"},
+			guardErr: &rpc.Error{Code: proto.CodeEchoUnconfirmed}, unconfirmed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newHeldMem()
+			at := time.Now().Add(-time.Hour)
+			putHeld(t, st, "s1", "a", db.HeldFailed, db.HeldUnclear, at)
+			putHeld(t, st, "s1", "b", db.HeldWaiting, "", at)
+			d, _ := heldDevices(t, st, time.Hour)
+			n := &heldNode{}
+			if tc.state != "" {
+				n.echo = func(p proto.SessionEchoParams) proto.SessionEchoState {
+					if p.SessionID != "s1" || p.ClientMsgID != "a" {
+						t.Errorf("wrong echo query: %+v", p)
+					}
+					return tc.state
+				}
+			}
+			if tc.guardErr != nil {
+				n.answer = func(map[string]any) (any, error) { return nil, tc.guardErr }
+			}
+			up := make(chan struct{})
+			laterMachine(t, d, "mac", "Studio Mac", n, up)
+			if found, err := d.HeldRetry(context.Background(), "s1", "a"); !found || err != nil {
+				t.Fatalf("retry: %v %v", found, err)
+			}
+			close(up)
+			eventually(t, 5*time.Second, "retry settles", func() bool {
+				rows := st.all()
+				if tc.unconfirmed {
+					return len(rows) == 2 && rows[0].State == db.HeldFailed && rows[0].Failure == db.HeldUnconfirmed && rows[1].State == db.HeldWaiting
+				}
+				return len(rows) == 0
+			})
+			heldTicks(t, d, 2)
+			n.mu.Lock()
+			guarded := slices.Clone(n.guarded)
+			n.mu.Unlock()
+			if calls, reads := n.sent(), n.itemReads(); !slices.Equal(calls, tc.calls) || !slices.Equal(guarded, tc.guarded) || reads != tc.reads {
+				t.Fatalf("send calls %v, guarded %v, latest-turn reads %d", calls, guarded, reads)
+			}
+		})
+	}
+}
+
+func TestHeldKnownUnseenWaitsForOwnerRetry(t *testing.T) {
+	st := newHeldMem()
+	putHeld(t, st, "s1", "a", db.HeldFailed, db.HeldUnclear, time.Now())
+	d, _ := heldDevices(t, st, time.Hour)
+	checked := make(chan struct{}, 1)
+	n := &heldNode{echo: func(proto.SessionEchoParams) proto.SessionEchoState {
+		checked <- struct{}{}
+		return proto.EchoKnownUnseen
+	}}
+	up := make(chan struct{})
+	laterMachine(t, d, "mac", "Studio Mac", n, up)
+	close(up)
+	select {
+	case <-checked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no echo check on reconnect")
+	}
+	heldTicks(t, d, 2)
+	if got, rows := n.sent(), st.all(); len(got) != 0 || len(rows) != 1 || rows[0].Failure != db.HeldUnclear {
+		t.Fatalf("sent %v, rows %+v", got, rows)
 	}
 }
 

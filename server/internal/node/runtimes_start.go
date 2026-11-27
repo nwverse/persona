@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -51,7 +52,7 @@ func (n *Node) startRuntime(name string) (h *runtimeConn, model string) {
 // whose engine runtime runs only its own launchers, that runtime for every name it offers); false when none does.
 func (n *Node) runtimeStart(ctx context.Context, p runtimeStartParams) (*proto.Session, *proto.StartInstead, error, bool) {
 	h, model := n.startRuntimeIn(ctx, p.Launcher)
-	if h == nil {
+	if h == nil || n.usesAgyPane(ctx, p.Launcher, p.AgentType) {
 		return nil, nil, nil, false
 	}
 	if p.Model == "" {
@@ -84,10 +85,14 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	defer cancel()
 	params := map[string]any{"cwd": p.Cwd, "prompt": p.Prompt}
 	for k, v := range map[string]string{"launcher": p.Launcher, "model": p.Model, "permission_mode": p.PermissionMode,
-		"effort": p.Effort, "workspace_id": p.WorkspaceID, "resume": p.Resume, "session_id": p.SessionID, "agent_type": p.AgentType} {
+		"effort": p.Effort, "workspace_id": p.WorkspaceID, "resume": p.Resume, "session_id": p.SessionID, "agent_type": p.AgentType,
+		"client_msg_id": p.ClientMsgID} {
 		if v != "" {
 			params[k] = v
 		}
+	}
+	if len(p.Images) > 0 {
+		params["images"] = p.Images
 	}
 	if p.Shell {
 		params["shell_launcher"] = true
@@ -95,11 +100,35 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	if p.OpenElsewhere {
 		params["open_elsewhere"] = true
 	}
+	if p.DeferMCP {
+		params["defer_mcp"] = true
+	}
 	var res struct {
 		Session json.RawMessage     `json:"session"`
 		Instead *proto.StartInstead `json:"instead"`
 	}
+	if b := backendLaunchFrom(ctx); b != nil {
+		h.mu.Lock()
+		supported := h.hello.Caps.BackendWorkspaceRoot
+		h.mu.Unlock()
+		if !supported && !b.taskDispatch {
+			return nil, nil, refusal("backend_workspace_unsupported", "This runtime cannot start in a prepared task directory.", nil)
+		}
+		if supported {
+			params["backend_workspace_root"] = true
+		}
+		if err := b.beforeDispatch(p.SessionID); err != nil {
+			return nil, nil, err
+		}
+	}
+	sentAt := time.Now()
+	if p.SessionID != "" && p.Prompt != "" {
+		n.ttft.arm(p.SessionID, sentAt, "")
+	}
 	if err := h.peer.Call(ctx, "session.start", params, &res); err != nil {
+		if p.SessionID != "" && p.Prompt != "" && !maybeDelivered(err) {
+			n.ttft.disarm(p.SessionID, sentAt)
+		}
 		return nil, nil, err
 	}
 	var s proto.Session
@@ -116,7 +145,59 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	if err != nil {
 		return nil, nil, err
 	}
+	if p.Prompt != "" && started.SessionID != "" && p.SessionID == "" {
+		n.ttft.armIfUnarmed(started.SessionID, sentAt, "")
+	}
+	if p.Resume == "" {
+		n.recordEngineStart(h, started, p.Cwd)
+		n.recordAgyRuntimeStart(h, started, p)
+	}
 	return started, cleanInstead(res.Instead), nil
+}
+
+// recordAgyRuntimeStart persists an explicit permission mode chosen when Persona starts a non-assistant Antigravity
+// companion session. The companion keeps per-session modes in memory only, so without a persisted record a companion,
+// node or machine restart falls back to local settings.json (losing bypassPermissions or escalating read-only plan).
+// Starts that left permission_mode empty stay unrecorded here so they continue to follow local settings.json.
+func (n *Node) recordAgyRuntimeStart(h *runtimeConn, s *proto.Session, p runtimeStartParams) {
+	if h == nil || h.agent() != agyAgent || s == nil || s.SessionID == "" || n.state == nil || p.PermissionMode == "" {
+		return
+	}
+	mode := cmp.Or(s.PermissionMode, p.PermissionMode)
+	if n.state.update(s.SessionID, func(st *sessionState) bool {
+		if st.AppMode == mode {
+			return false
+		}
+		st.AppMode = mode
+		return true
+	}) {
+		return
+	}
+	n.state.put(s.SessionID, sessionState{
+		Launcher:    cmp.Or(s.Launcher, p.Launcher, agyAgent),
+		Cwd:         cmp.Or(s.Cwd, p.Cwd),
+		Model:       cmp.Or(s.Model, p.Model),
+		ModelEffort: cmp.Or(s.Effort, p.Effort),
+		AppMode:     mode,
+		StartedAt:   time.Now().UTC(),
+	})
+}
+
+// recordEngineStart keeps the node's record of a session an engine runtime (Paseo, Cindy) has just started, as a
+// terminal start keeps one (putAgentState) and a start with a creation identity already did (creationResult): its
+// launcher, its directory, when, and the runtime that started it (EngineRuntime). The engine lists an archived Agent
+// only for a while (Paseo: the 80 newest archived in the last 7 days) and the node has no transcript under the id
+// Persona named it by, so without the record the computer would have nothing of it once it is not listed, and refuse
+// an extension's resume of it (resumeOutsideHealth) that the engine takes back (#10941). A session that has a record
+// keeps it.
+func (n *Node) recordEngineStart(h *runtimeConn, s *proto.Session, cwd string) {
+	if _, engine := engineRuntimes[h.id()]; !engine || s == nil || s.SessionID == "" || n.state == nil {
+		return
+	}
+	if _, ok := n.state.get(s.SessionID); ok {
+		return
+	}
+	n.state.put(s.SessionID, sessionState{Launcher: s.Launcher, Cwd: cmp.Or(s.Cwd, cwd), StartedAt: time.Now().UTC(), EngineRuntime: h.id(), RemoteAgent: h.remoteAgent()})
 }
 
 // listStarted lists a session h just started right away, before the runtime's next runtime.sessions, so the chat
@@ -152,9 +233,14 @@ func (n *Node) listStarted(h *runtimeConn, started proto.Session, transcript str
 	}
 	h.mu.Unlock()
 	b.recomputeOwners()
+	h.mu.Lock()
+	if h.hello.Caps.Assistant && h.hello.Caps.RemoteAgent {
+		b.markRemoteLocked(s.SessionID)
+	}
 	if startedHere(s) { // not while it is only starting: a takeover that fails leaves the session this machine's (#8130)
 		b.remember(h, s.SessionID, time.Now())
 	}
+	h.mu.Unlock()
 	b.noteStarted(h, s.SessionID, time.Now())
 	var tell *runtimeConn // runs it already, and is to hear that the hub started it (runtime.driven)
 	if o := b.owner[s.SessionID]; o != nil && o != h {
@@ -183,16 +269,22 @@ func (n *Node) listStarted(h *runtimeConn, started proto.Session, transcript str
 
 // noteRuntimeWorking marks h's cached row for id working as soon as session.send succeeds, before the runtime's
 // debounced runtime.sessions push arrives, unless the session is currently waiting on a user interaction.
-func (n *Node) noteRuntimeWorking(h *runtimeConn, id string) {
+func (n *Node) noteRuntimeWorking(h *runtimeConn, id string, before *proto.Session) {
 	if h == nil || id == "" {
 		return
 	}
 	h.mu.Lock()
-	for i := range h.sessions {
-		if h.sessions[i].SessionID == id && h.sessions[i].Status != proto.StatusBlocked {
-			h.sessions[i].Status = proto.StatusWorking
-			h.sessions[i].UpdatedAt = time.Now().UTC()
+	defer h.mu.Unlock()
+	for index := range h.sessions {
+		row := &h.sessions[index]
+		if row.SessionID != id || row.Status == proto.StatusBlocked {
+			continue
 		}
+		if before != nil && (row.Status != before.Status || row.Rev != before.Rev || row.TurnError != before.TurnError || !row.UpdatedAt.Equal(before.UpdatedAt)) {
+			return
+		}
+		row.Status = proto.StatusWorking
+		row.UpdatedAt = time.Now().UTC()
+		return
 	}
-	h.mu.Unlock()
 }

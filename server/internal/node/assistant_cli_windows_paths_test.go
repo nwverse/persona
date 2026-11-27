@@ -54,10 +54,10 @@ func checkScriptWords(t *testing.T, script string, want ...string) {
 	}
 }
 
-// icScript is the -ic script of cmd's arguments.
+// icScript is the -ic (-lic on macOS, shellFlag) script of cmd's arguments.
 func icScript(t *testing.T, args []string) string {
 	t.Helper()
-	i := slices.Index(args, "-ic")
+	i := slices.Index(args, shellFlag(args[0]))
 	if i < 0 || i+2 >= len(args) || args[i+2] != "persona" {
 		t.Fatalf("not a -ic launch: %q", args)
 	}
@@ -112,7 +112,10 @@ func TestCodexAssistantCommandWindowsPathsUseForwardSlashes(t *testing.T) {
 func TestAgentModelsCommandWindowsPathsUseForwardSlashes(t *testing.T) {
 	const bin = `C:\Program Files\Persona\personad.exe`
 	n := windowsScriptNode(t, bin, "box")
-	cmd, err := n.agentModelsCommand(context.Background(), "bash", "box", "codex", t.TempDir())
+	if _, err := interactiveShell(); err != nil {
+		t.Skip(err)
+	}
+	cmd, err := n.agentModelsCommand(context.Background(), "box", "codex", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +127,7 @@ func TestAgentModelsCommandWindowsPathsUseForwardSlashes(t *testing.T) {
 
 	start := `C:\Users\Example User\.claude-work`
 	n.claudeStartDir.Store(&start)
-	cmd, err = n.agentModelsCommand(context.Background(), "bash", "claude", "claude", t.TempDir())
+	cmd, err = n.agentModelsCommand(context.Background(), "claude", "claude", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

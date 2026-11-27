@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import persona.core.contracts.SessionKey
+import persona.core.inbox.*
 
 internal const val INBOX_HAND_OFF_UNDO_MILLIS = 5_000L
 internal const val INBOX_HAND_OFF_LISTED_TARGETS = 12
@@ -241,7 +242,7 @@ class InboxHandOffBarModel internal constructor(
                 // A finished item opened from history is not in the live list; the page's own lookup finds it.
                 val record = repository.item(itemId) ?: error("The Inbox item is no longer available")
                 known = record
-                operation.text = handoffPrompt(resources, handOffItem(record, repository.personaContext(itemId)), operation.ask)
+                operation.text = handoffPrompt(resources, handOffItem(record, repository.personaContext(itemId)?.text), operation.ask)
             }
             val text = checkNotNull(operation.text)
             val target = operation.target

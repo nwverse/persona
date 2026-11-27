@@ -123,7 +123,7 @@ final class PendingCardsTests: XCTestCase {
             dismissIconAlert()
             sleep(2)
             XCTAssertFalse(app.buttons["批准并自动执行"].exists, "the conflicting legacy approval is absent (\(look))")
-            let mode = app.staticTexts["每步都问"].firstMatch
+            let mode = app.staticTexts["默认权限"].firstMatch
             XCTAssertTrue(mode.waitForExistence(timeout: 5), "the recorded mode is in the card (\(look))")
             for _ in 0..<3 where !mode.isHittable { app.scrollViews["pending-cards"].swipeUp() }
             XCTAssertTrue(mode.isHittable, "the recorded mode is visible (\(look))")
@@ -305,7 +305,7 @@ final class PendingCardsTests: XCTestCase {
             XCTAssertTrue(first.waitForExistence(timeout: 5), "no first option")
             first.tap() // Multi-select does not advance: Submit is now enabled on this same long question.
             let before = resolutionCount("ix_ask_long")
-            let cards = app.scrollViews["pending-cards"]
+            let cards = app.otherElements["question-dock"].firstMatch // the assistant's pager (#12831)
             XCTAssertTrue(cards.exists, "the cards' area")
             let action = app.buttons.matching(NSPredicate(format: "label IN %@", ["提交", "Submit"])).firstMatch
             XCTAssertTrue(action.waitForExistence(timeout: 5), "no Submit:\n\(app.debugDescription)")
@@ -405,7 +405,7 @@ final class PendingCardsTests: XCTestCase {
             let submit = app.buttons["screen-review-submit"]
             if !submit.waitForExistence(timeout: 2) { app.buttons["提交"].firstMatch.tap() }
             XCTAssertTrue(submit.waitForExistence(timeout: 5), "no long review:\n\(app.debugDescription)")
-            let cards = app.scrollViews["pending-cards"]
+            let cards = app.otherElements["question-dock"].firstMatch // the assistant's pager (#12831)
             var reachable = false
             let hitDeadline = Date().addingTimeInterval(5)
             while Date() < hitDeadline {

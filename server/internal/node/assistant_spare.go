@@ -35,7 +35,12 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 	if p == nil || !p.alive() || time.Since(p.born) > assistantSpareMaxAge ||
 		((p.agent == "claude" || p.agent == "codex") && p.personaMCPOnly != n.hubSupportsPersonaContracts()) ||
 		(launcher != "" && p.launcher != launcher) || (cwd != "" && p.cwd != cwd) || p.fingerprint != n.executionFingerprint(p.launcher, executionOption(options)) ||
-		n.toolSearchStale(p) { // its endpoint refused tool search since it started (#10365)
+		n.toolSearchStale(p) || n.categoriesStaleSpareLocked(p) { // its endpoint refused tool search (#10365) or its directory's categories changed (#13246)
+		return nil
+	}
+	// A Claude spare was generated with the ordinary built-in list. It cannot become an Inbox process without
+	// reintroducing SendMessage outside the MCP origin policy; let the Inbox start cold with its restricted list.
+	if p.agent == "claude" && executionOption(options).Origin == originInbox {
 		return nil
 	}
 	// A Claude start names the profile it resolved (assistantProfileSelection), Persona's own included; a spare warmed in
@@ -54,9 +59,6 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 		return externalRefusal(context.Background(), "adapter_purpose_unsupported")
 	}
 	if n.assistantRuntime(launcher) != nil { // a runtime is running already: nothing to start ahead
-		if executionOption(options).SupervisionInstructions != "" {
-			return supervisionRuntimeRefusal(context.Background())
-		}
 		if executionOption(options).ConfigDir != "" {
 			return errors.New(assistantwire.ConfigDirClaudeOnly)
 		}
@@ -76,9 +78,20 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 		return err
 	}
 	// The main chat's spare starts with its window as the main conversation's start carries it (assistantSend, #7314).
-	execution.MainCompactWindow = n.mainWindowOn(launcher, execution.IsMain, execution.MainCompactWindow)
+	execution.MainCompactWindow = n.mainWindowOn(launcher, execution.MainCompactWindow)
 	if agent, err := n.assistantAgent(context.Background(), launcher); err != nil {
 		return err
+	} else if agent == "claude" && execution.Interactive {
+		// No spare for interactive Claude Code (assistant_tui.go): it would start before its conversation's mode is
+		// known, and one in print mode would be adopted by a conversation that asked for interactive.
+		n.mu.Lock()
+		old := n.spare
+		n.spare = nil
+		n.mu.Unlock()
+		if old != nil {
+			old.stop()
+		}
+		return nil
 	} else if agent == "claude" {
 		execution.ConfigDir, err = n.assistantProfileSelection(context.Background(), "", launcher, execution.ConfigDir, false)
 		if err != nil {
@@ -93,7 +106,7 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 		((old.agent != "claude" && old.agent != "codex") || old.personaMCPOnly == n.hubSupportsPersonaContracts()) &&
 		(old.agent != "claude" || sameAssistantProfile(old.model.ConfigDir, execution.ConfigDir)) &&
 		old.fingerprint == n.executionFingerprint(launcher, execution) && time.Since(old.born) < assistantSpareMaxAge/2 &&
-		!n.toolSearchStale(old) { // one adoptSpare would refuse: replaced by one started with every tool loaded (#10365)
+		!n.toolSearchStale(old) && !n.categoriesStaleSpareLocked(old) { // one adoptSpare would refuse: replaced (#10365, #13246)
 		n.mu.Unlock()
 		return nil
 	}

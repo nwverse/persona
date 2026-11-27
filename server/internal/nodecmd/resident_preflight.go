@@ -1,12 +1,10 @@
 package nodecmd
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
-	"os/exec"
+	"fmt"
+	"log"
 	"runtime"
 	"time"
 
@@ -14,41 +12,43 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 )
 
-type residentCheckOutput struct{ bytes.Buffer }
+// residentCheckLimits bound the replacement's node-update-check before a reload or at startup. A new file gets a
+// first run long enough for endpoint protection to scan it (#12528); a file that already passed here gets 5 s.
+var residentCheckLimits = nodeupdate.CheckLimits{FirstRun: 60 * time.Second, Repeat: 5 * time.Second}
 
-func (b *residentCheckOutput) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > 4096 {
-		return 0, errors.New("resident preflight output exceeds its budget")
-	}
-	return b.Buffer.Write(p)
-}
-
-func checkResidentReplacement(ctx context.Context, path, program string) error {
+func checkResidentReplacement(ctx context.Context, path, program string) (*nodeupdate.Check, error) {
 	check, err := residentReplacementInfo(ctx, path, program)
 	if err != nil {
-		return err
+		return check, err
 	}
 	// Where there is no handover (Windows), the supervisor starts the replacement as a new process instead.
 	if !check.ResidentHandover && node.ResidentHandoverSupported {
-		return errors.New("resident replacement does not support listener handover")
+		return check, errors.New("resident replacement does not support listener handover")
 	}
-	return nil
+	return check, nil
 }
 
-func residentReplacementInfo(ctx context.Context, path, program string) (nodeupdate.Check, error) {
-	var check nodeupdate.Check
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "node-update-check")
-	var out residentCheckOutput
-	cmd.Stdout, cmd.Stderr = &out, io.Discard
-	cmd.WaitDelay = time.Second
-	if err := cmd.Run(); err != nil {
-		return check, err
+func preflightResidentReload(ctx context.Context, logger *log.Logger, path, program string) error {
+	check, err := checkResidentReplacement(ctx, path, program)
+	if err == nil {
+		return nil
 	}
-	if err := json.Unmarshal(out.Bytes(), &check); err != nil {
-		return check, err
+	var identity string
+	if check != nil {
+		identity = fmt.Sprintf(" (version=%q os=%q arch=%q program=%q resident_handover=%t)",
+			check.Version, check.OS, check.Arch, check.Program, check.ResidentHandover)
 	}
+	logger.Printf("resident reload: replacement did not pass preflight; keeping the current node: %v%s", err, identity)
+	return err
+}
+
+// residentReplacementInfo returns the reported identity even if it fails validation.
+func residentReplacementInfo(ctx context.Context, path, program string) (*nodeupdate.Check, error) {
+	info, err := nodeupdate.RunCheck(ctx, path, residentCheckLimits)
+	if err != nil {
+		return nil, err
+	}
+	check := &info
 	if check.OS != runtime.GOOS || check.Arch != runtime.GOARCH || check.Version == "" ||
 		(check.Program != "" && program != "" && check.Program != program) {
 		return check, errors.New("resident replacement identity does not match this node")

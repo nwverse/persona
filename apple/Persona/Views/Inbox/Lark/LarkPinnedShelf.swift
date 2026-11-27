@@ -55,7 +55,7 @@ struct LarkPinnedShelf: View {
     private func pin(_ conversation: LarkConversation) -> some View {
         Button { open(conversation) } label: {
             VStack(spacing: Theme.Space.xs) {
-                LarkAvatarImage(name: conversation.name, url: conversation.avatar, isGroup: conversation.isGroup, size: Theme.Size.avatarXL)
+                LarkAvatarImage(name: conversation.name, url: conversation.picture, account: conversation.account, size: Theme.Size.avatarXL)
                     .dynamicTypeSize(...Theme.Shell.topBarLargestTypeSize)
                     .overlay(alignment: .topTrailing) {
                         if conversation.badge > 0 { CountBadge(count: conversation.badge).dynamicTypeSize(...Theme.Shell.topBarLargestTypeSize) }
@@ -70,7 +70,6 @@ struct LarkPinnedShelf: View {
     }
 }
 
-#if os(iOS) || os(visionOS)
 /// Offset compensation belongs to the scroll view, not every frame of the page's state.
 @MainActor final class LarkConversationScroll {
     let reader = ReaderAnchor()
@@ -133,4 +132,3 @@ struct LarkPinnedShelf: View {
         }
     }
 }
-#endif

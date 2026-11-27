@@ -14,7 +14,8 @@ export interface LiveTranscript {
   hasMore: boolean;
   loading: boolean;
   loadingEarlier: boolean;
-  loadEarlier: () => Promise<void>;
+  earlierPage?: symbol;
+  loadEarlier: (options?: { waitForRetry: boolean }) => Promise<symbol | undefined>;
   expandFold: (fold: Item) => Promise<boolean | void>;
 }
 
@@ -34,7 +35,10 @@ export interface EarlierStretch {
 export interface StretchesReport {
   hasMore: boolean;
   loading: boolean;
-  loadEarlier: () => Promise<void>;
+  loadEarlier: LiveTranscript["loadEarlier"];
+  /** Identities of the live and previous-session pages accounted for in the rendered stretches. */
+  projectedLivePage?: symbol;
+  projectedOtherPage?: symbol;
   /** The earlier stretches drawn, oldest first: a new array whenever what they draw changes. */
   stretches: EarlierStretch[];
   /** The local calendar days (YYYY-MM-DD) the drawn stretches cover: the live transcript skips its own divider for
@@ -71,7 +75,9 @@ export interface Stitched {
   hasMore: boolean;
   loadingEarlier: boolean;
   /** Loads what comes next going back: the live session's older page, or the next stretch's. */
-  loadEarlier: () => Promise<void>;
+  loadEarlier: LiveTranscript["loadEarlier"];
+  projectedLivePage?: symbol;
+  projectedOtherPage?: symbol;
   /** EarlierStretches' `due`: 0 for a conversation that never switched. */
   due: number;
   /** The stretches' module's props; null for a conversation that never switched. */
@@ -91,10 +97,26 @@ export function useEarlierStretches(mid: string, sid: string, history: readonly 
   // the live stretch's items when the live session ran an earlier one too; else the transcript as it is
   const own = useMemo(() => liveStretch(live.items, legs, sid), [live.items, legs, sid]);
   const host = useMemo<StretchesHost | null>(
-    () => (key ? { mid, sid, scope, history: legs, live, report: hear } : null),
+    () => (key ? {
+      mid,
+      sid,
+      scope,
+      history: legs,
+      // Snapshot the tracked live fields so memo(EarlierStretches) sees updates even when the caller mutates `live` in place.
+      live: {
+        items: live.items,
+        hasMore: live.hasMore,
+        loading: live.loading,
+        loadingEarlier: live.loadingEarlier,
+        earlierPage: live.earlierPage,
+        loadEarlier: live.loadEarlier,
+        expandFold: live.expandFold,
+      },
+      report: hear,
+    } : null),
     // `live` is read through: its items, pages and loads are what the module plans with
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mid, sid, scope, key, legs, hear, live.items, live.hasMore, live.loading, live.loadEarlier, live.expandFold],
+    [mid, sid, scope, key, legs, hear, live.items, live.hasMore, live.loading, live.loadingEarlier, live.loadEarlier, live.expandFold, live.earlierPage],
   );
   return {
     liveItems: own ?? live.items,
@@ -106,6 +128,8 @@ export function useEarlierStretches(mid: string, sid: string, history: readonly 
     hasMore: key ? (report?.hasMore ?? true) : live.hasMore,
     loadingEarlier: live.loadingEarlier || Boolean(report?.loading),
     loadEarlier: report?.loadEarlier ?? live.loadEarlier,
+    projectedLivePage: key ? report?.projectedLivePage : live.earlierPage,
+    projectedOtherPage: report?.projectedOtherPage,
     due: report?.due ?? 0,
     host,
   };

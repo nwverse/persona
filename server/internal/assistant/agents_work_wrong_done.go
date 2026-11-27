@@ -32,7 +32,7 @@ type wrongDoneStats struct {
 }
 
 // closedByJudge: done to-do t was closed by the hub's done judge, not by a person: on its own (done_by auto), or a
-// supervised task whose check passed, which the judge accepted for its supervisor (judgeClose: its review by "judge").
+// supervised task whose check passed before #5732, which the judge accepted for its supervisor (its review by "judge").
 func closedByJudge(t *Todo) bool {
 	switch {
 	case t.DoneBy == db.DoneByAuto:
@@ -53,5 +53,6 @@ func reopenedDetail(t *Todo, row db.TodoRow) map[string]any {
 	if row.ReopenedAt != nil {
 		at = *row.ReopenedAt
 	}
-	return map[string]any{"todo": t.ID, "done_by": t.DoneBy, "judge": closedByJudge(t), "after": at.Sub(*t.DoneAt).Seconds()}
+	return map[string]any{"todo": t.ID, "done_by": t.DoneBy, "judge": closedByJudge(t), "after": at.Sub(*t.DoneAt).Seconds(),
+		"was_finished": t.StartError == "" && !t.Cancelled()}
 }

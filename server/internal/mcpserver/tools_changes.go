@@ -11,9 +11,10 @@ import (
 type toolsListedKey struct{}
 
 type toolSnapshot struct {
-	Tools    []map[string]any
-	Revision string
-	Session  string
+	Tools     []map[string]any
+	WorkGuide map[string]bool
+	Revision  string
+	Session   string
 }
 
 // Ignore ordering, but not schema/description changes. A task update that did not

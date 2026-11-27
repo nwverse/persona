@@ -11,6 +11,7 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.inbox.*
 import persona.core.navigation.LocalDetailKey
 import persona.core.navigation.Navigator
+import persona.core.inbox.*
 
 @Composable
 internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navigator: Navigator,
@@ -41,6 +42,8 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
         addAll(muteAndRuleActions(res, record, onMute, onRule))
     })
     val selecting = selection?.selecting == true
+    val rowStatus = when { done -> null; item.isWorking || record.agent?.state in setOf("running", "queued") -> Status.Working
+        item.section == InboxTier.Action.wire -> Status.NeedsYou; else -> null }
     JSwipeActions(end = inboxRowSwipe(doneLabel, done, busy, selecting, onDone)) {
         MessageItem(sender = if (record.isAssistantRow) item.sender.orEmpty().ifBlank { record.sourceLabel }.ifBlank { item.title }
                 else item.sender.orEmpty().ifBlank { item.title }, title = if (groupEvent) record.groupName ?: stringResource(R.string.inbox_kind_group)
@@ -51,10 +54,11 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
             unread = if (record.count > 1) record.count else 0,
             selected = isInboxItemSelected(LocalDetailKey.current, item.id, record.feedId),
             position = position,
-            avatar = rememberLarkAvatar(record.avatar.takeIf { record.doc == null && !record.isAssistantRow }, onlineSince),
+            avatar = rememberLarkAvatar(record.avatar.takeIf { record.doc == null && !record.isAssistantRow }, onlineSince,
+                MessageItemTokens.avatarSize(rowStatus == Status.NeedsYou)),
             avatarIcon = when {
                 record.isAssistantRow -> PersonaIcons.persona
-                record.doc != null -> docIcon(record.doc.type)
+                record.doc != null -> docIcon(record.doc!!.type)
                 else -> null
             },
             // The assistant wears Persona's own mark with no source badge; other connectors keep a neutral mark and the hub's name.
@@ -71,8 +75,7 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
             preview = summary,
             meta = MessageItemMeta(metaText, nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
                 key = record.event.now),
-            status = when { done -> null; item.isWorking || record.agent?.state in setOf("running", "queued") -> Status.Working
-                item.section == InboxTier.Action.wire -> Status.NeedsYou; else -> null },
+            status = rowStatus,
             // The kind tag sits beside the title and a count above one is a badge; no separate source/count chip row.
             tags = emptyList(),
             // An extension may draw the page of its connector's items (inbox_item); the rest open their own page.
@@ -84,7 +87,7 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
                     ?: record.localStatus?.let { InboxLocalStatus(it) }
                 // Meta carries a recognized shared state; without one, the old mark still has its own place below it.
                 if (nowText == null) oldMark?.let { EventRowMark(it) }
-                if (!done) AgentDraftCard(record, composers, navigator, repository = repository)
+                if (!done && LocalMailAccess.current.offersReply(record)) AgentDraftCard(record, composers, navigator, repository = repository)
             })
     }
 }

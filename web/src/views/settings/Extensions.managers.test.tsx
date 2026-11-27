@@ -13,6 +13,7 @@ vi.mock("../../lib/store", async (original) => {
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 
 import { t } from "../../i18n";
+import { readExternalDirections, readExternalPolicy } from "../../features/external-sources/api";
 import { chooseManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
 import { setRoster } from "../../lib/managers";
 import { ChannelPage } from "./Channels";
@@ -46,6 +47,7 @@ let host: HTMLDivElement;
 let root: Root;
 let calls: { url: string; method: string; header: string | null; body?: string }[] = [];
 let roster: (() => void) | null = null; // set: the roster's answer waits until it is called
+let detail: Record<string, unknown> = DETAIL;
 
 const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body), headers: new Headers() });
 const flush = async () => {
@@ -55,6 +57,7 @@ const flush = async () => {
 beforeEach(() => {
   calls = [];
   roster = null;
+  detail = DETAIL;
   resetManagerChoice();
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const header = new Headers(init?.headers).get("X-Persona-Manager");
@@ -63,7 +66,8 @@ beforeEach(() => {
       if (roster === null) return reply(ROSTER);
       return new Promise((done) => (roster = () => done(reply(ROSTER))));
     }
-    if (/\/(plugins|extensions)\/example-wechat\/-\/$/.test(url)) return reply(DETAIL);
+    if (/\/(plugins|extensions)\/example-wechat\/-\/\?entry_lists=1$/.test(url)) return reply(detail);
+    if (url.endsWith("/assistant/extension-trust")) return reply({ items: [{ extension: "example-wechat", trust: "third_party", categories: ["finance"] }] });
     if (url.endsWith("/connectors")) {
       // the merged list: each manager's copy of the connector, stamped
       return reply({ connectors: [
@@ -96,11 +100,13 @@ const button = (text: string) => [...host.querySelectorAll<HTMLElement>("button,
 describe("another manager's extension page", () => {
   it("shows and changes that manager's connector, and links to its connector and channel pages", async () => {
     setRoster(ROSTER);
+    await import("../../features/external-sources/ExternalSourceSettings");
     const onChannel = vi.fn();
     const onConnector = vi.fn();
     act(() => root.render(<Extensions open="example-wechat@m-1" onOpen={() => {}} onChannel={onChannel} onConnector={onConnector} />));
     await flush();
-    expect(calls.find((c) => /example-wechat\/-\/$/.test(c.url))?.header).toBe("m-1");
+    expect(calls.find((c) => /example-wechat\/-\/\?entry_lists=1$/.test(c.url))?.header).toBe("m-1");
+    expect(calls.some((c) => c.url.includes("/external-source-bindings/summary") && c.header === "m-1")).toBe(true);
     // m-1's copy (inbox on), not the default's (off)
     const sw = host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="进收件箱"]')!;
     expect(sw.getAttribute("aria-checked")).toBe("true");
@@ -132,13 +138,62 @@ describe("another manager's extension page", () => {
     expect(onOpen).toHaveBeenLastCalledWith("example-wechat@m-1");
   });
 
-  it("the default's own page names no manager anywhere", async () => {
+  it("keeps default extension requests unscoped and stamps its external source bindings with the default owner", async () => {
+    setRoster(ROSTER);
+    await import("../../features/external-sources/ExternalSourceSettings");
+    act(() => root.render(<Extensions open="example-wechat" onOpen={() => {}} onChannel={() => {}} onConnector={() => {}} />));
+    await flush();
+    await readExternalPolicy("assistant", { provider: "wechat" }).catch(() => {});
+    await readExternalDirections("assistant").catch(() => {});
+    await act(async () => { await vi.dynamicImportSettled(); });
+    const sw = host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="进收件箱"]')!;
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+    expect(calls.some((c) => c.url.includes("/external-source-bindings/summary") && c.header === null)).toBe(true);
+    expect(calls.some((c) => c.url.includes("/assistant/external-source-policies") && c.header === null)).toBe(true);
+    expect(calls.some((c) => c.url.endsWith("/assistant/leaders") && c.header === null)).toBe(true);
+    expect(calls.filter((c) => !c.url.endsWith("/managers")).every((c) => c.header === null)).toBe(true);
+  });
+
+  it("pins the default assistant on external-source reads even when another assistant is chosen", async () => {
+    setRoster(ROSTER);
+    act(() => chooseManager("m-1"));
+    await import("../../features/external-sources/ExternalSourceSettings");
+    act(() => root.render(<Extensions open="example-wechat@assistant" onOpen={() => {}} onChannel={() => {}} onConnector={() => {}} />));
+    await flush();
+    await readExternalPolicy("assistant", { provider: "wechat" }).catch(() => {});
+    await readExternalDirections("assistant").catch(() => {});
+    expect(calls.find((c) => c.url.includes("/external-source-bindings/summary"))?.header).toBe("assistant");
+    expect(calls.find((c) => c.url.includes("/assistant/external-source-policies"))?.header).toBe("assistant");
+    expect(calls.find((c) => c.url.endsWith("/assistant/leaders"))?.header).toBe("assistant");
+  });
+
+  it("leaves out what the extension may read: extension trust is the default manager's", async () => {
+    setRoster(ROSTER);
+    act(() => root.render(<Extensions open="example-wechat@m-1" onOpen={() => {}} onChannel={() => {}} onConnector={() => {}} />));
+    await flush();
+    expect(host.querySelector("[data-extension-info-access]")).toBeNull();
+    expect(calls.some((c) => c.url.endsWith("/assistant/extension-trust"))).toBe(false);
+  });
+
+  it("shows what the default's extension may read, with live switches", async () => {
     setRoster(ROSTER);
     act(() => root.render(<Extensions open="example-wechat" onOpen={() => {}} onChannel={() => {}} onConnector={() => {}} />));
     await flush();
-    const sw = host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="进收件箱"]')!;
-    expect(sw.getAttribute("aria-checked")).toBe("false");
-    expect(calls.filter((c) => !c.url.endsWith("/managers")).every((c) => c.header === null)).toBe(true);
+    const group = host.querySelector("[data-extension-info-access]")!;
+    expect(group).not.toBeNull();
+    const switches = [...group.querySelectorAll<HTMLButtonElement>('[role="switch"]')];
+    expect(switches.length).toBeGreaterThan(0);
+    expect(switches.every((sw) => !sw.disabled)).toBe(true);
+  });
+
+  it("a read-only extension's page shows what it may read without live switches", async () => {
+    setRoster(ROSTER);
+    detail = { ...DETAIL, source: "hub.json", read_only: true };
+    act(() => root.render(<Extensions open="example-wechat" onOpen={() => {}} onChannel={() => {}} onConnector={() => {}} />));
+    await flush();
+    const switches = [...host.querySelectorAll<HTMLButtonElement>('[data-extension-info-access] [role="switch"]')];
+    expect(switches.length).toBeGreaterThan(0);
+    expect(switches.every((sw) => sw.disabled)).toBe(true);
   });
 
   it("opens a link that names no manager as the current assistant's copy", async () => {
@@ -146,7 +201,7 @@ describe("another manager's extension page", () => {
     act(() => chooseManager("m-1"));
     act(() => root.render(<Extensions open="example-wechat" onOpen={() => {}} />));
     await flush();
-    const reads = calls.filter((c) => /example-wechat\/-\/$/.test(c.url));
+    const reads = calls.filter((c) => /example-wechat\/-\/\?entry_lists=1$/.test(c.url));
     expect(reads.length).toBeGreaterThan(0);
     expect(reads.every((c) => c.header === "m-1")).toBe(true);
     expect(host.textContent).toContain("示例微信");

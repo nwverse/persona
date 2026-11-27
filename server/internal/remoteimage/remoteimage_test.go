@@ -48,8 +48,18 @@ type rig struct {
 // newRig serves handler as every host hosts names (name → comma-separated answers of the resolver).
 func newRig(t *testing.T, hosts map[string]string, handler http.HandlerFunc) *rig {
 	t.Helper()
+	return newRigOf(t, Profile{}, hosts, handler)
+}
+
+// newRigOf is newRig for profile p (Pictures for none), over TLS when p takes https only.
+func newRigOf(t *testing.T, p Profile, hosts map[string]string, handler http.HandlerFunc) *rig {
+	t.Helper()
 	r := &rig{}
-	r.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	start := httptest.NewServer
+	if p.HTTPSOnly {
+		start = httptest.NewTLSServer
+	}
+	r.srv = start(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		// Only the fetcher's requests count: a developer machine may probe a new local port on its own (GET /).
 		if req.Header.Get("User-Agent") != userAgent {
 			http.NotFound(w, req)
@@ -61,7 +71,9 @@ func newRig(t *testing.T, hosts map[string]string, handler http.HandlerFunc) *ri
 	t.Cleanup(r.srv.Close)
 	target := r.srv.Listener.Addr().String()
 	r.f = New(Options{
-		CacheDir: t.TempDir(),
+		Profile:     p,
+		tlsInsecure: p.HTTPSOnly,
+		CacheDir:    t.TempDir(),
 		resolve: func(_ context.Context, host string) ([]net.IPAddr, error) {
 			answer, ok := hosts[host]
 			if !ok {
@@ -528,5 +540,33 @@ func TestSnap(t *testing.T) {
 		if got := Snap(in); got != want {
 			t.Errorf("Snap(%d) = %d, want %d", in, got, want)
 		}
+	}
+}
+
+func TestTruncatedBodyReportsReadError(t *testing.T) {
+	part := pngBytes(t, 4, 4, false)
+	r := newRig(t, map[string]string{"img.test": publicIP}, func(w http.ResponseWriter, _ *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("ResponseWriter does not support hijacking")
+			return
+		}
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			t.Errorf("Hijack: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _ = fmt.Fprintf(buf, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: %d\r\n\r\n", len(part)+64)
+		_, _ = buf.Write(part[:len(part)/2])
+		_ = buf.Flush()
+	})
+	_, err := r.f.Get(t.Context(), "phone", "http://img.test/truncated.png", 256)
+	var e *Error
+	if !errors.As(err, &e) || e.Code != CodeFetchFailed {
+		t.Fatalf("Get = %v, want %s", err, CodeFetchFailed)
+	}
+	if strings.Contains(e.Detail, "<nil>") || !strings.Contains(e.Detail, "unexpected EOF") {
+		t.Fatalf("Error.Detail = %q, want unexpected EOF without <nil>", e.Detail)
 	}
 }

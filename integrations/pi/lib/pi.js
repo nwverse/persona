@@ -1,3 +1,5 @@
+import { assistantState, recordAssistant, assistantBeforeTurn } from './assistant.js'
+import { extractShellGates, matchShellGate } from '../../runtime-sdk/lib/shell-gates.js'
 import { wirePackageName } from '../../runtime-sdk/lib/compat.js'
 import { customTypeMatches, legacyCustomType, LEGACY_RELOAD, piHostKind } from './compat.js'
 // The pi runtime (docs/integrations/pi.md): the sessions of one pi process — a pi in a terminal, `pi --mode rpc`, or pi-web's
@@ -14,9 +16,10 @@ import { customTypeMatches, legacyCustomType, LEGACY_RELOAD, piHostKind } from '
 import { basename } from 'node:path'
 import { readFileSync, statSync } from 'node:fs'
 import { createRuntime, installCurrent, interactionId, light, page, RpcError, snippet, summaryOf, verifyPackage } from '../../runtime-sdk/index.js'
-import { ALLOW_ENTRY, alwaysAllowed, branchItems, branchKey, entryItems, firstText, HOST_ENTRY, imageOf, lastHost, lastText, partialText, toolInput, toolName } from './map.js'
+import { a2aTools } from '../../runtime-sdk/lib/a2a.js'
+import { ALLOW_ENTRY, alwaysAllowed, branchItems, branchKey, callName, entryItems, firstText, HOST_ENTRY, imageOf, lastHost, lastText, partialText, toolInput, toolName } from './map.js'
 
-export const RUNTIME_VERSION = '0.3.0'
+export const RUNTIME_VERSION = '0.4.0'
 const DISK_EVERY = 30_000 // ms: list the sessions on disk at most this often (pi-web)
 const TERMINAL_HOSTS = new Set(['herdr', 'terminal']) // resumed in the machine's terminal engine, not in pi-web
 const RELOAD_COMMAND = 'persona-reload' // the command a session runs on itself to load a new version (docs/integrations/pi.md "Automatic updates")
@@ -50,11 +53,14 @@ const BROWSERS_EVERY = 10_000 // ms: how often pi-web is asked which sessions a 
  *   agent: the agent this host serves (pi; omp for the pi fork of the same extension API). name: the agent's name in
  *   the apps. instancePrefix: the `<prefix>-<pid>` the runtime and, when instance is not given, the instance take.
  *   interactionPrefix: what a card's id starts with. resumeCommand: how its terminal resumes a session on disk.
+ *   settleEvents: which events end a turn for this agent (pi's agent_settled, which also covers its automatic retry,
+ *   compaction and queued continuation; omp's pi compatibility layer dispatches only the loop's agent_end).
  *   interruptSettleMs: how long an interrupt waits for the turn to end (tests).
  */
 export function createPiHost(deps, options = {}) {
   const web = deps.web
   const agent = options.agent ?? 'pi'
+  const settleEvents = options.settleEvents ?? ['agent_settled']
   const instancePrefix = options.instancePrefix ?? 'pi'
   const interactionPrefix = options.interactionPrefix ?? 'pi'
   // --approve: the resume runs in a herdr tab nobody watches, where pi's project Trust prompt would hold it (#9462).
@@ -76,6 +82,9 @@ export function createPiHost(deps, options = {}) {
   let installing = false
   let retired = false // stopped to hand this process over to a new version
   let idleTimer
+  let updateRetry
+  let updateRetryHash = ''
+  let updateOfferHash = ''
   const settleMs = options.interruptSettleMs ?? INTERRUPT_SETTLE
   // pi-web: the sessions a browser has open (its event streams), as its debug snapshot said last; undefined: not known.
   let browsers = { at: 0, open: undefined, asking: undefined }
@@ -88,7 +97,8 @@ export function createPiHost(deps, options = {}) {
     item,
     send,
     interrupt,
-    ...(listDisk ? { start } : {}),
+    close,
+    ...(web ? { start } : {}),
     rename,
     hasLocalClient,
   }, {
@@ -96,13 +106,19 @@ export function createPiHost(deps, options = {}) {
     name: options.name ?? (web ? 'Pi Web' : 'pi'),
     agent,
     version: RUNTIME_VERSION,
-    ...(listDisk ? { launcher: 'pi-web', launcherModel: 'pi' } : {}),
+    assistant: Boolean(web),
+    supervisionPolicy: Boolean(web),
+    ...(listDisk ? {
+      launcher: 'pi-web', launcherModel: agent,
+      // pi keeps its own model: the display label is not a model argument, so no model/effort is sent.
+      launchers: [{ name: 'pi-web', agent, model: agent, models: [{ id: 'default', name: agent, default: true }], permission_modes: ['default', 'bypassPermissions'] }],
+    } : {}),
     socketPath: options.socketPath,
     answerFirst: options.answerFirst ?? 'auto',
     log,
     connect: deps.connect,
     instance: options.instance ?? (options.instancePrefix ? `${instancePrefix}-${pid}` : undefined),
-    ...(update ? { package: { name: update.name, hash: update.hash }, onUpdate: (offer) => void takeUpdate(offer) } : {}),
+    ...(update ? { package: { name: update.name, hash: update.hash }, onHello: helloUpdate, onUpdate: (offer) => void takeUpdate(offer) } : {}),
     retryMs: options.retryMs,
     pushDelayMs: options.pushDelayMs,
     // Listing sessions only on disk is safe only where the runtime running a session answers for it.
@@ -146,7 +162,9 @@ export function createPiHost(deps, options = {}) {
     const branch = sm.getBranch()
     const cwd = sm.getCwd()
     const name = sm.getSessionName?.() ?? ''
+    const asst = assistantState(sm)
     const row = {
+      ...(asst ? { assistant: true, permission_mode: asst.mode } : {}),
       session_id: s.id,
       title: name || firstText(branch) || basename(cwd),
       cwd,
@@ -187,7 +205,7 @@ export function createPiHost(deps, options = {}) {
   }
 
   async function listSessions() {
-    const rows = [...live.values()].filter((s) => s.ctx).map(liveRow)
+    const rows = [...live.values()].filter((s) => s.ctx && !assistantState(s.ctx.sessionManager)?.closed).map(liveRow)
     if (listDisk) {
       await refreshDisk()
       // The running ones always; on disk, those the phone touched and the recent ones (the SDK's rule).
@@ -254,6 +272,17 @@ export function createPiHost(deps, options = {}) {
     const { text, images } = content(params) // once per client_msg_id: the SDK's
     const s = live.get(id)
     if (s) {
+      const previous = assistantState(s.ctx.sessionManager)
+      if (previous?.closed) throw new RpcError('This execution session is retired', 'conversation_retired')
+      if (s.running && (params.assistant === true || previous)) {
+        const policy = typeof params.supervision_instructions === 'string' ? params.supervision_instructions : previous?.policy || ''
+        const mode = params.permission_mode || params.mode || previous?.mode || 'default'
+        // Steering cannot refresh context; only an unchanged-role answer may join this turn.
+        if (!s.asking || policy !== (previous?.policy || '') || mode !== (previous?.mode || 'default')) {
+          throw new RpcError('This conversation is busy', 'busy', { delivered: 'none' })
+        }
+      }
+      recordAssistant(s.ctx.sessionManager, params, previous)
       // The turn waits on the user's answer (ask_user): this message is the answer. Steered, it would wait behind the
       // question for as long as nobody answers it.
       if (s.asking) {
@@ -275,6 +304,9 @@ export function createPiHost(deps, options = {}) {
       // A session that ran in a terminal goes back to one (the node resumes it in herdr); this node cannot.
       throw new RpcError('这个 pi 会话是在终端（herdr）里跑的，要在 herdr 里接着它：更新这台电脑上的 personad 后再发。这次没有发送', 'not_running')
     }
+    const sm = deps.SessionManager.open(path)
+    if (assistantState(sm)?.closed) throw new RpcError('This execution session is retired', 'conversation_retired')
+    recordAssistant(sm, params)
     // On disk: pi-web opens it and prompts (its extension load registers it here as it starts).
     await webCall(`/api/agent/${encodeURIComponent(id)}`, { type: 'prompt', message: text, ...(images.length ? { images } : {}) })
   }
@@ -366,13 +398,33 @@ export function createPiHost(deps, options = {}) {
 
   async function start(params) {
     if (!params.cwd) throw new RpcError('要选一个目录', 'bad_request')
+    // No prompt is released until assistant state has been durably recorded.
+    if (params.assistant === true && (params.model || params.effort || !['', 'default', 'bypassPermissions'].includes(params.permission_mode || ''))) throw new RpcError('This pi configuration is unsupported', 'readonly_unsupported')
     const prompt = typeof params.prompt === 'string' ? params.prompt.trim() : ''
-    const res = await webCall('/api/agent/new', prompt ? { cwd: params.cwd, type: 'prompt', message: prompt } : { cwd: params.cwd, type: 'ensure_session' })
+    const res = await webCall('/api/agent/new', prompt && params.assistant !== true ? { cwd: params.cwd, type: 'prompt', message: prompt } : { cwd: params.cwd, type: 'ensure_session' })
     const id = res?.sessionId
     if (!id) throw new RpcError('pi-web 没有返回会话', 'start_failed')
+    if (params.assistant === true) {
+      await refreshDisk(true)
+      const path = await diskPath(id)
+      const running = live.get(id)
+      // No prompt went to pi-web before recording the assistant: the switch rolls back.
+      if (!running && !path) throw new RpcError('The prepared pi session is not yet available', 'assistant_supervision_runtime', { delivered: 'none' })
+      recordAssistant(running?.ctx.sessionManager || deps.SessionManager.open(path), params)
+      if (prompt) await send({ ...params, session_id: id, text: prompt })
+    }
     // offline: it runs in pi-web, not here (the extension there lists it as running; the node takes that row).
     return { session: { session_id: id, cwd: params.cwd, title: basename(params.cwd), status: 'offline',
       space_id: params.cwd, space_name: basename(params.cwd), updated_at: new Date().toISOString() } }
+  }
+
+  async function close(params) {
+    await interrupt(params)
+    const s = live.get(params.session_id)
+    const path = await diskPath(params.session_id)
+    const sm = s?.ctx.sessionManager || (path ? deps.SessionManager.open(path) : undefined)
+    if (sm && assistantState(sm)) recordAssistant(sm, { assistant: true, closed: true })
+    rt.sessionsChanged(0)
   }
 
   async function webCall(path, body) {
@@ -408,6 +460,7 @@ export function createPiHost(deps, options = {}) {
 
   /** pi's API for one session (the extension's factory argument): its events, tools and approvals. */
   function register(pi, toolDeps) {
+    const assistantTools = new Set()
     let current // this API's session id (a /new in the terminal moves it to another)
     // The session's own way to load a new version: pi gives an extension reload() only in a command's context, so it
     // runs this command on itself (sendUserMessage with commands on). Only where the command exists: anything else
@@ -456,11 +509,15 @@ export function createPiHost(deps, options = {}) {
       if (want) setTimeout(maybeReload, 0) // a session that opened on the old code (pi cached it): switch it too
     })
     pi.on('session_shutdown', (_e, ctx) => drop(ctx?.sessionManager?.getSessionId() ?? current))
+    pi.on('before_agent_start', (event, ctx) => assistantBeforeTurn(rt, pi, ctx, event, assistantTools))
     pi.on('agent_start', (_e, ctx) => {
       track(ctx).running = true
       rt.sessionsChanged(0)
     })
-    pi.on('agent_settled', (_e, ctx) => {
+    // settleEvents: pi's agent_settled, or the agent's own word for a turn that is over (omp's agent_end; the events
+    // of an agent that dispatches more than one of them settle on the first, as the same turn's later ones change
+    // nothing).
+    for (const event of settleEvents) pi.on(event, (_e, ctx) => {
       const s = track(ctx)
       s.running = false
       wakeSettled(s)
@@ -484,8 +541,29 @@ export function createPiHost(deps, options = {}) {
       track(ctx)
       rt.sessionsChanged()
     })
-    if (approve.size > 0) pi.on('tool_call', (e, ctx) => approval(track(ctx), e, ctx))
+    pi.on('tool_call', (e, ctx) => approval(track(ctx), e, ctx))
     if (toolDeps?.Type) pi.registerTool(askUserTool(toolDeps.Type, track))
+    if (toolDeps?.A2AType || toolDeps?.Type) {
+      for (const tool of piA2ATools(toolDeps.A2AType ?? toolDeps.Type, track)) pi.registerTool(tool)
+    }
+  }
+
+  function piA2ATools(Type, track) {
+    return a2aTools.map(({ name, description, input }) => ({
+      name,
+      label: name,
+      description,
+      parameters: Type.Object(Object.fromEntries(Object.entries(input.properties).map(([key, property]) => {
+        const schema = property.type === 'boolean' ? Type.Boolean() : Type.String(property.enum ? { enum: property.enum } : undefined)
+        return [key, input.required.includes(key) ? schema : Type.Optional(schema)]
+      }))),
+      executionMode: 'sequential',
+      async execute(_id, args, signal, _onUpdate, ctx) {
+        const session = track(ctx)
+        const res = await rt.callTool({ name, args, session_id: session.id }, { signal })
+        return { content: res.content ?? [], details: { error: res.is_error === true } }
+      },
+    }))
   }
 
   /** Records where the session runs now when that changed (HOST_ENTRY): pi-web, herdr, or a terminal outside it. */
@@ -504,7 +582,25 @@ export function createPiHost(deps, options = {}) {
    */
   async function approval(s, e, ctx) {
     const name = e.toolName ?? e.name
-    if (!approve.has(name)) return undefined
+    const asst = assistantState(ctx.sessionManager)
+    if (asst?.closed) return { block: true, reason: 'This execution session is retired' }
+    // Persona actions retain their dedicated approval/scope path even when
+    // ordinary native tools use bypassPermissions. Failed rule reads stay closed.
+    if (asst && ['bash', 'shell'].includes(String(name).toLowerCase())) {
+      const input = e.input ?? e.args ?? {}
+      const command = input.command ?? input.cmd
+      if (typeof command !== 'string' || !command.trim()) return { block: true, reason: 'The shell command could not be checked. Nothing ran.' }
+      try {
+        if (!rt.hubConnected) throw new Error('rules unavailable')
+        const tools = await rt.tools({ assistant: true, sessionId: s.id, signal: ctx.signal })
+        if (!rt.hubConnected) throw new Error('rules unavailable')
+        if (matchShellGate(command, extractShellGates(tools))) return { block: true, reason: 'Use the Persona action tool instead of running this command directly.' }
+      } catch {
+        return { block: true, reason: 'Persona command rules are unavailable. Nothing ran.' }
+      }
+    }
+    if (asst?.mode === 'bypassPermissions') return undefined
+    if (!asst && !approve.has(name)) return undefined
     const entries = ctx.sessionManager.getEntries()
     if (alwaysAllowed(entries, name)) return undefined // "Always allow" on an earlier card of this session
     const input = e.input ?? e.args ?? {}
@@ -513,7 +609,7 @@ export function createPiHost(deps, options = {}) {
     const askPhone = async () => {
       const res = await rt.ask({
         id: interactionId(interactionPrefix, s.id, 'permission', e.toolCallId), kind: 'permission', session_id: s.id,
-        tool_name: toolName(name), tool_use_id: e.toolCallId, tool_input: toolInput(name, input), summary,
+        tool_name: callName(name, input), tool_use_id: e.toolCallId, tool_input: toolInput(name, input), summary,
         // Offered only where it can be kept: the grant is written into the session (ALLOW_ENTRY).
         ...(typeof s.pi.appendEntry === 'function' ? { always_label: `本会话不再问 ${toolName(name)}` } : {}),
       }, { signal: ctx.signal })
@@ -558,14 +654,58 @@ export function createPiHost(deps, options = {}) {
     return ![...live.values()].some((s) => s.running) && !rt.busy()
   }
 
-  async function takeUpdate(offer) {
-    if (!update || installing || retired || offer?.name !== update.name || offer.hash === update.hash || bad.has(offer.hash)) return
+  function helloUpdate(res) {
+    const offer = res?.update
+    updateOfferHash = offer?.name === update.name && typeof offer.hash === 'string' && offer.hash !== update.hash ? offer.hash : ''
+    clearUpdateRetry()
+  }
+
+  function currentUpdate(offer) {
+    return !retired && started && rt.ready && offer?.hash === updateOfferHash
+  }
+
+  function clearUpdateRetry() {
+    clearTimeout(updateRetry)
+    updateRetry = undefined
+    updateRetryHash = ''
+  }
+
+  function retryUpdate(offer, pkg) {
+    if (!currentUpdate(offer)) return
+    clearTimeout(updateRetry)
+    updateRetryHash = offer.hash
+    updateRetry = setTimeout(() => takeUpdate(offer, pkg), options.retryMs ?? 1000)
+    updateRetry.unref?.()
+  }
+
+  async function takeUpdate(offer, pkg) {
+    if (offer?.hash !== updateRetryHash) clearUpdateRetry()
+    if (!currentUpdate(offer) || offer.name !== update.name || offer.hash === update.hash || bad.has(offer.hash)) return
+    if (installing) {
+      retryUpdate(offer, pkg)
+      return
+    }
     installing = true
     try {
-      const { hash, files } = verifyPackage(await rt.fetchPackage(update.name), update.name)
-      if (hash === update.hash || bad.has(hash)) return
-      installCurrent(update.store, hash, files)
+      if (!pkg) {
+        let fetched
+        try {
+          fetched = await rt.fetchPackage(update.name)
+          if (!currentUpdate(offer)) return
+        } catch (err) {
+          if (currentUpdate(offer)) {
+            log(`persona: ${update.name} package fetch failed: ${err.message}; retrying`)
+            retryUpdate(offer)
+          }
+          return
+        }
+        pkg = verifyPackage(fetched, update.name)
+      }
+      const { hash, files } = pkg
+      if (!currentUpdate(offer) || hash !== offer.hash || hash === update.hash || bad.has(hash)) return
+      installCurrent(update.store, hash, files, { keep: [update.hash] })
       log(`persona: ${update.name} ${hash.slice(0, 12)} from the node is installed (running ${update.hash.slice(0, 12)})`)
+      clearUpdateRetry()
       if (update.exit) {
         rt.stop()
         update.exit(hash)
@@ -577,8 +717,14 @@ export function createPiHost(deps, options = {}) {
       idleTimer.unref?.()
       maybeReload()
     } catch (err) {
-      bad.add(offer.hash)
-      log(`persona: ${update.name} update to ${offer.hash.slice(0, 12)} failed: ${err.message}`)
+      if (!currentUpdate(offer)) return
+      if (err.code === 'ERR_RUNTIME_STORE_BUSY') {
+        retryUpdate(offer, pkg)
+        log(`persona: ${update.name} update store is busy; retrying ${offer.hash.slice(0, 12)}`)
+      } else {
+        bad.add(offer.hash)
+        log(`persona: ${update.name} update to ${offer.hash.slice(0, 12)} failed: ${err.message}`)
+      }
     } finally {
       installing = false
     }
@@ -597,10 +743,12 @@ export function createPiHost(deps, options = {}) {
       bad.add(want)
       want = ''
       clearInterval(idleTimer)
+      clearTimeout(updateRetry)
       return
     }
     retired = true
     clearInterval(idleTimer)
+    clearTimeout(updateRetry)
     log(`persona: switching ${sessions.length} session(s) to ${update.name} ${want.slice(0, 12)}`)
     rt.stop()
     for (const s of sessions) {
@@ -706,6 +854,7 @@ export function createPiHost(deps, options = {}) {
     },
     stop() {
       clearInterval(idleTimer)
+      clearTimeout(updateRetry)
       rt.stop()
       started = false
     },

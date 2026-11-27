@@ -25,6 +25,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -35,10 +39,13 @@ import persona.feature.inbox.LarkDocumentLink
 import persona.feature.inbox.LarkDocumentPrefetch
 import persona.feature.inbox.LarkLinkPicks
 import persona.feature.inbox.LarkMomentsLink
-import persona.feature.inbox.LarkNativeLink
+import persona.core.inbox.LarkNativeLink
 import persona.feature.inbox.LarkTextPick
 import persona.feature.inbox.ManagerUriHandler
-import persona.feature.inbox.larkNativeLink
+import persona.core.inbox.larkNativeLink
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -68,11 +75,14 @@ fun ChatLinkHost(
      * those read ahead, are read through it, as are links tapped in them; null: none named.
      */
     manager: String? = null,
+    /** Deferred scroll-state reader so callers avoid recomposing the whole page when scrolling starts or stops. */
+    scrolling: (() -> Boolean)? = null,
     content: @Composable (bottomInset: Dp) -> Unit,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val webFeatures = LocalChatWebFeatures.current
+    val webDownloader = LocalChatWebDownloader.current
     val pool = remember(context, webFeatures) { ChatWebViewPool(context, webFeatures) }
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -86,11 +96,13 @@ fun ChatLinkHost(
     var linkManager by remember { mutableStateOf<String?>(null) }
     /** "machine name :port" while the sheet shows one of the machine's ports (docs/operations/ports.md "Forwarding"). */
     var forwarded by remember { mutableStateOf<String?>(null) }
-    val ports by rememberUpdatedState(LocalChatPorts.current)
+    val portsState = rememberUpdatedState(LocalChatPorts.current)
+    val ports by portsState
     var unsupported by remember { mutableStateOf(false) }
     var external by remember { mutableStateOf<String?>(null) }
     var opening by remember { mutableIntStateOf(0) }
     var closeRequest by remember { mutableIntStateOf(0) }
+    val linkMenu = remember { ChatLinkMenuState() }
     val uriHandler = remember { object : ManagerUriHandler {
         override fun openUri(uri: String) = openUri(uri, null)
         override fun openUri(uri: String, manager: String?) {
@@ -116,6 +128,8 @@ fun ChatLinkHost(
                     }
                 }
                 ChatLinkKind.App -> {
+                    // Route-table links keep their original URL so selecting another hub can be completed by the shell.
+                    if (hubLinks?.invoke(uri) == true) { if (url != null) closeRequest++; return }
                     val link = ChatLinks.appLink(uri)
                     val navigate = appLinks
                     if (link == null || navigate == null) unsupported = true
@@ -147,22 +161,7 @@ fun ChatLinkHost(
         context.applicationContext.registerComponentCallbacks(callbacks)
         onDispose { context.applicationContext.unregisterComponentCallbacks(callbacks) }
     }
-    LaunchedEffect(preloadUrls, isScrolling, lifecycleState) {
-        if (!isScrolling && lifecycleState.isAtLeast(Lifecycle.State.STARTED)) {
-            delay(600)
-            pool.warmUp()
-            // A machine's port is never preloaded: it would load the phone's own localhost (docs/operations/ports.md). Nor is a
-            // Feishu link the card shows natively: its page loads only on "Switch to web page" (its document is read ahead below).
-            preloadUrls.mapNotNull { ChatLinks.webUrl(it) }
-                .filter { PortLinks.link(it, ports?.hostnames.orEmpty()) == null && larkNativeLink(it, lark) == null }
-                .take(3).forEach { pool.preload(it) }
-        }
-    }
-    // Feishu documents among the links are read ahead into the reader's cache, as on the web (iOS skips them too).
-    val documentsAhead = remember(preloadUrls, lark) {
-        preloadUrls.mapNotNull { ChatLinks.webUrl(it) }.filter { larkNativeLink(it, lark) is LarkNativeLink.Document }.take(3)
-    }
-    if (documentsAhead.isNotEmpty() && !isScrolling && lifecycleState.isAtLeast(Lifecycle.State.STARTED)) LarkDocumentPrefetch(documentsAhead, manager)
+    ChatLinkPrefetch(preloadUrls, isScrolling, scrolling, lifecycleState, pool, portsState, lark, manager)
     val picks = if (onHandToPersona != null) listOf(ChatLinkPick.HandToPersona)
         else listOfNotNull(ChatLinkPick.Edit.takeIf { onEdit != null }, ChatLinkPick.Context.takeIf { onContext != null })
     // A web page is over the page: the page's glass goes opaque and the dock makes way (LocalWebSheets).
@@ -175,7 +174,11 @@ fun ChatLinkHost(
     // in layout and effects, and in composition only while a card is open; a BoxWithConstraints here composed the whole
     // conversation again on each of those frames.
     var hostHeight by remember { mutableIntStateOf(-1) }
-    CompositionLocalProvider(LocalUriHandler provides uriHandler, LocalChatLinkOpening provides opening) {
+    CompositionLocalProvider(
+        LocalUriHandler provides uriHandler,
+        LocalChatLinkOpening provides opening,
+        LocalChatLinkMenu provides linkMenu,
+    ) {
         Box(modifier.fillMaxSize().onGloballyPositioned { hostTop = it.positionInWindow().y }.onSizeChanged { hostHeight = it.height }) {
             // safeDrawing includes the keyboard: read it in a derived state, whose value (the top) does not move with it.
             val safeDrawing = WindowInsets.safeDrawing
@@ -247,18 +250,52 @@ fun ChatLinkHost(
                         }
                     }, onWebpage = { nativeWebpage = it }) { title, whole -> nativeTitle = title; nativeWhole = whole }
                 }
+                val currentDownloader by rememberUpdatedState(webDownloader)
+                val currentFeedback by rememberUpdatedState(feedback)
                 if (view != null) {
                     // Only a committed composition activates the view; acquires from abandoned compositions stay evictable.
                     SideEffect { view.picks = picks; pool.activate(view) }
                     // Only the view going away releases it: a change of picks must not destroy the page being shown.
                     DisposableEffect(view) {
+                        val downloadJob = SupervisorJob(scope.coroutineContext[Job])
+                        val downloadScope = CoroutineScope(scope.coroutineContext + downloadJob)
                         view.onPick = picked
                         view.onExternal = { external = it }
-                        onDispose { pool.release(view) }
+                        view.onDownload = { request ->
+                            val key = view.downloadGuard.tryStart(request.url)
+                            if (key != null) {
+                                val isForwardedPage = forwarded != null
+                                downloadScope.launch {
+                                    var completed = false
+                                    try {
+                                        val _ = handleWebDownload(context, resources, currentDownloader, request, isForwardedPage) { notice, style ->
+                                            val _ = currentFeedback?.notice(notice, style)
+                                        }
+                                        completed = true
+                                    } finally {
+                                        view.downloadGuard.finish(key, applyCooldown = completed)
+                                    }
+                                }
+                            }
+                        }
+                        onDispose {
+                            downloadJob.cancel()
+                            view.downloadGuard.clear()
+                            pool.release(view)
+                        }
                     }
                 }
-                fun close() { scope.launch { drag.animateTo(LinkDetent.Hidden) } }
-                fun back() { if (view != null && !view.gone && view.canGoBack()) view.goBack() else close() }
+                fun close() {
+                    view?.exitCustomView()
+                    scope.launch { drag.animateTo(LinkDetent.Hidden) }
+                }
+                fun back() {
+                    when {
+                        view != null && view.exitCustomView() -> Unit
+                        view != null && !view.gone && view.canGoBack() -> view.goBack()
+                        else -> close()
+                    }
+                }
                 BackHandler { back() }
                 val pixels = geometry.pixels
                 val offset = drag.offset.takeIf { it.isFinite() } ?: pixels
@@ -316,7 +353,7 @@ fun ChatLinkHost(
                                     },
                                     JAction(stringResource(R.string.chat_link_share), PhIcons.ShareNetwork) {
                                         val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, page())
-                                        runCatching { context.startActivity(Intent.createChooser(send, null)) }
+                                        val _ = runCatching { context.startActivity(Intent.createChooser(send, null)) }
                                     }.takeIf { forwarded == null },
                                 ))
                             }
@@ -371,7 +408,57 @@ fun ChatLinkHost(
                         close()
                     }
                 }
+                val customView = view?.takeUnless { it.gone }?.customView
+                if (view != null && customView != null) {
+                    JFullScreen(onDismiss = { view.exitCustomView() }) {
+                        val dialogView = LocalView.current
+                        SideEffect {
+                            (dialogView.parent as? DialogWindowProvider)?.window?.let { window ->
+                                WindowCompat.getInsetsController(window, dialogView).run {
+                                    isAppearanceLightStatusBars = false
+                                    isAppearanceLightNavigationBars = false
+                                }
+                            }
+                        }
+                        DisposableEffect(dialogView) {
+                            val controller = (dialogView.parent as? DialogWindowProvider)?.window?.let { window ->
+                                WindowCompat.getInsetsController(window, dialogView)
+                            }
+                            controller?.run {
+                                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                                hide(WindowInsetsCompat.Type.systemBars())
+                            }
+                            onDispose {
+                                controller?.show(WindowInsetsCompat.Type.systemBars())
+                            }
+                        }
+                        Box(Modifier.fillMaxSize().background(palette.mediaBackdrop).testTag("chat_link_custom_view")) {
+                            key(customView) {
+                                AndroidView(
+                                    factory = { (customView.parent as? ViewGroup)?.removeView(customView); customView },
+                                    modifier = Modifier.fillMaxSize(),
+                                    onRelease = { (it.parent as? ViewGroup)?.removeView(it) },
+                                )
+                            }
+                        }
+                    }
+                }
             }
+        }
+        linkMenu.target?.let { menuTarget ->
+            val copy = rememberCopy()
+            val copied = stringResource(R.string.chat_link_copied)
+            val noBrowser = stringResource(R.string.chat_link_no_browser)
+            ChatLinkMenuOverlay(
+                target = menuTarget,
+                resources = resources,
+                ports = ports,
+                onDismiss = linkMenu::close,
+                onOpenInApp = { link -> uriHandler.openUri(link, manager) },
+                onOpenInBrowser = { link -> if (!openInSystemBrowser(context, link)) feedback?.notice(noBrowser) },
+                onCopy = { link -> copy(link, copied) },
+                onShare = { link -> shareLinkText(context, link) },
+            )
         }
         if (unsupported) JDialog(onDismiss = { unsupported = false }, title = stringResource(R.string.chat_link_unsupported_title),
             text = stringResource(R.string.chat_link_unsupported_text), confirm = stringResource(R.string.chat_link_ok) to { unsupported = false }, dismiss = null)
@@ -417,6 +504,39 @@ internal data class ChatPorts(
 )
 
 internal val LocalChatPorts = androidx.compose.runtime.compositionLocalOf<ChatPorts?> { null }
+
+/** Leaf scope for link prefetching so scroll start/stop never recomposes [ChatLinkHost] or its conversation content. */
+@Composable
+private fun ChatLinkPrefetch(
+    preloadUrls: List<String>,
+    isScrolling: Boolean,
+    scrolling: (() -> Boolean)?,
+    lifecycleState: Lifecycle.State,
+    pool: ChatWebViewPool,
+    ports: State<ChatPorts?>,
+    lark: persona.core.contracts.LarkFeatures,
+    manager: String?,
+) {
+    val activeScroll = scrolling?.invoke() ?: isScrolling
+    LaunchedEffect(preloadUrls, activeScroll, lifecycleState) {
+        if (!activeScroll && lifecycleState.isAtLeast(Lifecycle.State.STARTED)) {
+            delay(600)
+            pool.warmUp()
+            // A machine's port is never preloaded: it would load the phone's own localhost (docs/operations/ports.md). Nor is a
+            // Feishu link the card shows natively: its page loads only on "Switch to web page" (its document is read ahead below).
+            preloadUrls.mapNotNull { ChatLinks.webUrl(it) }
+                .filter { PortLinks.link(it, ports.value?.hostnames.orEmpty()) == null && larkNativeLink(it, lark) == null }
+                .take(3).forEach { pool.preload(it) }
+        }
+    }
+    // Feishu documents among the links are read ahead into the reader's cache, as on the web (iOS skips them too).
+    val documentsAhead = remember(preloadUrls, lark) {
+        preloadUrls.mapNotNull { ChatLinks.webUrl(it) }.filter { larkNativeLink(it, lark) is LarkNativeLink.Document }.take(3)
+    }
+    if (documentsAhead.isNotEmpty() && !activeScroll && lifecycleState.isAtLeast(Lifecycle.State.STARTED)) {
+        LarkDocumentPrefetch(documentsAhead, manager)
+    }
+}
 
 /** The link card's room in the host, in pixels: its height and where the card's top stops. */
 private data class LinkGeometry(val pixels: Float, val above: Float)

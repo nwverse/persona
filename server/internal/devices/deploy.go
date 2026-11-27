@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -36,19 +37,10 @@ func isPersonaNodeBuild(bin string) bool {
 	return strings.HasPrefix(filepath.Base(bin), nodeproto.ProgramPersonaNode+"-")
 }
 
-// deviceNode says the node runs from the device's own file (bin/persona-node), whichever program that holds now (a hub
-// without a persona-node build of its version sends personad there): its updates go to that file, and bring
-// persona-node again once the hub has it.
+// deviceNode identifies a device's own executable path for SSH deployment, including paths that hold personad
+// from an earlier deployment.
 func deviceNode(info proto.NodeInfo) bool {
 	return info.Program == nodeproto.ProgramPersonaNode || (info.Executable != "" && update.IsDeviceFile(info.Executable))
-}
-
-// nodeProgram is the program to send a node: persona-node to one that runs from the device's own file.
-func nodeProgram(info proto.NodeInfo) string {
-	if deviceNode(info) {
-		return nodeproto.ProgramPersonaNode
-	}
-	return info.Program
 }
 
 // remoteTarget is the file an ssh deploy of bin replaces on the machine: the device's own file for a node that runs
@@ -89,64 +81,144 @@ var errFallbackOnRedeploy = errors.New("a fallback build is sent only on Redeplo
 
 var errAutoNodeUpdatesDisabled = errors.New("automatic node upgrades are disabled")
 
+// deployRun is one deployment's private completion signal. Its error is written before done closes and never
+// overwritten by a later deployment.
+type deployRun struct {
+	done chan struct{}
+	err  error
+}
+
+// Redeploy starts the same explicit deployment as the app's Redeploy route and waits for its outcome. Canceling the
+// caller stops only the wait: the deployment keeps its own manager context and machine-card state.
+func (d *Devices) Redeploy(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m := d.machineByID(id)
+	if m == nil {
+		return errUnknownMachine
+	}
+	run, err := m.startDeployOf(false)
+	if err != nil {
+		return err
+	}
+	return m.waitDeploy(ctx, run)
+}
+
+func (m *Machine) waitDeploy(ctx context.Context, run *deployRun) error {
+	if run == nil {
+		return errors.New("redeploy is running but its result cannot be awaited")
+	}
+	select {
+	case <-run.done:
+		return run.err
+	case <-ctx.Done():
+		select {
+		case <-run.done:
+			return run.err
+		default:
+		}
+		return fmt.Errorf("redeploy is still running; its result is not confirmed: %w", ctx.Err())
+	}
+}
+
+// beginDeployLocked starts one outcome wait for every caller that joins this deployment.
+func (m *Machine) beginDeployLocked(phase string) *deployRun {
+	m.deploying, m.deployErr, m.deployPhase = true, "", phase
+	m.deploySource, m.deployVersion = "", ""
+	m.deployRun = &deployRun{done: make(chan struct{})}
+	return m.deployRun
+}
+
+func (m *Machine) endDeployLocked(err error) {
+	m.deploying, m.deployPhase = false, ""
+	if m.deployRun != nil {
+		m.deployRun.err = err
+		close(m.deployRun.done)
+		m.deployRun = nil
+	}
+}
+
 // startDeploy checks a deploy can start and runs it in the background; the machine list shows its progress. It is the
 // explicit Redeploy: any build the node's platform resolves to goes, a fallback too.
-func (m *Machine) startDeploy() error { return m.startDeployOf(false) }
+func (m *Machine) startDeploy() error {
+	_, err := m.startDeployOf(false)
+	return err
+}
 
 // startAutoDeploy is startDeploy for the updates the manager makes by itself (a machine back on another build, the
 // update after the hub's): only a build of the hub's own version goes, the hub's or its release's; a fallback build
 // is left to Redeploy (errFallbackOnRedeploy), as nobody chose to run another version than the hub's.
-func (m *Machine) startAutoDeploy() error { return m.startDeployOf(true) }
+func (m *Machine) startAutoDeploy() error {
+	_, err := m.startDeployOf(true)
+	return err
+}
 
-func (m *Machine) startDeployOf(auto bool) error {
+func (m *Machine) startDeployOf(auto bool) (*deployRun, error) {
 	if auto && !m.d.config().AutoUpdateNodes {
-		return errAutoNodeUpdatesDisabled
+		return nil, errAutoNodeUpdatesDisabled
 	}
 	if m.d.linkSwitchUnfinished(m.cfg.ID) { // the switch replaces the node's connection and may install its service
-		return errLinkSwitchDeploy
+		return nil, errLinkSwitchDeploy
 	}
 	m.mu.Lock()
 	if m.deploying {
+		run := m.deployRun
 		m.mu.Unlock()
-		return nil
+		return run, nil
 	}
 	blocked := m.canDeployLocked()
 	info, linked := m.info, m.rpcDeploymentLocked()
 	m.mu.Unlock()
 	if blocked != nil {
-		return blocked
+		return nil, blocked
 	}
 	// The build for its platform and kind of program (packages.go): looked up afresh, a release's manifest at most.
 	lookup, cancel := context.WithTimeout(m.d.deployContext(), packageLookup)
-	pkg, err := m.d.nodePackageFor(lookup, info.OS, info.Arch, nodeProgram(info))
+	pkg, err := m.d.nodePackageForInfo(lookup, info)
 	cancel()
 	m.d.changed() // what the machine should run may be another build now
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if auto && pkg.Fallback {
-		return errFallbackOnRedeploy
+	if auto {
+		cfg := m.d.config()
+		if !cfg.AutoUpdateNodes {
+			return nil, errAutoNodeUpdatesDisabled
+		}
+		if pkg.Fallback || pkg.Version != cfg.HubVersion {
+			return nil, errFallbackOnRedeploy
+		}
+	}
+	// A temporary local node takes the manager's build when spawned. For a
+	// resident, never put a stand-in release into a shared local executable.
+	if m.cfg.Kind == "local" && (pkg.Fallback || pkg.Version != m.d.hubVersion()) {
+		return nil, i18n.Err("hub-machine.deploy_local")
 	}
 	if linked {
-		return m.startRPCDeployment(pkg, nil)
+		return m.startRPCDeploymentRun(pkg, nil)
 	}
 	m.mu.Lock()
 	if m.deploying {
+		run := m.deployRun
 		m.mu.Unlock()
-		return nil
+		return run, nil
 	}
-	m.deploying, m.deployErr, m.deployPhase = true, "", "transferring"
+	run := m.beginDeployLocked("transferring")
 	m.mu.Unlock()
 	m.d.changed()
 	target := pkg.Version
 	go func() {
 		ctx := m.d.deployContext()
-		bin, err := m.d.fetchPackage(ctx, pkg) // a release's: downloaded and checked first (still "transferring")
+		bin, err := m.fetchDeployment(ctx, pkg) // a release's: downloaded and checked first (still "transferring")
+		if err == nil {
+			err = m.d.CheckDevelopmentTarget(ctx, pkg.development)
+		}
 		if err == nil {
 			err = m.deploy(ctx, bin, target)
 		}
 		m.mu.Lock()
-		m.deploying, m.deployPhase = false, ""
+		m.endDeployLocked(err)
 		if err != nil {
 			m.deployErr = err.Error()
 		}
@@ -159,7 +231,7 @@ func (m *Machine) startDeployOf(auto bool) error {
 		m.saveDeployOutcome(ctx, target, err)
 		m.d.changed()
 	}()
-	return nil
+	return run, nil
 }
 
 // deployExitWrapper is the deploy script's exit status when bin is a script (remote_bin a wrapper that sets the node's
@@ -167,10 +239,10 @@ func (m *Machine) startDeployOf(auto bool) error {
 // machine uid, so nothing is replaced and the owner updates the binary the wrapper runs.
 const deployExitWrapper = 5
 
-// deployScript is the remote command that installs the gzipped binary on stdin as bin and stops a resident node so
-// launchd restarts it. The staged binary must run `version` before it can replace the installed one or stop the node.
+// deployScript installs the gzipped binary on stdin as bin and asks a
+// legacy resident service using it to reload once idle.
+// The staged binary must run `version` before it can replace the installed one.
 // An installed file that is a script is never replaced (deployExitWrapper); one that is replaced is kept as bin.prev.
-// The pkill pattern is written so it does not match this ssh session's own command line.
 // personaNode: the binary is persona-node, which never replaces a file that is not persona-node already (a personad,
 // which may run a hub or a manager too, put there since the node said what it runs). The file says which it is in
 // node-update-check; a build that does not say is personad.
@@ -184,19 +256,44 @@ func deployScript(bin string, personaNode bool) string {
 		keep = `if [ -e "$b" ] && ! "$b" node-update-check 2>/dev/null | grep -q '"program":"persona-node"'; then rm -f "$b.new"; ` +
 			`echo "$b is personad, which may run a hub or a manager too: not replacing it with persona-node" >&2; exit 3; fi; `
 	}
-	return posixCommand("set -e; b=" + target + `; mkdir -p "$(dirname "$b")"; gzip -dc > "$b.new"; chmod 755 "$b.new"; ` + keep +
+	legacy := shellQuote(compat.DaemonBinary)
+	return posixCommand("set -e; b=" + target + `; mkdir -p "$(dirname "$b")"; d=$(cd -P "$(dirname "$b")" && pwd); b="$d/${b##*/}"; ` +
+		`if [ -L "$b" ]; then case "${b##*/}:$(readlink "$b")" in ` + legacy + `:personad|` + legacy + `:"$d/personad") b="$d/personad";; *) exit ` +
+		strconv.Itoa(deployExitWrapper) + `;; esac; fi; gzip -dc > "$b.new"; chmod 755 "$b.new"; ` + keep +
 		`if ! "$b.new" version >/dev/null; then rm -f "$b.new"; echo "$b failed its staged version check: keeping the current binary and node" >&2; exit 4; fi; ` +
 		`if [ -f "$b" ] && [ "$(head -c 2 "$b")" = '#!' ]; then rm -f "$b.new"; ` +
 		`echo "$b is a script, not personad: not replacing it (update the personad it runs instead)" >&2; exit ` + strconv.Itoa(deployExitWrapper) + `; fi; ` +
 		`if [ -f "$b" ]; then ln -f "$b" "$b.prev" 2>/dev/null || cp -p "$b" "$b.prev"; fi; ` +
-		`mv "$b.new" "$b"; pkill -f '` + residentNodePattern + `' || true`)
+		`mv "$b.new" "$b"; ` + reloadLegacyResident)
 }
 
-// residentNodePattern is what the deploy script's pkill -f looks for (an extended regular expression): a resident node's
-// command line, as persona-link's service runs it (`<data dir>/bin/personad node --attach`, or bin/persona-node on a
-// device), or an older installed service whose executable still has its original name.
-// The brackets keep it from matching the remote command itself, whose text contains the pattern.
-const residentNodePattern = compat.ResidentNodePattern
+// Capable nodes use update RPC directly. Older installations check their
+// managed services and signal only the main process using the replaced image.
+const reloadLegacyResident = `
+if [ -d /proc ] && command -v systemctl >/dev/null; then
+  for unit in personad-node.service persona-node.service ` + compat.HubService + `-node.service; do
+    pid=$(systemctl --user show --property=MainPID --value "$unit" 2>/dev/null) || continue
+    case "$pid" in ''|*[!0-9]*) continue;; esac
+    [ "$pid" -gt 1 ] || continue
+    exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+    [ "$exe" = "$b (deleted)" ] || continue
+    awk '$1 == "SigCgt:" && $2 ~ /[13579bdf]$/ { ok=1 } END { exit !ok }' "/proc/$pid/status" 2>/dev/null || continue
+    kill -HUP "$pid" 2>/dev/null || true
+    break
+  done
+elif command -v launchctl >/dev/null; then
+  for label in com.persona.node ` + compat.NodeLabel + `; do
+    job=$(launchctl print "gui/$(id -u)/$label" 2>/dev/null) || continue
+    exe=$(printf '%s\n' "$job" | sed -n 's/^[[:space:]]*program = //p')
+    [ "$exe" = "$b" ] || { [ "$exe" = "$d/` + compat.DaemonBinary + `" ] && [ "$b" = "$d/personad" ]; } || continue
+    pid=$(printf '%s\n' "$job" | sed -n 's/^[[:space:]]*pid = //p')
+    case "$pid" in ''|*[!0-9]*) continue;; esac
+    [ "$pid" -gt 1 ] || continue
+    kill -HUP "$pid" 2>/dev/null || true
+    break
+  done
+fi
+`
 
 // shellQuote quotes s for a POSIX shell only (the script inside posixCommand); a remote command goes through
 // anyShellQuote.
@@ -329,28 +426,24 @@ func (d *Devices) updateNodes(ctx context.Context) {
 	}
 	for _, m := range d.machinesNow() {
 		m.mu.Lock()
-		local, online, info := m.cfg.Kind == "local", m.online, m.info
-		offlineLinked := !m.online && m.rpcDeploymentLocked()
+		temporary := m.cfg.Kind == "local" && !m.residentUpdateLocked()
+		online, info := m.online, m.info
+		offlineLinked := !online && !temporary && m.rpcDeploymentLocked()
 		m.mu.Unlock()
+		if temporary {
+			continue
+		}
 		if offlineLinked {
 			if err := m.queueOfflineNodeUpdate(ctx); err != nil {
 				d.logf("update: [%s] queue node update: %v", m.cfg.ID, err)
 			}
 			continue
 		}
-		if local || !online {
+		if !online || !buildDiffers(d.hubVersion(), info.Version) {
 			continue
 		}
-		// The build its platform resolves to (the hub's, or the newest release this manager drives); not known while
-		// the release site is away, and then left alone. A fallback build is offered, sent only on Redeploy.
-		pkg, known := d.resolvedPackageKnown(ctx, info)
-		if !known || !buildDiffers(pkg.Version, info.Version) {
-			continue
-		}
-		if pkg.Fallback {
-			d.logf("update: [%s] node %s is not build %s, a fallback (not the hub's version): sent only on Redeploy", m.cfg.ID, info.Version, pkg.Version)
-			continue
-		}
+		// An explicit package check must look beyond a cached fallback. A
+		// private publisher may have activated the exact build since then.
 		if err := m.startAutoDeploy(); err != nil {
 			d.logf("update: [%s] %v", m.cfg.ID, err)
 			continue
@@ -387,8 +480,9 @@ func (m *Machine) updateOnConnect(ctx context.Context) {
 	}
 	m.mu.Lock()
 	online, deploying, info := m.online, m.deploying, m.info
+	temporary := m.cfg.Kind == "local" && !m.residentUpdateLocked()
 	m.mu.Unlock()
-	if m.cfg.Kind == "local" || m.d.hubVersion() == "" || !online || deploying {
+	if temporary || m.d.hubVersion() == "" || !online || deploying {
 		return
 	}
 	if m.d.linkSwitchUnfinished(m.cfg.ID) { // nothing recorded: the next connection after the switch looks again
@@ -442,6 +536,11 @@ func (m *Machine) saveDeployOutcome(ctx context.Context, target string, err erro
 		return
 	}
 	record := nodeDeployRecord{Target: target, State: "succeeded", At: time.Now().UTC()}
+	m.mu.Lock()
+	if m.deployVersion == target {
+		record.Source = m.deploySource
+	}
+	m.mu.Unlock()
 	if err != nil {
 		record.State, record.Error = "failed", err.Error()
 	}

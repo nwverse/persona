@@ -1,4 +1,4 @@
-Write to the knowledge base: create or change a project (name, project_kind short|long, status, goal, my_role, aliases, link chats / people, code dirs as "<machine>:<path>" so Agents there belong to it, append a timeline `log` line, replace its summary), or tag / annotate a chat, person, doc, meeting, event, recording (a recording's content is the phone's: only its tags, pinned and projects; importance P0–P3, relevance 0–100, tags, note, link projects), or a topic (its points are curated: only its name, note, aliases and tags). Tags set here are kept over the automatic ones. `remove_*` (ids) unlink for good: Persona won't relink it by itself; the rest still updates. Use it whenever a conversation settles something about a project or person. Two projects that are the same work under two names: `merge_into`; two that were merged but are not: `unmerge` on the one merged away.
+Write settled facts to the KB. Projects: the fields below (dirs: `<machine>:<path>`, linking Agents); merge_into folds a duplicate, unmerge reverses it, each alone in its call. Other kinds take annotations; recordings (phone-owned) only tags, pinned, projects; topics only name, note, aliases, tags. Explicit tags beat automatic ones. remove_* (ids) unlinks only that link, for good. At the user's word only: parent ("" = top level); milestone adds (no id), edits or removes (id, remove) a flag; its result has the undo. project_mode/source_urls: reference-only keeps pointers and aliases, details stay at the source; full, alone, restores detail writes.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -15,11 +15,24 @@ Write to the knowledge base: create or change a project (name, project_kind shor
     },
     "merge_into": {
       "type": "string",
-      "description": "projects only: fold this project into that one (slug or name); nothing else changes in the same call"
+      "description": "projects: fold into this target (slug or name)"
     },
     "unmerge": {
       "type": "boolean",
-      "description": "projects only: undo the merge that folded this project (slug or name) into another; nothing else changes in the same call"
+      "description": "projects: undo its merge"
+    },
+    "parent": {
+      "type": "string"
+    },
+    "milestone": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "target": { "type": "string", "description": "YYYY-MM-DD" },
+        "state": { "type": "string", "enum": ["open", "accepted", "not_accepted"] },
+        "remove": { "type": "boolean" }
+      }
     },
     "name": {
       "type": "string"
@@ -27,6 +40,16 @@ Write to the knowledge base: create or change a project (name, project_kind shor
     "project_kind": {
       "type": "string",
       "enum": ["short", "long"]
+    },
+    "project_mode": {
+      "type": "string",
+      "enum": ["full", "reference-only"],
+      "description": "user-directed"
+    },
+    "source_urls": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "user-directed; replace; empty list clears"
     },
     "status": {
       "type": "string",

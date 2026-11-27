@@ -22,8 +22,10 @@ larkTop
 loadAll
 newAssistant
 openAbout
+openAdvancedSettings
 openAgent
 openAgentsFresh
+openAlarms
 openAllWork
 openAppearance
 openAssistant
@@ -94,6 +96,7 @@ openLauncherDetails
 openLauncherEditor
 openLauncherPage
 openLauncherPicker
+openLinkSwitch
 openLinkURL
 openLiveScreenSettings
 openLocalProxy
@@ -105,8 +108,10 @@ openMacTodo
 openMachineClipboard
 openMachineDetail
 openMachineFiles
+openMachineMonitor
 openMachinePage
 openMachines
+openMachinesFootnote
 openMailLabel
 openMailThread
 openManagerPage
@@ -142,6 +147,7 @@ openPairSheet
 openPane
 openPeople
 openPeopleQuery
+openPermissionModes
 openPersona
 openPlugin
 openPluginMarket
@@ -186,12 +192,15 @@ openTerminalTips
 openTerminalsPage
 openThreadAt
 openTodoDetail
+openTodoPlace
 openTodoTitled
+openTodosChoice
 openTokenUsage
 openTranslationSettings
 openTriageSettings
 openUploadDemo
 openUrgentCallSettings
+openUsageMap
 openViewedImage
 openVoice
 openWelcome
@@ -212,6 +221,7 @@ seedSSHTunnel
 showAddComputer
 showAgentInfo
 showAgentSortShadow
+showAlarmSample
 showAnswerPartLines
 showAnswerWhole
 showAsUnread
@@ -219,8 +229,13 @@ showAssistantSwitcher
 showAttachCamera
 showAutoScroll
 showAvatarCrop
+showAvatarCropColor
 showAvatarCropName
+showAvatarCropPage
 showAvatarDelete
+showAvatarDropTarget
+showAvatarEdit
+showAvatarStatePicture
 showBlankLanding
 showBrowserLoginSample
 showButtonContrast
@@ -245,6 +260,7 @@ showCloseoutSample
 showCompactChrome
 showComposerPhoto
 showConnection
+showConnectionAddresses
 showConnectionCycle
 showContexts
 showContinuityShadow
@@ -282,6 +298,9 @@ showFromSeq
 showFullOutput
 showGitReload
 showHandOffNewAgent
+showHealthActivityExample
+showHealthHomeTrendsExample
+showHealthItemsEditor
 showHealthTrends
 showHerdrStart
 showHomeState
@@ -304,6 +323,7 @@ showInboxSuggestionEdit
 showInboxSuggestionStale
 showInboxTodo
 showInfo
+showIntakeSyncStatus
 showJumpPerf
 showKeyMods
 showKnowledgeDay
@@ -326,6 +346,8 @@ showLauncherCheck
 showLauncherHelp
 showLiftLines
 showListOffset
+showLocationAlwaysOffer
+showLocationLevel
 showLookBlink
 showLoopDraft
 showMacDropCover
@@ -346,6 +368,7 @@ showMinutesSearch
 showMinutesTab
 showModelConfigSheet
 showModelSearch
+showModules
 showNewAgentPrompt
 showNewChat
 showNewMain
@@ -400,6 +423,7 @@ showSamplePermission
 showSampleQuestion
 showSampleQuotes
 showSampleScreen
+showSampleStoppedWork
 showScreenFallbackDemo
 showScreenMobileData
 showScreenRoutes
@@ -422,12 +446,14 @@ showSwiftUIJumps
 showSystemCallService
 showTaskBoard
 showTaskDetail
+showTellHealthResult
 showTerminalUpload
 showTerminalsUnlinked
 showTestNotification
 showTestNotificationIn
 showToasts
 showTodoHandoff
+showTodosV1
 showTokenPick
 showToolDetails
 showUnfoldLab
@@ -435,6 +461,7 @@ showUnlockWithoutAuth
 showUpcomingSample
 showUrgentCallSample
 showUrgentCallSampleTitle
+showUsageCardsDemo
 showViewerChromeHidden
 showViewerDecodeDelay
 showViewerDecodeDuringPan

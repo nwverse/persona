@@ -326,6 +326,53 @@
             "width": {}
           },
           "additionalProperties": false
+        },
+        {
+          "$ref": "view.schema.json#/$defs/GraphComponent",
+          "properties": {
+            "type": {},
+            "key": {},
+            "nodes": {},
+            "edges": {},
+            "layout": {},
+            "direction": {},
+            "selected": {},
+            "folded": {}
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "view.schema.json#/$defs/SceneComponent",
+          "properties": {
+            "type": {},
+            "key": {},
+            "alt": {},
+            "caption": {},
+            "poster": {},
+            "camera": {},
+            "shapes": {},
+            "labels": {},
+            "pins": {}
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "view.schema.json#/$defs/MapComponent",
+          "properties": {
+            "type": {},
+            "key": {},
+            "title": {},
+            "alt": {},
+            "caption": {},
+            "aspect": {},
+            "viewport": {},
+            "markers": {},
+            "routes": {},
+            "links": {},
+            "static": {},
+            "show_list": {}
+          },
+          "additionalProperties": false
         }
       ],
       "x-discriminator": "type",

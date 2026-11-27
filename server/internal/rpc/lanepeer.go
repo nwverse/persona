@@ -39,6 +39,46 @@ func (p *Peer) EnableLanes(control, bulk []string) {
 	p.lanesUp = make(chan struct{})
 }
 
+// CreditReplies makes this side's answers to methods wait for credit on the lane the table gives them (interactive,
+// unless listed elsewhere), which an answer otherwise never does. It is for answers that can run to megabytes (a page of
+// a transcript, an image): written without credit they went to the transport at once and a pong written after them
+// waited behind all of them (#13677). On the interactive lane they still go ahead of bulk (a session's pushes, file
+// chunks), so a person's read is not held behind a background catch-up. Only for methods whose answer no read loop of
+// this side waits for: a read loop waiting for an answer that waits for credit would wait for an acknowledgement only it
+// reads. Call it after EnableLanes and before Serve; without lanes it does nothing.
+func (p *Peer) CreditReplies(methods ...string) {
+	if p.lanes == nil {
+		return
+	}
+	if p.creditReplies == nil {
+		p.creditReplies = map[string]bool{}
+	}
+	for _, m := range methods {
+		p.creditReplies[m] = true
+	}
+}
+
+// replyRoute is the route of this side's answer to method.
+func (p *Peer) replyRoute(method string) route {
+	r := p.lanes.reply(method)
+	if p.lanes != nil && p.creditReplies[method] && r.lane != LaneControl {
+		r.credit = true
+	}
+	return r
+}
+
+// NotifyBulk sends event like NotifyContext, but on a framed connection on the bulk lane, waiting for credit, whatever
+// lane the table gives the event's name: a push that can be large (a page of a session's items) then never fills the
+// transport ahead of a pong. On lines it is NotifyContext. It must never be called from a read loop (this peer's, or
+// one this peer's read loop waits for): waiting for credit waits for an acknowledgement only this peer's read loop
+// reads (lanes.go "route").
+func (p *Peer) NotifyBulk(ctx context.Context, event string, params any) error {
+	if p.lanes == nil {
+		return p.NotifyContext(ctx, event, params)
+	}
+	return p.notifyRoute(ctx, event, params, route{lane: LaneBulk, credit: true})
+}
+
 // UpgradeLanes asks the other side to frame the connection, and returns once both directions are framed. An error
 // says it did not happen: the other side refused (an older peer does not know rpc.lanes), or ctx ended or the
 // connection closed first; lines go on as before. The other side's answer switches this side whenever it comes, its
@@ -64,7 +104,13 @@ func (p *Peer) UpgradeLanes(ctx context.Context) error {
 		delete(p.methods, id)
 		p.mu.Unlock()
 	}()
-	params, err := marshal(lanesRequest{Versions: []int{lanesVersion}})
+	req := lanesRequest{Versions: []int{lanesVersion}}
+	p.mu.Lock()
+	if p.resume != nil {
+		req.Resume = 1 // resume.go: the other side grants it with its answer, or ignores it
+	}
+	p.mu.Unlock()
+	params, err := marshal(req)
 	if err != nil {
 		return err
 	}
@@ -118,15 +164,19 @@ func (p *Peer) answerLanes(m message) {
 	p.mu.Lock()
 	// Once only, and not while this side asks itself: both asking at once keep lines.
 	ok = ok && p.unnegotiatedLocked()
+	answer := lanesAnswer{Version: lanesVersion}
 	if ok {
 		p.lanesAsked = true
+		if token := p.grantResumeLocked(req.Resume == 1); token != "" {
+			answer.Resume = &resumeGrant{Token: token}
+		}
 	}
 	p.mu.Unlock()
 	if !ok {
 		_ = p.write(message{ID: m.ID, Error: &Error{Message: "rpc: lanes refused", Code: CodeLanesRefused}}, controlRoute)
 		return
 	}
-	result, _ := marshal(lanesAnswer{Version: lanesVersion})
+	result, _ := marshal(answer)
 	p.switchOutput(message{ID: m.ID, Result: result})
 }
 
@@ -148,6 +198,8 @@ func (p *Peer) frameWriter() *laneWriter {
 	if p.lw == nil {
 		p.lw = newLaneWriter(p.w, p.closed, p.Close, p.LineFilter)
 		p.lw.wrote = &p.lastWrite
+		p.lw.keep = p.resumeOnLocked() // resume.go: agreed before either side's first frame
+		p.lw.lose = p.lose
 	}
 	return p.lw
 }
@@ -193,11 +245,20 @@ func (p *Peer) framedInput(lr *lineReader, act *readActivity, maximum int) *fram
 	if lr.err != nil { // lr read to the end already: what is left is what it buffered, then its error
 		rest = errReader{lr.err}
 	}
-	fr := newFrameReader(io.MultiReader(bytes.NewReader(bytes.Clone(lr.buffered())), rest), maximum)
 	lw := p.frameWriter()
+	fr := newFrameReader(io.MultiReader(bytes.NewReader(bytes.Clone(lr.buffered())), rest), maximum)
 	fr.ack = lw.ack
 	fr.acked = lw.acked
 	fr.middle = lr.middle
+	p.mu.Lock()
+	if rs := p.resume; rs != nil && rs.on && lr.err == nil {
+		// resume.go: what follows is read through a transport a resume replaces, every frame acknowledged.
+		rs.sr, rs.fr = newSwapReader(p, act.r), fr
+		act.r = rs.sr
+		fr.ackAll = lw.ackAll
+		go p.watchStale(resumeStale, resumeCheck)
+	}
+	p.mu.Unlock()
 	return fr
 }
 
@@ -213,11 +274,10 @@ func (p *Peer) writeFramed(ctx context.Context, lw *laneWriter, b []byte, r rout
 		return observation, NotSent(err)
 	}
 	l := &outLine{b: b, lane: r.lane, credit: r.credit, queued: time.Now(), done: make(chan error, 1)}
-	delayed, err := lw.enqueue(l)
+	observation, err := lw.enqueue(l)
 	if err != nil {
 		return observation, NotSent(err)
 	}
-	observation.delayed = delayed
 	select {
 	case err = <-l.done:
 	case <-ctx.Done():

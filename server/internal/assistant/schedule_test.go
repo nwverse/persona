@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func TestNextRun(t *testing.T) {
@@ -560,7 +561,9 @@ func TestEditTask(t *testing.T) {
 }
 
 func TestTaskRoutes(t *testing.T) {
-	h := newStorelessService(t, newFakeHub())
+	f := newFakeHub().withMachine()
+	f.zshrc = map[string][]proto.Launcher{"server": {{Name: "claude-fast"}}}
+	h := newTestService(t, f)
 	setTasks(h, Task{ID: "morning", Title: "早报", Prompt: "x", Repeat: repeatDaily, Time: "09:00", Enabled: true},
 		Task{ID: "fu_1", Title: "巡检", Prompt: "y", Repeat: repeatInterval, EveryMinutes: 30, At: time.Now().Add(time.Minute), Enabled: true,
 			MachineID: "server"})
@@ -689,7 +692,9 @@ func scheduleStore(t *testing.T) *db.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(database.Close)
-	for _, k := range []string{tasksKey, routinesKey, followupsKey, runsKey} {
+	// The process shares one database (dbtest.Main), so also forget the settings an earlier test saved: a main
+	// conversation left there reroutes this test's schedule notices (scheduleFailureTarget) away from the owner push.
+	for _, k := range []string{tasksKey, routinesKey, followupsKey, runsKey, settingsKey} {
 		if err := database.PutSetting(context.Background(), k, nil); err != nil {
 			t.Fatal(err)
 		}

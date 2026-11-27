@@ -19,6 +19,18 @@ class ChatRepositoriesTest {
     @get:Rule val shadowParity = ShadowParityRule()
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun restoredHistoryRetainsItsOldestBoundaryBeforeTheLatestItemsAreVerified() = runTest {
+        for (more in listOf(null, true, false)) {
+            val cache = FakeItemsCache(CachedChat(listOf(item(3)), "h", 3, more))
+            val transport = FakeChatTransport().apply { fetch = { awaitCancellation() } }
+            val repo = HubChatRepository(transport, FakeConnection(), cache, FakeSessions(), backgroundScope)
+            val restored = repo.observe(key).first { it.items.isNotEmpty() }
+            assertFalse(restored.verified)
+            assertEquals(more != null, restored.olderBoundaryKnown)
+            assertEquals(more == true, restored.hasOlder)
+        }
+    }
+
     @Test fun unobservedSessionRevisionsNeverReadBodiesAndReopeningStillVerifiesTheLatestPage() = runTest {
         val sessions = FakeSessions()
         val connection = FakeConnection()
@@ -685,6 +697,26 @@ class ChatRepositoriesTest {
         val reply = snapshot.items.single { it.role == "assistant" }
         assertEquals(cut.text, reply.text)
         assertEquals(90_000, reply.fullSize)
+    }
+
+    @Test fun trackedActionsForwardTheRealStartAnswerInsteadOfTheInterfaceDefault() = runTest {
+        val repository = HubChatRepository(FakeChatTransport(), FakeConnection(), FakeItemsCache(CachedChat()),
+            FakeSessions(), backgroundScope)
+        val session = Session(key.machineId, key.sessionId)
+        val answered = session.copy(startErrorCode = null, startErrorArgs = null)
+        val calls = mutableListOf<Pair<Session, String>>()
+        val actions = repository.trackActions(object : ChatActions {
+            override suspend fun isMuted(session: Session) = false
+            override suspend fun execute(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun verify(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun continueStart(session: Session, choice: String): Session {
+                calls += session to choice
+                return answered
+            }
+        })
+
+        assertSame(answered, actions.continueStart(session, "y"))
+        assertEquals(listOf(session to "y"), calls)
     }
 
     @Test fun lifecycleRequiresVerifiedListsAndConfirmedActionsAndKeepsRecordedDurationOnly() = runTest {

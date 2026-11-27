@@ -1,10 +1,10 @@
 import { wirePackageName } from '../../runtime-sdk/lib/compat.js'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readlinkSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
-import { packageHash } from '../../runtime-sdk/lib/package.js'
+import { installCurrent, packageHash } from '../../runtime-sdk/lib/package.js'
 import { createPiHost, herdrPaneOf, piWebOf } from '../lib/pi.js'
 
 /** A pi session manager over entries (file order); the branch runs from the leaf back through parentId. */
@@ -23,6 +23,7 @@ function sessionManager(id, cwd, entries = [], name = '') {
       for (let e = byId.get(sm.leaf); e; e = byId.get(e.parentId)) out.unshift(e)
       return out
     },
+    appendCustomEntry(customType, data) { sm.append({ type: 'custom', id: `c${sm.entries.length}`, parentId: sm.leaf, customType, data }) },
     append(e) {
       sm.entries = [...sm.entries, e]
       sm.leaf = e.id
@@ -292,6 +293,8 @@ test('the pi-web companion lists sessions on disk, opens one to send to it, and 
   await n.ready
   assert.equal(n.hello.runtime, 'pi-files')
   assert.equal(n.hello.launcher, 'pi-web')
+  assert.deepEqual(n.hello.launchers[0].models, [{ id: 'default', name: 'pi', default: true }], 'the display label must not become a model argument')
+  assert.deepEqual(n.hello.launchers[0].permission_modes, ['default', 'bypassPermissions'])
   await until('listed', () => n.last('runtime.sessions')?.sessions.length === 2)
   const old = n.last('runtime.sessions').sessions.find((s) => s.session_id === 's-old')
   assert.equal(old.status, 'offline')
@@ -307,8 +310,19 @@ test('the pi-web companion lists sessions on disk, opens one to send to it, and 
   assert.deepEqual(posts[1].body, { cwd: '/w/new', type: 'prompt', message: 'hello' })
 })
 
+test('an assistant start pi-web has not written yet is refused as delivered nothing, so a switch rolls back', async (t) => {
+  const { n, host, posts } = await setup(t, { web: true, disk: [], files: {}, listDisk: true })
+  const live = piSession('s-live')
+  host.register(live.pi)
+  await live.fire('session_start')
+  await n.ready
+  await assert.rejects(n.peer.call('session.start', { cwd: '/w/new', assistant: true, permission_mode: 'default' }),
+    (error) => error.code === 'assistant_supervision_runtime' && error.data?.delivered === 'none')
+  assert.deepEqual(posts.at(-1).body, { cwd: '/w/new', type: 'ensure_session' }, 'no prompt went to pi-web')
+})
+
 test('approvals of configured tools go to the phone when it drives the session; pi\'s dialog otherwise; no answer blocks', async (t) => {
-  const { n, host } = await setup(t, { approve: ['bash'], answerFirst: 'phone' })
+  const { n, host } = await setup(t, { approve: ['bash', 'edit'], answerFirst: 'phone' })
   const a = piSession('s-x')
   host.register(a.pi)
   await a.fire('session_start')
@@ -317,6 +331,13 @@ test('approvals of configured tools go to the phone when it drives the session; 
   n.resolve = () => ({ allow: true })
   assert.equal(await a.fire('tool_call', { toolName: 'bash', toolCallId: 'c1', input: { command: 'rm -rf build' } }), undefined)
   assert.deepEqual([n.asked[0].tool_name, n.asked[0].summary, n.asked[0].tool_input.command], ['Bash', 'rm -rf build', 'rm -rf build'])
+  assert.equal(await a.fire('tool_call', {
+    toolName: 'edit',
+    toolCallId: 'c1m',
+    input: { path: 'a.go', edits: [{ oldText: 'a', newText: 'b' }, { oldText: 'c', newText: 'd' }] },
+  }), undefined)
+  assert.equal(n.asked[1].tool_name, 'MultiEdit')
+  assert.equal(n.asked[1].always_label, '本会话不再问 Edit')
   n.resolve = () => ({ allow: false, message: 'not now' })
   assert.deepEqual(await a.fire('tool_call', { toolName: 'bash', toolCallId: 'c2', input: { command: 'ls' } }), { block: true, reason: 'not now' })
   assert.equal(await a.fire('tool_call', { toolName: 'read', toolCallId: 'c3', input: { path: 'x' } }), undefined, 'tools not listed run as pi runs them')
@@ -401,6 +422,22 @@ async function askSetup(t, opts = {}) {
   const ask = (id, params) => tool.execute(id, params, a.ctx.signal, undefined, a.ctx)
   return { ...env, a, tool, status, ask }
 }
+
+test('A2A tools send and report from the active pi session', async (t) => {
+  const { Type } = await import('./typebox-stub.js')
+  const { n, host } = await setup(t)
+  const a = piSession('s-a2a')
+  host.register(a.pi, { A2AType: Type })
+  await a.fire('session_start')
+  await n.ready
+  await until('A2A session listed', () => n.last('runtime.sessions')?.sessions.some(s => s.session_id === 's-a2a'))
+  assert.ok(!a.pi.tools.some(t => t.name === 'ask_user'))
+  const report = a.pi.tools.find(t => t.name === 'a2a_report')
+  const args = { task_id: 'task', message_id: 'report', state: 'completed', text: 'Test result' }
+  const result = await report.execute('call', args, a.ctx.signal, undefined, a.ctx)
+  assert.equal(result.details.error, false)
+  assert.deepEqual(n.toolCalls.at(-1), { name: 'a2a_report', args, session_id: 's-a2a' })
+})
 
 /** A phone that has not answered yet: resolve(answer) answers the card it holds. */
 function heldPhone(n) {
@@ -701,6 +738,113 @@ test('the companion installs the node\'s version and exits for its supervisor', 
   assert.equal(readlinkSync(join(dir, 'current')), n.offer.hash)
 })
 
+test('a store lock retries the verified package without fetching it again', async (t) => {
+  const dir = store(t)
+  const exits = []
+  const logs = []
+  const n = await startFakeNode(t)
+  n.offer = offerOf('v2-locked')
+  const lock = join(dir, '.install.lock')
+  mkdirSync(lock)
+  writeFileSync(join(lock, `${process.pid}-0000000000000000`), '')
+  const host = createPiHost({ SessionManager: { listAll: async () => [], open: () => sessionManager('x', '/') }, web: { port: 1, host: '127.0.0.1' }, log: (msg) => logs.push(msg) },
+    { socketPath: n.path, retryMs: 20, listDisk: true, update: { name: PKG, hash: 'the-running-version', store: dir, exit: (h) => exits.push(h) } })
+  t.after(() => host.stop())
+  host.start()
+  await until('the package fetched once', () => n.packageCalls.length === 1)
+  await until('asynchronous lock retries', () => logs.filter((msg) => msg.includes('store is busy')).length >= 2)
+  assert.equal(n.packageCalls.length, 1, 'lock retries do not fetch again')
+  assert.throws(() => readlinkSync(join(dir, 'current')))
+  rmSync(lock, { recursive: true, force: true })
+  await until('the verified package installs after the lock is released', () => exits.length === 1)
+  assert.equal(exits[0], n.offer.hash)
+  assert.equal(n.packageCalls.length, 1)
+})
+
+test('a newer offer invalidates an older pi lock retry', async (t) => {
+  const dir = store(t)
+  const logs = []
+  const n = await startFakeNode(t)
+  const older = offerOf('v2-older')
+  const newer = offerOf('v2-newer')
+  n.offer = older
+  const lock = join(dir, '.install.lock')
+  mkdirSync(lock)
+  writeFileSync(join(lock, `${process.pid}-0000000000000000`), '')
+  const host = createPiHost({ SessionManager: { listAll: async () => [], open: () => sessionManager('x', '/') }, web: { port: 1, host: '127.0.0.1' }, log: (msg) => logs.push(msg) },
+    { socketPath: n.path, retryMs: 100, listDisk: true, update: { name: PKG, hash: 'the-running-version', store: dir } })
+  t.after(() => host.stop())
+  host.start()
+  await until('the older offer is waiting on the lock', () => logs.some((msg) => msg.includes('store is busy')))
+  n.offer = newer
+  rmSync(lock, { recursive: true, force: true })
+  n.peer.close(new Error('a newer node offer arrives'))
+  await until('the newer offer installs', () => {
+    try { return readlinkSync(join(dir, 'current')) === newer.hash } catch { return false }
+  })
+  await new Promise((r) => setTimeout(r, 160))
+  assert.equal(readlinkSync(join(dir, 'current')), newer.hash, 'the older timed retry cannot roll current back')
+  assert.equal(n.packageCalls.length, 2)
+})
+
+test('a rollback hello keeps a stale pi retry from installing while reconnecting', async (t) => {
+  const dir = store(t)
+  const logs = []
+  const n = await startFakeNode(t)
+  const running = offerOf('rollback-A')
+  const offered = offerOf('rollback-B')
+  installCurrent(dir, running.hash, running.files.map((file) => ({ path: file.path, data: Buffer.from(file.data, 'base64') })))
+  n.offer = offered
+  const lock = join(dir, '.install.lock')
+  mkdirSync(lock)
+  writeFileSync(join(lock, `${process.pid}-0000000000000000`), '')
+  const host = createPiHost({ SessionManager: { listAll: async () => [], open: () => sessionManager('x', '/') }, web: { port: 1, host: '127.0.0.1' }, log: (msg) => logs.push(msg) },
+    { socketPath: n.path, retryMs: 100, listDisk: true, update: { name: PKG, hash: running.hash, store: dir } })
+  t.after(() => {
+    rmSync(lock, { recursive: true, force: true })
+    return host.stop()
+  })
+  host.start()
+  await until('the stale offer is waiting on the lock', () => logs.some((msg) => msg.includes('store is busy')))
+  const hellos = n.hellos
+  let answerHello
+  n.holdHello = new Promise((resolve) => { answerHello = resolve })
+  t.after(() => { answerHello(); n.holdHello = undefined })
+  n.offer = running
+  rmSync(lock, { recursive: true, force: true })
+  n.peer.close(new Error('node rollback'))
+  await until('the rollback hello is negotiating', () => n.hellos > hellos)
+  await new Promise((resolve) => setTimeout(resolve, 160))
+  assert.equal(readlinkSync(join(dir, 'current')), running.hash, 'the cached package cannot install before the replacement hello')
+  n.hello = undefined
+  answerHello()
+  n.holdHello = undefined
+  await until('the rollback hello completed', () => n.hello?.package?.hash === running.hash)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(readlinkSync(join(dir, 'current')), running.hash)
+  assert.equal(n.packageCalls.length, 1)
+})
+
+test('stopping during a package fetch does not install or schedule another retry', async (t) => {
+  const dir = store(t)
+  const n = await startFakeNode(t)
+  n.offer = offerOf('v2-stopped')
+  const host = createPiHost({ SessionManager: { listAll: async () => [], open: () => sessionManager('x', '/') }, web: { port: 1, host: '127.0.0.1' } },
+    { socketPath: n.path, retryMs: 20, listDisk: true, update: { name: PKG, hash: 'the-running-version', store: dir } })
+  t.after(() => host.stop())
+  const push = n.packageCalls.push.bind(n.packageCalls)
+  n.packageCalls.push = (...args) => {
+    const result = push(...args)
+    host.stop()
+    return result
+  }
+  host.start()
+  await until('the in-flight package request stopped the host', () => n.packageCalls.length === 1)
+  await new Promise((r) => setTimeout(r, 70))
+  assert.equal(n.packageCalls.length, 1, 'the stopped host did not poll the offer again')
+  assert.throws(() => readlinkSync(join(dir, 'current')), 'the stopped host did not install the fetched package')
+})
+
 test('when the reload brings the same version back, it connects again and does not take that version again', async (t) => {
   const dir = store(t)
   const { n, host } = await setup(t, { update: { name: PKG, hash: 'the-running-version', store: dir } })
@@ -716,6 +860,30 @@ test('when the reload brings the same version back, it connects again and does n
   assert.equal(n.packageCalls.length, 1, 'the same version is not fetched again')
   assert.equal(reloads(a).length, 1)
   assert.equal(host.retired, false)
+})
+
+test('a valid package whose hash differs from the hello offer is not installed', async (t) => {
+  const dir = store(t)
+  const running = offerOf('offer-A')
+  const offered = offerOf('offer-B')
+  const replacement = offerOf('offer-C')
+  installCurrent(dir, running.hash, running.files.map((file) => ({ path: file.path, data: Buffer.from(file.data, 'base64') })))
+  const n = await startFakeNode(t)
+  n.offer = offered
+  const push = n.packageCalls.push.bind(n.packageCalls)
+  n.packageCalls.push = (...args) => {
+    const result = push(...args)
+    n.offer = replacement
+    return result
+  }
+  const host = createPiHost({ SessionManager: { listAll: async () => [], open: () => sessionManager('x', '/') }, web: { port: 1, host: '127.0.0.1' } },
+    { socketPath: n.path, retryMs: 20, listDisk: true, update: { name: PKG, hash: running.hash, store: dir } })
+  t.after(() => host.stop())
+  host.start()
+  await until('the replacement package answered', () => n.packageCalls.length === 1)
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(readlinkSync(join(dir, 'current')), running.hash, 'C is not cached or installed for the B offer')
+  assert.equal(n.packageCalls.length, 1, 'the mismatched response does not start a retry loop')
 })
 
 test('a package whose files do not match its hash is not installed', async (t) => {
@@ -784,4 +952,88 @@ test('a host can serve another agent of the same extension API (omp)', async (t)
   n.resolve = () => ({ allow: true })
   await a.fire('tool_call', { toolName: 'bash', toolCallId: 'c1', input: { command: 'ls' } })
   assert.match(n.asked.at(-1).id, /^omp-/, 'its cards carry its own id prefix')
+})
+
+test('a turn settles on the agent\'s own event: omp on agent_end, pi only on agent_settled', async (t) => {
+  // omp's pi compatibility layer dispatches no agent_settled (pi's word for a run fully over): without settleEvents a
+  // session would list as working forever after its first turn.
+  const statusOf = (n) => () => n.last('runtime.sessions')?.sessions.find((s) => s.session_id === 's-ompe')?.status
+  const mk = async (options) => {
+    const n = await startFakeNode(t)
+    const host = createPiHost({ SessionManager: { listAll: async () => [], open: () => sessionManager('x', '/', []) }, pid: 4343, log: () => {} },
+      { socketPath: n.path, retryMs: 20, pushDelayMs: 5, agent: 'omp', name: 'omp', instancePrefix: 'omp', interactionPrefix: 'omp', ...options })
+    t.after(() => host.stop())
+    return { n, host }
+  }
+  const entries = [msg('u1', null, 'user', 'one'), msg('a1', 'u1', 'assistant', 'done')]
+  const omp = await mk({ settleEvents: ['agent_end'] })
+  const o = piSession('s-ompe', '/w/app', entries)
+  omp.host.register(o.pi)
+  await o.fire('session_start')
+  await omp.n.ready
+  await until('listed', () => statusOf(omp.n)() === 'done')
+  await o.fire('agent_start')
+  await until('working', () => statusOf(omp.n)() === 'working')
+  await o.fire('agent_end') // omp's own word for the turn being over
+  await until('settled to done', () => statusOf(omp.n)() === 'done')
+
+  const pi = await mk({}) // no settleEvents: pi as it always was
+  const p = piSession('s-ompe', '/w/app', entries)
+  pi.host.register(p.pi)
+  await p.fire('session_start')
+  await pi.n.ready
+  await until('listed', () => statusOf(pi.n)() === 'done')
+  await p.fire('agent_start')
+  await p.fire('agent_end') // the loop ended; its retry, compaction or queue may still run
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(statusOf(pi.n)(), 'working', 'a pi settles only on agent_settled')
+  await p.fire('agent_settled')
+  await until('settled to done', () => statusOf(pi.n)() === 'done')
+})
+
+test('Assistant native shell gates survive bypass mode and unavailable rules; ordinary pi stays unchanged', async (t) => {
+  const { n, host } = await setup(t, { web: true })
+  const assistant = piSession('guarded'), ordinary = piSession('ordinary')
+  host.register(assistant.pi)
+  host.register(ordinary.pi)
+  await assistant.fire('session_start')
+  await ordinary.fire('session_start')
+  await n.ready
+  n.tools = [{ name: 'send_message', shell: ['send-message'], input_schema: { type: 'object' } }]
+  await n.peer.call('session.send', { session_id: 'guarded', assistant: true, text: 'continue', mode: 'bypassPermissions' })
+  const direct = await assistant.fire('tool_call', { toolName: 'bash', input: { command: 'send-message --to example' } })
+  assert.equal(direct.block, true)
+  const nested = await assistant.fire('tool_call', { toolName: 'bash', input: { command: `bash -lc 'send-"message" --to example'` } })
+  assert.equal(nested.block, true)
+  assert.equal(await assistant.fire('tool_call', { toolName: 'bash', input: { command: 'pwd' } }), undefined)
+  assert.equal(await ordinary.fire('tool_call', { toolName: 'bash', input: { command: 'send-message --to example' } }), undefined)
+  n.setHub(false)
+  await until('hub disconnected', () => !host.runtime.hubConnected)
+  assert.equal((await assistant.fire('tool_call', { toolName: 'bash', input: { command: 'pwd' } })).block, true)
+  n.setHub(true)
+  await until('hub connected', () => host.runtime.hubConnected)
+  Object.defineProperty(n, 'tools', { get() { throw new Error('rules unavailable') }, configurable: true })
+  const unavailable = await assistant.fire('tool_call', { toolName: 'bash', input: { command: 'pwd' } })
+  assert.equal(unavailable.block, true)
+  assert.equal(n.toolCalls.length, 0, 'a native permission check never executes a Persona action')
+})
+
+test('Assistant messages wait for a fresh turn context; ordinary steering remains available', async (t) => {
+  const { n, host } = await setup(t, { web: true })
+  const a = piSession('context-turn')
+  host.register(a.pi)
+  await a.fire('session_start')
+  await n.ready
+  await n.peer.call('session.send', { session_id: 'context-turn', assistant: true, text: 'first', context: 'snapshot one', supervision_instructions: 'role', mode: 'default' })
+  await a.fire('agent_start')
+  const count = a.sm.getEntries().length
+  await assert.rejects(n.peer.call('session.send', { session_id: 'context-turn', assistant: true, text: 'second', context: 'snapshot two', supervision_instructions: 'role', mode: 'default' }), (error) => error.code === 'busy' && error.data?.delivered === 'none')
+  assert.equal(a.pi.sent.length, 1)
+  assert.equal(a.sm.getEntries().length, count, 'busy input cannot mutate an active turn’s state')
+  await a.fire('agent_settled')
+  await n.peer.call('session.send', { session_id: 'context-turn', assistant: true, text: 'second', context: 'snapshot two', supervision_instructions: 'role', mode: 'default' })
+  const applied = await a.fire('before_agent_start', { systemPrompt: 'base' })
+  assert.equal(applied.systemPrompt, 'base\n\nrole')
+  assert.equal(applied.message.content, 'snapshot two')
+  assert.equal(a.pi.sent.length, 2)
 })

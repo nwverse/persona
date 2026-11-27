@@ -8,11 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -51,6 +53,21 @@ func TestClaudeModelListReadsInitialize(t *testing.T) {
 	}
 }
 
+// With "model": "default" in its settings, Claude Code's list names default twice (#9998): one row of it reaches the apps.
+func TestClaudeModelListKeepsOneRowPerID(t *testing.T) {
+	out := `{"type":"control_response","response":{"subtype":"success","request_id":"persona-models","response":{"models":[` +
+		`{"value":"default","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)"},` +
+		`{"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Opus"},` +
+		`{"value":"default","resolvedModel":"default","displayName":"default","description":"Custom model"}]}}}`
+	got, err := claudeModelList(io.Discard, strings.NewReader(out+"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "default" || got[0].Name != "Default (recommended)" || got[1].ID != "opus" {
+		t.Fatalf("got %+v, want default (the first one) and opus", got)
+	}
+}
+
 func TestClaudeModelListErrors(t *testing.T) {
 	for name, out := range map[string]string{
 		"refused":   `{"type":"control_response","response":{"subtype":"error","request_id":"persona-models","error":"Not logged in"}}`,
@@ -60,6 +77,171 @@ func TestClaudeModelListErrors(t *testing.T) {
 		if _, err := claudeModelList(io.Discard, strings.NewReader(out+"\n")); err == nil {
 			t.Errorf("%s: no error", name)
 		}
+	}
+}
+
+func TestManagedClaudeModelListWithNode(t *testing.T) {
+	for _, setup := range []string{
+		"NVM", "Homebrew prefix", "Node on service PATH", "Node from shell startup", "Claude shell wrapper",
+	} {
+		t.Run(setup, func(t *testing.T) {
+			testManagedClaudeWithNode(t, setup, false)
+		})
+	}
+}
+
+func TestManagedClaudeLaunchPreservesPath(t *testing.T) {
+	testManagedClaudeWithNode(t, "Homebrew prefix", true)
+}
+
+func testManagedClaudeWithNode(t *testing.T, setup string, ordinaryLaunch bool) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix npm launchers and node sockets")
+	}
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("no zsh")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no Node.js to run the npm launcher fixture")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := launchKeyHome(t)
+	n, _ := testNode(t)
+	n.home, n.dir = home, filepath.Dir(nodeclient.SocketPath())
+	programDir := filepath.Join(home, "Persona Link")
+	if err := os.MkdirAll(programDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	n.bin = filepath.Join(programDir, "personad")
+	if err := os.Symlink(self, n.bin); err != nil {
+		t.Fatal(err)
+	}
+	serviceBin := filepath.Join(home, "service-bin")
+	link := func(target, path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link(zsh, filepath.Join(serviceBin, "zsh"))
+	t.Setenv("NVM_DIR", "")
+	t.Setenv("PERSONA_NODEJS", "")
+	t.Setenv("PATH", serviceBin)
+	localClaude := filepath.Join(home, ".local", "bin", "claude")
+	cli := localClaude
+	var prefix string
+	if setup == "NVM" {
+		root := filepath.Join(home, "custom NVM")
+		prefix = filepath.Join(root, "versions", "node", "v22.1.0")
+		t.Setenv("NVM_DIR", root)
+		// The service knows one Node installation; a different interpreter on PATH must not win.
+		t.Setenv("PERSONA_NODEJS", filepath.Join(prefix, "bin", "node"))
+		writeExecutable(t, filepath.Join(serviceBin, "node"), "#!/bin/sh\nexit 17\n")
+	} else if setup == "Homebrew prefix" {
+		prefix = filepath.Join(home, "opt", "homebrew")
+	}
+	if prefix != "" {
+		cli = filepath.Join(prefix, "lib", "node_modules", "@anthropic-ai", "claude-code", "cli.js")
+		bin := filepath.Join(prefix, "bin")
+		rel, err := filepath.Rel(bin, cli)
+		if err != nil {
+			t.Fatal(err)
+		}
+		link(rel, filepath.Join(bin, "claude"))
+		link(node, filepath.Join(bin, "node"))
+		if setup == "Homebrew prefix" {
+			link(filepath.Join(bin, "claude"), localClaude)
+		}
+	} else if setup == "Node on service PATH" {
+		link(node, filepath.Join(serviceBin, "node"))
+	}
+	if ordinaryLaunch {
+		writeExecutable(t, filepath.Join(serviceBin, "node"),
+			"#!/bin/sh\nFIXTURE_NODE=service exec "+shellQuote(node)+` "$@"`+"\n")
+		writeExecutable(t, filepath.Join(serviceBin, "fixture-tool"), "#!/bin/sh\nexit 0\n")
+		writeExecutable(t, filepath.Join(prefix, "bin", "fixture-tool"), "#!/bin/sh\nexit 17\n")
+	}
+
+	shellWrapper := setup == "Claude shell wrapper"
+	if shellWrapper {
+		cli = filepath.Join(home, "wrapped Claude", "cli.js")
+		writeExecutable(t, localClaude, "#!/bin/sh\nexec node "+shellQuote(cli)+` "$@"`+"\n")
+	}
+	shellSetup := setup == "Node from shell startup" || shellWrapper
+	wantPath := serviceBin
+	rc := `: > "$HOME/rc-ran"` + "\n/bin/sleep 20\n"
+	if shellSetup {
+		shellBin := filepath.Join(home, "shell runtime", "bin")
+		link(node, filepath.Join(shellBin, "node"))
+		wantPath = shellBin + ":" + loginShellPATH(t, serviceBin)
+		rc = `: > "$HOME/rc-ran"` + "\nexport PATH=" + shellQuote(shellBin) + `:"$PATH"` + "\n"
+	}
+	t.Setenv("FIXTURE_EXPECTED_PATH", wantPath)
+	writeFile(t, filepath.Join(home, ".zshrc"), rc)
+	writeExecutable(t, cli, `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+const args = process.argv.slice(2);
+if (process.env.PATH !== process.env.FIXTURE_EXPECTED_PATH || process.env.PERSONA_MANAGED_MODEL_PROBE !== undefined) {
+  throw new Error('Managed Claude inherited a changed PATH or the internal probe marker');
+}
+if (args.includes('--version')) {
+  const {spawnSync} = require('node:child_process');
+  if (process.env.FIXTURE_NODE !== 'service' || process.env.ANTHROPIC_AUTH_TOKEN !== 'probe-fixture' ||
+      spawnSync('fixture-tool').status !== 0) {
+    throw new Error('Managed Claude did not use the Node.js and tool from the service PATH');
+  }
+  process.exit(0);
+}
+const settings = JSON.parse(fs.readFileSync(args[args.indexOf('--settings') + 1]));
+const rl = readline.createInterface({input: process.stdin});
+rl.on('line', (line) => {
+  const req = JSON.parse(line);
+  if (req.type !== 'control_request' || req.request.subtype !== 'initialize' ||
+      !settings.disableAllHooks || settings.env.ANTHROPIC_AUTH_TOKEN !== 'probe-fixture' ||
+      process.env.ANTHROPIC_AUTH_TOKEN !== 'probe-fixture' ||
+      !args.includes('stream-json') || !args.includes('--verbose')) {
+    throw new Error('Missing managed model probe configuration');
+  }
+  console.log(JSON.stringify({type: 'control_response', response: {
+    subtype: 'success', request_id: req.request_id, response: {models: [
+      {value: 'npm-model', displayName: 'NPM model'}
+    ]}
+  }}));
+});
+`)
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("NODE_OPTIONS", "")
+	t.Setenv("NODE_TEST_LAUNCH", "1")
+	n.setManaged([]proto.ManagedLauncher{{Name: "store", APIKey: "probe-fixture", Auth: "bearer"}})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := n.listenOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ordinaryLaunch {
+		out, err := exec.CommandContext(ctx, n.bin, "launch", "store", "--version").CombinedOutput()
+		if err != nil {
+			t.Fatalf("managed launch: %v: %s", err, out)
+		}
+	} else {
+		models, err := n.listAgentModels(ctx, "store", "claude")
+		if err != nil || len(models) != 1 || models[0].ID != "npm-model" {
+			t.Fatalf("managed models = %+v, %v", models, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "rc-ran")); (shellSetup && err != nil) || (!shellSetup && !os.IsNotExist(err)) {
+		t.Fatalf("shell initialization: expected ran=%t, stat error=%v", shellSetup, err)
 	}
 }
 
@@ -408,12 +590,59 @@ func TestLauncherModelsKnowsRuntimeLaunchers(t *testing.T) {
 	}
 }
 
-func TestLauncherModelsOtherAgents(t *testing.T) {
+func TestLauncherModelsTraex(t *testing.T) {
 	n, _ := testNode(t)
-	res, err := n.launcherModels(context.Background(), "traex", "", false)
-	if err != nil || res.Agent != traexAgent || res.Models == nil || len(res.Models) != 0 {
+	t.Setenv("HOME", n.home)
+	t.Setenv("ZDOTDIR", n.home)
+	for _, rc := range []string{".bashrc", ".zshrc"} {
+		if err := os.WriteFile(filepath.Join(n.home, rc), []byte("printf 'Shell startup [notice]\\n'\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := `#!/bin/sh
+case "$#:$*" in
+  '2:debug models')
+    test "$TRAE_TEST_LEGACY" != 1 || exit 2
+    printf '%s\n' '{"models":[{"config_name":"example-fast","slug":"Example Fast","description":"Fast model","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"medium"},{"effort":"xhigh"}],"visibility":"list"},{"config_name":"hidden","visibility":"hide"},{"config_name":"example-fast","slug":"Duplicate"},{"slug":"Display only"},{"config_name":"--flag"},{"config_name":"example-small"}]}'
+    ;;
+  '2:models --json')
+    printf '%s\n' '[{"config_name":"example-fast","name":"Example Fast","description":"Fast model","backend_model":"backend-only"},{"config_name":"example-small"}]'
+    ;;
+  *) exit 2 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "traex"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res, err := n.launcherModels(context.Background(), traexAgent, "", true)
+	want := []proto.AgentModel{
+		{ID: "example-fast", Name: "Example Fast", Description: "Fast model", Efforts: []string{"medium", "xhigh"}, DefaultEffort: "medium"},
+		{ID: "example-small", Name: "example-small"},
+	}
+	if err != nil || res.Agent != traexAgent || len(res.Models) != len(want) {
 		t.Fatalf("got %+v %v", res, err)
 	}
+	for i, m := range res.Models {
+		if m.ID != want[i].ID || m.Name != want[i].Name || m.Description != want[i].Description || m.Default ||
+			!slices.Equal(m.Efforts, want[i].Efforts) || m.DefaultEffort != want[i].DefaultEffort {
+			t.Errorf("model %d = %+v, want %+v", i, m, want[i])
+		}
+	}
+	t.Setenv("TRAE_TEST_LEGACY", "1")
+	cached, err := n.launcherModels(context.Background(), traexAgent, "", false)
+	if err != nil || len(cached.Models) != 2 || !slices.Equal(cached.Models[0].Efforts, []string{"medium", "xhigh"}) {
+		t.Fatalf("cached TRAE catalog: %+v, %v", cached, err)
+	}
+	fallback, err := n.launcherModels(context.Background(), traexAgent, "", true)
+	if err != nil || len(fallback.Models) != 2 || fallback.Models[0].ID != "example-fast" || len(fallback.Models[0].Efforts) != 0 {
+		t.Fatalf("public TRAE catalog: %+v, %v", fallback, err)
+	}
+}
+
+func TestLauncherModelsRejectsInvalidName(t *testing.T) {
+	n, _ := testNode(t)
 	if _, err := n.launcherModels(context.Background(), "bad name;", "", false); err == nil {
 		t.Fatal("ran an invalid launcher name")
 	}
@@ -462,4 +691,30 @@ func TestLauncherProbesOnlyRunKnownLaunchers(t *testing.T) {
 	if _, err := os.ReadFile(marker); err != nil {
 		t.Fatalf("a launcher in hub.json was not probed: %v", err)
 	}
+}
+
+// loginShellPATH is the PATH a zsh started as the node starts it (shellFlag) has before ~/.zshrc, from path: on macOS
+// a login shell, whose /etc/zprofile puts path_helper's directories first (#16217); elsewhere path as it is.
+func loginShellPATH(t *testing.T, path string) string {
+	t.Helper()
+	const helper = "/usr/libexec/path_helper"
+	if !strings.Contains(shellFlag("zsh"), "l") {
+		return path
+	}
+	if _, err := os.Stat(helper); err != nil {
+		return path
+	}
+	cmd := exec.Command(helper, "-s")
+	cmd.Env = []string{"PATH=" + path}
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PATH="<dirs>"; export PATH;
+	v, ok := strings.CutPrefix(strings.TrimSpace(string(out)), `PATH="`)
+	v, _, found := strings.Cut(v, `";`)
+	if !ok || !found {
+		t.Fatalf("path_helper printed %q", out)
+	}
+	return v
 }

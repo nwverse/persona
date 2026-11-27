@@ -3,11 +3,13 @@ package persona.core.domain.models
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import persona.core.contracts.ModelPick
 import persona.core.contracts.PendingSwitch
 import persona.core.contracts.Session
 import persona.core.contracts.SessionCompaction
+import persona.core.contracts.UndeliveredMessage
 
 /**
  * A summary row landing on a conversation the app holds (#5055, riba2534's note on #5055; iOS `preservingDetails`):
@@ -15,6 +17,7 @@ import persona.core.contracts.SessionCompaction
  */
 class SummaryRowsTest {
     private val full = Session(machineId = "mac", sessionId = "c1", assistant = true, launcher = "team", permissionMode = "plan",
+        bypassAvailable = true, bypassPending = true,
         effort = "high", model = "sonnet", compaction = SessionCompaction("done"), modelPick = ModelPick("team", "sonnet"),
         pendingSwitch = PendingSwitch("work"), runtime = "agentsdk")
 
@@ -24,6 +27,8 @@ class SummaryRowsTest {
         val merged = summary.keepingDetails(full)
         assertEquals("team", merged.launcher)
         assertEquals("plan", merged.permissionMode)
+        assertEquals(true, merged.bypassAvailable)
+        assertEquals(false, merged.bypassPending)
         assertEquals(SessionCompaction("done"), merged.compaction)
         assertEquals("agentsdk", merged.runtime)
         assertEquals(PendingSwitch("work"), merged.pendingSwitch)
@@ -62,5 +67,61 @@ class SummaryRowsTest {
         val summary = complete.copy(waiting = true)
         assertSame(summary, summary.keepingDetails(null))
         assertSame(summary, summary.keepingDetails(full.copy(sessionId = "other")))
+    }
+
+    @Test fun aSummaryKeepsUndeliveredButACompleteEmptyListClearsIt() {
+        val kept = UndeliveredMessage("kept", "words", at = "2026-11-17T10:00:00Z", state = "waiting")
+        val detailed = full.copy(undelivered = listOf(kept))
+        val summary = Session(machineId = "mac", sessionId = "c1", assistant = true, waiting = false)
+        assertEquals(listOf(kept), summary.keepingDetails(detailed).undelivered)
+        val complete = Session(machineId = "mac", sessionId = "c1", assistant = true)
+        assertTrue(complete.keepingDetails(detailed).undelivered.isNullOrEmpty())
+    }
+
+    @Test fun codedStartDetailsNeverCrossAChangedRawError() {
+        val oldArgs = mapOf("where" to "terminal", "launcher" to "work")
+        val old = full.copy(startError = "The old launcher is missing", startErrorCode = "launcher_missing", startErrorArgs = oldArgs)
+        val unchanged = Session(machineId = "mac", sessionId = "c1", assistant = true, waiting = false,
+            startError = old.startError).keepingDetails(old)
+        assertEquals("launcher_missing", unchanged.startErrorCode)
+        assertEquals(oldArgs, unchanged.startErrorArgs)
+
+        val changed = Session(machineId = "mac", sessionId = "c1", assistant = true, waiting = false,
+            startError = "The checkout path is taken").keepingDetails(old)
+        assertNull(changed.startErrorCode)
+        assertNull(changed.startErrorArgs)
+
+        val newCode = Session(machineId = "mac", sessionId = "c1", assistant = true, waiting = false,
+            startError = "The checkout path is taken", startErrorCode = "worktree_path_taken").keepingDetails(old)
+        assertEquals("worktree_path_taken", newCode.startErrorCode)
+        assertNull("a new code never inherits the old code's arguments", newCode.startErrorArgs)
+
+        val newArgs = mapOf("path" to "/worktrees/task")
+        val newPair = Session(machineId = "mac", sessionId = "c1", assistant = true, waiting = false,
+            startError = "The checkout path is taken", startErrorCode = "worktree_path_taken", startErrorArgs = newArgs)
+            .keepingDetails(old)
+        assertEquals("worktree_path_taken", newPair.startErrorCode)
+        assertEquals(newArgs, newPair.startErrorArgs)
+    }
+
+    @Test fun clearingAStartFailureDoesNotReviveItsCodeOnLaterSummaryRows() {
+        val old = full.copy(startError = "The launcher is missing", startErrorCode = "launcher_missing",
+            startErrorArgs = mapOf("where" to "terminal", "launcher" to "work"))
+        val cleared = Session(machineId = "mac", sessionId = "c1", assistant = true, waiting = false)
+            .keepingDetails(old)
+        assertNull(cleared.startError)
+        assertNull(cleared.startErrorCode)
+        assertNull(cleared.startErrorArgs)
+
+        val laterSummary = Session(machineId = "mac", sessionId = "c1", assistant = true, waiting = false)
+            .keepingDetails(cleared)
+        assertNull(laterSummary.startErrorCode)
+        assertNull(laterSummary.startErrorArgs)
+
+        val completeClear = Session(machineId = "mac", sessionId = "c1", assistant = true).keepingDetails(old)
+        val afterCompleteClear = Session(machineId = "mac", sessionId = "c1", assistant = true, waiting = false)
+            .keepingDetails(completeClear)
+        assertNull(afterCompleteClear.startErrorCode)
+        assertNull(afterCompleteClear.startErrorArgs)
     }
 }

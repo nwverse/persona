@@ -13,9 +13,9 @@
     },
     "ExactHost": {"description": "A host name, lowercase, no scheme, port, path or wildcard.", "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"},
     "NetworkEntry": {
-      "description": "A host name as Host, or config:<field> (config:<field>:http) for the address the user writes in configuration field <field> (format uri): https only unless :http.",
+      "description": "A host name as Host; config:<field> for the address the user writes in configuration field <field>; or config:<list>[].<field> for that address in every entry of an entry list (format uri). Add :http to either config: form to allow HTTP too; otherwise HTTPS only.",
       "type": "string", "maxLength": 253,
-      "pattern": "^((\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?|config:[a-z_][a-z0-9_]{0,63}(:http)?)$"
+      "pattern": "^((\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?|config:[a-z_][a-z0-9_]{0,63}(\\[\\]\\.[a-z_][a-z0-9_]{0,63})?(:http)?)$"
     },
     "ActivationEvent": {"type": "string", "enum": ["on_startup", "on_call", "on_http"]},
     "VersionRange": {
@@ -55,7 +55,7 @@
           "description": "An extension pack (docs \"Extension packs\"): installing it installs these. A pack has no runtime and no contributes of its own.",
           "type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/PackMember"}
         },
-        "configuration": {"description": "The configuration's JSON Schema, in the subset every app draws as a form (docs \"Configuration: the form subset\")."},
+        "configuration": {"description": "The configuration's JSON Schema, in the settings-form subset (docs \"Configuration: the form subset\"). Capable clients draw declared entry lists after opting in; other clients receive compatibility projections."},
         "secrets": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/SecretSpec"}},
         "settings_check": {"type": "boolean", "description": "The program checks a change of its settings or secrets before the hub saves it (settings.check)."},
         "permissions": {"$ref": "#/$defs/Permissions"},
@@ -67,7 +67,8 @@
         "host_integrations": {
           "description": "Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an executable; writes and arbitrary command lines are not part of this contract.",
           "type": "array", "maxItems": 1, "items": {"$ref": "#/$defs/HostIntegrationSpec"}
-        }
+        },
+        "upgrade": {"$ref": "#/$defs/UpgradeSpec"}
       },
       "required": ["manifest_version", "id", "name", "version"],
       "anyOf": [
@@ -143,6 +144,16 @@
         "page": {"type": "string", "description": "An extension_page (plugin_page) ui contribution: its own sign-in page for apps that do not know auth; apps that do leave it out of its pages."}
       },
       "required": ["title"]
+    },
+    "UpgradeSpec": {
+      "description": "What the extension asks of the hub around an automatic upgrade (docs \"Backup before an upgrade\"). The hub snapshots the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse the manifest.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backup": {"type": "string", "enum": ["auto", "required"], "description": "auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade."},
+        "prepare": {"type": "boolean", "description": "Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the upgrade."},
+        "health_check": {"type": "boolean", "description": "Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the snapshot."}
+      }
     },
     "Dependency": {
       "type": "object",
@@ -308,7 +319,7 @@
         "network": {"type": "array", "items": {"$ref": "#/$defs/NetworkEntry"}},
         "hub_api": {"type": "boolean", "description": "The old way: the hub's full token. With hub scopes, the scopes win."},
         "hub": {"type": "array", "description": "The scopes of the hub's API it calls: its token opens their routes only.",
-          "items": {"type": "string", "pattern": "^(kb\\.read|kb\\.write|sent\\.read|inbox\\.read|inbox\\.write|agents\\.read|agents\\.control|agents\\.permission_mode|machines\\.read|notify|assistant\\.ask|assistant\\.read|assistant\\.memory\\.read|todos\\.read|todos\\.write|leaders\\.read|assistant\\.dispatch_policy|assistant\\.start_defaults|models|transcription|extensions\\.call:[a-z0-9][a-z0-9_-]{0,31})$"}},
+          "items": {"type": "string", "pattern": "^(kb\\.read|kb\\.write|sent\\.read|inbox\\.read|inbox\\.write|agents\\.read|agents\\.control|agents\\.archive_idle|agents\\.permission_mode|machines\\.read|machines\\.pair|browser\\.run|notify|push\\.grading|assistant\\.ask|spaces|assistant\\.read|assistant\\.memory\\.read|assistant\\.entries\\.read|todos\\.read|todos\\.write|tasks\\.schedule|decisions\\.raise|bots\\.feishu\\.identity|bots\\.feishu\\.handoff|leaders\\.read|leaders\\.write|assistant\\.dispatch_policy|assistant\\.start_defaults|dispatch.guard|models|transcription|market\\.refresh_own|assistant\\.events|lark\\.messages\\.read|extensions\\.call:[a-z0-9][a-z0-9_-]{0,31})$"}},
         "launcher_keys": {"type": "boolean"},
         "gh_login": {"type": "boolean", "description": "It asks the hub for the GitHub token of a computer's gh login (the one the user picks for the GitHub connector), held in its memory only."},
         "usage_gateways": {"type": "boolean", "description": "It reads the account list of the account-pool gateways in the hub's usage sources (usage.gateway_accounts): accounts, status and quota windows, never a key."},
@@ -343,11 +354,13 @@
         "browser": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NamedItem"}},
         "iphone": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NamedItem"}},
         "quota": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/QuotaItem"}},
+        "usage": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/UsageItem"}},
         "providers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ProviderItem"}},
         "api": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/APIItem"}},
         "assistant": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AssistantItem"}},
         "mcp_servers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/MCPServerItem"}},
         "ui": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/UIItem"}},
+        "track_kinds": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TrackKindItem"}},
         "agent_sources": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AgentSourceItem"}},
         "channel": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ChannelItem"}},
         "events": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/EventsItem"}},
@@ -363,6 +376,8 @@
         "auth_relay": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AuthRelayItem"}},
         "secret_providers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/SecretProviderItem"}},
         "repository_providers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/RepositoryProviderItem"}},
+        "memory_sources": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/MemorySourceItem"}},
+        "disk_offload": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/DiskOffloadItem"}},
         "messaging": {"type": "array", "minItems": 1, "items": {"$ref": "messaging.schema.json#/$defs/MessagingItem"}}
       }
     },
@@ -372,6 +387,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
+        "title": {"type": "string", "maxLength": 40, "description": "What the extension's contributions list calls it; the id when absent."},
         "dir": {"type": "string", "description": "The directory, relative to the package (or to the data directory with source data)."},
         "source": {"$ref": "#/$defs/ContentSource"}
       },
@@ -572,9 +588,46 @@
             "not": {"anyOf": [{"enum": ["github.com", "www.github.com", "api.github.com", "ssh.github.com", "gitlab.com", "altssh.gitlab.com"]}, {"pattern": "(^|\\.)([0-9]+|0x[0-9a-f]*)$"}]}}},
         "link_kinds": {"type": "array", "description": "What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels: the kinds stay issue and pull_request.", "maxItems": 2, "uniqueItems": true,
           "items": {"$ref": "#/$defs/RepositoryLinkLabel"},
-          "not": {"minItems": 2, "anyOf": [{"items": {"properties": {"kind": {"const": "issue"}}}}, {"items": {"properties": {"kind": {"const": "pull_request"}}}}]}}
+          "not": {"minItems": 2, "anyOf": [{"items": {"properties": {"kind": {"const": "issue"}}}}, {"items": {"properties": {"kind": {"const": "pull_request"}}}}]}},
+        "capabilities": {"type": "array", "description": "What else the program answers (#11584): pr_status, the state of a pull request for delivery checks (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.", "maxItems": 1, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/RepositoryCapability"}}
       },
       "required": ["id", "name", "hosts"]
+    },
+    "DiskOffloadItem": {
+      "description": "A provider that moves items from a computer to storage elsewhere, lists what it already holds and brings items back (docs/server/machine-usage-map.md \"Extension point disk_offload\"): the disk usage map draws its inventory beside the computer's disk and offers Offload; the manager asks the program (offload.inventory, offload.run, offload.job, offload.cancel; offload.schema.json) after the user confirmed. Needs the program to speak the protocol.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/ID"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\x00-\\x20\\x7f-\\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000][^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "What the map and its menus call the provider (Offload to Example Cloud). Not only spaces, no control characters."},
+        "kinds": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/DiskOffloadKind"},
+          "description": "What it takes from the map; without it, files and folders."},
+        "restore": {"type": "boolean", "description": "Items it holds can be brought back (Restore on the map's cloud side)."}
+      },
+      "required": ["id", "name"]
+    },
+    "DiskOffloadKind": {
+      "description": "What a disk_offload provider takes: file, dir (a folder) or app (a macOS app bundle).",
+      "type": "string",
+      "enum": ["file", "dir", "app"]
+    },
+    "MemorySourceItem": {
+      "description": "The extension's memory, read by the manager one entry at a time (memory.entries; memory.schema.json) so the hub decides which entries reach which scene (a conversation's standing context, a recall, a dispatched task, the Inbox's helper). Needs the program to speak the protocol; one per extension. Once declared, the hub stops delivering the extension's own text outlets (its assistant instructions, project context, Inbox context and its connectors' read tools in the assistant's conversations) directly.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/ID"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\x00-\\x20\\x7f-\\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000][^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "What settings call the source (My memory). Not only spaces, no control characters."}
+      },
+      "required": ["id", "name"]
+    },
+    "RepositoryCapability": {
+      "description": "A repository provider's optional answer: pr_status (repo.pr_status).",
+      "type": "string",
+      "enum": ["pr_status"]
     },
     "RepositoryLinkLabel": {
       "description": "The word a repository provider shows for one kind of its links (MR for a pull_request).",
@@ -650,6 +703,43 @@
       },
       "required": ["id", "name", "capabilities"]
     },
+    "TrackAttention": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"push_cap": {"type": "string", "enum": ["P0", "P1", "P2"]}, "deep_default": {"type": "string", "enum": ["quick", "deep"]}, "enter_mode": {"type": "string", "enum": ["none", "immersive"]}}
+    },
+    "TrackSidebar": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"group": {"type": "string", "maxLength": 40}, "order": {"type": "integer"}, "icon": {"type": "string", "pattern": "^[a-z][a-zA-Z0-9_]{0,63}$"}}
+    },
+    "TrackKindConfig": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "schema": {"type": "integer", "const": 1},
+        "template": {"type": "string", "enum": ["assistant", "space", "health"]},
+        "user_instructions": {"type": "string", "enum": ["", "space_md"]},
+        "context": {"type": "string", "enum": ["engineering", "track", "none"]},
+        "default_categories": {"type": "array", "items": {"type": "string", "enum": ["health", "finance", "relationships", "emotion", "legal_id"]}},
+        "tag_focus": {"type": "array", "items": {"type": "string", "enum": ["health", "finance", "relationships", "emotion", "legal_id"]}},
+        "rhythms": {"type": "array", "items": {"type": "object"}},
+        "attention": {"$ref": "#/$defs/TrackAttention"},
+        "supervision": {"type": "string", "enum": ["leaders", "routine", "none"]},
+        "usage": {"type": "array", "items": {"type": "object"}},
+        "assembly": {"type": "string", "enum": ["assistant", "track"]},
+        "capture_target": {"type": "boolean"},
+        "channels": {"type": "array", "items": {"type": "string", "enum": ["topics", "single"]}},
+        "sidebar": {"$ref": "#/$defs/TrackSidebar"}
+      },
+      "required": ["schema", "template", "context", "default_categories", "tag_focus", "rhythms", "attention", "supervision", "usage", "assembly", "channels", "sidebar"]
+    },
+    "TrackKindItem": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/ID"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 80},
+        "config": {"$ref": "#/$defs/TrackKindConfig"}
+      },
+      "required": ["id", "title", "config"]
+    },
     "NamedItem": {
       "description": "A contribution with only an id and a name: voice, transcription, speech, computer, browser.",
       "type": "object",
@@ -661,6 +751,16 @@
       "required": ["id"]
     },
     "QuotaItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/ID"},
+        "name": {"type": "string", "minLength": 1},
+        "hosts": {"type": "array", "items": {"$ref": "#/$defs/Host"}}
+      },
+      "required": ["id", "name"]
+    },
+    "UsageItem": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -721,6 +821,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
+        "title": {"type": "string", "maxLength": 40, "description": "What the extension's contributions list calls it; the id when absent."},
         "skills": {"type": "array", "items": {"type": "string"}},
         "instructions": {"type": "string"},
         "gate": {"type": "string"}
@@ -733,6 +834,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID", "description": "The server's name for the assistant; not persona or persona."},
+        "title": {"type": "string", "maxLength": 40, "description": "What the extension's contributions list calls it; the id when absent."},
         "command": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Looked up on PATH, then in ~/bin."},
         "env": {"type": "string", "pattern": "^PERSONA_[A-Z0-9_]{1,56}$", "description": "A PERSONA_ variable (PERSONA_ read too) that, when set, replaces the lookup: a path, or \"\" / 0 / off / false to leave the server out."},
         "args": {"type": "array", "items": {"type": "string"}},
@@ -752,6 +854,7 @@
         "placement": {"$ref": "view.schema.json#/$defs/Placement"},
         "hosts": {"type": "array", "items": {"$ref": "#/$defs/Host"}, "description": "launcher_section only."},
         "icon": {"$ref": "view.schema.json#/$defs/NavIcon", "description": "nav_page only."},
+        "icon_color": {"$ref": "view.schema.json#/$defs/Color", "description": "nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink."},
         "opens": {"type": "string", "description": "overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension."},
         "connector": {"type": "string", "description": "inbox_item only: one of the extension's own connectors."},
         "families": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "view.schema.json#/$defs/WidgetFamily"}, "description": "widget only (and needed there): the sizes it can be drawn at."},
@@ -790,7 +893,7 @@
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
         "name": {"type": "string", "minLength": 1, "maxLength": 40},
-        "kind": {"type": "string", "enum": ["im"]},
+        "kind": {"type": "string", "enum": ["im", "mention"]},
         "connector": {"type": "string"},
         "bind": {"type": "string", "enum": ["qr", "code", "fields"]},
         "description": {"type": "string"},
@@ -803,12 +906,14 @@
       "additionalProperties": false,
       "properties": {
         "images_in": {"type": "boolean"},
+        "images_out": {"type": "boolean", "description": "It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as Markdown in the text."},
         "files_in": {"type": "boolean"},
         "voice_in": {"type": "boolean"},
         "format": {"type": "string", "enum": ["markdown", "plain"]},
         "max_text": {"type": "integer", "minimum": 0},
         "asks": {"type": "string", "enum": ["none", "text", "buttons"]},
         "push": {"type": "boolean"},
+        "reply_only": {"type": "boolean", "description": "It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without reply_to; testing checks connectivity instead of calling channel.send."},
         "typing": {"type": "boolean"},
         "progress": {"type": "boolean"},
         "threads": {"type": "boolean"}
@@ -819,7 +924,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
-        "subscribe": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": ["kb.changed", "kb.forgotten", "inbox.changed", "agent.needs_you", "agent.finished", "todo.changed", "todo.decision", "leader.changed", "leader.report"]}}
+        "subscribe": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": ["assistant.entries.changed", "kb.changed", "kb.forgotten", "inbox.changed", "agent.needs_you", "agent.finished", "todo.changed", "todo.decision", "leader.changed", "leader.report", "placement.pending", "lark.messages"]}}
       },
       "required": ["id", "subscribe"]
     },

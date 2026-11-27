@@ -1,0 +1,51 @@
+{
+  "name": "interaction_answer",
+  "description": "Answer another agent's card for the user when they said what to answer or told you to decide: each question by its own wording with an option label it offers (multi-select: an array); no free text (use agent_send). A card a 督办 message handed you is yours: answer a question or terminal dialog (an option's label or number), or allow/deny a permission, plan or dialog's Yes/No with allow, giving reason; kept as the task's decision, not the user's. You may always deny permissions/plans. Forms, secrets, allowing a message/reply as the user, spending or deletion, and folder-trust/Bypass Permissions dialogs are the user's: ask_escalate. Never other approvals or assistant questions.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "machine",
+      "session_id",
+      "interaction_id"
+    ],
+    "properties": {
+      "machine": {
+        "type": "string",
+        "description": "the machine's id or name, as agents_list shows it"
+      },
+      "session_id": {
+        "type": "string",
+        "description": "the agent's session id, or its first 8 characters"
+      },
+      "interaction_id": {
+        "type": "string",
+        "description": "the waiting interaction's id, from agents_list"
+      },
+      "answers": {
+        "type": "object",
+        "description": "each question's own wording → the option label to pick; a multi-select gives an array of labels",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      "allow": {
+        "type": "boolean",
+        "description": "a permission or plan card: true allows (approves), false denies"
+      },
+      "reason": {
+        "type": "string",
+        "description": "in a sentence, why this answer (kept with the task's decision)"
+      }
+    }
+  }
+}

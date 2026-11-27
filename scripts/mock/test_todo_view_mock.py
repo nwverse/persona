@@ -5,7 +5,8 @@ EXPECTED, read with Node); the places add up; an unchanged list answers 304; the
 (old) answers 405 and lists none of stage 1's fields; today's answers (accept, Don't handle, retry, a tick on a failed
 start, the Widget's plan card) move the views without MOCK_TASKS, and a refused write changes nothing; the hellos under
 late lack the view, have it, lack it, have it, and again after /mock/reset; two managers' answers are joined as the hub
-joins them.
+joins them; the send receipts go to whom the hub sends them, in its order, say what the answer said, and come from
+the request that claimed the id alone.
 
     python3 -B scripts/mock/test_todo_view_mock.py
 """
@@ -20,11 +21,13 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import quote
 from urllib.request import ProxyHandler, Request, build_opener
 
 HERE = Path(__file__).resolve().parent
@@ -105,12 +108,12 @@ class Hub:
 class Socket:
     """A WebSocket to the mock, enough to read what it sends."""
 
-    def __init__(self, port):
+    def __init__(self, port, query=""):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=10)
         key = base64.b64encode(os.urandom(16)).decode()
-        self.sock.sendall(("GET /api/v1/ws HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nUpgrade: websocket\r\n"
+        self.sock.sendall(("GET /api/v1/ws%s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nUpgrade: websocket\r\n"
                            "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n"
-                           % (port, key)).encode())
+                           % (query, port, key)).encode())
         self.buf = b""
         while b"\r\n\r\n" not in self.buf:
             chunk = self.sock.recv(4096)
@@ -168,6 +171,13 @@ class Socket:
                     return True
         except socket.timeout:
             return False
+
+    def send(self, obj):
+        """One text message, masked as a client's are."""
+        data = json.dumps(obj).encode()
+        mask = os.urandom(4)
+        size = bytes([0x80 | len(data)]) if len(data) < 126 else bytes([0x80 | 126]) + struct.pack(">H", len(data))
+        self.sock.sendall(bytes([0x81]) + size + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
 
     def close(self):
         self.sock.close()
@@ -249,6 +259,57 @@ class ViewTests(Case):
         features = self.hub.get("/api/v1/health")["features"]
         self.assertIn("todo_view", features)
         self.assertIn("todo_places", features)
+        self.assertIn("todo_asks", features)
+
+    def ask_path(self, tid):
+        """The asks route for the first ask the row's view lists, its id one path segment."""
+        ask = self.row(tid)["view"]["asks"][0]["id"]
+        return "/api/v1/todos/%s/asks/%s/answer" % (tid, quote(ask, safe="")), ask
+
+    def test_the_asks_say_their_risk(self):
+        asks = {t["id"]: t["view"]["asks"][0] for t in self.rows() if t["view"].get("asks")}
+        self.assertEqual((asks["t01"]["risk"], asks["t01"]["lockscreen"]), ("safe", "answer"))
+        self.assertEqual((asks["t03"]["risk"], asks["t03"]["lockscreen"]), ("safe", "answer"))
+        self.assertEqual((asks["t02"]["risk"], asks["t02"]["lockscreen"], asks["t02"]["interaction"]),
+                         ("open", "open_only", "ix_todo_widget_plan"))
+
+    def test_the_asks_route_answers_t01(self):
+        path, ask = self.ask_path("t01")
+        before = self.hub.get("/api/v1/todos")["counts"]
+        self.assertEqual(self.post(path, {"option": "Kaede", "outcome": "later"})[0], 400, "one answer")
+        self.assertEqual(self.post(path, {"option": "Elsewhere"})[0], 400)
+        self.assertEqual(self.post(path, {})[0], 400, "a decision takes an option, a fixed answer or words (errAnswerNeeded)")
+        status, _, body = self.post(path, {"outcome": "later"})
+        self.assertEqual((status, body["outcome"]), (200, "later"))
+        self.assertEqual(self.row("t01")["view"]["section"], "needs_you", "later writes nothing")
+        status, _, body = self.post(path, {"option": "Kaede"})
+        self.assertEqual((status, body["ask"], body["outcome"]), (200, ask, "answered"))
+        self.holds("TodoSummary", body["todo"]["view"], "t01")
+        self.assertEqual(body["todo"]["view"]["line"], {"key": "persona_working", "args": {"text": "booking Kaede"}})
+        self.assertEqual(self.hub.get("/api/v1/todos")["counts"]["needs_you"], before["needs_you"] - 1)
+        status, _, stale = self.post(path, {})
+        self.assertEqual((status, stale["code"], stale["delivered"], stale["todo"]["id"]), (409, "ask_stale", "none", "t01"))
+        self.assertEqual(self.post("/api/v1/todos/t01/asks/nothing/answer", {})[2]["code"], "ask_not_found")
+        self.assertEqual(self.post("/api/v1/todos/nope/asks/x/answer", {})[2]["code"], "todo_not_found")
+
+    def test_the_asks_route_declines_and_undoes(self):
+        path, _ = self.ask_path("t01")
+        before = self.hub.get("/api/v1/todos")["counts"]
+        status, _, body = self.post(path, {"outcome": "decline"})
+        self.assertEqual((status, body["outcome"]), (200, "declined"))
+        self.assertEqual(self.row("t01")["view"]["section"], "todo")
+        self.assertEqual(self.post(path, {"outcome": "undo", "receipt": "other"})[0], 409)
+        status, _, undone = self.post(path, {"outcome": "undo", "receipt": body["receipt"]})
+        self.assertEqual((status, undone["outcome"]), (200, "undone"))
+        self.assertEqual(self.hub.get("/api/v1/todos")["counts"], before)
+
+    def test_the_asks_route_starts_t03_again_and_leaves_runs_to_their_cards(self):
+        path, _ = self.ask_path("t03")
+        self.assertEqual(self.post(path, {"option": "x"})[0], 400, "a retry takes no answer")
+        status, _, body = self.post(path, {})
+        self.assertEqual((status, body["outcome"], body["todo"]["view"]["section"]), (200, "answered", "working"))
+        path, _ = self.ask_path("t02")
+        self.assertEqual(self.post(path, {})[2]["code"], "answer_in_session")
 
     def test_every_answer_holds_to_the_schema(self):
         listed = self.hub.get("/api/v1/todos")
@@ -395,6 +456,26 @@ class ViewTests(Case):
         self.hub.call("/api/v1/todos/t08/seen", "PUT")
         v = self.row("t08")["view"]
         self.assertEqual((v["phase"], v["section"], v["reason"], v["seen"]), ("done", "done", "completed", True))
+
+    def test_a_finished_row_seen_a_day_ago_offers_mark_done(self):
+        self.hub.get("/mock/todo-view?seen_hours=25")
+        self.hub.call("/api/v1/todos/t07/seen", "PUT")
+        v = self.row("t07")["view"]
+        self.assertEqual((v["section"], v["reason"], v["line"]["key"]), ("todo", "finished_seen", "finished_seen"))
+        self.hub.get("/mock/reset")
+        self.hub.call("/api/v1/todos/t07/seen", "PUT")
+        self.assertEqual(self.row("t07")["view"]["reason"], "finished_recent")
+
+    def test_a_closed_todo_moved_back(self):
+        before = self.row("t08")["done_at"]
+        self.hub.call("/api/v1/todos/t08/seen", "PUT")
+        self.hub.get("/mock/todo-view?done_hours=t08:50")
+        t08 = self.row("t08")
+        hours = (datetime.now(timezone.utc) - datetime.fromisoformat(t08["done_at"].replace("Z", "+00:00"))).total_seconds() / 3600
+        self.assertTrue(49.9 < hours < 50.1, hours)
+        self.assertEqual(t08["view"]["section"], "done")
+        self.hub.get("/mock/reset")
+        self.assertEqual(self.row("t08")["done_at"], before)
 
     def test_a_parent_follows_its_steps(self):
         t02 = self.row("t02")["view"]
@@ -552,6 +633,16 @@ class ViewTests(Case):
         self.assertNotEqual(self.hub.call("/api/v1/todos")[1]["ETag"], tag)
 
 
+class NoAsksTests(Case):
+    """MOCK_TODO_VIEW_ASKS=0: a hub whose managers answer only through today's routes."""
+    ENV = {"MOCK_TODO_VIEW": "1", "MOCK_TODO_VIEW_ASKS": "0"}
+
+    def test_no_asks_route(self):
+        self.assertNotIn("todo_asks", self.hub.get("/api/v1/health")["features"])
+        ask = self.row("t01")["view"]["asks"][0]["id"]
+        self.assertEqual(self.post("/api/v1/todos/t01/asks/%s/answer" % quote(ask, safe=""), {})[0], 404)
+
+
 class OldHubTests(Case):
     ENV = {"MOCK_TODO_VIEW": "old"}
 
@@ -628,6 +719,187 @@ class TwoManagersTests(Case):
         own = {p["project"]: p["manager"] for p in places["places"] if p["kind"] == "project"}
         self.assertEqual(own, {"home": ids[0], "kyoto": ids[0], "weather": ids[1]})
         self.assertEqual(places["counts"], listed["counts"])
+
+
+_mock_spec = importlib.util.spec_from_file_location("todo_view_mock", HERE / "todo_view_mock.py")
+receipts = importlib.util.module_from_spec(_mock_spec)
+_mock_spec.loader.exec_module(receipts)
+
+WIDGET = "e1a7c3d5-0000-4000-8000-000010465001"  # the Widget run's session (todo_view_mock.sid(1))
+ROUTE = "/api/v1/assistant/conversations/c-kyoto/route"
+
+
+def receipt(kind, **match):
+    return lambda m: m.get("type") == kind and all(m.get(k) == v for k, v in match.items())
+
+
+class ReceiptTests(Case):
+    """docs/protocol/protocol.md "Message feedback (#5258)" and its "To-do writes"; MOCK_TASKS serves the route."""
+    ENV = {"MOCK_TODO_VIEW": "1", "MOCK_TASKS": "1"}
+
+    def socket(self, *features, subscribe=None):
+        """A socket that said client_hello with features (and subscribed to a session), and its hello."""
+        ws = Socket(self.hub.port)
+        self.addCleanup(ws.close)
+        hello = ws.message(lambda m: m.get("type") == "hello")
+        self.assertIsNotNone(hello)
+        ws.send({"type": "client_hello", "features": list(features)})
+        self.assertIsNotNone(ws.message(lambda m: m.get("type") == "client_hello_ack"))
+        if subscribe:
+            ws.send({"type": "subscribe", "machine_id": "macbook", "session_id": subscribe})
+            self.assertIsNotNone(ws.message(lambda m: m.get("type") == "items" and m.get("session_id") == subscribe))
+        return ws, hello
+
+    def test_the_hello_vouches_for_both(self):
+        _, hello = self.socket()
+        self.assertEqual((hello.get("message_send_state"), hello.get("todo_send_state")), (1, 1))
+
+    def test_an_answer_under_an_op_id(self):
+        ws, _ = self.socket("todo_send_state")
+        ask = self.row("t01")["view"]["asks"][0]["id"]
+        path = "/api/v1/todos/t01/asks/%s/answer" % quote(ask, safe="")
+        op = "0A1B2C3D-0000-4000-8000-0000000000AC"
+        status, _, first = self.post(path, {"option": "Ryokan Hanami"}, **{"X-Persona-Op-Id": op})
+        self.assertEqual((status, first["outcome"]), (200, "answered"))
+        self.assertEqual(ws.message(receipt("todo_send_state", client_op_id=op.lower()))["state"], "processing")
+        self.assertEqual(ws.message(receipt("todo_send_state", client_op_id=op.lower()))["state"], "delivered")
+        status, _, again = self.post(path, {"option": "Ryokan Hanami"}, **{"X-Persona-Op-Id": op})
+        self.assertEqual((status, again), (200, first), "the same op id gets the first answer, not ask_stale")
+
+    def test_a_todos_message_under_an_op_id(self):
+        ws, _ = self.socket("todo_send_state")
+        quiet, _ = self.socket()  # asked for nothing
+        op = "0A1B2C3D-0000-4000-8000-0000000000AB"
+        status, _, first = self.post(ROUTE, {"todo_id": "t01", "text": "Book the quieter one."}, **{"X-Persona-Op-Id": op})
+        self.assertEqual(status, 200, first)
+        said = ws.message(receipt("todo_send_state"))
+        self.assertEqual({k: said[k] for k in ("todo_id", "client_op_id", "state")},
+                         {"todo_id": "t01", "client_op_id": op.lower(), "state": "processing"})
+        self.assertRegex(said["at"], r"^\d{4}-\d\d-\d\dT[\d:.]+Z$")
+        self.assertEqual(ws.message(receipt("todo_send_state", client_op_id=op.lower()))["state"], "delivered")
+        self.assertIsNone(quiet.message(receipt("todo_send_state"), seconds=1))
+        status, _, again = self.post(ROUTE, {"todo_id": "t01", "text": "Book the quieter one."}, **{"X-Persona-Op-Id": op})
+        self.assertEqual((status, again), (200, first), "the same op id gets the first answer")
+        self.assertIsNone(ws.message(receipt("todo_send_state"), seconds=1), "and says nothing")
+
+    def test_the_sockets_url_asks_too(self):
+        ws = Socket(self.hub.port, "?features=sessions_delta,todo_send_state")
+        self.addCleanup(ws.close)
+        self.assertIsNotNone(ws.message(lambda m: m.get("type") == "hello"))
+        # The mock lists the socket among its clients after the hello and before the machines list: a post between the
+        # two would find nobody to tell.
+        self.assertIsNotNone(ws.message(lambda m: m.get("type") == "machines"))
+        op = "0a1b2c3d-0000-4000-8000-0000000000af"  # no client_hello yet: the URL is enough, as on the hub
+        self.assertEqual(self.post(ROUTE, {"todo_id": "t01", "text": "Hi"}, **{"X-Persona-Op-Id": op})[0], 200)
+        self.assertEqual([ws.message(receipt("todo_send_state"))["state"] for _ in range(2)], ["processing", "delivered"])
+
+    def test_what_the_hub_refuses_first_says_nothing(self):
+        ws, _ = self.socket("todo_send_state", subscribe=WIDGET)
+        status, _, _ = self.post(ROUTE, {"todo_id": "t01", "text": "Hi"}, **{"X-Persona-Op-Id": "not-a-uuid"})
+        self.assertEqual(status, 400, "withClientOp: an op id is a UUID")
+        path = "/api/v1/sessions/macbook/%s/messages" % WIDGET
+        status, _, _ = self.post(path, {"text": "Hi", "client_msg_id": "msg-ro", "todo_id": "t01"},
+                                 **{"X-Mock-Role": "readonly"})
+        self.assertEqual(status, 403, "a read-only device's message to a to-do")
+        self.assertIsNone(ws.message(lambda m: m.get("type") in ("todo_send_state", "message_send_state"), seconds=1))
+
+    def test_no_receipt_without_an_op_id_or_a_todo(self):
+        ws, _ = self.socket("todo_send_state")
+        self.assertEqual(self.post(ROUTE, {"todo_id": "t01", "text": "Hi"})[0], 200)
+        self.post(ROUTE, {"text": "Hi"}, **{"X-Persona-Op-Id": "0a1b2c3d-0000-4000-8000-0000000000ac"})
+        self.assertIsNone(ws.message(receipt("todo_send_state"), seconds=1))
+
+    def test_a_sessions_message(self):
+        ws, _ = self.socket(subscribe=WIDGET)
+        other, _ = self.socket()  # not subscribed
+        path = "/api/v1/sessions/macbook/%s/messages" % WIDGET
+        self.assertEqual(self.post(path, {"text": "Go on.", "client_msg_id": "msg-1"})[0], 200)
+        said = ws.message(receipt("message_send_state"))
+        self.assertEqual({k: said[k] for k in ("machine_id", "session_id", "client_msg_id", "state")},
+                         {"machine_id": "macbook", "session_id": WIDGET, "client_msg_id": "msg-1", "state": "processing"})
+        self.assertEqual(ws.message(receipt("message_send_state", client_msg_id="msg-1"))["state"], "delivered")
+        self.assertIsNone(other.message(receipt("message_send_state"), seconds=1))
+        self.post(path, {"text": "Go on.", "client_msg_id": "msg-1"})  # taken: the hub's flight answers, silently
+        self.assertIsNone(ws.message(receipt("message_send_state"), seconds=1))
+
+    def test_a_message_that_did_not_get_there(self):
+        ws, _ = self.socket(subscribe=WIDGET)
+        self.hub.get("/mock/send-fail?on=1")
+        self.addCleanup(self.hub.get, "/mock/send-fail?on=0")
+        path = "/api/v1/sessions/macbook/%s/messages" % WIDGET
+        self.assertEqual(self.post(path, {"text": "Go on.", "client_msg_id": "msg-2"})[0], 502)
+        self.assertEqual(ws.message(receipt("message_send_state"))["state"], "processing")
+        self.assertEqual(ws.message(receipt("message_send_state"))["state"], "failed")
+        self.hub.get("/mock/send-fail?on=0")
+        self.assertEqual(self.post(path, {"text": "Go on.", "client_msg_id": "msg-2"})[0], 200)  # nothing typed: again
+        self.assertEqual([ws.message(receipt("message_send_state"))["state"] for _ in range(2)], ["processing", "delivered"])
+
+    def test_the_hubs_reading_of_an_answer(self):
+        todo, message = receipts.todo_outcome, receipts.message_outcome
+        self.assertEqual(todo(200, {"item": {}}), "delivered")
+        self.assertEqual(todo(200, {"delivered": "none"}), "delivered")  # recorded for the supervisor
+        self.assertEqual(todo(409, {"code": "conflict", "delivered": "none"}), "failed")
+        self.assertEqual(todo(503, {"code": "assistant_offline"}), "failed")
+        self.assertEqual(todo(404, {"code": "todo_not_found"}), "failed")
+        self.assertEqual(todo(409, {"code": "conflict"}), "unknown")  # an older manager says nothing of delivery
+        self.assertEqual(todo(409, {"code": "send_in_doubt", "delivered": "yes"}), "unknown")
+        self.assertEqual(todo(502, {"code": "assistant_in_doubt", "delivered": "unknown"}), "unknown")
+        self.assertEqual(message(200, {"ok": True}), "delivered")
+        self.assertEqual(message(202, {"delivered": "later"}), "kept")
+        self.assertEqual(message(502, {"delivered": "unknown"}), "unknown")
+        self.assertEqual(message(409, {"delivered": "none"}), "failed")
+
+
+class InFlightReceiptTests(Case):
+    """A repeat of an id while its first request is still under way joins it, as the hub's withClientOp and send
+    flight do: one Processing, one write, the first answer for both."""
+    ENV = {"MOCK_TODO_VIEW": "1", "MOCK_TASKS": "1", "MOCK_SEND_DELAY_MS": "1500"}
+    socket = ReceiptTests.socket
+
+    def twice(self, path, body, want, **headers):
+        """The first request's and the repeat's (status, answer), the repeat sent once the first said Processing."""
+        first = []
+        thread = threading.Thread(target=lambda: first.append(self.post(path, body, **headers)))
+        thread.start()
+        self.addCleanup(thread.join)
+        self.assertEqual(self.ws.message(want)["state"], "processing")
+        status, _, again = self.post(path, body, **headers)
+        thread.join()
+        return (first[0][0], first[0][2]), (status, again)
+
+    def test_the_same_op_id_twice(self):
+        self.ws, _ = self.socket("todo_send_state")
+        op = "0a1b2c3d-0000-4000-8000-0000000000ae"
+        body = {"todo_id": "t01", "text": "Book the quieter one."}
+        first, again = self.twice(ROUTE, body, receipt("todo_send_state"), **{"X-Persona-Op-Id": op})
+        self.assertEqual(first[0], 200, first)
+        self.assertEqual(again, first, "the first answer, typed once")
+        self.assertEqual(self.ws.message(receipt("todo_send_state"))["state"], "delivered")
+        self.assertIsNone(self.ws.message(receipt("todo_send_state"), seconds=1), "the repeat said nothing")
+
+    def test_the_same_client_msg_id_twice(self):
+        self.ws, _ = self.socket(subscribe=WIDGET)
+        path = "/api/v1/sessions/macbook/%s/messages" % WIDGET
+        first, again = self.twice(path, {"text": "Go on.", "client_msg_id": "msg-3"}, receipt("message_send_state"))
+        self.assertEqual(first[0], 200, first)
+        self.assertEqual(again, first)
+        self.assertEqual(self.ws.message(receipt("message_send_state"))["state"], "delivered")
+        self.assertIsNone(self.ws.message(receipt("message_send_state"), seconds=1), "the repeat said nothing")
+
+
+class OldHubReceiptTests(Case):
+    ENV = {"MOCK_TODO_VIEW": "old", "MOCK_TASKS": "1"}
+
+    def test_an_older_hub_has_no_todo_receipts(self):
+        ws = Socket(self.hub.port)
+        self.addCleanup(ws.close)
+        hello = ws.message(lambda m: m.get("type") == "hello")
+        self.assertEqual((hello.get("message_send_state"), hello.get("todo_send_state")), (1, None))
+        ws.send({"type": "client_hello", "features": ["todo_send_state"]})
+        self.assertIsNotNone(ws.message(lambda m: m.get("type") == "client_hello_ack"))
+        op = "0a1b2c3d-0000-4000-8000-0000000000ad"
+        self.assertEqual(self.post(ROUTE, {"todo_id": "t01", "text": "Hi"}, **{"X-Persona-Op-Id": op})[0], 200)
+        self.assertIsNone(ws.message(receipt("todo_send_state"), seconds=1))
 
 
 if __name__ == "__main__":

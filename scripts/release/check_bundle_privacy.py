@@ -31,8 +31,9 @@ Prints the file and the kind of hit, never the value.
 For public Go builds, narrowly scoped dependency constants are classified separately from private data. This requires
 a build with exactly the tags of server/build-tags.txt (the public marker and ts_omit_ feature tags), and unreplaced
 dependencies whose build-info checksums match server/go.sum; registered personal values always win.
-Two exact Go rodata contexts are classified too (#6314): larkcli's two adjacent constants that read as a banned name,
-and wireguard-go's handshake identifier (its author string), the latter only with that unreplaced dependency.
+Two exact Go rodata contexts are classified too (#6314): larkcli's chat-link path and its display name, in their
+observed public constant prefixes, read as a banned name; wireguard-go's handshake identifier (its author string) is
+classified only with that unreplaced dependency.
 The seven known swift-nio-ssh algorithm/certificate names are also classified as a complete original printable field
 or a complete comma-separated list; that fallback excludes URLs, surrounding context and normalized fragments.
 """
@@ -100,9 +101,11 @@ TAILSCALE_CONTACT = re.compile(r'<a href="mailto:support\+webclient@tailscale[.]
 # Upstream author strings, not accounts; only right after "by <" and before ">".
 RUST_TLS_CONSTANTS = re.compile(r"(?<=by <)(?:appro@openssl[.]org|xiaokang[.]qian@arm[.]com)(?=>)")
 # Go lays string constants out back to back in rodata. larkcli's chat-link path ends where its display name begins
-# (the path, then the display name), which reads as a banned name that neither constant holds. Exact join only.
+# (the path, then the display name), which reads as a banned name that neither constant holds. Only the exact observed
+# public prefixes count: the full public chat URL, or the iMessage parser's error next to the path (#14310).
 # The name is split here because this file must not spell it either.
-GO_ADJACENT_CONSTANTS = re.compile(r"(?<=applink[.]feishu[.]cn)/client/chat/" + "open" + "Lark via lark-cli")
+GO_ADJACENT_CONSTANTS = re.compile(
+    r"(?:(?<=applink[.]feishu[.]cn)|(?<=not a typedstream))/client/chat/" + "open" + "Lark via lark-cli")
 # wireguard-go's handshake identifier (device/noise-protocol.go): an upstream author string, not an account.
 WIREGUARD_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9._%+-])WireGuard v1 zx2c4 Jason@zx2c4[.]com(?![.][A-Za-z])")
 WIREGUARD_MODULES = frozenset({"github.com/tailscale/wireguard-go", "golang.zx2c4.com/wireguard"})
@@ -595,12 +598,22 @@ def verified_public_file(path):
 
 
 def public_download_url(cfg):
-    """The update URL every published personad carries and the one path it may have: publish.update_url as configured
-    (a GitHub repository's releases/latest/download, say), else publish.site_url's /dl (persona_config.update_url)."""
-    url = persona_config.update_url(cfg)
-    if url and persona_config.get(cfg, "publish.update_url", "") not in ("", None):
+    """The update URL every published personad carries and the one path it may have: an inherited environment override,
+    then publish.update_url (a GitHub repository's releases/latest/download, say), else publish.site_url's /dl."""
+    override = os.environ.get("PERSONA_UPDATE_URL")
+    url = persona_config.update_url(cfg, override)
+    if url and (override or persona_config.get(cfg, "publish.update_url", "") not in ("", None)):
         return url, urlsplit(url).path
     return url, "/dl"
+
+
+def public_download_urls(cfg):
+    """Both legitimate public feeds: the update base and the site's own /dl publication feed."""
+    urls = [public_download_url(cfg)]
+    site = persona_config.get(cfg, "publish.site_url", "")
+    if isinstance(site, str) and site.strip():
+        urls.append((site.rstrip("/") + "/dl", "/dl"))
+    return urls
 
 
 def public_archive_dependencies(path, whole_short):
@@ -713,7 +726,8 @@ def main():
                         if not whole_short:
                             t = remove_public_relay_url(t, persona_config.get(cfg, "app.push_relay", ""))
                         else:
-                            t = remove_public_relay_url(t, *public_download_url(cfg))
+                            for public_url, public_path in public_download_urls(cfg):
+                                t = remove_public_relay_url(t, public_url, public_path)
                         for v in inherent:
                             t = t.replace(v, "")
                         if modules:

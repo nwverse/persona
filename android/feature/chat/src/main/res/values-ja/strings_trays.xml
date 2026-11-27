@@ -2,6 +2,7 @@
 <resources>
     <string name="chat_tray_entry_needs_you">要対応</string>
     <string name="chat_tray_entry_running">進行中</string>
+    <string name="chat_tray_entry_finished">完了</string>
     <plurals name="chat_tray_items">
         <item quantity="other">%1$d 件</item>
     </plurals>
@@ -36,6 +37,7 @@
     <string name="chat_tray_draft_changed">下書きが更新されました。最新の内容を確認してから送信してください。</string>
     <string name="chat_tray_caught_up">すべて対応済み</string>
     <string name="chat_tray_accept">受け入れる</string>
+    <string name="chat_tray_ready_to_verify">確認待ち</string>
     <string name="chat_tray_finish_now">ここで完了</string>
     <string name="chat_tray_follow_recommendation">推奨に従う</string>
     <string name="chat_tray_finish_failed">タスクを完了できませんでした。もう一度お試しください。</string>
@@ -48,7 +50,7 @@
     <string name="chat_tray_stopped_reason">止まったまま未完了 · %1$s</string>
     <string name="chat_tray_pr_number">PR #%1$s</string>
     <string name="chat_tray_done">完了</string>
-    <string name="chat_tray_just_finished">完了したばかり</string>
+    <string name="chat_tray_finished_empty">直近 24 時間に完了したタスクはありません</string>
     <string name="chat_tray_finished_done">完了</string>
     <string name="chat_tray_accepted">検収済み</string>
     <string name="chat_tray_in_progress">進行中</string>

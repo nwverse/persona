@@ -29,24 +29,32 @@ func (s *Service) InboxTriagePreview(ctx context.Context, p assistantwire.InboxT
 	if source == "" {
 		source = "-preview" // no source has it: its kinds come with the request
 	}
+	hello := s.hello(ctx)
+	language := answerLanguage(hello.Locale)
 	b := &s.inbox
 	out := make([]assistantwire.InboxTriageVerdict, len(things))
 	var wg sync.WaitGroup
 	for i, t := range things {
 		it := &InboxItem{ID: "preview", Source: source}
 		fillConnectorItem(it, t)
-		b.mu.Lock()
-		item := b.promptItem(it)
-		b.mu.Unlock()
-		if source == "larkcli" && it.Kind == KindDM {
-			item.Latest = it.Preview
+		allowed, err := s.inboxVisibilityModelAllowed(ctx, it)
+		if err != nil || !allowed {
+			why := "This chat is excluded from AI reads."
+			if err != nil {
+				why = "Chat visibility could not be verified."
+			}
+			out[i] = assistantwire.InboxTriageVerdict{State: "error", Why: why}
+			continue
 		}
+		b.mu.Lock()
+		item := b.triagePromptItem(it, language)
+		b.mu.Unlock()
 		if item.Described == "" {
 			item.Described = p.Kinds[it.Kind]
 		}
 		input := prompts.RenderInboxItem(item)
 		wg.Go(func() {
-			v := s.triageModel(ctx, input, it.Rules, triagePreviewWait)
+			v := s.triageModelIn(ctx, input, it.Rules, triagePreviewWait, hello)
 			out[i] = assistantwire.InboxTriageVerdict{Tier: v.tier, Summary: v.summary, Reason: v.reason, Urgent: v.urgent,
 				State: v.state, Why: v.why}
 		})

@@ -46,6 +46,17 @@ func (e *proxyError) Text(l i18n.Lang) string {
 
 var errProxyInvalid = &proxyError{key: "link-errors.proxy_invalid"}
 
+// errProxyOnlyNone: Config.ProxyAlways is set, but no proxy applies to the hub's candidates (none set, "off", or
+// NO_PROXY and loopback exempting them all). The link waits rather than dialing direct.
+var errProxyOnlyNone = &proxyError{key: "link-errors.proxy_only_none"}
+
+// Why SetProxyAlways refuses to turn proxy-only mode on.
+var (
+	ErrProxyAlwaysNeedsURL  = newTextError("link-errors.proxy_always_needs_url", nil)
+	ErrProxyAlwaysSSHAlways = newTextError("link-errors.proxy_always_ssh_always", nil)
+	ErrSSHAlwaysProxyAlways = newTextError("link-errors.ssh_always_proxy_always", nil)
+)
+
 // ParseProxy reads a proxy URL as Go's net/http reads HTTPS_PROXY (a bare host:port means http://) and takes what a
 // CONNECT proxy needs alone: http or https, a host and port, optional credentials. Errors never quote it.
 func ParseProxy(raw string) (*url.URL, error) {
@@ -82,7 +93,8 @@ func RedactedProxy(raw string) string {
 	return u.String()
 }
 
-// SetProxy saves link.json's proxy: a URL (ParseProxy), ProxyOff, or "" for the environment's again.
+// SetProxy saves link.json's proxy: a URL (ParseProxy), ProxyOff, or "" for the environment's again. ProxyOff and ""
+// also turn proxy-only mode off: it needs a proxy of link.json's own.
 func SetProxy(path, raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw != ProxyOff && raw != "" {
@@ -92,7 +104,36 @@ func SetProxy(path, raw string) error {
 		}
 		raw = u.String()
 	}
-	return Update(path, func(c *Config) error { c.Proxy = raw; return nil })
+	return Update(path, func(c *Config) error {
+		c.Proxy = raw
+		if raw == ProxyOff || raw == "" {
+			c.ProxyAlways = false
+		}
+		return nil
+	})
+}
+
+// SetProxyAlways turns proxy-only mode (Config.ProxyAlways) on or off. On needs a proxy URL saved in link.json (an
+// environment proxy is the process's, and a service rarely has one) and refuses while SSH.Always is set.
+func SetProxyAlways(path string, on bool) error {
+	return Update(path, func(c *Config) error {
+		if on {
+			if c.Proxy == "" || c.Proxy == ProxyOff {
+				return ErrProxyAlwaysNeedsURL
+			}
+			if c.SSH != nil && c.SSH.Always {
+				return ErrProxyAlwaysSSHAlways
+			}
+		}
+		c.ProxyAlways = on
+		return nil
+	})
+}
+
+// proxySettings selects the proxy and bypass list used for both dialing and route memory.
+func proxySettings(c *Config) (raw, noProxy string) {
+	env := httpproxy.FromEnvironment() // https_proxy and no_proxy, lower case first, as Go's net/http reads them
+	return cmp.Or(c.Proxy, env.HTTPSProxy, os.Getenv("all_proxy"), os.Getenv("ALL_PROXY")), env.NoProxy
 }
 
 // proxied is the proxy c's candidates go through and those candidates, each marked KindProxy: link.json's proxy,
@@ -101,16 +142,12 @@ func SetProxy(path, raw string) error {
 // rarely reaches them. An environment proxy Persona cannot use (SOCKS, say) is left to the programs it is for; one in
 // link.json is the proxy route's error, and direct candidates are tried all the same.
 func proxied(c *Config) (*url.URL, []Endpoint, error) {
-	env := httpproxy.FromEnvironment() // https_proxy and no_proxy, lower case first, as Go's net/http reads them
-	raw, fromEnv := c.Proxy, c.Proxy == ""
-	if fromEnv {
-		raw = cmp.Or(env.HTTPSProxy, os.Getenv("all_proxy"), os.Getenv("ALL_PROXY"))
-	}
+	raw, noProxy := proxySettings(c)
 	if raw == "" || raw == ProxyOff {
 		return nil, nil, nil
 	}
 	// Only NO_PROXY's answer is wanted here: the stand-in keeps the real URL (and its credentials) out of httpproxy.
-	use := (&httpproxy.Config{HTTPSProxy: "http://proxy.invalid", NoProxy: env.NoProxy}).ProxyFunc()
+	use := (&httpproxy.Config{HTTPSProxy: "http://proxy.invalid", NoProxy: noProxy}).ProxyFunc()
 	var eps, lan []Endpoint
 	for _, ep := range ranked(c.Endpoints) {
 		u, err := url.Parse(ep.URL)
@@ -131,12 +168,22 @@ func proxied(c *Config) (*url.URL, []Endpoint, error) {
 	}
 	p, err := ParseProxy(raw)
 	switch {
-	case err != nil && fromEnv:
+	case err != nil && c.Proxy == "":
 		return nil, nil, nil
 	case err != nil:
 		return nil, nil, err
 	}
 	return p, eps, nil
+}
+
+// proxyRoute is proxied for dialing the proxy route: in proxy-only mode no proxy is errProxyOnlyNone, so the route
+// fails on its own instead of leaving the link without any.
+func proxyRoute(c *Config) (*url.URL, []Endpoint, error) {
+	p, eps, err := proxied(c)
+	if c.ProxyAlways && p == nil && err == nil {
+		err = errProxyOnlyNone
+	}
+	return p, eps, err
 }
 
 // proxyDial is a DialContext that reaches addr through proxy p with a CONNECT. An https proxy is checked with the

@@ -71,7 +71,6 @@ describe("parseQueued", () => {
     expect(parseQueued(raw)).toEqual({ text: raw, photos: [], files: [], contexts: [] });
   });
 });
-
 describe("queuedMarks", () => {
   it("counts each kind a message carries, only the ones it has", () => {
     const raw = `${withContexts([{ kind: "context", title: "Notes", url: "", text: "x" }], "Here", true)} <persona-file kind="video" path="/v.mov"/> <persona-file kind="file" path="/a.pdf"/>\n\n<attached_images>\npath: ${A}\npath: ${B}\n</attached_images>`;

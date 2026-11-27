@@ -25,6 +25,7 @@ const (
 	OrcaPaneEnv       = "ORCA_PANE_KEY"     // Orca
 	OrcaLegacyPaneEnv = "ORCA_AGENT_PANE"   // older Orca
 	TernPaneEnv       = "TERN_PANE"         // Tern
+	RexPaneEnv        = "REX_BLOCK"         // Rex
 )
 
 // GlobalHookFlag marks the report-only entries the node puts in the user's own Claude Code settings
@@ -56,6 +57,9 @@ func HookPane(getenv func(string) string) string {
 	if b := getenv(TernPaneEnv); b != "" {
 		return host.PaneRef{Kind: host.Tern, ID: b}.String()
 	}
+	if b := getenv(RexPaneEnv); b != "" {
+		return host.PaneRef{Kind: host.Rex, ID: b}.String()
+	}
 	return ""
 }
 
@@ -68,6 +72,10 @@ func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 			_ = os.Setenv("PERSONA_HOME", args[1]) // read by SocketPath, as from a shell-form hook's environment
 		}
 		args = args[2:]
+	}
+	if len(args) > 0 && args[0] == AgyFlag { // an entry in the Antigravity CLI's hooks: report only, prints {}
+		RunAgyHook(ctx, args[1:], stdin, stdout, os.Getenv)
+		return
 	}
 	input, err := io.ReadAll(stdin)
 	if err != nil || !json.Valid(input) {

@@ -133,8 +133,9 @@ func (s *Service) toolInboxPost(ctx context.Context, machine, self string, args 
 	default:
 		return "", fmt.Errorf("tier %q: use \"action\" (needs the user) or \"fyi\" (worth knowing)", a.Tier)
 	}
-	if s.justMeNow(machine, self) || s.inHealth(ctx, self) {
-		// Like notify_user: a meeting's side turn and a health conversation put nothing where the lists can show it.
+	if pol := s.selfPolicy(ctx, self); s.justMeNow(machine, self) || pol.Redact || pol.HideFromExtensions {
+		// Like notify_user: a meeting's side turn and a conversation of a private space put nothing where the lists
+		// (and the extensions that read them) can show it.
 		return "", errors.New("this conversation can't be put into the Inbox")
 	}
 	if !s.inboxPostOn(ctx) {
@@ -255,13 +256,18 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 			live.ArrivedOf, live.ArrivedAt = it.ArrivedOf, it.ArrivedAt
 			value, previous, current := reflect.ValueOf(live).Elem(), reflect.ValueOf(before), reflect.ValueOf(latest)
 			for i := range value.NumField() {
-				if name := value.Type().Field(i).Name; name == "Chain" || name == "ChainSeq" {
+				field := value.Type().Field(i)
+				if !field.IsExported() {
+					continue // reflect can neither read nor set it: rebaseInboxBookkeeping does, below
+				}
+				if field.Name == "Chain" || field.Name == "ChainSeq" {
 					continue // apply appended the post to the chain that already holds the concurrent notes
 				}
 				if !reflect.DeepEqual(current.Field(i).Interface(), previous.Field(i).Interface()) {
 					value.Field(i).Set(current.Field(i))
 				}
 			}
+			rebaseInboxBookkeeping(live, &before, &latest)
 		} else {
 			return // a concurrent removal/replacement owns the live row now
 		}
@@ -272,6 +278,25 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 		return inboxPosted{}, errInboxNotPersisted
 	}
 	return inboxPosted{id: it.ID, updated: updated}, nil
+}
+
+// rebaseInboxBookkeeping is postToInbox's rebase for InboxItem's unexported fields, which the reflect loop there
+// cannot read (reflect.Value.Interface panics on them): as for the exported ones, a value that changed on the live row
+// while the post's IO was pending (latest differs from before) stays the live row's; otherwise live keeps what the
+// post's apply gave it. A new unexported field of InboxItem belongs here (TestInboxPostRebaseCoversUnexportedFields).
+func rebaseInboxBookkeeping(live, before, latest *InboxItem) {
+	if !reflect.DeepEqual(latest.externalMoves, before.externalMoves) {
+		live.externalMoves = latest.externalMoves
+	}
+	if latest.externalChecking != before.externalChecking {
+		live.externalChecking = latest.externalChecking
+	}
+	if latest.replyClassifySerial != before.replyClassifySerial {
+		live.replyClassifySerial = latest.replyClassifySerial
+	}
+	if latest.receivedInCollection != before.receivedInCollection {
+		live.receivedInCollection = latest.receivedInCollection
+	}
 }
 
 // inboxPostText is a post's text as the row keeps it: body, the Markdown as written (cut past inboxPostBodyMax), and

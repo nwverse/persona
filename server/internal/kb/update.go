@@ -31,6 +31,9 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	// run while a connector downloads, so reread their metadata before commit.
 	e.Store.ingestMu.Lock()
 	defer e.Store.ingestMu.Unlock()
+	// After every other deferred unlock (chatMu below), still under ingestMu: gateway lines a fuller sync message
+	// supersedes go once that message is written (align_loose.go).
+	defer e.settleSuperseded(ChatID(src.Name(), sc.ID))
 	cut := e.textCutoff()
 	e.Store.chatMu.Lock()
 	c, exists, r, err := e.Store.ingestState(src.Name(), sc, cut)
@@ -45,8 +48,8 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	selecting := sel != nil && facts.Selected()
 	unchanged := func() (int, error) {
 		if exists {
-			// No new lines, but the source may report a new state (a pull request merged): record it all the same.
-			if err := e.recordChatState(c.ID, sc); err != nil {
+			// The source can report a new URL or state without adding a message.
+			if err := e.recordChatSource(c.ID, sc); err != nil {
 				return 0, err
 			}
 			e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
@@ -71,11 +74,29 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 		late bool // stored with a later message of the owner's: older than lines written before it
 	}
 	var picks []pick
+	// dups: messages another source already archived (Engine.Align), by ID: received, never written.
+	var dups map[string]time.Time
+	// repairs: already-received larksync messages arriving with a resolved SenderName to backfill pre-#15486 "?:" lines.
+	var repairs []SourceMessage
 	for _, m := range msgs {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
 		if _, seen := r.IDs[m.ID]; m.ID != "" && seen {
+			if exists && syncSource(src) && !m.Mine && strings.TrimSpace(m.SenderName) != "" {
+				if lr, hasLine := r.Lines[m.ID]; hasLine && !lr.Mine && lr.Hash != "" {
+					repairs = append(repairs, m)
+				}
+			}
+			continue
+		}
+		if e.Align != nil && e.Align(src, sc, m) {
+			if m.ID != "" {
+				if dups == nil {
+					dups = map[string]time.Time{}
+				}
+				dups[m.ID] = m.At
+			}
 			continue
 		}
 		if !selecting {
@@ -139,10 +160,26 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 		}
 		kept = append(kept, m)
 	}
+	needChatNameFill := exists && syncSource(src) && sc.Name != "" && c.Name == ""
+	if len(repairs) > 0 || needChatNameFill {
+		if err := e.repairLarkSyncSenders(src, sc, cut, repairs); err != nil {
+			return 0, err
+		}
+		if needChatNameFill {
+			c.Name = sc.Name
+		}
+	}
 	if len(lines) == 0 {
 		if err := saveWindow(); err != nil {
 			return 0, err
 		}
+		if len(dups) > 0 && exists {
+			if err := e.receiveOnly(src, sc, cut, dups); err != nil {
+				return 0, err
+			}
+		}
+		// A chat not stored yet keeps no receipts for its duplicates: an empty chat would list beside the one that
+		// has the messages. They are asked about again when they come again.
 		return unchanged()
 	}
 	if err := ctx.Err(); err != nil {
@@ -156,6 +193,9 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	}
 	if err := attributeChat(c, src); err != nil {
 		return 0, err
+	}
+	for id, at := range dups {
+		r.IDs[id] = at
 	}
 	for i, m := range kept {
 		if m.ID != "" {
@@ -178,7 +218,7 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	}
 	c.Messages += len(lines)
 	c.Pending += len(lines)
-	stateChanged := noteChatState(c, sc, time.Now())
+	stateChanged, _ := noteChatSource(c, sc, time.Now())
 	usual := ""
 	if selecting {
 		usual = sel.UsualRule(ret, facts)
@@ -198,6 +238,24 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	return len(lines), nil
 }
 
+// receiveOnly records the IDs of dups (messages another source already archived) in a stored chat's receipts without
+// writing a line, so they are not aligned again. The caller holds ingestMu.
+func (e *Engine) receiveOnly(src Source, sc SourceChat, cut time.Time, dups map[string]time.Time) error {
+	e.Store.chatMu.Lock()
+	defer e.Store.chatMu.Unlock()
+	c, exists, r, err := e.Store.ingestState(src.Name(), sc, cut)
+	if err != nil || !exists {
+		return err
+	}
+	if err := attributeChat(c, src); err != nil {
+		return err
+	}
+	for id, at := range dups {
+		r.IDs[id] = at
+	}
+	return e.Store.commitIngest(c, nil, r, false, "")
+}
+
 // Defined in the contract package kbwire (docs/server/architecture.md "Contract packages"); the old names stay.
 type (
 	Detail    = kbwire.Detail
@@ -208,7 +266,7 @@ type (
 	Evidence   = kbwire.Evidence
 )
 
-var ErrNotFound = errors.New("not found")
+var ErrNotFound = kbwire.ErrNotFound
 
 // Get reads one entity. recentChars bounds a chat's latest messages in bytes, a recording's transcript in characters
 // (0: none).
@@ -222,7 +280,9 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	case KindChat, KindPerson, KindProject, KindRecording, KindTopic:
 		meta = e.Store.path(kind, id, "meta.json")
 		d.Path = e.Store.path(kind, id)
-		d.Summary = e.Store.Summary(kind, id)
+		if kind != KindProject {
+			d.Summary = e.Store.Summary(kind, id)
+		}
 	case KindDoc, KindMeeting, KindEvent:
 		meta = filepath.Join(e.Store.Dir, kind, SafeID(id)+".json")
 		d.Path = meta
@@ -234,6 +294,7 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	var hub HubTranscript
 	var raw []byte
 	var err error
+	var project *Project
 	if kind == KindRecording {
 		// Its files with its meeting.json and the hub's transcript, read together: detail.segments is the transcript of
 		// record, detail.meta has the transcription.
@@ -242,6 +303,9 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		if err == nil && raw == nil {
 			err = ErrNotFound
 		}
+	} else if kind == KindProject {
+		project, err = e.projectDetail(d)
+		raw = d.Meta
 	} else {
 		raw, err = os.ReadFile(meta)
 	}
@@ -252,14 +316,12 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	if kind == KindRecording {
 		d.Meta = metaWithNameSource(metaWithMeeting(raw, meeting))
 	}
-	if kind == KindProject {
-		d.Log = e.Store.Log(id, 30)
-		if p, ok := e.Store.Project(id); ok {
-			for _, x := range p.Moments {
-				if m, ok := e.Store.MomentPost(x.ID); ok {
-					f := momentForPrompt(m, x.Note, 200, e.Store.Zone())
-					d.Moments = append(d.Moments, MomentRef{ID: m.ID, Author: f.Author, Text: f.Text, At: m.At, Comments: m.CommentCount, Note: x.Note})
-				}
+	if project != nil {
+		d.Sources = e.projectSources(project, e.projectSourceLookup())
+		for _, x := range project.Moments {
+			if m, ok := e.Store.MomentPost(x.ID); ok {
+				f := momentForPrompt(m, x.Note, 200, e.Store.Zone())
+				d.Moments = append(d.Moments, MomentRef{ID: m.ID, Author: f.Author, Text: f.Text, At: m.At, Comments: m.CommentCount, Note: x.Note})
 			}
 		}
 	}
@@ -285,6 +347,11 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		if recentChars > 0 {
 			raw := recording["transcript.md"]
 			d.Recent = clip(string(raw), recentChars)
+		}
+		if e.recordings == nil { // without the recording module: what waits for it is said, never rewritten
+			if r, ok := e.Store.Recording(id); ok {
+				d.Paused = e.recordingPaused(r)
+			}
 		}
 	}
 	if kind == KindChat && recentChars > 0 {
@@ -327,7 +394,7 @@ func (e *Engine) itemEntries(refs []string) []Entry {
 		}
 		if kind == KindRecording {
 			if r, ok := e.Store.Recording(id); ok {
-				by[kind] = append(by[kind], recordingEntry(r))
+				by[kind] = append(by[kind], e.recordingEntryOf(r))
 			}
 			continue
 		}
@@ -428,13 +495,27 @@ func (e *Engine) applyUser(kind, id string, uu UserUpdate) (string, error) {
 	u.Profile = nil
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
+	uu.Update = u
+	var tree treeEdit
 	if kind == KindProject {
+		if err := e.projectSourceUpdate(id, &uu); err != nil {
+			return "", err
+		}
+		var err error
+		if tree, err = e.projectTreeUpdate(id, uu); err != nil {
+			return "", err
+		}
 		u = e.projectUpdate(u)
+	} else {
+		uu.Parent, uu.Milestones, uu.Milestone = nil, nil, nil
 	}
 	uu.Update = u
-	out, err := e.apply(kind, id, u, userEdit(uu))
+	out, err := e.apply(kind, id, uu, userEdit(uu), UserWriter)
 	if err == nil && u.MergeInto == "" {
 		err = e.claim(kind, out, u, "", nil, nil)
+	}
+	if err == nil && kind == KindProject {
+		err = e.writeTree(out, tree)
 	}
 	if err == nil && profile != nil {
 		_, err = e.putProfile(out, UserWriter, profile)
@@ -453,7 +534,8 @@ func (e *Engine) putProfile(pid, writer string, p *PersonProfile) (*PersonProfil
 	return before, nil
 }
 
-func (e *Engine) apply(kind, id string, u Update, le linkEdit) (string, error) {
+func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer string) (string, error) {
+	u := uu.Update
 	now := time.Now().UTC()
 	switch kind {
 	case KindProject:
@@ -487,6 +569,15 @@ func (e *Engine) apply(kind, id string, u Update, le linkEdit) (string, error) {
 				return "", errors.New("a project needs a name")
 			}
 			p = &Project{Slug: Slug(name), Name: name, Kind: "short", Status: "active", Created: now}
+		}
+		if uu.ProjectMode != nil {
+			p.Mode = *uu.ProjectMode
+			if p.Mode == "full" {
+				p.Mode = ""
+			}
+		}
+		if uu.SourceURLs != nil {
+			p.SourceURLs = uu.SourceURLs
 		}
 		if u.Name != "" {
 			p.Name = u.Name
@@ -528,6 +619,9 @@ func (e *Engine) apply(kind, id string, u Update, le linkEdit) (string, error) {
 		for _, cid := range u.Chats {
 			c, ok, err := e.Store.editChat(cid, func(c *Chat) {
 				c.Projects = addUnique(c.Projects, p.Slug)
+				if le.user { // an extension's link does not lift what the user held
+					c.HeldOffProjects = false
+				}
 				if u.Lock == nil || *u.Lock {
 					c.LockedFields = addUnique(c.LockedFields, "projects")
 				}
@@ -539,7 +633,7 @@ func (e *Engine) apply(kind, id string, u Update, le linkEdit) (string, error) {
 			if ok {
 				p.Chats = addUnique(p.Chats, c.ID)
 				le.linked(&p.Tagging, "chats", c.ID)
-				p.People = addUnique(p.People, p.kept("people", c.People)...) // not the people the user took off it
+				p.People = addUnique(p.People, taggingKept(&p.Tagging, "people", c.People)...) // not the people the user took off it
 			}
 		}
 		if u.Log != "" {
@@ -565,7 +659,7 @@ func (e *Engine) apply(kind, id string, u Update, le linkEdit) (string, error) {
 			return "", err
 		}
 		if u.Summary != "" {
-			if err := e.Store.putSummary(KindProject, p.Slug, u.Summary, true); err != nil {
+			if err := e.Store.putSummary(KindProject, p.Slug, u.Summary, true, writer); err != nil {
 				return "", err
 			}
 		}
@@ -592,8 +686,14 @@ func (e *Engine) apply(kind, id string, u Update, le linkEdit) (string, error) {
 				c.Projects = addUnique(c.Projects, pr.Slug)
 				le.linked(&c.Tagging, "projects", pr.Slug)
 			}
+			if le.user && (len(linked) > 0 || len(le.allow["projects"]) > 0) { // the user's own link, not an extension's
+				c.HeldOffProjects = false
+			}
 			c.People = removeStrings(c.People, u.RemovePeople)
 			c.Projects = removeStrings(c.Projects, u.RemoveProjects)
+			if le.user && le.lockLists && len(u.RemoveProjects) > 0 && len(c.Projects) == 0 {
+				c.HeldOffProjects = true // took off every project and held the list: compression links it to none
+			}
 			le.removed(&c.Tagging, "people", e.existing(KindPerson, u.RemovePeople)...)
 			le.removed(&c.Tagging, "projects", e.existing(KindProject, u.RemoveProjects)...)
 			le.allowed(&c.Tagging, "people", "projects")
@@ -756,6 +856,9 @@ func (e *Engine) apply(kind, id string, u Update, le linkEdit) (string, error) {
 		if !ok {
 			return "", ErrNotFound
 		}
+		if uu.ExpectedPinned != nil && r.Pinned != *uu.ExpectedPinned {
+			return "", ErrConflict
+		}
 		tagUpdate(u, &r.Tagging)
 		protectUpdate(u, &r.Tagging, le)
 		for _, slug := range u.Projects {
@@ -811,10 +914,10 @@ func (e *Engine) ProjectsForDir(machine, dir string) []*Project {
 // entries names and ranks linked entities (at most 30 chats and 30 people).
 func (e *Engine) entries(projects, chats, people []string) []Entry {
 	var out []Entry
+	catalog := e.projectSourceLookup()
 	for _, slug := range projects {
 		if p, ok := e.Store.Project(slug); ok && p.Live() {
-			out = append(out, Entry{Kind: KindProject, ID: p.Slug, Name: p.Name, OneLine: p.OneLine, Importance: p.Importance,
-				Relevance: p.Relevance, Tags: p.Tags, Updated: p.Updated, Extra: p.Kind + " · " + p.Status})
+			out = append(out, e.projectEntry(p, catalog))
 		}
 	}
 	var cs, ps []Entry

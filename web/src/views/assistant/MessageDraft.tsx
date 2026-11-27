@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { cardDismissed, cardFiled, cardSent, dismissMessage, draftPlaceholder, field, later, sendMessage, undoDismissMessage, useFeed, type FeedItem } from "../../lib/feed";
-import { TODO_STATUS_INFO } from "../../lib/todos";
+import { statusWord, type WaitReason } from "../../lib/todo-wait-reason";
 import { clock } from "../../lib/format";
 import { Button, cx, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -11,7 +11,7 @@ import type { Session } from "../../lib/types";
 
 export interface DraftTaskHelpers {
   useTodo: (id: string | undefined) => Todo | undefined;
-  useTaskNow: (todo: Todo | undefined) => { status: TodoStatus; lead?: Session } | undefined;
+  useTaskNow: (todo: Todo | undefined) => { status: TodoStatus; lead?: Session; wait?: WaitReason } | undefined;
   progressOf: (lead: Session | undefined) => { text: string; for?: string } | null;
   TaskMark: ComponentType<{ status: TodoStatus }>;
   openTask: (id: string) => void;
@@ -31,6 +31,7 @@ export default function MessageDraft({ item, tasks }: { item: FeedItem; tasks: D
   const [text, setText] = useState<string | null>(null);
   const headingId = useId();
   const draft = text ?? field(item, "draft") ?? "";
+  const displayed = sent?.text ?? draft;
   const blank = resolved ? undefined : draftPlaceholder(draft);
   const dismiss = async () => {
     try {
@@ -68,7 +69,7 @@ export default function MessageDraft({ item, tasks }: { item: FeedItem; tasks: D
         <button type="button" onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-[12.5px] hover:bg-hover">
           <TaskMark status={status} />
           <span className="font-semibold">{todo.title}</span>
-          <span className="min-w-0 flex-1 truncate text-ink-2">{progressOf(now?.lead)?.text || TODO_STATUS_INFO[status].label}</span>
+          <span className="min-w-0 flex-1 truncate text-ink-2">{progressOf(now?.lead)?.text || statusWord(status, now?.wait)}</span>
           <Icon name="chevronRight" size={13} className="text-ink-3" />
         </button>
       )}
@@ -88,8 +89,8 @@ export default function MessageDraft({ item, tasks }: { item: FeedItem; tasks: D
             rows={Math.min(6, Math.max(2, draft.split("\n").length))}
             className="-mx-1.5 resize-none rounded-control bg-transparent px-1.5 text-[14.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent"
           />
-        ) : (
-          <div className="whitespace-pre-line text-[14.5px]">{sent ? sent.text : draft}</div>
+        ) : displayed && (
+          <div className="whitespace-pre-line text-[14.5px]">{displayed}</div>
         )}
       </div>
       {blank && <div className="text-[12px] text-red">{t("assistant-task-actions.draft_blank", { blank })}</div>}

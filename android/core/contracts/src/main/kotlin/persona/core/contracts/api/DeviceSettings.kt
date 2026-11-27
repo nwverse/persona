@@ -16,8 +16,13 @@ data class PairedDevice(
     val revokedAt: String? = null,
 )
 
-/** [devices] are the credentials in use; [revoked] the ones already revoked, kept by the hub for reference. */
-data class PairedDevices(val devices: List<PairedDevice>, val currentId: String?, val revoked: List<PairedDevice> = emptyList())
+/** [devices] are the credentials in use; [revoked] the ones already revoked; [onlineIds] are currently connected. */
+data class PairedDevices(
+    val devices: List<PairedDevice>,
+    val currentId: String?,
+    val revoked: List<PairedDevice> = emptyList(),
+    val onlineIds: Set<String> = emptySet(),
+)
 
 /** The hub cannot list device credentials: too old a version (404), or no database (503). [message] says which. */
 class DeviceCredentialsUnavailable(text: CoreText) : CoreTextException(text)
@@ -71,9 +76,18 @@ data class QuietHours(
     }
 }
 
-/** Bound to one pairing; preferenceDeviceId is the ID used by notification registration. */
-data class BrowserLoginDetails(val name: String, val source: String, val ageSeconds: Int)
+/** A browser sign-in request as this device sees it. [number] is present only for the device that allowed it. */
+data class BrowserLoginDetails(
+    val name: String,
+    val source: String,
+    val ageSeconds: Int,
+    /** Null from a hub before number matching; such a hub keeps the legacy successful-Allow dismissal. */
+    val state: String? = null,
+    val network: String? = null,
+    val number: String? = null,
+)
 
+/** Bound to one pairing; preferenceDeviceId is the ID used by notification registration. */
 interface DeviceSettings {
     suspend fun browserLogin(id: String, hub: String, allow: Boolean? = null): BrowserLoginDetails =
         throw UnsupportedOperationException("browser-login")

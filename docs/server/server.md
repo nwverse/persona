@@ -2,7 +2,7 @@
 
 The default runtime directory is `~/.persona`; what the old names (commands, directories, variables) still reach is in [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md). Existing systemd / launchd, database / container / volume, and release-file identities in this document are retained rather than rebuilt for the rename. Migration-version differences: [Configuration and compatibility](../operations/config.md#命名与兼容).
 
-Go, `server/cmd/`: the six programs under "Programs" below, all of one build, and `pushrec`, a development tool that records what an app gets from a hub for the push replay test (`docs/operations/testing.md`). Modes: `docs/server/architecture.md`; protocol: docs/protocol/protocol.md.
+The six programs listed below share one build and live under `server/cmd/`. The push recorder and fleet soak harness live under `server/scripts/`. See [testing](../operations/testing.md) for their commands, [server architecture](architecture.md) for the program modes and [the protocol](../protocol/protocol.md) for the wire format.
 
 ## Programs
 
@@ -28,6 +28,204 @@ The hub and the managers apart:
 - **One container in Docker.** The hub image runs the hub and the built-in manager as two processes under `personad supervise`, each restarted on its own, as `persona-hub run` and `persona-manager assistant` unless `PERSONA_SPLIT_PROGRAMS=0` ([docker.md](../operations/docker.md) ("Programs")).
 - **Two services on a new install.** `hub setup` installs the hub's service and the built-in manager's own (`persona-manager-assistant.service` running `persona-manager assistant`, or on a Mac the launchd agent `com.persona.manager.assistant`, running `persona-manager assistant` on a new install, each with `PERSONA_ASSISTANT_DEPLOY=service`), and binds the second to the first with a one-time code. Existing installs keep the hub's child until `hub setup --manager-service` ([upgrade.md](../operations/upgrade.md): every install type, step by step). See [managers.md](../assistant/managers.md) ("The built-in manager as its own service").
 
+## Send an Agent message and check its receipt
+
+Use `personad agent send` to hand a message to an existing Agent from a script or terminal. Use a full paired-device
+token file and either an HTTPS hub address or loopback HTTP. The hub must advertise `client_ops` and `agent_terminal_send`.
+
+```sh
+personad agent send --hub '<hub URL>' --token-file '<private token file>' \
+  --message-file instructions.txt --json '<computer ID>' '<session ID>'
+
+personad agent receipt --hub '<hub URL>' --token-file '<same private token file>' \
+  --wait --json '<request ID>'
+```
+
+The CLI checks the exact target before submitting. A listed Agent may be on an offline computer. Persona
+conversations, archived sessions and unknown targets are refused by the hub.
+
+Pass `--message-file -` to read stdin. Text must be nonempty UTF-8 and fit in 64 KiB. The command prints a generated
+request UUID on stderr before the POST. Scripts can supply their own stable UUID using `--request-id`. Keep the UUID
+with the chosen hub, device credential, target, text and hold choice. A reused ID with different input is a conflict. The CLI
+makes one POST and can recover a lost answer by reading the matching receipt. The recovery read gets a separate
+deadline of up to five seconds. It reuses the same hub and credential and verifies the stored target and input digest.
+
+Add `--hold` to opt in to the hub's existing hold for an Agent whose computer is away. A `held` receipt records admission
+to the outbox. It does not report eventual delivery or change when the outbox retries or discards the message. Use
+`personad outbox list` and the existing recovery actions to check what is still held. An Agent may also accept a message
+into its own queue, reported as `queued`. Delivery and queueing are transport outcomes and do not indicate that the
+Agent finished the work.
+
+`receipt --wait` polls a pending receipt and can continue through a transient read failure. The network deadline defaults to 30 seconds and accepts up to five minutes
+with `--timeout`. A missing or unusable receipt cannot establish whether a message was sent. Keep the same request
+ID and check the existing chat and outbox before making a new send decision.
+
+With `--json`, an outcome is one stdout object containing `request_id` and `state`, plus `http_status` or `reason` when
+known. Exit 0 means `delivered`, `queued`, or `held`. Exit 1 covers `pending`, `refused`, `conflict`, `unknown` and
+`unavailable`, plus connection setup failures. Exit 2 signals invalid usage. The command does not print message text,
+raw receipt bodies or credentials.
+
+## Export a conversation from the terminal
+
+People who work in a terminal can save an Agent or Persona conversation as Markdown for handoffs, tickets,
+or personal archives. Address one conversation using the computer ID and current session ID in the hub's session list.
+Use the hub's HTTPS address, including its mount path when applicable. Local HTTP also works. Keep the paired
+device's credential in a private file (see [Authentication](../protocol/protocol.md#authentication)).
+
+```sh
+personad chat export --hub '<hub URL>' --token-file '<private token file>' \
+  --output conversation.md '<computer ID>' '<current session ID>'
+
+personad chat export --hub '<hub URL>' --token-file '<private token file>' \
+  --output conversation-with-steps.md --include-steps '<computer ID>' '<current session ID>'
+```
+
+By default the export includes the visible conversation, with images and visualizations identified by placeholders.
+Add `--include-steps` to also keep tool calls, results, thinking and intermediate narration in collapsible sections.
+As in the Web export, tool inputs and results show up to 4,000 characters each and mark any omitted continuation.
+Tool inputs retain any size-limit markers already added by the runtime. In a conversation that switched engines, each
+session is read once and its items are placed inside the recorded switch windows. Existing chat permissions still apply.
+
+The command requires a hub that advertises `sessions_lookup` and a hub and node that confirm strict transcript reads.
+This currently means a readable local transcript, including a runtime session whose transcript the node reads locally.
+Export declines terminal-only views and transcripts reconstructed from Codex App or TRAE CLI databases. It captures each source's last sequence on the first page. New messages after
+that point stay out, and an observed rewrite or changed switch history triggers one fresh attempt. An unreadable
+page, incomplete full message, or exhausted budget fails without publishing a document. An attempt can read up to
+400 pages, 20,000 items, 512 full items, 64 conversation segments and 96 MiB of responses. Individual responses have a
+16 MiB limit and the command allows up to five minutes for the operation.
+
+Use a new path in an existing local folder that supports hard links. The document is published only after every
+read and the file write succeed, and an existing file is never replaced. On platforms with Unix file permissions the
+file is created with owner-only access. The credential is sent only to the supplied hub and never added to the export.
+
+## Find and export a recording from the terminal
+
+Search for a meeting by its title or a phrase you remember hearing, then use the recording ID from the results to
+save its notes or a subtitle track. Use the same hub address and paired-device token as for conversation export.
+
+```sh
+personad recordings list --hub '<hub URL>' --token-file '<private token file>' --query 'design review'
+personad recordings export --hub '<hub URL>' --token-file '<private token file>' \
+  --output meeting.md '<recording ID>'
+personad recordings export --hub '<hub URL>' --token-file '<private token file>' \
+  --format vtt --output meeting.vtt '<recording ID>'
+```
+
+Omit `--query` to browse all recordings. Add `--json` for a script. The command can also read the paired-device
+token from `PERSONA_RECORDINGS_TOKEN`. Markdown includes the available notes and the timestamped transcript.
+WebVTT uses elapsed time from the beginning of the recording so captions line up with playback.
+
+Omit `--output` to print the document. For a file, choose a new name in an existing directory that supports hard
+links. The command publishes the completed export with owner-only file permissions on Unix. It can read stored
+recordings while the recording module is off. If the transcript has expired and the minutes are still available,
+export them as Markdown. A subtitle export requires retained transcript lines.
+
+## Held Agent messages from the terminal
+
+Use `personad outbox` to check and recover messages waiting for one computer, even when the computer is offline or
+the Agent is absent from the session list. Use the computer ID from the hub's machine list and a full paired-device
+token. See [Authentication](../protocol/protocol.md#authentication) for issuing and revoking a device token.
+Store it in a private file or provide it in `PERSONA_OUTBOX_TOKEN`. The command takes the hub's HTTPS address
+(including its mount path, if any) or a local HTTP address.
+
+```sh
+personad outbox list --hub '<hub URL>' --token-file '<private token file>' '<computer ID>'
+personad outbox list --hub '<hub URL>' --token-file '<private token file>' --state failed --json '<computer ID>'
+personad outbox retry --hub '<hub URL>' --token-file '<private token file>' '<computer ID>' '<session ID>' '<message ID>'
+personad outbox discard --hub '<hub URL>' --token-file '<private token file>' '<computer ID>' '<session ID>' '<message ID>'
+```
+
+The list shows queue order, message and session IDs, the send time and delivery status. Add `--session` to narrow it to one
+Agent. The default page is 50 messages. Set `--limit` to 1–100 and pass the returned cursor to `--after` with the same
+filters for the next page. This is a live view, so a message can leave the queue between a read and an action. The
+inventory omits messages' contents and attachments.
+
+Waiting means the manager still has the message. Sending and checking mean it is trying delivery or looking for
+evidence of a previous delivery. A failed message may have been refused, expired, or reached the chat without
+confirmation. Retry follows the chat's existing behavior, including checking for a message that may have arrived and
+requiring a separate owner retry when the check cannot confirm delivery. Discard removes the held copy. A copy that
+already reached the chat stays there. Messages from a signed-out device can only be discarded. If a request's outcome
+is unclear, list the outbox again before trying an action. See [Messages to an Agent whose computer is away](../assistant/assistant.md#messages-to-an-agent-whose-computer-is-away-10661).
+
+## Team project documents pilot
+
+An operator can run `persona-projects` separately to hand a versioned text document to another project member. Build the pilot from source in the `server` directory with `go build -o persona-projects ./cmd/persona-projects`. Provision a dedicated PostgreSQL database and login that can create tables in it. Set `TEAM_PROJECT_DATABASE_URL` in the operator's environment to that database's connection URL. Use a TLS-verified database connection for a remote database.
+
+Run `./persona-projects serve -listen 127.0.0.1:18082` and keep it running. It accepts local connections. For remote members, put an HTTPS reverse proxy on the same host and give them the HTTPS URL. Configure the proxy to keep authorization headers and document bodies out of its logs.
+
+On the service host, grant each member their project role. The operator assigns stable project and member identifiers. Keep each member identifier bound to the same person so earlier authorship and approvals remain attributable. The first grant can use a new project identifier. Each command prints a secret for one member in one project. Deliver each secret privately to its owner. Granting the same member again rotates their token and sets their role. Use `./persona-projects revoke checkout product` to remove a grant.
+
+~~~sh
+umask 077
+./persona-projects grant checkout product writer > product.token
+./persona-projects grant checkout lead approver > lead.token
+./persona-projects grant checkout engineering reader > engineering.token
+~~~
+
+### Publish and review with the member CLI
+
+On each member's computer, set `TEAM_PROJECT_URL` to the project service URL and `TEAM_PROJECT_TOKEN_FILE` to the file containing that member's token. Use HTTPS for a remote service. For a single-host trial use `http://127.0.0.1:18082`. Each command also accepts `-url` and `-token-file`.
+
+1. The writer publishes the chosen UTF-8 file. Use expected version zero to create the document. To edit it, supply the current published version. The receipt identifies the new revision and its SHA-256.
+
+   ~~~sh
+   persona-projects publish -expected 0 -file refund.md checkout refund
+   ~~~
+
+2. The reviewer saves the numbered revision, then inspects the file. Reading succeeds only after the client verifies the identifier, revision and SHA-256. Standard output contains the exact bytes, including any final newline.
+
+   ~~~sh
+   persona-projects read -revision 1 checkout refund > review.md
+   ~~~
+
+3. After reviewing the text, calculate its digest and approve that version. The command checks the pinned revision against the supplied digest before submitting approval. If the author has already published a new head, review that version separately.
+
+   ~~~sh
+   digest=$(python3 -c 'import hashlib; print(hashlib.sha256(open("review.md", "rb").read()).hexdigest())')
+   persona-projects approve -revision 1 -sha256 "$digest" checkout refund
+   ~~~
+
+The project service returns the approved revision and approver in the receipt. Keep those details with the work that uses the document.
+
+### HTTP API
+
+Each member can use curl with their own token. In the examples below, each member saves their token as `member.token` on their own machine, runs the shared setup and performs their role's step. Use the local URL below for a single-host trial, or the team's HTTPS URL from another machine.
+
+~~~sh
+umask 077
+API=http://127.0.0.1:18082/v1/projects/checkout/documents/refund
+awk '{print "Authorization: Bearer " $0}' member.token > member.header
+~~~
+
+1. The writer selects the text to share in a UTF-8 file called `refund.md`. Publish it with the expected head revision (zero for a new document). The response identifies the author, revision and SHA-256 digest.
+
+   ~~~sh
+   jq -n --rawfile text refund.md '{expected_revision: 0, content: $text}' |
+     curl --fail-with-body -H @member.header -H 'Content-Type: application/json' \
+       --data-binary @- "$API/revisions"
+   ~~~
+
+2. The approver reads the exact revision, then approves that number. If another writer has published a newer head in the meantime, approval returns a conflict. Review the newer text before approving again.
+
+   ~~~sh
+   curl --fail-with-body -H @member.header "$API/revisions/1"
+   curl --fail-with-body -H @member.header -H 'Content-Type: application/json' \
+     --data '{"revision":1}' "$API/approvals"
+   ~~~
+
+3. The reader retrieves the approved document. Record its revision and digest with the work that used it. The pinned URL continues to return that revision when someone publishes a new draft.
+
+   ~~~sh
+   curl --fail-with-body -H @member.header "$API/approved"
+   curl --fail-with-body -H @member.header "$API/revisions/1"
+   ~~~
+
+Members can also discover documents before requesting their text. `GET /v1/projects/{project}/documents` lists one entry per document with an approval, ordered by document identifier in ASCII order. Each entry describes the latest approved revision. `GET /v1/projects/{project}/documents/{document}/approvals` lists that document's approved revisions, newest first. Both return an `items` array containing the project, document, revision, SHA-256 digest, author, approver and approval time. Fetch the numbered revision for the text.
+
+Both lists accept `limit` from 1 to 100 (default 25). When more rows are available, pass the response's `next` string as `after` for documents or `before` for revisions. Each request reads the current approvals. Restart the list to see a document or a new revision that sorts before your cursor.
+
+Publishing and approving are separate actions. A reader may retrieve a published, pending revision by number. Members can distinguish approval from authorship using `approved_by`, `approved_at` and `author`. A later draft leaves the previous approved revision current until an approver accepts the new head. Writers editing the same head receive one success and one conflict. A document holds up to 256 KiB of UTF-8 text per revision. The [team project proposal](../design/proposals/team-project-spaces.md) covers the planned Web experience, attachments and opening a revision in a personal agent.
+
 ## Code
 
 | Package | Content |
@@ -44,7 +242,7 @@ The hub and the managers apart:
 | `internal/bus` | Service-to-hub bus client: dialing, handshake, reconnect, keepalive; `docs/protocol/protocol.md`, “Bus” |
 | `internal/netaddr` | Local addresses, Linux netlink flags and address-change notifications; not proof of public reachability |
 | `internal/db` | Postgres connection pool, embedded SQL migrations in two sets (`migrations/hub/`, `migrations/manager/`; “Migrations” below), table access |
-| `internal/mail` | IMAP/SMTP, encrypted account storage, mail HTTP APIs and MCP tools (`docs/extensions/mail.md`) |
+| `internal/modules/mail` | IMAP/SMTP, encrypted account storage, mail HTTP APIs and MCP tools (`docs/extensions/mail.md`) |
 | `internal/mcpserver` | personad mcp: stdio MCP server for Claude |
 | `internal/nodecmd` | The device's command line (`personad` and `persona-node` both dispatch it) |
 | `internal/nodeclient` | The client side of `node.sock` for hook / mcp / ask / notify / tool |
@@ -362,7 +560,7 @@ Script steps:
 
 ### Whole-install backup (`personad backup`)
 
-`personad backup create|verify|restore` backs up the hub and the built-in manager together: both databases, `secret.key` files, runtime files and the knowledge base (`personad backup <command> -h`). Stop the hub and the built-in manager first (`--writes-quiesced`).
+`personad backup create|verify|restore` backs up the hub and the built-in manager together: both databases, `secret.key` files, the hub's TLS identity (`tls/`, so certificate pins saved by managers and clients still match after a restore), runtime files and the knowledge base (`personad backup <command> -h`). A bundle therefore holds private keys: keep it private. Stop the hub and the built-in manager first (`--writes-quiesced`).
 
 - **The writes-stopped check must see every session.** With `--writes-quiesced`, `create` and `restore` refuse while another client session is connected to either database. PostgreSQL hides the kind of another role's session from a role without `pg_read_all_stats`, so such a session counts as a possible writer: if the database role in `hub.json` is not a superuser and other roles connect to the databases, the check fails and says so; stop those sessions, or grant the role `pg_read_all_stats` (`GRANT pg_read_all_stats TO <role>`). Background processes with no role (autovacuum) are not counted; a subscription's apply worker is not counted when the role can see it (with `pg_read_all_stats`, as a superuser, or as its owner), and blocks the check otherwise. A logical-replication walsender (the hub database as a publisher, under a replication role) likewise blocks an unprivileged role's check: it fails closed.
 - **It needs `pg_dump` and `pg_restore` of the server's major version**, on `PATH` where `personad backup` runs. They connect as Persona does: every host of a multi-host URL, in order with its own port, and an encrypted TLS client key's `sslpassword` (which libpq takes from no environment variable) through a private libpq service file deleted when they exit, never their arguments. A query parameter given twice counts once, with its first value, as for pgx. The service file is mode 0600 in a mode-0700 directory of its own under `TMPDIR`; if `personad backup` is killed (SIGKILL, power loss) while a client runs it stays there, still private: delete the `persona-backup-libpq-*` directory. An `sslpassword` with trailing white space or a line break is refused (a service file cannot hold it). The encrypted key must be in traditional PEM form (`-----BEGIN RSA PRIVATE KEY-----` with `Proc-Type: 4,ENCRYPTED`, as `openssl rsa -aes256 -traditional` writes it): pgx cannot open an encrypted PKCS#8 key (`BEGIN ENCRYPTED PRIVATE KEY`). Without them, it falls back to `docker exec` into `persona-postgres` only when the database host is a loopback address (the native Docker deployment); `--hub-docker-container` / `--manager-docker-container` name another container. The clients inside a container connect over its own loopback without TLS, so they are given no `sslpassword` or other TLS settings.
@@ -373,8 +571,31 @@ Script steps:
 - **`create` warns when the knowledge base is not there.** A missing or unreadable knowledge-base path (an install without one yet, but also an unmounted drive or a mistyped `kb_dir`) is recorded as no knowledge base, and `create` prints `warning: the knowledge base … does not exist …`; such a bundle restores no knowledge base and leaves the install's in place. Fix the path and create the backup again if it should be there. The manifest always states `present`: a manifest without it, or one that records no knowledge base but lists knowledge-base files, is refused.
 - **Where the knowledge base may be.** The default `data`, any other directory of its own, and a directory inside `managers/assistant` (a relative `kb_dir` such as `kb` is relative to the manager's directory), `extensions`, `skills` or `hub.machines_kept` are all fine: the knowledge base is collected once, not also as part of that directory, and restored after it. `create` (before it stages or dumps anything) and `restore` (before any database is staged or file moved) refuse a knowledge base that holds the runtime directory (the runtime itself, its parent or any directory above it, `/`: restoring it would move the whole install, the previous files with it, into the knowledge base's previous copy), one that is or holds a runtime file or directory restore also replaces (`hub.json`, `docker`, `managers`, `managers/assistant`, `extensions`, `skills`, `hub.machines_kept`, …), and one inside a previous-files directory. Paths are compared as written and with symbolic links resolved.
 - **If restoring the files cannot be undone completely**, the originals that could not be put back stay in the previous-files directory (`.persona-backup-previous-<id>` in the runtime directory, or `.<name>.persona-backup-previous-<id>` beside an external knowledge base), each as `NNN-<name>`; the error names the directory and each file, and the directory is deleted only once it is empty. Move each back by hand.
-- **`--output` must be outside the collected trees** (the knowledge base, `managers/assistant`, `extensions`, `skills`, `hub.machines_kept`); `create` refuses it with a message, since the bundle and its staging directory would be copied into themselves. `~/.persona/backups/` is fine. On a case-insensitive file system (macOS) a differently-cased spelling of such a path is not recognised; spell the path as it is.
+- **`--output` must be outside the collected trees** (the knowledge base, `managers/assistant`, `extensions`, `skills`, `hub.machines_kept`, `tls`); `create` refuses it with a message, since the bundle and its staging directory would be copied into themselves. `~/.persona/backups/` is fine. On a case-insensitive file system (macOS) a differently-cased spelling of such a path is not recognised; spell the path as it is.
 - **If a restore cannot put the databases back** (for example the server goes away during the swap), what happens to the runtime files follows what restore could establish. If a database from the bundle may be live (it could not be moved back, or the checks that would show it was not installed failed), the files stay as restored, so they match it, and the error names every database that may be the bundle's, the previous databases that may still exist (`persona_previous_*`), any staged copy that may remain (`persona_staged_*`, not in use; when something outside the restore changed the databases, so that what a staged name holds cannot be confirmed, the error says so instead of calling it safe to drop: check it before dropping), the directory with the previous files and, for an external knowledge base, its previous copy. Otherwise the files are rolled back, and the error still names any previous database left parked and any staged copy that could not be dropped. The files can therefore stay as restored while both live databases are in fact the install's own only when every check that would tell failed; when one database was put back and the other could not be, the files stay as restored while one live database is the install's own. Running restore again converges, and nothing is lost either way.
+
+### Inspect a backup offline
+
+Use `personad backup inspect` to check a copied or rotated bundle before a recovery environment is ready. It reads
+the bundle directly, so it needs no Persona install, PostgreSQL clients, live database, or extraction space.
+
+```sh
+personad backup inspect --bundle '<backup file>'
+personad backup inspect --bundle '<backup file>' --json
+```
+
+The file must be a regular owner-only archive. Inspection checks the manifest, member names, sizes, modes, and
+SHA-256 hashes, then checks the bundled hub and built-in manager keys against their manifest fingerprints. It checks
+the archive ending too, so a file cut off after its last payload still fails. An interrupted or failed check exits
+with an error and prints no partial report.
+
+The report gives the format, creation time, archive bytes, and file and byte totals for the hub dump, manager dump,
+runtime files, and knowledge base. It shows whether the knowledge base was absent, empty, or included and whether
+the manifest puts it outside the installation. It omits file paths, database names, configuration, keys, and
+fingerprints. JSON has `check: "offline_integrity"` and `database_restore_verified: false`.
+
+The checks compare the archive with its own manifest. Run `personad backup verify` for a temporary restore of both
+databases and a check of their schema and key identity.
 
 ### Restore drill (`scripts/test/backup_restore_drill.py`, #10497)
 
@@ -423,6 +644,42 @@ python3 scripts/test/backup_restore_drill.py --execute --binary /tmp/personad-dr
   manager, a restore onto another machine or another PostgreSQL cluster, real power loss, offsite copies, starting the
   restored services and their first start's recovery are outside it. A later Settings page belongs under Settings →
   Hub (Backup & Recovery), apart from the program backups of hub updates, not under Machines.
+
+### Settings → Hub → Recovery (#12553)
+
+The Web Recovery page is a read-only overview for ordinary users. It explains the bundle's scope (the hub and built-in
+manager databases, knowledge base, runtime files and configuration, encryption keys, and TLS identity), and keeps
+independently hosted managers and update program backups outside that scope. Its three full-credential routes are
+`GET /api/v1/hub/recovery`, `POST /api/v1/hub/recovery/bundles/{id}/inspect`, and
+`POST /api/v1/hub/recovery/bundles/{id}/verify`; answer-only, scoped, and extension credentials are refused. Every
+request writes an audit log line with the action, credential ID, and result, never a path, bundle name, archive content,
+database URL, key, fingerprint, or raw operational error.
+
+- **Inventory is deliberately narrow.** Only direct, non-hidden regular files in the owner-only `~/.persona/backups/`
+  directory are listed, newest first, at most 50. A missing directory is an empty inventory. A symbolic-link,
+  non-private, or unreadable directory is unsupported rather than an empty or healthy one; nested directories and
+  symbolic-link files are skipped. Bundle IDs are SHA-256 digests of file names, not paths, and a separate revision
+  binds a displayed result to the listed name, size, modification time, and mode. A changed revision discards the
+  result. The API accepts no file name, arbitrary path, or alternate directory.
+- **Inspection is explicit and offline.** Opening or refreshing the page does not read archive contents. **Check
+  integrity** uses the same `backup inspect` implementation and returns its aggregate redacted report: no member paths,
+  configuration, database names, keys, hashes, or fingerprints. A malformed or replaced bundle fails closed. The result
+  belongs only to the current page and revision; it is not presented as durable verification history.
+- **Verification is explicit and not a restore drill.** **Verify databases** preflights configuration and the required
+  PostgreSQL clients without opening a database, then runs the existing `backup verify`: both dumps restore into
+  temporary databases, schema and key identity are checked, and the temporary databases are removed. It does not
+  quiesce writes, restore runtime files, replace a live database, or start services. Missing tools and the shipped
+  Docker Compose deployment are unsupported states. Raw errors stay out of the API; the terminal command supplies the
+  redacted diagnostic. There is no authoritative per-install restore/drill history source, so the page says that
+  history is unavailable instead of inventing success from an inspection.
+- **One check at a time.** A verification extracts the whole bundle into temporary space and restores two temporary
+  databases on the live PostgreSQL server, so the hub runs one inspection or verification at a time across all requests
+  and credentials. Another one is refused with `409` until the running check finishes; nothing is queued.
+- **No unsafe create, restore, or export.** There is no server-managed full-install quiescence that can stop both the
+  hub and built-in manager while their Web request is running. Creation therefore remains the guided terminal workflow
+  above with both writers stopped and `--writes-quiesced`; no create endpoint exists. Restore and service-starting
+  drills remain terminal operations too. No bundle download or private-key export route exists: the current Web
+  boundary has no separate reauthentication ceremony appropriate for releasing a bundle full of private keys.
 
 ### Logs
 
@@ -601,25 +858,47 @@ Pairing: hub `~/.persona/bin/personad hub pair` calls running hub via loopback H
   - Running background commands / sub-Agents defer push until reports are processed and that Claude turn ends; no standalone `WokeByTask` turn push.
   - Duration = first working to final completion. Per-device `prefs.done` off / long / always; long receives turns at least `long_turn_seconds`; `prefs.input` off suppresses Needs you.
   - Hidden Agents and assistant turns already pushed by `notify_user` are skipped. Hub restart measures ongoing turns from first post-restart observation.
-  - A session hosted in a Lark chat bridge that finished normally gets no push and no Lark card: the bridge answered in the topic it was asked in (#8592, `chatBridgeFinish` in `server/internal/assistant/fleet_push.go`). Hosted means origin `feishu` (`server/internal/sessionorigin/origin.go`, the Agents rows' "Lark group"), or a pane of the herdr session the bridge runs its agents in on its herdr backend, which the clients label a terminal (`sessionorigin.ChatBridge`, #8845); on Claude Code, Codex or TRAEX. An error, a cut-off, a stuck turn, a usage limit or a stop the host reports is pushed as ever; the Agents list still shows it finished and unread.
+  - A session hosted in a Lark chat bridge that finished normally gets no push and no Lark card: the bridge answered in the topic it was asked in (#8592, `chatBridgeFinish` in `server/internal/assistant/fleet_push.go`). Hosted means origin `feishu` (`server/internal/sessionorigin/origin.go`, the Agents rows' "Lark group"), or a pane of the herdr session the bridge runs its agents in on its herdr backend, which the clients label a terminal (`sessionorigin.ChatBridge`, #8845); on Claude Code, Codex or TRAE CLI. An error, a cut-off, a stuck turn, a usage limit or a stop the host reports is pushed as ever; the Agents list still shows it finished and unread.
 - Extension notifications (`POST /api/v1/notify`, `hub/notify_api.go`): extension picks active / `time-sensitive`, filtered by device input and hidden status. Decision / rate limits belong to extension; `docs/extensions/extensions.md` (“Sending notifications”).
 
-### Push grading (push urgency filtering, `hub/lnmode.go`)
+### Push grading (push urgency filtering, `hub/push_grading.go`)
 
-A hub-side switch (`hub_settings` key `hub.ln_mode`, default off; `GET`/`PUT /api/v1/push/ln-mode` — the GET is also open to an extension token with the `notify` scope, the PUT stays full credentials only). With it off every push behaves exactly as above. With it on, alerts are delivered by urgency instead of all alerting:
+The `ln` spellings in this section's routes, setting keys, template fields, and reason values are shipped compatibility identifiers. The feature's current name is **push grading**.
 
-- **Where the owner turns it on (#8157).** Settings › Notifications › **Low-distraction mode** on the web, iOS and Android: the page's last group, after this device's own rows, because the switch is the hub's and holds for every device; its footer says in plain words what still notifies (questions, approvals, decisions only the owner can make, their reminders, the main conversation's notices) and what waits for the briefing and Held pushes (task results, "Please verify" requests, other conversations' notices; finished agents are silent). The apps read and write it with the routes above on their own device credential; a hub without the route (404 / 405) gets no switch: iOS and Android show no row, the web says to update the hub. The assistant reads and changes it through `persona_settings` key `notifications.low_distraction` (`hub/self_settings_lnmode.go`): `get` answers what the `GET` answers, `set` shows a card on the phone (before → after and what that means) and changes the switch only once the owner approves it. The route's PUT and the setting both go through `setPushGrading`, which writes the switch and tells the managers (`Hello.QuietPush`).
+A hub-side switch (`hub_settings` key `hub.ln_mode`, default off; `GET`/`PUT /api/v1/push/ln-mode` and its neutral alias `/api/v1/push/grading`, both served by the same handler — the GET is also open to an extension token with the `notify` scope, the PUT stays full credentials only). With it off every push behaves exactly as above. With it on, alerts are delivered by urgency instead of all alerting:
+
+- **Where the owner turns it on (#8157).** Settings › Notifications › **Push grading** on the web, iOS and Android: the page's last group, after this device's own rows, because the switch is the hub's and holds for every device; its footer says in plain words what still notifies (questions, approvals, decisions only the owner can make, their reminders, the main conversation's notices) and what waits for the briefing and Held pushes (task results, "Please verify" requests, other conversations' notices; finished agents are silent). The apps read and write it with the routes above on their own device credential; a hub without the route (404 / 405) gets no switch: iOS and Android show no row, the web says to update the hub. The assistant reads and changes it through `persona_settings` key `notifications.low_distraction` (`hub/self_settings_push_grading.go`): `get` answers what the `GET` answers, `set` shows a card on the phone (before → after and what that means) and changes the switch only once the owner approves it. The route's PUT and the setting both go through `setPushGrading`, which writes the switch and tells the managers (`Hello.QuietPush`).
 
 - Every alert push carries a level and a related key. A manager notification may name them (`assistantwire.Notification.Level` / `RelatedKey`, omitempty; older managers let the hub derive them): `NotifyInput` / `NotifyDecide` / `NotifyReply` and other cards derive **P0**, `NotifyPush` (incl. `notify_user`) **P1**, `NotifyDone` **P2**. `POST /api/v1/notify` accepts `push_level` (`P0` / `P1` / `P2`, default `P1`).
-- A `notify_user` push that names no level gets an extra rule while the switch is on (`hub/fleet_link.go` `lnNotifyPushLevel`, reusing the hub's existing main-conversation check `isMainOn`): from the main conversation it is **P0**, from any other conversation (a supervisor, scheduled-task or oversight conversation) it stays **P1** and is held for the briefing. An explicitly named level (`P0`/`P1`/`P2`) always stands, and with the switch off nothing is re-levelled.
-- P0 still alerts; P1 is held for the “Needs you” list / briefings; P2 stays silent. The WebSocket `notify` event is never filtered, so app lists and briefings keep updating; only the APNs alert is withheld.
+- A `notify_user` push that names no level gets an extra rule while the switch is on (`hub/fleet_link.go` `pushGradingNotifyLevel`, reusing the hub's existing main-conversation check `isMainOn`): from the main conversation it is **P0**, from any other conversation (a supervisor, scheduled-task or oversight conversation) it stays **P1** and is held for the briefing. An explicitly named level (`P0`/`P1`/`P2`) always stands, and with the switch off nothing is re-levelled.
+- P0 still alerts; P1 is held for the “Needs you” list / briefings; P2 stays silent. When push grading holds an alert, the hub withholds APNs, `ws_notify` (`notify` / `notifyring`), and closed-browser Web Push alongside it while state lists and held-push briefings keep updating, and `hello.push_grading` / `push_grading` keeps open web and desktop clients in sync.
 - P0 always alerts: the level is judged before the 12-hour check, so no earlier push with the same key swallows what the owner must do or decide themself (a reply reminder is keyed by the question it waits on, not the session). After a P0, P1 / P2 pushes with its related key are held as repeats for 12 hours (`ln_dedup_12h`); the check and the note happen under one lock.
 - What the manager names P0: a card that names no level, an `ask_escalate` whose `why_owner` is `irreversible`, `visible_to_others` or `only_owner_knows` (or that sets `p0`), the owner's own to-do reminders, `ask_user` cards and decisions (`needs_user` without `can_wait`) with their overdue reminders. P1: task failures, plans waiting for Start, `notify_user` by default, other escalations (`priority`, `acceptance`).
 - With the switch on, the assistant also holds back what was never a hub push (`server/internal/assistant/push_quiet.go`; the manager learns the switch from the hub's hello, `assistantwire.Hello.QuietPush`, and a change sends `manager.updated`; it never reads the hub's settings): a supervised task's card does not climb to the owner on its supervisor's timeout (its supervisor is reminded once, the owner gets a held P1 notice, then the card stays with the supervisor until it is answered or escalated); a P1 escalation goes to the Needs you list without a Feishu card or channel message, and is not posted by the channels' catch-up either; conclusions (`task_review accepted`), "Please verify" asks, their morning reminders and task progress reports post no Feishu card (the briefing and the board list them); a `notify_user` notice the hub held (`held`: a P1 one, or a repeat of a related key within 12 hours) is not copied to the Feishu bot or the channels with pushes on, while a P0 one and the main conversation's ordinary one are copied as before (the copy follows the hub's answer for the same push, #8268; a held notice marks no channel pushed, so a turn-end mirror goes as it would without it); `leader.report` carries `level`. With the switch off all of that is as before. Decisions are keyed by to-do and round (`todo:<id>@<asked_at>`), so a decision asked again rings again; `POST /api/v1/notify` keys by manager, extension and `id`; `notify_user` takes an optional `related_key` (a PR link, a to-do id). Held P1 entries of one manager and the same client destination (the typed source plus any client-followed `todo:` / http(s) `related_key`) merge when they arrive in the same minute or share a related key within 12 hours, so several conclusion notices, or three about one PR, are one entry; a different or missing destination stays in its own row because one merged row has only one link.
-- `notify.request` answers `{"ok":true}` plus, for an assistant's push (`notify_user`) or a finished turn, where it went: `devices`, how many devices it was handed to now (a push route, a `ws_notify` connection, a browser's Web Push; not a delivery receipt), `kept` when offline devices keep it for their next connection (`hub/notifyring.go`: 30 minutes, lost when the hub restarts), and with `devices` 0 `reason` `no_device` (nothing could take it) or `filtered` (every device that could turned it off), as `POST /api/v1/notify` answers. When ln mode held the push it is `{"ok":true,"held":true,"reason":"ln_p1_held"|...}` with the same `devices`. A card's push, a reply reminder and a decision report no `devices`, nor does an older hub. The assistant's `notify_user` tool tells the model what happened, in the user's language: sent to N devices; moved to the briefing (held); not delivered yet, waiting for an offline device; not delivered, no device or every device turned it off; or, while the hub is away, kept in the manager's outbox until it is back. Only a notice a device took counts as a north-star interruption (`docs/assistant/north-star.md`); the copies to chat channels with pushes on are sent whatever the devices did (not when ln mode held the notice) and are not part of `devices` (#8138). When a copy went out the answer also says, per channel, whether it was delivered (the Feishu bot's first card landed, or a channel took the text), failed, or is not confirmed after `notifyCopyWait` (5 seconds; the send goes on in the background), and with no device taking the push it no longer says the user was not alerted unless every copy failed too (`assistant/channels_copies.go`, #8268). With nothing copied the answer is as above.
+- `notify.request` answers `{"ok":true}` plus, for an assistant's push (`notify_user`) or a finished turn, where it went: `devices`, how many devices it was handed to now (a push route, a `ws_notify` connection, a browser's Web Push; not a delivery receipt), `kept` when offline devices keep it for their next connection (`hub/notifyring.go`: 30 minutes, lost when the hub restarts), and with `devices` 0 `reason` `no_device` (nothing could take it) or `filtered` (every device that could turned it off), as `POST /api/v1/notify` answers. When push grading held the push it is `{"ok":true,"held":true,"reason":"ln_p1_held"|...}` with the same `devices`. A card's push, a reply reminder and a decision report no `devices`, nor does an older hub. The assistant's `notify_user` tool tells the model what happened, in the user's language: sent to N devices; moved to the briefing (held); not delivered yet, waiting for an offline device; not delivered, no device or every device turned it off; or, while the hub is away, kept in the manager's outbox until it is back. Only a notice a device took counts as a north-star interruption (`docs/assistant/north-star.md`); the copies to chat channels with pushes on are sent whatever the devices did (not when push grading held the notice) and are not part of `devices` (#8138). When a copy went out the answer also says, per channel, whether it was delivered (the Feishu bot's first card landed, or a channel took the text), failed, or is not confirmed after `notifyCopyWait` (5 seconds; the send goes on in the background), and with no device taking the push it no longer says the user was not alerted unless every copy failed too (`assistant/channels_copies.go`, #8268). With nothing copied the answer is as above.
 - The switch is read at startup, written through the API and refreshed in the background, so pushes never wait on the database; with it off the push path is unchanged. Held entries are saved by one background writer that coalesces bursts and never writes out of order.
 - Every held push is recorded with its reason (`ln_p1_held`, `ln_p2_silent`, `ln_dedup_12h`), in memory and under `hub_settings` key `hub.ln_intercepts` (bounded to 500 entries and 14 days), and read through `GET /api/v1/push/intercepts`. A record also persists the source already present on the push as optional `todo_id`, `machine_id`, and `session_id` fields (the session pair only when both IDs are present); old records without those fields load unchanged. Two guards protect the content: the **body is stored as a summary only** — the title plus at most 140 runes (`pushInterceptBodyMaxRunes`, one line with an ellipsis when cut), never the full text, since a body can carry the owner's decision questions, agent replies or `notify_user` content; and reads are **allow-listed by extension ID** — full credentials read every manager, while an extension token needs the `notify` scope *and* its extension ID in `hub.json` `intercept_readers` (docs/operations/config.md), then sees its own manager's entries only (the manager filter runs before the 200-entry limit). Any other extension token gets 403. Rows written before the summary limit are sanitized again at load. The hub's own pairing / join alerts are P0 and always pass.
 - Every alert push allowed through to delivery is also recorded (one entry per logical push however many devices were targeted, with the switch off as well as on, including pairing / joining receipts under manager `""`; silent background and Live Activity pushes are not counted) in memory and as one appended row in the hub's `hub_push_sent` table (migration 0522, #8257; a burst is one insert, and the whole record is never rewritten). The table is swept to the 2000 entries and 14 days the counts read at start and at most hourly after; the hub reads them back at start. The first start after the upgrade adds the entries of the old `hub_settings` key `hub.push_sent` (one jsonb list every push used to rewrite) to the table, in one transaction, and keeps the key: a build from before the table reads only that key. So that a switch back to one (`personad hub switch`, a self-update going back, the old binary put back) starts with the same history and daily counts, the hub writes the whole list back to the key whenever it stops (its cleanup, before the database closes; the updater going back, before it runs the old binary) and, while it runs, at most once an hour when pushes went out since: never per push, so at most 24 rewrites a day. A hub that was killed leaves the key short of at most the last hour's pushes; they stay in the table. Every start adds the key's entries the table lacks, which are the ones an older build delivered meanwhile: an entry and a row are the same push by time (to the microsecond), level, related key and manager, two equal entries are two pushes, and entries the sweep would take are left out. Going forward again therefore keeps both builds' pushes and counts none twice. A hub that could not read the key into the table at start leaves the key alone, since its own list may be the shorter one. The key and its write-back can go in a later release, once no build from before the table is switched back to. `GET /api/v1/push/stats/daily` (`?days=1..14`, default today, or `?since=<RFC3339>`; `notify` scope reads its own manager only) answers per UTC day and manager with `sent`, `intercepted` and `by_reason`, counted from the full records rather than the 200-entry intercepts view, so a busy day stays exact. `sent` means "allowed through to delivery", not APNs-confirmed reception — the hub cannot know the latter. No "opened / handled" number exists: the app has no push-open callback, and `interaction_resolved` is a card-lifecycle event that is not stored per push (withdrawal state is in-memory for 30 minutes only). A failed write (the held-push setting or the delivered-push rows) is retried with a backoff instead of being dropped; each delivered push carries a `push_id` chosen before its first write (UNIQUE, inserted with `ON CONFLICT DO NOTHING`), so a write that committed but reported an error is not counted twice; a failed startup read logs and starts empty without deleting the stored rows.
+
+- **Extension push grading layers and read-only preview (`hub/push_grading_layer_lifecycle.go`, `hub/push_grading_layer.go`, `hub/push_grading_effective.go`, `hub/push_grading_effective_cache.go`, #14380).** An extension explicitly granted the named-only `push.grading` scope (excluded from `extension.EveryScope` and legacy `hub_api`) may claim or renew the singleton versioned (`version: 1`) grading layer in `hub_settings` under `hub.push_grading_layer` via `GET`/`PUT`/`DELETE /api/v1/push/grading/layer` (with per-manager/per-extension ownership, monotonic `revision` on same-owner renewal, `409 layer_taken` on competing claims, optional `?revision=` CAS delete, and full-credential inspect/clear). Extension layer writes and deletes never read or write the owner's `hub.ln_mode` switch (`hub.push_grading` base writes mirror only explicit non-null `enabled`), never allow extension-supplied `enabled`, and never allow holding or silencing `P0`. Both live delivery (`applyPushGrading`) and read-only preview (`POST /api/v1/push/grading/preview`, full credentials or `push.grading` scope) evaluate through the same per-manager cached effective configuration (`pushGradingEffectiveCache`, invalidated immediately on switch, layer, and lifecycle writes) and pure decision function (`evaluatePushGradingDecision`), applying the singleton layer only to its owning manager, preserving active owner attention modes and hub system alerts, emitting neutral `held` / `silenced` / `deduped` outcomes mapped at the live intercept boundary via `legacyPushGradingReason`, and never mutating intercepts, delivered counts, dedup state or stored layers during preview. Each manager's `extwire.Report` declares its currently enabled, compatible `push.grading` extensions (`PushGradingDeclared` / `PushGradingExtensions`), and the hub asynchronously reconciles and prunes `hub.push_grading_layer` for that manager (invalidating the cache on prune) when the owning extension is disabled, uninstalled, incompatible, or loses `push.grading`.
+
+### Attention modes (`assistantwire/attention.go`, `hub/push_attention.go`, #13503)
+
+A mode the user sets for a while that reinterprets the push levels for every device: `normal` (today: `hub.ln_mode` decides), `fragment` (between things: only what takes seconds to decide interrupts), `immersive` (a block of deep work) and `quiet` (sleep or rest). The manager keeps it (`assistant.attention` in its settings; `GET` / `PUT /api/v1/assistant/attention`, neither open to extension tokens, the PUT for the user only) and reports it to the hub in its profile (`assistantwire.Profile.Attention`), which the hub keeps across a restart like the rest of the profile. Every mode but `normal` has a time limit (1 minute to 24 hours) and ends by itself: the hub reads the end itself (`Attention.Effective`), and the manager stores `normal` again (`set_by: system`) and reports it (`assistant/attention.go` `attentionLoop`).
+
+| | `fragment` | `immersive` | `quiet` |
+| --- | --- | --- | --- |
+| P0 | Goes; one marked `depth: deep` is held (`attn_deep_deferred`) | Goes only when it is about the matter in focus (the track, or the session, set with the mode); otherwise held (`attn_immersive_held`) | Goes without a sound on every device (`passive`, as `hushed`) |
+| P1 | Held for a batch (`attn_fragment_batch`) | Held (`attn_immersive_held`) | Held for the briefing (`attn_quiet_held`) |
+| P2 and finished turns | Silent (`ln_p2_silent`) | Silent | Silent |
+
+- **Always through**: an urgent call's ring (`call.ring`, a VoIP push the filter never sees), and the hub's own alerts (pairing, a computer joining), which quiet mode still hushes.
+- **With `hub.ln_mode`**: in a mode other than `normal` the filter runs whatever the switch says, and the mode never writes the switch, so when it ends the switch is what it was. The `notify_user` rule above (main conversation P0, other conversations P1 when no level is named) applies in a mode too.
+- **With quiet hours**: a device's quiet hours and the mode both apply, the stricter side winning: quiet hours never release what the mode holds, and the mode never gives back a sound quiet hours took (`assistantwire.DecideAttention`'s `QuietHours`).
+- **Held pushes** are recorded like push grading's, with the new reasons, in `hub.ln_intercepts`, and listed by Held pushes and `GET /api/v1/push/intercepts`.
+- **Hints a push carries** (`assistantwire.Notification`, omitempty, dropped by older hubs): `depth` (`quick`, the default, or `deep`: a plan, a long review, a document to read) and `track` (the track the push comes from). A card's push carries them too (`notifyInteractionHinted`). The assistant's `notify_user` names its conversation's track, and a track's kind caps its level (`attention.push_cap`, `docs/assistant/health.md` "Tracks and kinds"; every built-in kind's cap is P0, so nothing changes for the main chat or the health space).
+- **In the manager**: a mode other than `normal` counts as the low-distraction switch on (`push_quiet.go` `quietModeOn`), and in `immersive` a question an agent reports to its supervisor without `urgent` waits for the briefing as one it said can wait (`agent_control.go`, `later.go`), unless the focus names the task's track, the reporting session or its supervising conversation; the agent is told it may ask again with `urgent:true`, which always goes at once.
+- **Not yet** (later steps of #13503): the 45-minute batch push of fragment mode's P1 and the one short "N things kept for a block of time" notice; the immersive agenda card and the summary push when a mode ends; the assistant's `attention_set` tool; marking plan cards and long reviews `deep` in the manager; a WebSocket message when the mode changes (the apps read the route); the apps' controls (Control Center, Focus filters, the watch, the web settings page) and scheduled modes.
 
 <a id="关停hubshutdowngo"></a>
 
@@ -673,6 +952,6 @@ Foreground app keeps WebSocket to hub, receiving change broadcasts. A 19-minute 
 - Public auth failures including WS handshake log auth source=… path=… status=… code=… failures=… suppressed=…. Mask sources IPv4 /24, IPv6 /64; fixed API paths only, no tokens. Rate limit 429 / `Retry-After`; `security.auth_log_interval_seconds` controls log throttling.
 - Network issues: read-only personad hub doctor on hub machine, [Network troubleshooting](../operations/network.md#网络排查).
 - Admin failed login: admin: wrong password from <masked source>. Password set / change, scope changes, computer add / remove, device revocation, pairing-code generation each `admin: …` log, no passwords / codes. Admin 401 / 404 uses request IDs too.
-- Request IDs: `X-Request-Id` on every response, reusing app `X-Client-Request-Id` if present. Hub logs only ≥400 failures / >2-second slow requests, `[<id>] method path -> status (duration)`, no query / body / token. App 5xx adds “(Request <id>)”; find corresponding `journalctl --user -u personad` line.
+- Request IDs: `X-Request-Id` on every response, reusing app `X-Client-Request-Id` if present. Hub logs only ≥400 failures / >2-second slow requests, `[<id>] method path -> status (duration)`, no query / body / token. A 5xx line also names the error the hub wrote itself (`apierr.WriteBody`, which notes it on the request's writer: `apierr.NoteError`): `code=<code>`, then `detail="…"` (the technical words a localized failure keeps apart from its generic `error`) or else `error="…"`, one line, quoted, clipped at 300 characters (#13468); no other response body is logged, nor is an answer the hub passes on as it is from a manager, an extension or a linked hub, whatever its status and shape (#14490). App 5xx adds “(Request <id>)”; find corresponding `journalctl --user -u personad` line.
 - Compression (#2149, `gzip.go`): `Accept-Encoding: gzip` gets gzip for >1 KB JSON / JS / CSS / HTML / SVG / plain text (Lark chat 2.9 MB → 70 KB). App, web, Go clients decompress automatically. WebSocket upgrade, persistent connections, Range, HEAD, event-stream, images / binaries, already encoded / cookie-setting responses unchanged. Admin `/admin` and `/api/v1/admin/` uncompressed to avoid cookie / CSRF size leakage (BREACH). Layer outside `logRequests`; handlers still receive logging statusWriter. Debug `curl --compressed` or `-H 'Accept-Encoding: gzip'` and inspect Content-Encoding. The web client built into personad keeps its hashed assets gzipped already and sends them as stored, and its first-screen files' brotli copies to a client that names `br` (`web.go`, `docs/web/web.md` "Precompressed assets"); `<hub data dir>/web` is still compressed as it is sent. The compressible types and the 1 KB minimum live in `server/internal/webasset`, shared with the build's precompress step.
 - Unreachable herdr socket / restart: node logs `herdr: … failed` at most once per 30 seconds, with failure count, then reachable again; SSH stderr enters hub log.

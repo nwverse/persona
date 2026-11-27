@@ -47,11 +47,12 @@ struct HoldSourceTests {
     /// The folders it reads are there (after a move, a check reading nothing passes for nothing).
     @Test func readsTheSources() {
         #expect(Self.sources(["Persona/Views"]).count > 50)
+        #expect(Self.sources(["Persona/Features"]).count > 0)
     }
 
     @Test func scrollPhasesAreReportedNotWaitedOut() {
         var found: [String] = []
-        for (name, text) in Self.sources(["Persona"]) {
+        for (name, text) in Self.sources(["Persona", "Modules"]) {
             for b in Self.blocks(text, starting: ".onScrollPhaseChange") where Self.waits(b.body) {
                 found.append("\(name):\(b.line)")
             }
@@ -63,7 +64,7 @@ struct HoldSourceTests {
     /// not when: no timers in it, the cap and the settling are its `Hold`'s.
     @Test func feedsLeaveTheTimingToTheirHold() {
         var found: [String] = []
-        for (name, text) in Self.sources(["Persona/Views"]) {
+        for (name, text) in Self.sources(["Persona/Views", "Persona/Features"]) {
             for b in Self.blocks(text, starting: "final class ") where b.body.contains("withObservationTracking") && Self.waits(b.body) {
                 found.append("\(name):\(b.line)")
             }

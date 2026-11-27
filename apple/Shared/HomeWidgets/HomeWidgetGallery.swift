@@ -90,7 +90,7 @@ struct HomeGalleryCell: View {
             .environment(\.colorScheme, look.scheme)
             .environment(\.widgetRenderingMode, look.mode)
             .environment(\.homeSimTint, simTint)
-            .redacted(reason: locked ? .privacy : [])
+            .redacted(reason: locked && kind.isPrivate ? .privacy : [])
     }
 
     private var simTint: Color? {
@@ -221,25 +221,37 @@ struct HomeCalendarGallery: View {
 }
 
 /// `-showHomeWidgets YES`: every widget at every Home Screen size, light and dark, with the sample data, over the app
-/// (screenshots and design review; the real proof is the Home Screen itself). `-showHomeWidgets lock`: the Lock
-/// Screen's families instead, and `lock:agents,today` only those kinds (one screenshot holds four).
+/// (screenshots and design review; the real proof is the Home Screen itself). `-showHomeWidgets home:computers`: only
+/// those kinds (one screenshot holds a kind's three sizes). `-showHomeWidgets lock`: the Lock Screen's families
+/// instead, and `lock:agents,today` only those kinds (one screenshot holds four).
 struct HomeGalleryOverlay: View {
+    /// The sample data; with `-recording.phoneModule off`, as the app writes it while the hub's recording module is off
+    /// (#15214): the Record widget then offers no start.
+    private static var sample: HomeSnapshot {
+        var s = HomeSamples.busy(zh: LanguageStore.shared.launched.hasPrefix("zh"), now: .now)
+        if PhoneRecordingAllowance.stored() == .off { s.recordingModule = .off }
+        return s
+    }
+
     @State private var shown = UserDefaults.standard.string(forKey: "showHomeWidgets").flatMap { ["", "NO"].contains($0) ? nil : $0 }
 
     var body: some View {
         if let shown {
-            let entry = HomeEntry(date: .now, snapshot: HomeSamples.busy(zh: LanguageStore.shared.launched.hasPrefix("zh"), now: .now))
+            let entry = HomeEntry(date: .now, snapshot: Self.sample)
             ScrollView([.vertical, .horizontal]) {
                 HomeGallerySheet(title: "Persona", note: nil) {
-                    if shown.hasPrefix("calendar") {
+                    if shown.hasPrefix("health:") {
+                        HomeHealthGallery(page: shown.split(separator: ":").dropFirst().first.map(String.init) ?? "default", entry: entry)
+                    } else if shown.hasPrefix("calendar") {
                         HomeCalendarGallery(page: shown.split(separator: ":").dropFirst().first.map(String.init) ?? "medium", entry: entry)
                     } else if shown.hasPrefix("lock") {
                         let only = shown.split(separator: ":").dropFirst().first.map { $0.split(separator: ",").map(String.init) }
-                        ForEach(HomeKind.allCases.filter { only?.contains($0.rawValue) ?? true }, id: \.self) { kind in
+                        ForEach(HomeKind.allCases.filter { ($0.families.contains(.accessoryCircular)) && (only?.contains($0.rawValue) ?? true) }, id: \.self) { kind in
                             HomeGalleryLockRow(kind: kind, entry: entry)
                         }
                     } else {
-                        ForEach(HomeKind.allCases, id: \.self) { kind in
+                        let only = shown.hasPrefix("home:") ? shown.split(separator: ":").dropFirst().first.map { $0.split(separator: ",").map(String.init) } : nil
+                        ForEach(HomeKind.allCases.filter { only?.contains($0.rawValue) ?? true }, id: \.self) { kind in
                             ForEach(kind.families.filter { [.systemSmall, .systemMedium, .systemLarge].contains($0) }, id: \.self) { family in
                                 HomeGalleryRow(title: "\(kind.rawValue) · \(family)", kind: kind, family: family, looks: [.light, .dark], entry: entry)
                             }
@@ -249,6 +261,58 @@ struct HomeGalleryOverlay: View {
             }
             .background(HomeWidgetTokens.Gallery.sheet)
         }
+    }
+}
+
+/// Screenshot pages for the intake widgets and the four independent health cells. `vibrant` previews Today's
+/// Health in a monochrome environment only; it does not register a Lock Screen family.
+struct HomeHealthGallery: View {
+    var page: String
+    var entry: HomeEntry
+
+    var body: some View {
+        switch page {
+        case "water", "protein", "water-mono", "protein-mono":
+            let kind: HomeKind = page.hasPrefix("water") ? .water : .protein
+            let looks: [HomeGallery.Look] = page.hasSuffix("mono") ? [.tinted, .clear] : [.light, .dark]
+            HomeGalleryRow(title: "\(page) · small", kind: kind, family: .systemSmall, looks: looks, entry: entry)
+            HomeGalleryRow(title: "\(page) · medium", kind: kind, family: .systemMedium, looks: looks, entry: entry)
+        case "lock":
+            HomeGalleryLockRow(kind: .water, entry: entry)
+            HomeGalleryLockRow(kind: .protein, entry: entry)
+        case "vibrant":
+            row(.systemSmall, looks: [.lock])
+            row(.systemMedium, looks: [.lock])
+            HStack(spacing: HomeGallery.pad) {
+                HomeGalleryCell(kind: .water, family: .systemSmall, look: .dark, entry: entry, locked: true)
+                HomeGalleryCell(kind: .healthToday, family: .systemSmall, look: .dark, entry: entry, locked: true)
+            }
+        default:
+            let looks: [HomeGallery.Look] = page == "mono" ? [.tinted, .clear] : [.light, .dark]
+            row(.systemSmall, looks: looks)
+            row(.systemMedium, looks: looks)
+        }
+    }
+
+    private var sample: HomeEntry {
+        var e = entry
+        switch page {
+        case "move":
+            e.snapshot.activity?.exerciseGoal = nil
+            e.snapshot.activity?.standGoal = nil
+        case "access":
+            e.snapshot.activity = .init(date: e.date.timeIntervalSince1970, needsAccess: true)
+        case "choices":
+            e.healthItems = [.steps, .water, .steps, .activity]
+            e.snapshot.activity?.isPaused = true
+        default: break
+        }
+        return e
+    }
+
+    private func row(_ family: WidgetFamily, looks: [HomeGallery.Look]) -> some View {
+        HomeGalleryRow(title: "today's health · \(page) · \(family)", kind: .healthToday, family: family, looks: looks, entry: sample)
+            .environment(\.dynamicTypeSize, page == "largest" ? HomeWidgetTokens.healthLargestTypeSize : .large)
     }
 }
 #endif

@@ -1,11 +1,17 @@
 import { join } from "node:path";
-import { BrowserWindow, Menu, app, dialog, protocol, screen, shell, powerMonitor, Notification } from "electron";
+import { BrowserWindow, Menu, app, dialog, nativeTheme, protocol, screen, shell, powerMonitor, Notification } from "electron";
 import { parseDeepLink, parseHubAddress, externalBrowserURL, inHub } from "./urls.js";
 import type { HubAddress } from "./urls.js";
 import { appPairingURL } from "./pairing.js";
+import { parseConnectInput } from "./connect-input.js";
+import { classifyConnectError } from "./connect-errors.js";
+import { allowPinnedSessionRequest, isValidPin, verifyPinnedCertificate } from "./tls-pin.js";
+import type { HubPin } from "./tls-pin.js";
 import { installDesktopIPC, DesktopNotifications } from "./ipc.js";
 import { PageRoutes } from "./page-routes.js";
-import { installSetupIPC } from "./setup-ipc.js";
+import { installSetupIPC, installSetupProtocol } from "./setup-ipc.js";
+import type { ConnectResponse } from "./setup-ipc.js";
+import { SETUP_SCHEME, SETUP_URL } from "./setup-page.js";
 import { JSONStore } from "./store.js";
 import { restoreWindow, DEFAULT_WINDOW } from "./window-state.js";
 import { closeToTray, installTray } from "./tray.js";
@@ -24,10 +30,17 @@ import { ISLAND_SCHEME } from "./island-page.js";
 
 installSmokeCapture();
 // Electron takes this registration once, before the app is ready: every scheme of the app's own pages belongs here.
-protocol.registerSchemesAsPrivileged([{ scheme: ISLAND_SCHEME, privileges: { standard: true, secure: true } }]);
+protocol.registerSchemesAsPrivileged([
+  { scheme: ISLAND_SCHEME, privileges: { standard: true, secure: true } },
+  { scheme: SETUP_SCHEME, privileges: { standard: true, secure: true } },
+]);
 
 let mainWindow: BrowserWindow | undefined;
 let hub: HubAddress | undefined;
+let hubPins: Record<string, string> = {};
+const verifiedLinkPins = new Map<string, string>();
+let pendingInitialURL: { readonly origin: string; readonly href: string } | undefined;
+let connectionFailed = false;
 let quitting = false;
 let pendingDeepLink: string | undefined;
 let setupWindow: BrowserWindow | undefined;
@@ -35,10 +48,59 @@ let screenLocked = false;
 let presenceTimer: ReturnType<typeof setInterval> | undefined;
 const hubWindow = new HubWindowLifecycle<BrowserWindow | undefined>();
 const store = () => JSONStore.inUserData(app.getPath("userData"));
+function windowBackground(surface: "hub" | "setup" = "hub"): string {
+  if (surface === "setup") {
+    // Match --page in setup.css until the local renderer paints.
+    return nativeTheme.shouldUseDarkColors ? "#0b0b0c" : "#f1f1f4";
+  }
+  // Match the Web shell canvas and its prepaint background.
+  return nativeTheme.shouldUseDarkColors ? "#0b0b0c" : "#f1f1f4";
+}
+function applySurfaceStyle(window: BrowserWindow, style: DesktopSurfaceStyle): void {
+  if (process.platform !== "darwin" || window.isDestroyed()) return;
+  if (style === "liquid-glass") {
+    window.setVibrancy("under-window");
+    window.setBackgroundColor("#00000000");
+  } else {
+    window.setVibrancy(null);
+    window.setBackgroundColor(windowBackground());
+  }
+}
 // Each hub window's routes wait until its page listens (page-routes.ts, #10282): no route is sent around them.
 const pageRoutes = new WeakMap<BrowserWindow, PageRoutes>();
 function openRoute(window: BrowserWindow | undefined, route: string): void {
   if (window && !window.isDestroyed()) pageRoutes.get(window)?.open(route);
+}
+function activePinFor(address: HubAddress | undefined): HubPin | undefined {
+  if (!address) return undefined;
+  const fp = hubPins[address.url.origin];
+  if (!fp || !isValidPin(fp)) return undefined;
+  return { origin: address.url.origin, fp };
+}
+const windowPins = new WeakMap<BrowserWindow, string | undefined>();
+function sessionPinKey(pin: HubPin | undefined): string | undefined {
+  return pin ? `${pin.origin}#${pin.fp}` : undefined;
+}
+async function applySessionPin(window: BrowserWindow, owner: HubAddress): Promise<void> {
+  if (window.isDestroyed()) return;
+  const pin = activePinFor(owner);
+  const ses = window.webContents.session;
+  ses.webRequest.onBeforeRequest(
+    pin
+      ? (details, callback) => {
+          callback({ cancel: !allowPinnedSessionRequest(details.url, pin) });
+        }
+      : null,
+  );
+  ses.setCertificateVerifyProc((request, callback) => {
+    callback(verifyPinnedCertificate({
+      hostname: request.hostname,
+      certificateData: request.certificate.data,
+      verificationResult: request.verificationResult,
+    }, pin));
+  });
+  windowPins.set(window, sessionPinKey(pin));
+  await ses.closeAllConnections();
 }
 // The island at the MacBook notch (#7669): off until the person turns it on; a clicked row opens as a notification does.
 const island = new NotchIsland(route => {
@@ -52,7 +114,7 @@ const island = new NotchIsland(route => {
 function navigateFromDeepLink(raw: string): void {
   const link = parseDeepLink(raw);
   if (!link) return;
-  if (!hub) { pendingDeepLink = raw; void showSetup(); return; }
+  if (!hub || !mainWindow || mainWindow.isDestroyed()) { pendingDeepLink = raw; void showSetup(); return; }
   if (link.kind === "open" && link.route) openRoute(mainWindow, link.route);
   if (link.kind === "pair-app") {
     const pairing = appPairingURL(hub, raw);
@@ -111,14 +173,30 @@ async function replaceMainWindow(next: HubAddress, close: (window: BrowserWindow
 }
 
 async function showMain(): Promise<BrowserWindow | undefined> {
+  if (quitting) return undefined;
   return hubWindow.show(async (): Promise<BrowserWindow | undefined> => {
   const generation = hubWindow.generation;
   const owner = hub;
   if (!owner) {
+    pendingInitialURL = undefined;
     if (!setupWindow || setupWindow.isDestroyed()) await showSetup();
     return undefined;
   }
-  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); return mainWindow; }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    connectionFailed = false;
+    const initial = pendingInitialURL && pendingInitialURL.origin === owner.url.origin && inHub(owner, pendingInitialURL.href)
+      ? pendingInitialURL.href
+      : undefined;
+    pendingInitialURL = undefined;
+    if (initial || windowPins.get(mainWindow) !== sessionPinKey(activePinFor(owner))) {
+      await applySessionPin(mainWindow, owner);
+      if (quitting || owner !== hub || generation !== hubWindow.generation || mainWindow.isDestroyed()) return undefined;
+    }
+    if (initial) await mainWindow.loadURL(initial);
+    if (quitting || owner !== hub || generation !== hubWindow.generation || mainWindow.isDestroyed()) return undefined;
+    mainWindow.show();
+    return mainWindow;
+  }
   const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
   if (owner !== hub || generation !== hubWindow.generation) return undefined;
   const current = new BrowserWindow({
@@ -127,7 +205,8 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     show: false,
     title: "Persona",
     autoHideMenuBar: true,
-    backgroundColor: "#111111",
+    backgroundColor: windowBackground(),
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 19 } } : {}),
     webPreferences: {
       preload: join(import.meta.dirname, "preload.cjs"),
       contextIsolation: true,
@@ -145,6 +224,23 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     },
   });
   mainWindow = current;
+  let surfaceStyle: DesktopSurfaceStyle = "default";
+  const readWindowChrome = (): DesktopWindowChrome => ({
+    unifiedTitlebar: process.platform === "darwin",
+    fullScreen: !current.isDestroyed() && current.isFullScreen(),
+    focused: !current.isDestroyed() && current.isFocused(),
+  });
+  const publishChrome = () => {
+    if (!current.isDestroyed()) current.webContents.send("desktop:window-chrome-changed", readWindowChrome());
+  };
+  current.on("enter-full-screen", publishChrome);
+  current.on("leave-full-screen", publishChrome);
+  current.on("focus", publishChrome);
+  current.on("blur", publishChrome);
+  const onThemeUpdated = () => {
+    if (!current.isDestroyed() && surfaceStyle === "default") current.setBackgroundColor(windowBackground());
+  };
+  nativeTheme.on("updated", onThemeUpdated);
   const routes = new PageRoutes(route => {
     if (!current.isDestroyed()) current.webContents.send("desktop:notification-open", route);
   });
@@ -189,6 +285,11 @@ async function showMain(): Promise<BrowserWindow | undefined> {
       current.focus();
       routes.open(route);
     }),
+    windowChrome: readWindowChrome,
+    setSurfaceStyle: style => {
+      surfaceStyle = style;
+      applySurfaceStyle(current, style);
+    },
   });
   const save = () => {
     if (current.isDestroyed() || current.isMinimized()) return;
@@ -202,7 +303,7 @@ async function showMain(): Promise<BrowserWindow | undefined> {
   current.on("unmaximize", save);
   current.on("close", save);
   current.once("ready-to-show", () => {
-    if (owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) return;
+    if (quitting || owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) return;
     if (state.maximized) current.maximize();
     current.show();
     if (pendingDeepLink) navigateFromDeepLink(pendingDeepLink);
@@ -211,23 +312,30 @@ async function showMain(): Promise<BrowserWindow | undefined> {
   // The island's state is this page's (#7669): once the page is gone (a hub change destroys this window, its renderer
   // crashed), the island forgets it, so nothing of this hub stays at the notch; a newer page's state stays.
   current.webContents.on("render-process-gone", () => island.forget(page));
-  current.once("closed", () => { removeIPC(); island.forget(page); if (mainWindow === current) mainWindow = undefined; });
+  current.once("closed", () => { nativeTheme.removeListener("updated", onThemeUpdated); removeIPC(); island.forget(page); if (mainWindow === current) mainWindow = undefined; });
   if (owner) {
+    await applySessionPin(current, owner);
+    const targetURL = pendingInitialURL && pendingInitialURL.origin === owner.url.origin && inHub(owner, pendingInitialURL.href)
+      ? pendingInitialURL.href
+      : owner.url.href;
+    pendingInitialURL = undefined;
     try {
-      await current.loadURL(owner.url.href);
+      await current.loadURL(targetURL);
     } catch (error) {
       removeIPC();
       if (mainWindow === current) mainWindow = undefined;
       if (!current.isDestroyed()) current.destroy();
+      if (owner === hub && generation === hubWindow.generation) connectionFailed = true;
       if (owner === hub && generation === hubWindow.generation) throw error;
       return undefined;
     }
-    if (owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) {
+    if (quitting || owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) {
       removeIPC();
       if (mainWindow === current) mainWindow = undefined;
       if (!current.isDestroyed()) current.destroy();
       return undefined;
     }
+    connectionFailed = false;
     return current;
   }
   return undefined;
@@ -235,12 +343,22 @@ async function showMain(): Promise<BrowserWindow | undefined> {
 }
 
 async function showSetup(): Promise<void> {
+  if (quitting) return;
   if (setupWindow && !setupWindow.isDestroyed()) { setupWindow.show(); setupWindow.focus(); return; }
+  const isSettings = Boolean(mainWindow && !mainWindow.isDestroyed());
+  const isRecovery = !isSettings && connectionFailed && Boolean(hub);
+  const bounds = isSettings
+    ? { width: 760, height: 560, minWidth: 640, minHeight: 480 }
+    : isRecovery
+      ? { width: 460, height: 440, minWidth: 400, minHeight: 380 }
+      : { width: 480, height: 620, minWidth: 420, minHeight: 480 };
   const setup = new BrowserWindow({
-    width: 720,
-    height: 640,
-    title: "Persona setup",
+    ...bounds,
+    show: false,
+    title: isSettings ? "Persona Settings" : "Persona",
     autoHideMenuBar: true,
+    backgroundColor: windowBackground("setup"),
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 } } : {}),
     webPreferences: {
       preload: join(import.meta.dirname, "setup-preload.cjs"),
       contextIsolation: true,
@@ -252,6 +370,18 @@ async function showSetup(): Promise<void> {
     },
   });
   setupWindow = setup;
+  setup.once("ready-to-show", () => {
+    if (!quitting && !setup.isDestroyed()) setup.show();
+  });
+  type ConnectionAttempt = {
+    generation?: number;
+    next: HubAddress;
+    previousHub: HubAddress | undefined;
+    previousPins: Record<string, string>;
+    previousConnectionFailed: boolean;
+    persisting?: boolean;
+  };
+  let activeConnection: ConnectionAttempt | undefined;
   let connectQueue: Promise<unknown> = Promise.resolve();
   setup.setMenu(null);
   setup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -259,64 +389,142 @@ async function showSetup(): Promise<void> {
   setup.once("closed", () => {
     removeIPC();
     if (setupWindow === setup) setupWindow = undefined;
-    // Quitting closes setup too; opening another window here would cancel the quit (#9458).
+    // Quitting closes setup too; closing onboarding or recovery exits cleanly instead of respawning (#9458).
     if (quitting) return;
-    // Do not re-enter a connection whose setup was closed while its creation was still pending.
-    if (!mainWindow && !hubWindow.pending) void showMain().catch(() => { if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {}); });
+    const attempt = activeConnection;
+    if (attempt && !attempt.persisting) {
+      activeConnection = undefined;
+      const currentGeneration = attempt.generation === undefined || attempt.generation === hubWindow.generation;
+      const currentOwner = hub === attempt.next || hub === attempt.previousHub;
+      if (currentGeneration && currentOwner) {
+        hub = attempt.previousHub;
+        hubPins = attempt.previousPins;
+        connectionFailed = attempt.previousConnectionFailed;
+        pendingInitialURL = undefined;
+        hubWindow.replace();
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+      }
+      if ((!mainWindow || mainWindow.isDestroyed()) && (!attempt.previousHub || attempt.previousConnectionFailed)) {
+        quitting = true;
+        app.quit();
+      }
+      return;
+    }
+    // Retire a pending connection when its setup closes. A late result must not reopen the last window.
+    if (hubWindow.pending) {
+      pendingInitialURL = undefined;
+      hubWindow.replace();
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        quitting = true;
+        app.quit();
+      }
+      return;
+    }
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      quitting = true;
+      app.quit();
+    }
   });
   const removeIPC = installSetupIPC(setup, {
     hub: () => hub,
-    connect: async (raw: string) => {
-      const next = parseHubAddress(raw);
+    hasMainWindow: () => Boolean(mainWindow && !mainWindow.isDestroyed()),
+    connectionFailed: () => connectionFailed,
+    onVerifiedLinkPin: pin => {
+      if (isValidPin(pin.fp)) verifiedLinkPins.set(pin.origin, pin.fp);
+    },
+    connect: async (raw: string): Promise<ConnectResponse> => {
+      const parsed = parseConnectInput(raw);
+      if (parsed.kind === "link-pair") {
+        return {
+          ok: false,
+          errorCode: "link_pair_input",
+          linkURL: parsed.linkURL,
+          ...(parsed.suggestedHub ? { suggestedHub: parsed.suggestedHub.url.href } : {}),
+          error: "This is a Persona Link pairing code for running Agents on this computer.",
+        };
+      }
+      const next = parsed.hub;
+      const verifiedPin = parsed.pin ?? (() => {
+        const fp = verifiedLinkPins.get(next.url.origin);
+        return fp && isValidPin(fp) ? { origin: next.url.origin, fp } : undefined;
+      })();
       const previous = connectQueue;
       let generation: number | undefined;
-      const run = async (): Promise<{ ok: boolean; error?: string }> => {
+      const run = async (): Promise<ConnectResponse> => {
+      if (quitting || setup.isDestroyed()) return { ok: false, replaced: true, error: "The hub connection was replaced before it finished." };
+      const previousHub = hub;
+      const previousPins = { ...hubPins };
+      const attempt: ConnectionAttempt = { next, previousHub, previousPins, previousConnectionFailed: connectionFailed };
+      activeConnection = attempt;
       try {
         await replaceMainWindow(next, window => window.destroy());
+        if (quitting || setup.isDestroyed()) return { ok: false, replaced: true, error: "The hub connection was replaced before it finished." };
         const generationValue = hubWindow.generation;
         generation = generationValue;
+        attempt.generation = generationValue;
         hub = next;
+        if (verifiedPin) {
+          hubPins = { ...hubPins, [verifiedPin.origin]: verifiedPin.fp };
+        }
+        pendingInitialURL = parsed.autoSignIn ? { origin: next.url.origin, href: parsed.initialURL } : undefined;
         const loadedWindow = await showMain();
         // An obsolete or destroyed load cannot persist or close setup.
         if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
             !loadedWindow || loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
-          return { ok: false, error: "The hub connection was replaced before it finished." };
+          return { ok: false, replaced: true, error: "The hub connection was replaced before it finished." };
         }
         try {
+          attempt.persisting = true;
           await store().update({ hub: next.url.href });
+          if (verifiedPin) {
+            await store().update({ pins: hubPins });
+          }
         } catch (error) {
           // Do not leave a live window using a hub that the setup state no longer owns.
           if (generation === hubWindow.generation && hub?.url.href === next.url.href) {
             hub = undefined;
+            hubPins = previousPins;
             hubWindow.replace();
             const failedWindow = mainWindow;
             mainWindow = undefined;
             if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
           }
-          if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
+          if (!quitting && !setup.isDestroyed() && (!setupWindow || setupWindow.isDestroyed())) void showSetup().catch(() => {});
           return { ok: false, error: error instanceof Error ? error.message : "Could not save the hub connection." };
         }
         if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
             loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
-          return { ok: false, error: "The hub connection was replaced before it finished." };
+          return { ok: false, replaced: true, error: "The hub connection was replaced before it finished." };
         }
+        if (activeConnection === attempt) activeConnection = undefined;
         if (!setup.isDestroyed()) setup.close();
         return { ok: true };
       } catch (error) {
         if (generation !== hubWindow.generation || hub?.url.href !== next.url.href) {
-          return { ok: false, error: "The hub connection was replaced before it finished." };
+          return { ok: false, replaced: true, error: "The hub connection was replaced before it finished." };
         }
         const failedWindow = mainWindow;
         if (failedWindow && !failedWindow.isDestroyed()) {
-          // A failed connection must not leave a live window after its global owner is cleared.
+          // A failed connection must not leave a live window after its generation is retired.
           mainWindow = undefined;
           hubWindow.replace();
           failedWindow.destroy();
         }
-        hub = undefined;
+        const info = classifyConnectError(error, Boolean(activePinFor(next)));
+        hub = previousHub;
+        hubPins = previousPins;
+        pendingInitialURL = undefined;
+        connectionFailed = attempt.previousConnectionFailed;
         hubWindow.replace();
-        if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
-        return { ok: false, error: error instanceof Error ? error.message : "Could not connect to the hub." };
+        return {
+          ok: false,
+          errorCode: info.code,
+          ...(info.technical ? { technical: info.technical } : {}),
+          error: error instanceof Error ? error.message : "Could not connect to the hub.",
+        };
+      } finally {
+        if (activeConnection === attempt) activeConnection = undefined;
       }
       };
       const result = previous.catch(() => {}).then(run);
@@ -324,7 +532,7 @@ async function showSetup(): Promise<void> {
       return result;
     },
   });
-  await setup.loadFile(join(import.meta.dirname, "setup.html"));
+  await setup.loadURL(SETUP_URL);
 }
 
 const locked = app.requestSingleInstanceLock();
@@ -346,6 +554,7 @@ else {
   });
   app.whenReady().then(async () => {
     installIslandProtocol();
+    installSetupProtocol();
     const publishPresence = () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       const presence = desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported());
@@ -370,23 +579,35 @@ else {
       changed: state => { updateItems = updateMenu(state, strings); tray?.setUpdate(updateItems); },
       prepareQuit: () => { quitting = true; },
     });
-    const saved = await store().read<{ hub?: string; island?: boolean }>();
+    const saved = await store().read<{ hub?: string; island?: boolean; pins?: Record<string, string> }>();
+    if (saved?.pins && typeof saved.pins === "object" && !Array.isArray(saved.pins)) {
+      for (const [origin, fp] of Object.entries(saved.pins)) {
+        if (typeof fp === "string" && isValidPin(fp)) {
+          try {
+            hubPins[new URL(origin).origin] = fp;
+          } catch { /* ignore invalid saved pin origin */ }
+        }
+      }
+    }
     try { hub = parseHubAddress(process.env.PERSONA_HUB_URL ?? saved?.hub ?? ""); } catch { hub = undefined; }
     if (saved?.island === true) island.setEnabled(true);
     for (const scheme of ["persona", "jarvis"]) {
       if (!app.isDefaultProtocolClient(scheme)) app.setAsDefaultProtocolClient(scheme);
     }
-    if (hub) await showMain().catch(() => { hub = undefined; hubWindow.replace(); });
-    if (!hub) await showSetup();
+    if (hub) await showMain().catch(() => {});
+    if (quitting) return;
+    if (!mainWindow) await showSetup();
     tray = installTray({ open: strings.tray_open ?? "Open Persona", quit: strings.tray_quit ?? "Quit Persona" }, () => {
       if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); }
-      else void showMain();
+      else if (hub) void showMain().catch(() => { if (!quitting) void showSetup().catch(() => {}); });
+      else void showSetup().catch(() => {});
     }, () => { quitting = true; app.quit(); }, action => {
       if (action === "restart") updates?.restart();
       else updates?.check();
     });
     tray.setUpdate(updateItems);
   }).catch(error => {
+    if (quitting) return;
     dialog.showErrorBox("Persona could not start", error instanceof Error ? error.message : String(error));
     app.quit();
   });
@@ -398,4 +619,5 @@ app.on("window-all-closed", () => {
 
 // Developing Persona (#9675): the shell's own record while the page's switch is on (dev-diagnostics.ts).
 import { installDevDiagnostics } from "./dev-diagnostics.js";
+import type { DesktopSurfaceStyle, DesktopWindowChrome } from "../../spec/desktop-bridge.js";
 installDevDiagnostics();

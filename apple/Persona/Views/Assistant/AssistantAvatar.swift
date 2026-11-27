@@ -18,38 +18,34 @@ struct AssistantAvatar: View {
     var mouth: Double? = nil
     var eyesShut = false
 
-    #if os(macOS)
-    @Environment(\.tabIsActive) private var inFront
-    #endif
-
     private var held: Bool { still || reduceMotion }
+    static let stillSchedule = VisiblePeriodicSchedule(interval: Theme.Motion.personaFrameInterval, paused: true)
+    static func moves(state: PersonaState, still: Bool, reduceMotion: Bool, eligible: Bool) -> Bool {
+        !(still || reduceMotion) && eligible && [.thinking, .working, .needsYou].contains(state)
+    }
     private func moving(eligible: Bool) -> Bool {
-        !held && eligible && [.thinking, .working, .needsYou].contains(state)
+        Self.moves(state: state, still: still, reduceMotion: reduceMotion, eligible: eligible)
     }
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("PersonaAvatar")
         #endif
-        #if os(macOS)
-        // Preserve the Mac's existing continuous-animation branch.
-        TimelineView(.animation(minimumInterval: Theme.Motion.personaFrameInterval, paused: !moving(eligible: inFront))) { tl in
-            face(at: tl.date, eligible: inFront)
-        }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
-        #else
         VisibleWork { eligible in
-            TimelineView(VisiblePeriodicSchedule(interval: Theme.Motion.personaFrameInterval, paused: !moving(eligible: eligible))) { tl in
-                face(at: tl.date, eligible: eligible)
+            if moving(eligible: eligible) {
+                PersonaFaceMotion(face: face(at: Date(timeIntervalSinceReferenceDate: 0), eligible: eligible))
+            } else {
+                // Keep the original paused timeline container: still frames retain its exact compositing and never tick.
+                TimelineView(Self.stillSchedule) { tl in
+                    face(at: tl.date, eligible: eligible)
+                }
             }
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
-        #endif
     }
 
-    private func face(at date: Date, eligible: Bool) -> some View {
+    private func face(at date: Date, eligible: Bool) -> PersonaFace {
         PersonaFace(size: size, design: PersonaFace.Design(rawValue: design.rawValue) ?? .mochi, state: state,
                     time: date.timeIntervalSinceReferenceDate, moving: moving(eligible: eligible),
                     blink: held || !eligible ? nil : Theme.Motion.blink, mouth: mouth, eyesShut: eyesShut)

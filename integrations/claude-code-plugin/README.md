@@ -6,9 +6,19 @@ run, a background session. Without it the node can only use Claude Code's peer i
 words come from another session and that they are not the person's approval (`docs/integrations/claude-integration.md`,
 "Owner input through the Persona plugin").
 
-The plugin does one thing: while its session is idle it asks the local Persona node for a message, and submits the
-text it gets with `$.prompt.submit({ text, asUser: true })`. It runs nothing else, reads no file but its own manifest,
-and stays quiet when no node is running.
+The plugin polls the local Persona node while its session lives: it submits the owner's messages with
+`$.prompt.submit({ text, asUser: true })` (immediately when idle, or into Claude Code's prompt queue while a turn runs),
+cancels the active main-loop turn via `$.turn.abort({ turnId })` when the owner presses Stop, applies session-scoped
+model / effort picks on main-loop `turn.step` calls when `settings` is advertised, and bridges interactive tool
+permission prompts, `ExitPlanMode`, and `AskUserQuestion` cards through `classic.PermissionRequest` when the node
+explicitly authorizes `permissions: true` on `/poll`. It reads no file but its own manifest and stays quiet when no
+node is running.
+
+On a computer with managed settings, Claude Code's `cc-plugin-sec-default` guard can pass every `classic.*` event over
+the user-tier plugin. Persona does not try to work around that policy: after a main-loop turn uses tools without a
+`classic.PreToolUse` reaching the plugin, the plugin reports `classic_passed_over: true`. The node then keeps permission
+bridging off for that session and the row says to approve on the computer or start the session from Persona in a
+terminal engine. Question cards (`clq_`) are unchanged.
 
 ## Packaging
 
@@ -48,18 +58,46 @@ another session, gets `403`.
 `POST /claude-plugin/v1/poll`
 
 ```json
-{"session_id": "<uuid>", "plugin_version": "0.1.0", "engine_version": "2.1.308", "wait_ms": 25000}
+{"session_id": "<uuid>", "plugin_version": "0.3.1", "engine_version": "2.1.331", "capabilities": ["busy_input", "interrupt", "settings", "permissions"], "classic_passed_over": true, "wait_ms": 25000}
 ```
 
-- Held until a message comes or `wait_ms` passes (at most 25 s; Claude Code's fetch gives up at 30 s), then asked
+- Held until work comes or `wait_ms` passes (at most 25 s; Claude Code's fetch gives up at 30 s), then asked
   again at once. A newer poll for the same session answers the older one at once, empty. The plugin polls whether the
-  session works or rests: the node reads that from Claude Code's own status file and hands a message over only while
-  the session rests.
-- `200`: `{"messages": [{"id": "<id>", "text": "...", "deadline_ms": <epoch ms>}], "retry_ms": <ms>}`. `messages` is
-  empty when nothing came. `retry_ms`, when present, is how long to wait before the next poll: a session the node does
-  not deliver to this way (one in a Persona terminal, the assistant's own) is told to come back much later.
+  session works or rests; when `busy_input` is advertised, owner prompts are also handed over while a turn runs so
+  Claude Code queues them natively without holding them at the computer in `bypassPermissions` or `auto` mode.
+  `settings` overrides can be delivered to any active poll.
+- `200`: `{"messages": [{"id": "<id>", "text": "...", "deadline_ms": <epoch ms>}], "interrupt": {"id": "<id>", "deadline_ms": <epoch ms>}, "settings": {"id": "<id>", "model": "...", "effort": "..."}, "permissions": true, "retry_ms": <ms>}`.
+  `messages` is empty when nothing came; `interrupt`, `settings` and `permissions` are omitted when inactive.
+  `permissions: true` is returned only when the session is served by the plugin and not managed by `persona-hooks` or an
+  external tmux pane. `retry_ms`, when present, is how long to wait before the next poll: a session the node does not
+  deliver to this way (one in a Persona terminal, the assistant's own) is told to come back much later.
+- `classic_passed_over: true` is sent after a main-loop turn used tools but no `classic.PreToolUse` arrived.
+  Claude Code's managed-settings guard can do that to every `classic.*` hook in a user-tier plugin. The node then
+  returns no `permissions: true` for that session, refuses direct `/permission` calls with `passthrough`, withdraws any
+  active plugin card, and leaves `clq_` question cards alone. The field is omitted while classic hooks reach the plugin.
 - `403 {"error": "not_this_session"}`: the caller is not the claude that has this session open. `404`, or an answer
   that is not HTTP: a node without this protocol. The plugin backs off (up to a minute) and tries again.
+
+`POST /claude-plugin/v1/permission`
+
+```json
+{"session_id": "<uuid>", "req_id": "<id>", "wait_ms": 25000, "tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_use_id": "toolu_..."}
+```
+
+- Only called after `/poll` authorizes `permissions: true`, the plugin has not reported `classic_passed_over`, and after
+  giving fast local command hooks (`next(e)`) a 500 ms grace window. Pairs `tool_use_id` from `classic.PreToolUse`.
+- `200`: `{"action": "renew"}` (keep renewing with the same `req_id` under the 30 s fetch cap),
+  `{"action": "decide", "decision": {"behavior": "allow" | "deny", ...}}`, or `{"action": "passthrough"}` (fall back
+  to the computer UI).
+
+`POST /claude-plugin/v1/permission-done`
+
+```json
+{"session_id": "<uuid>", "req_id": "<id>", "tool_use_id": "toolu_...", "reason": "post_tool_use"}
+```
+
+- Sent asynchronously from `classic.PostToolUse`, `classic.PermissionDenied`, `turn.complete`, or when a slower local
+  hook wins the race, so the node immediately withdraws the phone card and ends any active renewal wait.
 
 `POST /claude-plugin/v1/ack`
 
@@ -69,6 +107,9 @@ another session, gets `403`.
 
 `submitted: false` with a `reason` (`late`, `invalid`, `command`, `dropped`, `failed`) when the plugin did not submit it.
 The plugin submits a message only before its `deadline_ms`; after that the node may send it through the inbox instead.
+The 250 ms settle window only releases the poll loop. A submission still pending then sends no final ack until its real
+result arrives; the node can independently confirm its queue/prompt line. The timer therefore never turns a later
+rejection or `drop` into an earlier success.
 
 Registration is the poll itself: a session counts as having the plugin while its claude process lives and a poll from
 that process waits, or ended less than 90 s ago. The node lists such a session with `capabilities.plugin_input: true`.
@@ -82,7 +123,9 @@ session has loaded the plugin, or none has polled yet (a session polls as it sta
 
 ## What goes this way
 
-Only text the owner typed in a Persona app (the hub's own-device human-input marker, `owner_input` on `session.send`),
-to a session that is idle. Everything else keeps the peer inbox: messages from the Persona assistant, extensions and
-channels (Lark, WeChat), relays between conversations, a message to a busy session, slash commands, the answer to a
-question the session asked, and Stop. Details and fallback rules: `docs/integrations/claude-integration.md`.
+Text the owner typed in a Persona app (`owner_input` on `session.send`, idle or busy when `busy_input` is advertised),
+owner-attested turn interrupts (`interrupt`, `$.turn.abort`), and session-scoped model / effort overrides (`settings`).
+Everything else keeps the peer inbox: messages from the Persona assistant, extensions and channels (Lark, WeChat),
+relays between conversations, slash commands, the answer to a question the session asked, and non-owner interrupts.
+Details and fallback rules:
+`docs/integrations/claude-integration.md`.

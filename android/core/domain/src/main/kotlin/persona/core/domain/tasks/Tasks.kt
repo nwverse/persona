@@ -16,7 +16,10 @@ import persona.core.contracts.Session
 import persona.core.contracts.PlanTask
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
+import persona.core.contracts.canonicalMcpToolName
 import persona.core.contracts.draftPlaceholder
+import persona.core.contracts.parseTime
+import persona.core.contracts.stripToolResultTimestampHeaders
 import persona.core.domain.lines.ApiErrorInfo
 import persona.core.domain.lines.ChatLine
 import persona.core.domain.lines.ToolCall
@@ -50,12 +53,13 @@ enum class TaskState(val label: CoreText, val rank: Int) {
     Failed(CoreText.of(Key.TaskFailed), 4);
 
     companion object {
-        /** [interrupted]: one of its agents stopped on a model API error (`Session.interrupted`). */
-        fun of(todo: Todo, agents: List<AgentState>, interrupted: Boolean = false): TaskState = when {
+        /** [interrupted]: one of its agents stopped on a model API error (`Session.interrupted`). A current working or
+         *  [waiting] replacement supersedes that old interruption. */
+        fun of(todo: Todo, agents: List<AgentState>, interrupted: Boolean = false, waiting: Boolean = false): TaskState = when {
             todo.doneAt != null && !todo.startError.isNullOrBlank() -> Failed
             todo.doneAt != null -> Done
             AgentState.NeedsYou in agents -> NeedsYou
-            interrupted -> Interrupted
+            interrupted && AgentState.Working !in agents && !waiting && todo.supervision?.state != "parked" -> Interrupted
             AgentState.Unread in agents -> Unread
             AgentState.Working in agents -> Working
             agents.isNotEmpty() -> Followup
@@ -78,13 +82,15 @@ fun receiptTitle(item: FeedItem, todo: Todo?): String? = todo?.title?.trim()?.if
 /** Why the model service cut the agent off (#1516), in words, and whether "Continue" can help; null when it was not.
  *  [plain]: no model service error, [reason] being the hub's own sentence, said as it is: a turn with no output at all
  *  (turn_error_kind `no_output`, or `stopped` when Persona's Stop interrupted it with its conversation, #10187). */
-data class Interruption(val reason: CoreText, val canContinue: Boolean, val plain: Boolean = false) {
+data class Interruption(val reason: CoreText, val canContinue: Boolean, val invalid: Boolean = false, val plain: Boolean = false) {
     companion object {
         /** The hub's own kinds for a turn with no output (#10187): its turn_error is a sentence, not an API error. */
         private val silentKinds = setOf("no_output", "stopped")
 
         fun of(s: Session?): Interruption? {
             if (s?.interrupted != true) return null
+            val invalid = s.turnErrorKind == "unrecoverable" || s.turnErrorCode == "compaction_sealed" || ApiErrorInfo.unrecoverable(s.turnError)
+            if (invalid) return Interruption(CoreText.of(Key.ApiConversationInvalid), false, invalid = true)
             if (s.turnErrorKind in silentKinds) return Interruption(CoreText.plain(s.turnError.orEmpty().trim()), true, plain = true)
             val info = ApiErrorInfo.parse(s.turnError)
             return Interruption(info?.reason ?: CoreText.of(Key.ApiFailed), info?.needsAction != true)
@@ -127,13 +133,17 @@ sealed interface TaskNow {
  *
  * [itemId] is the id of the item the phone made, which Undo deletes. The phone's calendar ids are numbers, so a result
  * whose id is not one (an iPhone's event or reminder) still draws its card, without an Undo button.
+ *
+ * [sourceDeviceName] and [sourceDevicePlatform] are the hub-attested phone that created it, when known. Older results
+ * leave both null and make no source claim.
  */
 data class QuickResult(
     val reminder: Boolean, val callId: String, val itemId: Long?, val title: String, val time: String?, val place: String?,
+    val sourceDeviceName: String? = null, val sourceDevicePlatform: String? = null,
 ) {
     companion object {
         fun of(call: ToolCall): QuickResult? {
-            val short = call.name.substringAfterLast("__")
+            val short = canonicalMcpToolName(call.name).substringAfterLast("__")
             val reminder = when (short) {
                 "phone_reminders_create" -> true
                 "phone_calendar_create_event" -> false
@@ -141,12 +151,16 @@ data class QuickResult(
             }
             val result = call.result?.item ?: return null
             if (result.isError == true) return null
-            val o = runCatching { JsonCodec.parseToJsonElement(result.text.orEmpty()) as? JsonObject }.getOrNull() ?: return null
+            val o = runCatching {
+                JsonCodec.parseToJsonElement(stripToolResultTimestampHeaders(result.text.orEmpty())) as? JsonObject
+            }.getOrNull() ?: return null
             fun s(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            fun nonBlank(k: String) = s(k)?.trim()?.takeIf { it.isNotEmpty() }
             // No card without an id (iOS QuickResult.init), so an old or broken result says nothing it cannot back.
             val id = s("id")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
             return QuickResult(reminder, call.use.id, id.toLongOrNull()?.takeIf { it > 0 },
-                s("title").orEmpty(), s(if (reminder) "due" else "start"), s(if (reminder) "list" else "calendar"))
+                s("title").orEmpty(), s(if (reminder) "due" else "start"), s(if (reminder) "list" else "calendar"),
+                nonBlank("source_device_name"), nonBlank("source_device_platform"))
         }
     }
 }
@@ -180,10 +194,17 @@ object AssistantLines {
     /**
      * The chat's lines (in reading order) with the feed among them — each item at the end of the exchange it happened
      * in, before the first message sent after it — each turn's quick results after its work line, and a day line over
-     * the first line of each day.
+     * the first line of each day. While older transcript pages remain unloaded, [earliest] (the oldest loaded item's
+     * time, matching web `displayLines` `from`) holds back older feed items and their day lines until those pages load.
      */
-    fun lines(lines: List<ChatLine>, feed: List<FeedItem>, zone: ZoneId = ZoneId.systemDefault()): List<ChatLine> {
-        val out = ArrayList<ChatLine>(lines.size + feed.size)
+    fun lines(
+        lines: List<ChatLine>,
+        feed: List<FeedItem>,
+        zone: ZoneId = ZoneId.systemDefault(),
+        earliest: Instant? = null,
+    ): List<ChatLine> {
+        val visible = if (earliest == null) feed else feed.filter { time(it.at)?.isBefore(earliest) != true }
+        val out = ArrayList<ChatLine>(lines.size + visible.size)
         var next = 0
         var pending = emptyList<ChatLine>()
         fun flush() { out += pending; pending = emptyList() }
@@ -192,7 +213,7 @@ object AssistantLines {
             flush()
             val at = inputTime(line)
             if (at != null) {
-                while (next < feed.size && (time(feed[next].at) ?: Instant.EPOCH) < at) out += feedLine(feed[next++])
+                while (next < visible.size && (time(visible[next].at) ?: Instant.EPOCH) < at) out += feedLine(visible[next++])
             }
             out += line
             if (line is ChatLine.Work) {
@@ -201,7 +222,7 @@ object AssistantLines {
             }
         }
         flush()
-        while (next < feed.size) out += feedLine(feed[next++])
+        while (next < visible.size) out += feedLine(visible[next++])
         return days(out, zone)
     }
 
@@ -241,7 +262,7 @@ object AssistantLines {
         else -> null
     }
 
-    fun time(iso: String?): Instant? = iso?.let { runCatching { Instant.parse(it) }.getOrNull() }
+    fun time(iso: String?): Instant? = parseTime(iso)
 
     /** "Today · Tue, Nov 3", "Yesterday · …", or the date: which one, and whether the year shows (the app words it). */
     fun dayLabel(date: LocalDate, today: LocalDate = LocalDate.now()): DayLabel = DayLabel(date, when (date) {

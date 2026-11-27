@@ -3,9 +3,10 @@ import { ApiError } from "./api";
 import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import {
   checkError, clearedSecrets, clearExtensionSecret, compact, configError, fieldTitle, isDirty, listItems, listExtensions, listSummary, numberProblems, placeholder, extensionDetail,
-  machineStatus, extensionState, extensionTone, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setExtensionConfig, setExtensionEnabled, setExtensionSecret, sourceText,
+  machineStatus, extensionState, extensionTone, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setExtensionConfig, setExtensionConfigPreservingEntries, setExtensionEnabled, setExtensionSecret, sourceText,
   stateLine, valueAt, morePermissions, extensionUpgrades, setExtensionAutoUpgrade, setExtensionUpgrades, upgradeAction, upgradeDetail, upgradeNote,
-  type HubExtension, type ExtensionField, type ExtensionUpgrade, nodeProgramStatus, exitText, saveFooter, channelOf, sandboxState,
+  type HubExtension, type ExtensionField, type ExtensionUpgrade, type JsonObject, nodeProgramStatus, exitText, saveFooter, channelOf, sandboxState,
+  entryID, entryItems, entryKey, fieldPath, isEntryList, extensionTypeText, permissionTitle, permissionDetail,
 } from "./extensions";
 
 const extension = (status: string, extra: Partial<HubExtension> = {}): HubExtension => ({ id: `p-${status}`, name: status, kind: "connectors", status, ...extra });
@@ -84,6 +85,19 @@ describe("扩展的文字", () => {
     expect(stateLine(extension("running", { version: "1.2.0", source: "installed" }))).toBe("启动 · 1.2.0 · 已安装");
     expect(stateLine(extension("running", { source: "hub.json" }))).toBe("启动 · manager.json");
     expect(sourceText("other")).toBeUndefined();
+  });
+  it("names extension kinds and permissions in words, without hub keys or socket filenames", () => {
+    expect(extensionTypeText("connectors")).toBe("连接器");
+    expect(extensionTypeText("agent_sources")).toBe("Agent 来源");
+    expect(extensionTypeText("a_new_point")).toBe("其他扩展");
+    expect(extensionTypeText()).toBeUndefined();
+    expect(permissionTitle({ key: "network", title: "访问网络" })).toBe("它可联系的网站");
+    expect(permissionTitle({ key: "agent_runtimes", title: "接入节点" })).toBe("在 Agents 里显示它的 Agent");
+    expect(permissionTitle({ key: "secrets", title: "使用密钥" })).toBe("使用密钥");
+    const runtime = permissionDetail({ key: "agent_runtimes", detail: "only runtime.sock" });
+    expect(runtime).toContain("本地 Agent 服务");
+    expect(runtime).not.toContain("runtime.sock");
+    expect(permissionDetail({ key: "network", detail: "notes.example.com" })).toBe("notes.example.com");
   });
   it("says whether an attached extension is online, since when, and the version its program says", () => {
     const at = new Date();
@@ -166,6 +180,14 @@ describe("草稿", () => {
     expect(same([1, { a: 2 }], [1, { a: 2 }])).toBe(true);
     expect(same([1], { 0: 1 })).toBe(false);
   });
+  it("preserves only required entry lists as explicit empty arrays", () => {
+    const required = new Set(["accounts"]);
+    expect(compact({ accounts: [], tags: [] }, required)).toEqual({ accounts: [] });
+    const base: JsonObject = { accounts: [{ _id: "entry_a", name: "One" }], include_shared: false };
+    const draft: JsonObject = { accounts: [], include_shared: false };
+    expect(isDirty(draft, base, required)).toBe(true);
+    expect(rebaseDraft({ base, draft, typed: {} }, { accounts: base.accounts, include_shared: true }, required).draft).toEqual({ accounts: [], include_shared: true });
+  });
   it("puts only the edits back on a newer configuration, field by field inside a group", () => {
     const base = { mode: "safe", proxy: { host: "a.example.com", port: 80 }, every: 30, tags: ["x"] };
     const draft = { mode: "safe", proxy: { host: "b.example.com", port: 80 }, every: 30, tags: [] };
@@ -177,6 +199,25 @@ describe("草稿", () => {
       typed: { limit: { text: "1a", integer: true } },
     });
     expect(rebaseDraft({ base, draft: base, typed: {} }, fresh).draft).toBe(fresh);
+  });
+  it("keeps an unsaved entry's browser key across immutable edits without sending it", () => {
+    const entry = {};
+    const key = entryKey(entry);
+    const edited = setAt({ accounts: [entry] }, ["accounts", "0", "name"], "One");
+    const saved = entryItems(edited, ["accounts"])[0];
+    expect(entryKey(saved)).toBe(key);
+    expect(entryID(saved)).toBeUndefined();
+    expect(Object.keys(saved)).toEqual(["name"]);
+    expect(JSON.stringify(edited)).toBe('{"accounts":[{"name":"One"}]}');
+    expect(fieldPath(["accounts", "0", "address"])).toBe("accounts[0].address");
+    expect(isEntryList({ name: "accounts", type: "array", secret: { name: "key", title: "Key" }, items: { name: "", type: "object", fields: [{ name: "name", type: "string" }] } })).toBe(true);
+    expect(isEntryList({ name: "tags", type: "array", items: { name: "", type: "string" } })).toBe(false);
+  });
+  it("keeps entry arrays atomic when unsaved edits meet a fresh configuration", () => {
+    const base: JsonObject = { accounts: [{ _id: "entry_a", name: "One" }] };
+    const draft: JsonObject = { accounts: [{ _id: "entry_a", name: "One" }, { name: "Two" }] };
+    const fresh: JsonObject = { accounts: [{ _id: "entry_a", name: "Changed elsewhere" }, { _id: "entry_c", name: "Three" }] };
+    expect(rebaseDraft({ base, draft, typed: {} }, fresh).draft).toEqual(draft);
   });
   it("reads numbers as typed", () => {
     expect(readNumber(" 30 ", true)).toEqual({ value: 30 });
@@ -205,15 +246,17 @@ describe("扩展的接口", () => {
     await extensionDetail("a b");
     await setExtensionEnabled("a b", false);
     await setExtensionConfig("a b", { x: 1 });
+    await setExtensionConfigPreservingEntries("a b", { x: 2 });
     await setExtensionSecret("a b", "api_key", "v");
     await clearExtensionSecret("a b", "api_key");
     expect(calls.map((c) => `${c.method} ${c.url} ${c.body ?? ""}`.trim())).toEqual([
       "GET /api/v1/extensions",
-      "GET /api/v1/extensions/a%20b/-/",
-      'PUT /api/v1/extensions/a%20b/-/enabled {"enabled":false}',
-      'PUT /api/v1/extensions/a%20b/-/config {"config":{"x":1}}',
-      'PUT /api/v1/extensions/a%20b/-/secrets/api_key {"value":"v"}',
-      "DELETE /api/v1/extensions/a%20b/-/secrets/api_key",
+      "GET /api/v1/extensions/a%20b/-/?entry_lists=1",
+      'PUT /api/v1/extensions/a%20b/-/enabled?entry_lists=1 {"enabled":false}',
+      'PUT /api/v1/extensions/a%20b/-/config?entry_lists=1 {"config":{"x":1}}',
+      'PUT /api/v1/extensions/a%20b/-/config?entry_lists=1&preserve_entries=1 {"config":{"x":2}}',
+      'PUT /api/v1/extensions/a%20b/-/secrets/api_key?entry_lists=1 {"value":"v"}',
+      "DELETE /api/v1/extensions/a%20b/-/secrets/api_key?entry_lists=1",
     ]);
   });
   it("calls a hub from before #1844 on its old routes, and reads its old keys", async () => {
@@ -228,7 +271,7 @@ describe("扩展的接口", () => {
     expect((await listExtensions()).map((p) => p.status)).toEqual(["running"]);
     const d = await extensionDetail("a");
     expect(d.ui).toEqual([{ extension: "a", extension_name: "A", id: "usage", title: "用量", placement: "plugin_page" }]);
-    expect(calls).toEqual(["GET /api/v1/plugins", "GET /api/v1/plugins/a/-/"]);
+    expect(calls).toEqual(["GET /api/v1/plugins", "GET /api/v1/plugins/a/-/?entry_lists=1"]);
   });
   it("refreshes the extension's places after a secret is set or cleared, not after a refused one", async () => {
     // A secret change restarts the extension (registry SetSecret / DeleteSecret), so its sidebar entries, cards and

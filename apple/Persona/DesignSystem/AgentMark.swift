@@ -28,15 +28,39 @@ nonisolated struct AgentKind: Equatable, Sendable {
         surface = s.agentSurface.flatMap(Surface.init(rawValue:))
         switch (s.agent ?? "").lowercased() {
         case _ where s.isCodex: brand = Theme.Brand.openAI; name = "Codex"
-        case "trae", "trae-cli", "traecli": brand = Theme.Brand.trae; name = "TRAE"
+        case "trae": brand = Theme.Brand.trae; name = "TRAE"
+        case "trae-cli", "traecli", "traex": brand = Theme.Brand.trae; name = Session.traeCLIName
         case _ where s.isClaude: brand = Theme.Brand.claude; name = "Claude Code"
         default:
             // A runtime's agent by the name the row gives it (Paseo's provider label, else its launcher, its provider's
             // id): one the app has a mark for draws it, any other its letter. Never the engine's own name.
             name = s.agentLabel
-            brand = Self.brand(named: s.agentLabelHint)
+            brand = Self.brand(named: s.agent) ?? Self.brand(named: s.agentLabelHint)
                 ?? (Session.providerEngines.contains((s.agent ?? "").lowercased()) ? Self.brand(named: s.launcher) : nil)
         }
+    }
+
+    init(_ harness: SubagentOverview.HarnessInfo) {
+        surface = harness.agentSurface.flatMap(Surface.init(rawValue:))
+        let lower = (harness.agent ?? "").lowercased()
+        let isCodex = lower == "codex" || harness.sourceKind == "codex_app_server" || harness.sourceKind == "codex_history"
+        let isClaude = !isCodex && (lower.isEmpty || lower == "claude")
+        switch lower {
+        case _ where isCodex: brand = Theme.Brand.openAI; name = "Codex"
+        case "trae": brand = Theme.Brand.trae; name = "TRAE"
+        case "trae-cli", "traecli", "traex": brand = Theme.Brand.trae; name = Session.traeCLIName
+        case _ where isClaude: brand = Theme.Brand.claude; name = "Claude Code"
+        default:
+            name = harness.displayName
+            brand = Self.brand(named: harness.agent) ?? Self.brand(named: harness.agentLabel)
+                ?? Self.brand(named: harness.displayName)
+                ?? (Session.providerEngines.contains(lower) ? Self.brand(named: harness.launcher) : nil)
+        }
+    }
+
+    /// Shares and exports look up the displayed agent mark uniformly (no legacy letter override needed).
+    static func prefersLetterMark(for session: Session?) -> Bool {
+        false
     }
 
     /// The agent a token usage share names (`UsageAgentShare.agent`, `Session.agent`'s names, #9984): its mark and its
@@ -49,24 +73,33 @@ nonisolated struct AgentKind: Equatable, Sendable {
         case "claude": brand = Theme.Brand.claude; name = "Claude Code"
         case "codex": brand = Theme.Brand.openAI; name = "Codex"
         case "trae": brand = Theme.Brand.trae; name = "TRAE"
-        case "traex": brand = nil; name = "TRAEX"
+        case "trae-cli", "traecli", "traex": brand = Theme.Brand.trae; name = Session.traeCLIName
         case "omp": brand = nil; name = "Oh My Pi"
-        case "gemini": brand = nil; name = "Gemini CLI"
-        case "cursor": brand = nil; name = "Cursor"
+        case "gemini": brand = Theme.Brand.gemini; name = "Gemini CLI"
+        case "cursor": brand = Theme.Brand.cursor; name = "Cursor"
         default: brand = Self.brand(named: agent); name = agent // pi, opencode (their own lower case), a runtime's own
         }
     }
 
-    /// The mark of an agent known by `name`, a provider's label or id ("TRAE", "Trae CLI", "traecli"), with case, spaces,
-    /// hyphens and underscores ignored; nil for one the app has no mark for. TRAEX, an in-house Codex fork, keeps its
-    /// letter (its name is not TRAE's).
+    /// The mark of an agent known by `name`, a provider's label or id ("TRAE", "TRAE CLI", "trae-cli"), with case, spaces,
+    /// hyphens and underscores ignored; nil for one the app has no mark for.
     static func brand(named name: String?) -> String? {
         guard let name else { return nil }
-        let key = name.lowercased().filter { !" -_".contains($0) }
+        let product = name.split(separator: "·", maxSplits: 1).first ?? ""
+        let key = product.lowercased().filter { !$0.isWhitespace && !".-_".contains($0) }
         switch key {
         case "claude", "claudecode": return Theme.Brand.claude
         case "codex", "codexcli": return Theme.Brand.openAI
-        case "trae", "traecli", "traeagent": return Theme.Brand.trae
+        case "trae", "traecli", "traeagent", "traex": return Theme.Brand.trae
+        case "opencode": return Theme.Brand.opencode
+        case "pi", "piweb": return Theme.Brand.pi
+        case "gemini", "geminicli": return Theme.Brand.gemini
+        case "cursor", "cursoragent": return Theme.Brand.cursor
+        case "grok", "grokbuild", "grokchat", "grokcli": return Theme.Brand.grok
+        case "agy", "antigravity", "antigravitycli", "googleantigravity": return Theme.Brand.agy
+        case "dsh", "deepseekharness": return Theme.Brand.dsh
+        case "kimi", "kimicli": return Theme.Brand.kimi
+        case "copilot", "copilotcli", "githubcopilot", "githubcopilotcli": return Theme.Brand.copilot
         default: return nil
         }
     }

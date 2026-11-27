@@ -46,6 +46,10 @@ class AndroidPhoneTools(context: Context, private val foreground: () -> Boolean)
             "phone_health_summary" -> Health.summary(context, args)
             "phone_workouts_recent" -> Workouts.recent(context, args)
             "phone_workout_detail" -> Workouts.detail(context, args)
+            "phone_health_types" -> HealthRecords.types(context, args)
+            "phone_health_samples" -> HealthRecords.samples(context, args)
+            "phone_health_sources" -> HealthRecords.sources(context, args)
+            "phone_health_request_access" -> HealthRecords.requestAccess(context, args, foreground())
             "phone_device_info" -> device()
             "phone_clipboard_get", "phone_clipboard_set" -> withContext(Dispatchers.Main.immediate) {
                 if (!foreground()) return@withContext PhoneToolText.needsForeground()
@@ -64,6 +68,7 @@ class AndroidPhoneTools(context: Context, private val foreground: () -> Boolean)
                     }.toString())
                 }
             }
+            "phone_call_start" -> if (foreground()) CallTool.start(context, args) else PhoneToolText.needsForeground()
             "phone_notify" -> PhoneNotifications(context).schedule(args)
             "phone_notifications_list" -> PhoneNotifications(context).list(args.int("limit", 50, 1, 100))
             else -> PhoneToolText.unknownTool(name, emptyList())

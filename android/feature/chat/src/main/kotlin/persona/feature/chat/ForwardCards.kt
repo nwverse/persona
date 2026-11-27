@@ -37,6 +37,7 @@ import persona.core.designsystem.ChatContextBodyMaxHeight
 import persona.core.designsystem.JIcon
 import persona.core.designsystem.MessageContextGroup
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.ReadingContent
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.currentLocale
 import persona.core.designsystem.icons.PersonaIcons
@@ -86,9 +87,10 @@ internal fun ForwardBubbleCard(context: MessageContext, id: String, modifier: Mo
                 overflow = TextOverflow.Ellipsis)
         }
         meta?.let { Text(it, style = type.micro, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-        if (open) Text(context.body.ifBlank { summary }, Modifier.heightIn(max = ChatContextBodyMaxHeight).verticalScroll(rememberScrollState()),
-            style = type.callout, color = palette.ink)
-        else Text(summary, style = type.callout, color = palette.ink, maxLines = FORWARD_LINES, overflow = TextOverflow.Ellipsis)
+        if (open) ReadingContent {
+            Text(context.body.ifBlank { summary }, Modifier.heightIn(max = ChatContextBodyMaxHeight).verticalScroll(rememberScrollState()),
+                style = type.callout, color = palette.ink)
+        } else Text(summary, style = type.callout, color = palette.ink, maxLines = FORWARD_LINES, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -127,7 +129,7 @@ fun PendingForwardBubble(text: String, id: String) {
     // Everything the message carries besides the forward, as the sent bubble shows it (MergedUserBubble): the other
     // contexts above it, then the files, photos and note inside it.
     val model = remember(text) { messageModel(text, user = true) }
-    val forwards = model.contexts.filter { it.kind == ForwardMessage.KIND }
+    val forwards = remember(model) { bubbleForwardGroups(model.contexts) }
     val contexts = model.contexts.filter { it.kind != ForwardMessage.KIND }
     val rest = model.plain
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
@@ -136,7 +138,7 @@ fun PendingForwardBubble(text: String, id: String) {
         AttachedFileCards(model.attached)
         persona.core.designsystem.UserBubbleFrame {
             forwards.forEachIndexed { index, forward ->
-                ForwardBubbleCard(forward, "outbox/$id/$index")
+                ForwardBubbleGroup(forward, "outbox/$id/$index")
                 if (index < forwards.lastIndex || rest.isNotEmpty() || model.images.isNotEmpty())
                     Spacer(Modifier.padding(top = Tokens.Space.s))
             }
@@ -144,7 +146,7 @@ fun PendingForwardBubble(text: String, id: String) {
                 AttachedPhotoRow(model.images)
                 if (rest.isNotEmpty()) Spacer(Modifier.padding(top = Tokens.Space.s))
             }
-            if (rest.isNotEmpty()) Text(rest, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+            if (rest.isNotEmpty()) ReadingContent { Text(rest, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
         }
     }
 }

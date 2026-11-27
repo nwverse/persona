@@ -63,26 +63,42 @@ func New(cfg Config) *Client {
 
 // NewWith is New sending its requests through transport (nil: this machine's network).
 func NewWith(cfg Config, transport http.RoundTripper) *Client {
-	return &Client{cfg: cfg, http: &http.Client{Timeout: 60 * time.Second, Transport: transport, CheckRedirect: checkRedirect}}
+	c := &Client{cfg: cfg}
+	c.http = &http.Client{Timeout: 60 * time.Second, Transport: transport, CheckRedirect: c.checkRedirect}
+	return c
 }
 
-// net/http copies headers from the first request on every redirect, so check the entire chain before retaining its
-// potentially private User-Agent or gateway session header. Once a chain leaves its original origin, all later hops
-// use Persona's identity and drop gateway-scoped session headers.
+// net/http copies headers from the first request on every redirect, so check the entire chain before retaining
+// provider-specific values. Once a chain leaves its original origin, all later hops use Persona's identity and omit
+// every custom provider header and gateway-scoped session header.
 func checkRedirect(req *http.Request, via []*http.Request) error {
+	return checkRedirectHeaders(req, via, nil)
+}
+
+func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
+	return checkRedirectHeaders(req, via, c.cfg.Headers)
+}
+
+func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[string]string) error {
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
 	origin := via[0].URL
-	if !sameOrigin(origin, req.URL) {
+	clearPrivate := func() {
+		for name := range headers {
+			req.Header.Del(name)
+		}
 		req.Header.Set("User-Agent", modelhttp.UserAgent())
 		modelhttp.ClearOpenCodeSession(req.Header)
+		modelhttp.ClearSource(req.Header)
+	}
+	if !sameOrigin(origin, req.URL) {
+		clearPrivate()
 		return nil
 	}
 	for _, previous := range via[1:] {
 		if !sameOrigin(origin, previous.URL) {
-			req.Header.Set("User-Agent", modelhttp.UserAgent())
-			modelhttp.ClearOpenCodeSession(req.Header)
+			clearPrivate()
 			break
 		}
 	}
@@ -105,9 +121,16 @@ func sameOrigin(a, b *url.URL) bool {
 	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
 }
 
-// NewRun is a client whose requests run answers instead of an HTTP API: no gate, no key (a launcher's CLI on a
-// computer, cfg.RunLauncher).
+// NewRun sends requests through a launcher callback. Each configured launcher shares a gate
+// with other clients running the same model on the same computer, so consecutive full-budget
+// timeouts back off and cap concurrency instead of piling onto a wedged launcher.
 func NewRun(cfg Config, run func(context.Context, Request) (Reply, error)) *Client {
+	if cfg.RunLauncher != "" && run != nil {
+		g := gateForRun(cfg)
+		return &Client{cfg: cfg, run: func(ctx context.Context, r Request) (Reply, error) {
+			return g.run(ctx, r, run)
+		}}
+	}
 	return &Client{cfg: cfg, run: run}
 }
 
@@ -248,6 +271,7 @@ func (c *Client) chat(ctx context.Context, r Request) (Reply, error) {
 	default:
 		reply, answered, err = c.messages(ctx, hc, key, r)
 	}
+	err = c.redactError(err, key)
 	returned = true
 	if reply.Model == "" {
 		reply.Model = c.cfg.Model
@@ -317,6 +341,14 @@ func apiEndpoint(base, path string) string {
 	return base + "/" + path
 }
 
+// setCustomHeaders applies provider fields before the protocol's own credentials and metadata, which always win.
+func (c *Client) setCustomHeaders(req *http.Request) {
+	for name, value := range c.cfg.Headers {
+		req.Header.Set(name, value)
+	}
+	modelhttp.Source{Role: "background"}.ApplyForURL(req.Header, req.URL.String())
+}
+
 // setUserAgent gives an explicit connection value precedence over Persona's default.
 func (c *Client) setUserAgent(req *http.Request) {
 	if c.cfg.UserAgent != nil {
@@ -341,6 +373,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 	if err != nil {
 		return reply, false, err
 	}
+	c.setCustomHeaders(req)
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "text/event-stream")
 	if c.cfg.Bearer {
@@ -357,7 +390,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return reply, false, newHTTPError(resp, raw)
+		return reply, false, c.newHTTPError(resp, raw, key)
 	}
 	in := bufio.NewReader(resp.Body)
 	if wholeMessage(in) {
@@ -603,6 +636,10 @@ func messagesThinkingDisabledUnsupported(model string) bool {
 	return false
 }
 
+// DisabledThinking is the Messages API's thinking object that turns thinking off. It is built here, with the rest of
+// the providers' request formats, so callers that force it (the model probe) send the same bytes.
+func DisabledThinking() map[string]any { return map[string]any{"type": "disabled"} }
+
 // ApplyReasoningEffort keeps connection probes and runtime calls on the same wire format.
 // False means this protocol cannot express the requested effort; Chat and Responses validate model-specific levels upstream.
 func ApplyReasoningEffort(body map[string]any, api, model, effort string) bool {
@@ -631,7 +668,7 @@ func ApplyReasoningEffort(body map[string]any, api, model, effort string) bool {
 			case messagesThinkingDisabledUnsupported(model):
 				body["output_config"] = map[string]any{"effort": "low"}
 			default:
-				body["thinking"] = map[string]any{"type": "disabled"}
+				body["thinking"] = DisabledThinking()
 			}
 		case "low", "medium", "high", "xhigh", "max":
 			body["output_config"] = map[string]any{"effort": effort}
@@ -662,6 +699,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	if err != nil {
 		return reply, false, err
 	}
+	c.setCustomHeaders(hreq)
 	hreq.Header.Set("content-type", "application/json")
 	hreq.Header.Set("accept", "text/event-stream")
 	hreq.Header.Set("authorization", "Bearer "+key)
@@ -673,7 +711,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return reply, false, newHTTPError(resp, raw)
+		return reply, false, c.newHTTPError(resp, raw, key)
 	}
 	var b strings.Builder
 	refused := false // a refusal content part came: the model declined, whatever else the stream says
@@ -812,17 +850,17 @@ func (c *Client) JSONMax(ctx context.Context, system, user string, maxTokens int
 }
 
 // ErrNoObject: the reply holds no JSON object at all.
-var ErrNoObject = errors.New("ai: no JSON object in reply")
+var ErrNoObject = aiwire.ErrNoObject
 
 // ErrUnterminated: the reply's JSON object never closes (and the reply was not cut off at max_tokens).
-var ErrUnterminated = errors.New("ai: unterminated JSON object in reply")
+var ErrUnterminated = aiwire.ErrUnterminated
 
 // ErrTruncated: the reply stopped at max_tokens before the answer was complete, even with the room doubled.
-var ErrTruncated = errors.New("ai: reply cut off at max_tokens")
+var ErrTruncated = aiwire.ErrTruncated
 
 // ErrRefused: the model declined the request (the Messages API's stop_reason "refusal", e.g. a safety classifier).
 // The same input is declined again, so sending it as is once more only spends a call.
-var ErrRefused = errors.New("ai: the model declined to answer")
+var ErrRefused = aiwire.ErrRefused
 
 // RefusalError is ErrRefused with what the upstream said: StopReason is "refusal" (the Messages API's stop_reason, a
 // Responses API refusal part or a Chat Completions refusal delta) or "content_filter" (an incomplete response's reason

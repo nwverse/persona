@@ -25,6 +25,7 @@ import (
 
 // runtimeHub is the hub end of a node under test: the events it got and how it answers interactions.
 type runtimeHub struct {
+	modeSets []proto.ModeSetEvent
 	mu       sync.Mutex
 	events   []string
 	lists    [][]proto.Session
@@ -100,6 +101,10 @@ func runtimeNodeTapped(t *testing.T, shared *RuntimeHost, tap io.Writer) (*Node,
 		defer end.mu.Unlock()
 		end.events = append(end.events, event)
 		switch event {
+		case proto.EventModeSet:
+			var e proto.ModeSetEvent
+			_ = json.Unmarshal(params, &e)
+			end.modeSets = append(end.modeSets, e)
 		case "sessions.changed":
 			var p struct {
 				Sessions []proto.Session `json:"sessions"`
@@ -189,6 +194,12 @@ func dialRuntimeAt(t *testing.T, path string, hello map[string]any) *fakeRuntime
 	if err != nil {
 		t.Fatal(err)
 	}
+	return runtimeOn(t, c, hello)
+}
+
+// runtimeOn is a fake runtime on connection c to the node's runtime host, once it has said hello.
+func runtimeOn(t *testing.T, c net.Conn, hello map[string]any) *fakeRuntime {
+	t.Helper()
 	f := &fakeRuntime{conn: c, params: map[string][]json.RawMessage{}}
 	f.peer = rpc.New("d", c)
 	f.peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -242,9 +253,31 @@ func dshHello() map[string]any {
 		"caps": map[string]any{"start": true, "send": true, "interrupt": true, "rename": true}}
 }
 
+// nodeCall is a current-manager call: an existing assistant conversation gets an explicit ordinary origin decision
+// unless the fixture sets origin_known itself. nodeCallWithoutAttestation exercises older-manager/store-error upgrades.
 func nodeCall(t *testing.T, n *Node, method string, params any) (json.RawMessage, error) {
 	t.Helper()
 	raw, _ := json.Marshal(params)
+	if method == "assistant.send" || method == "session.send" {
+		var p map[string]any
+		if json.Unmarshal(raw, &p) == nil && p["session_id"] != "" && p["session_id"] != nil {
+			if _, set := p["origin_known"]; !set {
+				p["origin_known"] = true
+				raw, _ = json.Marshal(p)
+			}
+		}
+	}
+	return nodeCallRaw(t, n, method, raw)
+}
+
+func nodeCallWithoutAttestation(t *testing.T, n *Node, method string, params any) (json.RawMessage, error) {
+	t.Helper()
+	raw, _ := json.Marshal(params)
+	return nodeCallRaw(t, n, method, raw)
+}
+
+func nodeCallRaw(t *testing.T, n *Node, method string, raw json.RawMessage) (json.RawMessage, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	res, err := n.handle(ctx, method, raw)
@@ -309,6 +342,74 @@ func TestRuntimeRenameCapability(t *testing.T) {
 			}
 			if caps := got["rename-child"].Capabilities; caps == nil || caps.Rename == nil || *caps.Rename {
 				t.Fatalf("a sub-Agent's row lists rename: %+v", caps)
+			}
+		})
+	}
+}
+
+// A runtime's sentinel-only update keeps the preceding preview of that same row or subagent.
+// The new revision still applies, and a real empty preview can clear the old one.
+func TestRuntimeBotmuxSentinelPreviews(t *testing.T) {
+	const marker = "BOTMUX_NOTHING_TO_SEND"
+	rh, h, _ := runtimePush(t, 0)
+	push := func(rev int64, text, child string) proto.Session {
+		t.Helper()
+		children := []proto.Subagent{{ID: "other", LastText: "unrelated"}, {ID: "child", LastText: child}}
+		if rev == 2 {
+			slices.Reverse(children)
+		}
+		rows := []proto.Session{{SessionID: "sample", LastText: text, Rev: rev, Subagents: children}}
+		rh.event(h, "runtime.sessions", mustJSON(map[string]any{"sessions": rows}))
+		s := onlyRow(t, rh.reg.appendSessions(nil), "sample")
+		if s.Rev != rev || len(s.Subagents) != 2 {
+			t.Fatalf("got revision %d with %d children, want %d with two children", s.Rev, len(s.Subagents), rev)
+		}
+		return s
+	}
+	s := push(1, marker+"\nfirst words", strings.Repeat(" ", maxRuntimeTaskText)+marker+"\nchild words")
+	if s.LastText != "first words" || s.Subagents[1].LastText != "child words" {
+		t.Errorf("mixed preview after clipping: got %q / %q", s.LastText, s.Subagents[1].LastText)
+	}
+	s = push(2, marker, marker)
+	if s.LastText != "first words" || s.Subagents[0].LastText != "child words" {
+		t.Errorf("sentinel-only update: got %q / %q", s.LastText, s.Subagents[0].LastText)
+	}
+	s = push(3, "", "")
+	if s.LastText != "" || s.Subagents[1].LastText != "" {
+		t.Errorf("empty update: got %q / %q", s.LastText, s.Subagents[1].LastText)
+	}
+}
+
+func TestRuntimeBotmuxSentinelNewOwner(t *testing.T) {
+	rh, h, _ := runtimePush(t, 0)
+	rh.event(h, "runtime.sessions", json.RawMessage(`{"sessions":[{"session_id":"sample","last_text":"first owner's words","subagents":[{"id":"child","last_text":"earlier child"}]}]}`))
+	other := rh.reg.add(nil)
+	other.hello, other.ready = runtimeHello{Runtime: "other"}, true
+	rh.event(other, "runtime.sessions", json.RawMessage(`{"sessions":[{"session_id":"sample","last_text":"BOTMUX_NOTHING_TO_SEND","subagents":[{"id":"child","last_text":"BOTMUX_NOTHING_TO_SEND"}]}]}`))
+	s := onlyRow(t, rh.reg.appendSessions(nil), "sample")
+	if s.SourceInstanceID != "other" || s.LastText != "" || len(s.Subagents) != 1 || s.Subagents[0].LastText != "" {
+		t.Errorf("new owner's preview: got owner %q, text %q, children %+v", s.SourceInstanceID, s.LastText, s.Subagents)
+	}
+}
+
+func TestRuntimeBotmuxSentinelPaneMerges(t *testing.T) {
+	for name, merge := range map[string]func(*Node, *proto.Session){"opencode": (*Node).mergeOpencodeRow, "pi": (*Node).mergePiRow} {
+		t.Run(name, func(t *testing.T) {
+			rh, h, _ := runtimePush(t, 0)
+			n := &Node{runtimes: rh.reg}
+			for _, tc := range []struct{ reported, want string }{
+				{"BOTMUX_NOTHING_TO_SEND", "host words"},
+				{"", "host words"},
+				{"plugin words\nBOTMUX_NOTHING_TO_SEND", "plugin words"},
+			} {
+				rh.event(h, "runtime.sessions", mustJSON(map[string]any{"sessions": []map[string]any{{
+					"session_id": "sample", "last_text": tc.reported, "model": "sample-model", "rev": 2,
+				}}}))
+				s := proto.Session{SessionID: "sample", LastText: "host words"}
+				merge(n, &s)
+				if s.LastText != tc.want || s.Model != "sample-model" || s.Rev != 2 {
+					t.Errorf("report %q: got preview %q, model %q, rev %d; want %q, sample-model, 2", tc.reported, s.LastText, s.Model, s.Rev, tc.want)
+				}
 			}
 		})
 	}
@@ -490,20 +591,21 @@ func TestRuntimeSendRefusedWithoutTheCap(t *testing.T) {
 // runtime's own, never a subagent's. Rows of a runtime that did not declare it say false, not nothing.
 func TestRuntimeModesCapability(t *testing.T) {
 	for _, c := range []struct {
-		declared bool
-		rt, id   string
-		agent    string
-		want     bool
+		declared        bool
+		rt, rtAgent, id string
+		agent           string
+		want            bool
 	}{
-		{true, "orca", "session-1", "claude", true},
-		{true, "agy", "session-1", "agy", true},
-		{true, "paseo", "session-1", "codex", false},
-		{true, "paseo", "session-1", "claude", true},
-		{true, "paseo", "session-1", "paseo", false}, // Paseo's catch-all (opencode, grok, ...): its modes refuses them
-		{true, "orca", "session-1" + subagentSep + "a1", "claude", false},
-		{false, "dsh", "session-1", "dsh", false},
+		{true, "orca", "", "session-1", "claude", true},
+		{true, "agy", "agy", "session-1", "agy", true},
+		{true, "opencode-4242", "opencode", "session-1", "opencode", true},
+		{true, "paseo", "", "session-1", "codex", false},
+		{true, "paseo", "", "session-1", "claude", true},
+		{true, "paseo", "paseo", "session-1", "paseo", false}, // Paseo's catch-all (opencode, grok, ...): its modes refuses them
+		{true, "orca", "", "session-1" + subagentSep + "a1", "claude", false},
+		{false, "dsh", "dsh", "session-1", "dsh", false},
 	} {
-		if got := runtimeModes(c.declared, c.rt, proto.Session{SessionID: c.id, Agent: c.agent}); got != c.want {
+		if got := runtimeModes(c.declared, c.rt, c.rtAgent, proto.Session{SessionID: c.id, Agent: c.agent}); got != c.want {
 			t.Errorf("%+v: modes %v", c, got)
 		}
 	}
@@ -645,7 +747,7 @@ func TestRuntimeItemsAndDeltasReachTheHub(t *testing.T) {
 	if w := host.got("session.watch"); len(w) != 1 {
 		t.Fatal("watch not forwarded")
 	}
-	_ = host.peer.Notify("session.items", map[string]any{"session_id": "session-4", "from_seq": 5, "to_seq": 7, "history": "h",
+	_ = host.peer.Notify("session.items", map[string]any{"session_id": "session-4", "from_seq": 5, "to_seq": 7, "history": "h", "update": true,
 		"items": []proto.Item{{ID: "a", Seq: 7, Role: "assistant", Kind: proto.KindText, Text: "done"}}})
 	_ = host.peer.Notify("session.delta", map[string]any{"session_id": "session-4", "text": "do"})
 	_ = host.peer.Notify("session.items", map[string]any{"session_id": "someone-else", "to_seq": 1})
@@ -659,6 +761,12 @@ func TestRuntimeItemsAndDeltasReachTheHub(t *testing.T) {
 	defer hub.mu.Unlock()
 	if len(hub.items) != 1 {
 		t.Fatalf("items for a session the host does not list were forwarded: %d", len(hub.items))
+	}
+	var pushed struct {
+		Update bool `json:"update"`
+	}
+	if err := json.Unmarshal(hub.items[0], &pushed); err != nil || !pushed.Update {
+		t.Fatalf("in-place update flag lost: %s (%v)", hub.items[0], err)
 	}
 	if n.runtimes.watching["session-4"] != 7 {
 		t.Fatalf("watched seq %d", n.runtimes.watching["session-4"])
@@ -863,6 +971,34 @@ func TestRuntimeStartFromTheLauncher(t *testing.T) {
 	}
 	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": "session-new", "text": "go"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeStartForwardsAntigravityImageOnlyPrompt(t *testing.T) {
+	node, _ := runtimeNode(t)
+	hello := map[string]any{"runtime": "agy", "launcher": "agy", "version": "test", "caps": map[string]any{"start": true}}
+	host := dialRuntime(t, node, hello)
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "session.start" {
+			return map[string]any{"session": proto.Session{SessionID: "agy-new", Cwd: "/work"}}, nil
+		}
+		return nil, nil
+	}
+	images := []proto.Image{{Mime: "image/png", Data: "aW1hZ2U="}}
+	_, err := nodeCall(t, node, "session.start", map[string]any{"cwd": "/work", "host": proto.EngineOrca,
+		"launcher": "agy", "client_msg_id": "start-photo", "images": images})
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := host.got("session.start")
+	var start struct {
+		Prompt      string        `json:"prompt"`
+		ClientMsgID string        `json:"client_msg_id"`
+		Images      []proto.Image `json:"images"`
+	}
+	if len(starts) != 1 || json.Unmarshal(starts[0], &start) != nil || start.Prompt != "" ||
+		start.ClientMsgID != "start-photo" || !slices.Equal(start.Images, images) {
+		t.Fatalf("runtime starts: %s", starts)
 	}
 }
 

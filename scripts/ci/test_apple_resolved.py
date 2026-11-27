@@ -1,0 +1,88 @@
+import hashlib
+import json
+import os
+from pathlib import Path
+import tempfile
+import unittest
+
+import apple_resolved
+
+
+ROOT = Path(__file__).resolve().parents[2]
+RESOLVED = ROOT / "apple/Packages/PersonaSSH/Package.resolved"
+TRACKED_SHA256 = "16e3c3bd49535709b1cde4faf834bd964f692481ecf08d5bcc7913ed8410b7fc"
+DEFAULT_SHA256 = "655f7e5280dd00dd342bc4205f18b47c8b50feb2d1abf7bd66e5ac5ec0a6b118"
+
+
+class AppleResolvedTests(unittest.TestCase):
+    def setUp(self):
+        self.original = RESOLVED.read_bytes()
+        self.tempdir = tempfile.TemporaryDirectory()
+        root = Path(self.tempdir.name)
+        self.tracked = root / "tracked.resolved"
+        self.staged = root / "staged.resolved"
+        self.evidence = root / "evidence.txt"
+        self.tracked.write_bytes(self.original)
+        self.staged.write_bytes(self.original)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def test_render_preserves_the_tracked_bytes(self):
+        self.assertEqual(hashlib.sha256(self.original).hexdigest(), TRACKED_SHA256)
+        self.assertEqual(apple_resolved.render(json.loads(self.original)), self.original)
+
+    def test_default_variant_matches_the_green_candidate_without_touching_tracked(self):
+        apple_resolved.stage(self.tracked, self.staged, "NO", self.evidence)
+        self.assertEqual(hashlib.sha256(self.staged.read_bytes()).hexdigest(), DEFAULT_SHA256)
+        self.assertEqual(hashlib.sha256(self.tracked.read_bytes()).hexdigest(), TRACKED_SHA256)
+        document = json.loads(self.staged.read_bytes())
+        self.assertEqual(len(document["pins"]), 12)
+        self.assertEqual(document["originHash"], json.loads(self.original)["originHash"])
+        self.assertFalse(any(pin["identity"] == apple_resolved.META_IDENTITY for pin in document["pins"]))
+        evidence = self.evidence.read_text()
+        self.assertIn(f"source_sha256={TRACKED_SHA256}", evidence)
+        self.assertIn(f"staged_sha256={DEFAULT_SHA256}", evidence)
+        self.assertIn("tracked_unchanged=yes", evidence)
+
+    def test_meta_enabled_variant_retains_the_pristine_superset(self):
+        apple_resolved.stage(self.tracked, self.staged, "YES", self.evidence)
+        self.assertEqual(self.staged.read_bytes(), self.original)
+        self.assertEqual(self.tracked.read_bytes(), self.original)
+        document = json.loads(self.staged.read_bytes())
+        self.assertEqual(len(document["pins"]), 13)
+        self.assertEqual(sum(pin["identity"] == apple_resolved.META_IDENTITY for pin in document["pins"]), 1)
+        evidence = self.evidence.read_text()
+        self.assertIn("meta_wearables=YES", evidence)
+        self.assertIn(f"staged_sha256={TRACKED_SHA256}", evidence)
+        self.assertIn("tracked_unchanged=yes", evidence)
+
+    def test_staging_requires_a_distinct_disposable_copy(self):
+        with self.assertRaisesRegex(ValueError, "disposable copy"):
+            apple_resolved.stage(self.tracked, self.tracked, "NO", self.evidence)
+
+
+    def test_staged_hardlink_is_rejected_before_either_write(self):
+        self.staged.unlink()
+        os.link(self.tracked, self.staged)
+        with self.assertRaisesRegex(ValueError, "disposable copy"):
+            apple_resolved.stage(self.tracked, self.staged, "NO", self.evidence)
+        self.assertEqual(self.tracked.read_bytes(), self.original)
+        self.assertEqual(self.staged.read_bytes(), self.original)
+        self.assertFalse(self.evidence.exists())
+
+    def test_evidence_cannot_alias_either_lockfile(self):
+        for target in (self.tracked, self.staged):
+            with self.subTest(target=target.name):
+                self.tracked.write_bytes(self.original)
+                self.staged.write_bytes(self.original)
+                self.evidence.unlink(missing_ok=True)
+                os.link(target, self.evidence)
+                with self.assertRaisesRegex(ValueError, "evidence file must be separate"):
+                    apple_resolved.stage(self.tracked, self.staged, "NO", self.evidence)
+                self.assertEqual(self.tracked.read_bytes(), self.original)
+                self.assertEqual(self.staged.read_bytes(), self.original)
+
+
+if __name__ == "__main__":
+    unittest.main()

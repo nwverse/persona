@@ -147,6 +147,46 @@ class HubSubPathTest {
         }
     }
 
+    @Test fun agentsDisplaySettingsAndFilteredPagesUseTheAuthenticatedPairing() = runBlocking {
+        val requests = Channel<RecordedRequest>(Channel.UNLIMITED)
+        server(requests).use { server ->
+            val config = HubConnectionConfig("test-hub", null, "display-fixture", listOf(endpoint(server)), "test")
+            OkHttpHubConnection(config, HubNetwork("online")).use { connection ->
+                withTimeout(5000) { connection.currentHello.first { it != null } }
+                val api = HttpHubPreferencesTransport(connection)
+                assertEquals(AgentsDisplaySettings(true, false, false), api.read())
+                assertEquals(AgentsDisplaySettings(false, true, false), api.migrateHidden())
+                assertEquals(AgentsDisplaySettings(false, true, true), api.setUseHerdrTabName(true))
+                val chat = HubChatTransport(connection)
+                val filter = SessionListFilter(hiddenBotmuxHubs = setOf("g11111111")).forHub("g11111111")
+                assertEquals(3, chat.sessionCounts(filter).paneSource["terminal"])
+                chat.sessionPage(filter)
+                chat.sessionPage(filter.forHub("g22222222"))
+                val seen = withTimeout(5000) {
+                    buildList {
+                        while (size < 6) {
+                            val request = requests.receive()
+                            if (request.requestUrl!!.encodedPath.endsWith("/agents/display-settings") ||
+                                request.requestUrl!!.encodedPath.endsWith("/sessions")) add(request)
+                        }
+                    }
+                }
+                assertTrue(seen.all { it.getHeader("Authorization") == "Bearer display-fixture" })
+                assertEquals(listOf("GET", "PUT", "PUT"), seen.take(3).map { it.method })
+                assertEquals("""{"show_botmux":false,"only_if_unset":true}""", seen[1].body.readUtf8())
+                assertEquals("""{"use_herdr_tab_name":true}""", seen[2].body.readUtf8())
+                assertEquals(listOf("feishu", "feishu", null), seen.drop(3).map { it.requestUrl!!.queryParameter("exclude_pane_source") })
+            }
+        }
+        server(requests, displaySupported = false).use { server ->
+            val config = HubConnectionConfig("test-hub", null, "display-fixture", listOf(endpoint(server)), "test")
+            OkHttpHubConnection(config, HubNetwork("online")).use { connection ->
+                withTimeout(5000) { connection.currentHello.first { it != null } }
+                assertEquals(404, failure { HttpHubPreferencesTransport(connection).read() }.status)
+            }
+        }
+    }
+
     @Test fun pairingWorksAtASubPath() = runBlocking {
         val requests = Channel<RecordedRequest>(Channel.UNLIMITED)
         server(requests).use { server ->
@@ -173,7 +213,7 @@ class HubSubPathTest {
     }
 
     /** A hub reachable only under `/persona`, as a proxy that strips the prefix would forward it. */
-    private fun server(requests: Channel<RecordedRequest>, configure: MockWebServer.() -> Unit = {}) = MockWebServer().apply {
+    private fun server(requests: Channel<RecordedRequest>, displaySupported: Boolean = true, configure: MockWebServer.() -> Unit = {}) = MockWebServer().apply {
         configure()
         dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
@@ -186,7 +226,16 @@ class HubSubPathTest {
                     }
                 })
                 requests.trySend(request)
+                if (path == "/api/v1/agents/display-settings" && !displaySupported) return MockResponse().setResponseCode(404)
                 return MockResponse().setBody(when {
+                    path == "/api/v1/agents/display-settings" -> if (request.method == "PUT") {
+                        val raw = request.body.clone().readUtf8()
+                        if ("use_herdr_tab_name" in raw) """{"show_botmux":false,"configured":true,"use_herdr_tab_name":true}"""
+                        else """{"show_botmux":false,"configured":true,"use_herdr_tab_name":false}"""
+                    } else """{"show_botmux":true,"configured":false,"use_herdr_tab_name":false}"""
+                    path.substringBefore('?') == "/api/v1/sessions" -> if (request.requestUrl!!.queryParameter("counts") == "1")
+                        """{"total":3,"revision":"r1","machine":{},"project":{},"group":{},"state":{},"pane_source":{"terminal":3}}"""
+                        else """{"sessions":[],"has_more":false,"total":3,"revision":"r1"}"""
                     path == "/api/v1/auth/tokens" -> """{"token":"device-token","id":"device"}"""
                     path == "/api/v1/machines" -> """{"machines":[]}"""
                     path == "/api/v1/endpoints" -> """{"hub_id":"test-hub","endpoints":[]}"""

@@ -1,9 +1,12 @@
 package node
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -21,8 +24,9 @@ import (
 // too ("Set model to `Opus 5.5` and saved as your default for new sessions", seen in local transcripts); there is no
 // session-only form of the command, and the popover says so.
 //
-// Only Claude Code's TUI sessions: a Codex thread on its app-server keeps its effort-only control (codex_effort.go),
-// a headless Persona conversation switches model in its own chip, and every other agent has no command to type.
+// Only Claude Code's TUI sessions here. A Codex thread on its app-server switches through thread/settings/update
+// (codex_effort.go), a Codex in a pane on the terminal route through Codex's own /model with arguments
+// (codex_terminal_modes.go), a headless Persona conversation in its own chip; every other agent has no command to type.
 
 // modelCommand is the line typed into Claude Code to switch the session to model: an id from the agent's own list
 // (aliases such as opus, a full id, a bracketed variant like opus[1m], a gateway's provider/model) or one the user
@@ -52,7 +56,63 @@ func modelOutcome(screen, model string) error {
 			return fmt.Errorf("Claude Code 没接受这个模型（%s），请在终端里确认", model)
 		}
 	}
-	return fmt.Errorf("模型可能没切到 %s，请在终端里确认", model)
+	return modelUnconfirmed{model}
+}
+
+// modelUnconfirmed is modelOutcome's answer when the screen shows neither the change nor a refusal.
+type modelUnconfirmed struct{ model string }
+
+func (e modelUnconfirmed) Error() string {
+	return fmt.Sprintf("模型可能没切到 %s，请在终端里确认", e.model)
+}
+
+// modelLook is the pause between two looks at the screen after typing (a test shortens it).
+var modelLook = 200 * time.Millisecond
+
+// modelRecordMost is how much of the transcript past the typing is read for the switch's record: more than that
+// written since and the record is not looked for any more.
+const modelRecordMost = 4 << 20
+
+// modelRecorded: Claude Code wrote this switch into the transcript at path since offset: the command with its
+// argument, then its output line "Set model to …", which it writes when it runs the command, whatever the screen
+// shows. read is false when the transcript could not be read (looked at again), or holds more than modelRecordMost
+// since offset.
+func modelRecorded(path string, offset int64, model string) (recorded, read bool) {
+	if path == "" {
+		return false, false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false, false
+	}
+	defer f.Close()
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return false, false
+	}
+	added, err := io.ReadAll(io.LimitReader(f, modelRecordMost+1))
+	if err != nil || len(added) > modelRecordMost {
+		return false, false
+	}
+	return modelRecordIn(added, model), true
+}
+
+// modelRecordIn: added, what a transcript got since a `/model <model>` was typed, records that command as carried
+// out. The argument ties the record to this switch, and the output must be that command's own: the first one after
+// it, before any other command (a refused switch followed by another the user typed is not this one made).
+func modelRecordIn(added []byte, model string) bool {
+	i := bytes.LastIndex(added, []byte("<command-args>"+model+"</command-args>"))
+	if i < 0 {
+		return false
+	}
+	rest := added[i+1:]
+	out := bytes.Index(rest, []byte("<local-command-std"))
+	if out < 0 {
+		return false
+	}
+	if next := bytes.Index(rest, []byte("<command-name>")); next >= 0 && next < out {
+		return false
+	}
+	return bytes.HasPrefix(rest[out:], []byte("<local-command-stdout>Set model to"))
 }
 
 // modelPicker: Claude Code's /model picker is on screen (the command was taken as a bare /model, or a pick is open).
@@ -72,9 +132,76 @@ type pendingModel struct {
 // pendingModelTTL bounds how long a pick stands in for the transcript (a switch followed by no reply at all).
 const pendingModelTTL = time.Hour
 
+// awaitedModel is a switch typed into Claude Code that the wait after typing did not confirm. Claude Code can take
+// longer than that wait to run a typed command (twelve seconds were seen on a long session, #10810): the switch is
+// reported as unconfirmed, as before, and when Claude Code's own record of it shows in the transcript it is noted as
+// the pick it is, so the app shows the model the session really runs.
+type awaitedModel struct {
+	Model, From string
+	Path        string // the transcript
+	Offset      int64  // where it ended when the command was typed: only what follows is this command's record
+	Checked     int64  // its size at the last look: looked at again only once it grew
+	At          time.Time
+}
+
+// awaitedModelTTL is how long a typed switch is still looked for.
+const awaitedModelTTL = 5 * time.Minute
+
+func (n *Node) awaitModel(id string, a awaitedModel) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	m := n.modes[id]
+	m.Awaited = &a
+	n.modes[id] = m
+}
+
+// takeAwaitedModel notes an awaited switch as made once Claude Code recorded it, and lets go of one too old.
+func (n *Node) takeAwaitedModel(id string) {
+	n.mu.Lock()
+	a := n.modes[id].Awaited
+	n.mu.Unlock()
+	if a == nil {
+		return
+	}
+	recorded, size := false, a.Checked
+	expired := time.Since(a.At) > awaitedModelTTL
+	if !expired {
+		st, err := os.Stat(a.Path)
+		if err != nil || st.Size() == a.Checked {
+			return
+		}
+		read := false
+		if recorded, read = modelRecorded(a.Path, a.Offset, a.Model); !read {
+			if st.Size()-a.Offset <= modelRecordMost {
+				return // not read this time: looked at again
+			}
+			expired = true // too much written since: its record is not looked for any more
+		}
+		size = st.Size()
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	m := n.modes[id]
+	if m.Awaited != a { // another switch since
+		return
+	}
+	switch {
+	case recorded:
+		m.Awaited, m.Model = nil, &pendingModel{Model: a.Model, From: a.From, At: time.Now()}
+	case expired:
+		m.Awaited = nil
+	default:
+		next := *a
+		next.Checked = size
+		m.Awaited = &next
+	}
+	n.modes[id] = m
+}
+
 // shownModel is the model the session list shows: the app's pick while the transcript has not moved on from the model
 // it had at the switch.
 func (n *Node) shownModel(id, fromTranscript string) string {
+	n.takeAwaitedModel(id)
 	n.mu.Lock()
 	m, ok := n.modes[id]
 	n.mu.Unlock()
@@ -82,6 +209,9 @@ func (n *Node) shownModel(id, fromTranscript string) string {
 		return fromTranscript
 	}
 	if fromTranscript != m.Model.From || time.Since(m.Model.At) > pendingModelTTL {
+		return fromTranscript
+	}
+	if n.metaOf(id).modelAt.After(m.Model.At) {
 		return fromTranscript
 	}
 	return m.Model.Model
@@ -104,7 +234,7 @@ func (n *Node) noteModel(id, model, from string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	m := n.modes[id]
-	m.Model = &pendingModel{Model: model, From: from, At: time.Now()}
+	m.Model, m.Awaited = &pendingModel{Model: model, From: from, At: time.Now()}, nil
 	n.modes[id] = m
 }
 
@@ -125,10 +255,19 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 		return fmt.Errorf("Persona 对话的模型在对话上方的芯片里换")
 	}
 	if n.externalCodex(id) || n.codexPath(id) != "" || n.traexPath(id) != "" {
-		return fmt.Errorf("Codex / TRAEX 的会话不支持在手机上切换模型")
+		return fmt.Errorf("Codex / TRAE CLI 的会话不支持在手机上切换模型")
 	}
 	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 		return err
+	}
+	// Outside / Claude Desktop sessions without a terminal pane switch session-only model via Persona's Claude plugin.
+	if handled, err := n.ccPluginSetSettings(ctx, id, model, ""); handled {
+		if err != nil {
+			return err
+		}
+		n.noteModel(id, model, n.transcriptModel(id))
+		n.notifySessions()
+		return nil
 	}
 	// One at a time with the messages: a send in flight is typing into the same box.
 	defer n.typing.lock(id)()
@@ -144,11 +283,21 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 			return fmt.Errorf("Agent 正在工作，这一轮结束后再切换模型")
 		}
 	}
+	if c, ok := n.outsideClaude(id); ok && (c.Status == "busy" || c.Status == "waiting") {
+		return fmt.Errorf("Agent 正在工作，这一轮结束后再切换模型")
+	}
 	// The same checks as a message: a dialog with the keyboard or a draft in the box refuses, nothing typed.
 	if err := n.checkPane(ctx, pane, "claude", ""); err != nil {
 		return err
 	}
-	from := n.transcriptModel(id)
+	// The transcript as it is now: its model, and where it ends. What Claude Code writes after this is its record of
+	// the command typed below.
+	record, from, recordFrom := n.transcriptPath(id), "", int64(0)
+	if st, err := os.Stat(record); record != "" && err == nil {
+		from, recordFrom = n.meta(record, st).model, st.Size()
+	} else {
+		record = ""
+	}
 	if err := n.prompt(ctx, pane, cmd); err != nil {
 		if r := deliveryRefusal(err); r != nil {
 			return r
@@ -157,8 +306,12 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 	}
 	n.typing.typed(pane, cmd)
 	var last string
+	recorded := false
 	for range 15 {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(modelLook)
+		if recorded, _ = modelRecorded(record, recordFrom, model); recorded {
+			break // Claude Code's own word, whatever the screen shows by now
+		}
 		s, err := n.readPane(ctx, pane, "visible", 60)
 		if err != nil {
 			continue
@@ -172,8 +325,14 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 			break
 		}
 	}
-	if err := modelOutcome(last, model); err != nil {
-		return err
+	if !recorded {
+		if err := modelOutcome(last, model); err != nil {
+			if errors.As(err, &modelUnconfirmed{}) && record != "" {
+				// Typed, and Claude Code may yet run it: its record, when it comes, is taken up (takeAwaitedModel).
+				n.awaitModel(id, awaitedModel{Model: model, From: from, Path: record, Offset: recordFrom, Checked: recordFrom, At: time.Now()})
+			}
+			return err
+		}
 	}
 	n.noteModel(id, model, from)
 	n.notifySessions()
@@ -182,14 +341,91 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 
 // setModelAndModes applies a request of session.modes: the model first (the efforts a model takes depend on it),
 // then the mode and effort.
-func (n *Node) setModelAndModes(ctx context.Context, id, model, mode, effort string) error {
-	if model != "" {
-		if err := n.setModel(ctx, id, model); err != nil {
-			return err
+func (n *Node) setModelAndModes(ctx context.Context, id, model, mode, effort string, queueEffort bool) (pending, changed bool, err error) {
+	if !n.isAssistantSession(id) {
+		if c, t, ok := n.codexEffortThread(id); ok {
+			if err := n.switchingRefusal(id); err != nil {
+				return false, false, err
+			}
+			if mode != "" {
+				return false, false, fmt.Errorf("Codex 的会话在手机上只能改思考强度和模型，权限模式要在电脑上改")
+			}
+			if err := n.setCodexSettings(ctx, id, c, t, model, effort); err != nil {
+				return false, false, err
+			}
+			return false, strings.TrimSpace(model) != "" || strings.TrimSpace(effort) != "", nil
+		}
+		if src, found := n.codexSource(id); found && codexDesktopChat(src) {
+			if err := n.switchingRefusal(id); err != nil {
+				return false, false, err
+			}
+			if err := n.codexDesktopModes(ctx, id, src, model, mode, effort); err != nil {
+				return false, false, err
+			}
+			return false, strings.TrimSpace(model) != "" || strings.TrimSpace(effort) != "", nil
+		}
+		// A Codex in a pane on the terminal route: Codex's own /model, typed into its box (codex_terminal_modes.go).
+		if t, why, ok := n.codexOnTerminalCtx(ctx, id, true); ok {
+			if err := n.switchingRefusal(id); err != nil {
+				return false, false, err
+			}
+			if mode != "" {
+				return false, false, fmt.Errorf("Codex 的会话在手机上只能改思考强度和模型，权限模式要在电脑上改")
+			}
+			if strings.TrimSpace(model) == "" && strings.TrimSpace(effort) == "" {
+				return false, false, nil
+			}
+			if why != nil {
+				return false, false, why
+			}
+			changed, err := n.setCodexTerminalSettings(ctx, id, t, model, effort)
+			return false, changed, err
+		}
+		if mode == "" && (model != "" || effort != "") {
+			m := strings.TrimSpace(model)
+			if m != "" {
+				if st, ok := n.state.get(id); ok {
+					m = cmp.Or(n.claudeModelArg(st.Launcher, m), "default")
+				}
+				if _, err := modelCommand(m); err != nil {
+					return false, false, err
+				}
+			}
+			if err := validModes("", effort); err != nil {
+				return false, false, err
+			}
+			if handled, err := n.ccPluginSetSettings(ctx, id, m, effort); handled {
+				if err != nil {
+					return false, false, err
+				}
+				if m != "" {
+					n.noteModel(id, m, n.transcriptModel(id))
+				}
+				if effort != "" {
+					n.noteModes(id, "", effort)
+				}
+				n.notifySessions()
+				return false, true, nil
+			}
 		}
 	}
-	if mode == "" && effort == "" {
-		return nil
+	if model != "" {
+		if err := n.setModel(ctx, id, model); err != nil {
+			return false, false, err
+		}
+		changed = true
 	}
-	return n.setModes(ctx, id, mode, effort)
+	if mode == "" && effort == "" {
+		return false, changed, nil
+	}
+	var pendingPtr *bool
+	if queueEffort {
+		pendingPtr = &pending
+	}
+	var modesChanged bool
+	err = n.updateModes(ctx, id, mode, effort, pendingPtr, &modesChanged)
+	if err != nil && changed {
+		return pending, true, partialModesErr(err)
+	}
+	return pending, changed || modesChanged, err
 }

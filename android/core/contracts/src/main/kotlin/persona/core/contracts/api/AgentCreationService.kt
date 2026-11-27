@@ -1,7 +1,12 @@
 package persona.core.contracts.api
 
 import persona.core.contracts.CoreText
+import persona.core.contracts.PaseoAgent
 import persona.core.contracts.Session
+import persona.core.contracts.TraeCliDisplayName
+import persona.core.contracts.isTraeCliId
+import persona.core.contracts.isTraeCliLabel
+import persona.core.contracts.unknownAgentName
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.KeepGeneratedSerializer
@@ -32,12 +37,17 @@ interface AgentCreationService {
      * unified model configuration.
      */
     suspend fun newAgentModel(): ModelPurposeDetail? = null
+    /** The same purpose on the hub that owns a preselected computer. */
+    suspend fun newAgentModel(machineId: String): ModelPurposeDetail? = newAgentModel()
 
     /**
      * The models [launcher]'s agent offers in its own /model menu, for "New Agent"'s model picker: the node keeps the
      * list a while, [refresh] asks the CLI again. Null from hubs without the list (404).
      */
     suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean = false): LauncherModels? = null
+    /** A new start's host may offer or lock a different model from the machine's default host. */
+    suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?): LauncherModels? =
+        launcherModels(machineId, launcher, refresh)
 
     /**
      * What [cwd] is in Git terms (`POST …/worktree/status`, docs/protocol/protocol.md): null when the computer can't say
@@ -71,7 +81,13 @@ interface AgentCreationService {
 }
 
 /** A complete response replaces the inventory. A partial response updates returned rows but does not remove missing ones. */
-data class AgentWorkspaceCatalog(val workspaces: List<AgentWorkspace>, val complete: Boolean = true)
+data class AgentWorkspaceCatalog(
+    val workspaces: List<AgentWorkspace>,
+    /** Completeness as used by the New Agent picker. The list tracks failures for each source separately. */
+    val complete: Boolean = true,
+    val failedSources: Set<String> = emptySet(),
+    val unscopedFailure: Boolean = false,
+)
 
 /**
  * One workspace of the hub's catalog (`GET /api/v1/workspaces`, docs/protocol/protocol.md): a start with
@@ -145,6 +161,8 @@ data class LauncherModels(
     val models: List<AgentModel> = emptyList(),
     /** Why a model picked here would not reach the agent (the launcher passes its own --model); null: it would. */
     val locked: String? = null,
+    /** The node accepts a per-start model on this launcher and host. Absent on older nodes. */
+    @SerialName("supports_start_model") val supportsStartModel: Boolean = false,
 )
 
 @Serializable
@@ -155,6 +173,8 @@ data class AgentModel(
     val description: String? = null,
     /** The concrete model an alias stands for with this launcher's settings (opus → its model id). */
     val resolved: String? = null,
+    /** Other spellings the hub folded into this row; a saved alias selects this row, not a duplicate. */
+    val aliases: List<String> = emptyList(),
     /** What the agent runs when it is given no model: picking it is the same as picking none. */
     @SerialName("default") val isDefault: Boolean = false,
     /** The thinking efforts it takes, weakest first; empty: no effort setting. */
@@ -168,13 +188,13 @@ data class AgentModel(
 
 private val gptModelId = Regex("^gpt-([a-z0-9]+(?:\\.[a-z0-9]+)*(?:-[a-z0-9]+(?:\\.[a-z0-9]+)*)*)$", RegexOption.IGNORE_CASE)
 
-/** Display only: explicit names win, and GPT versions and variants retain every component of their id. */
+/** Display only: explicit names win, and GPT versions and variants preserve the GPT- prefix and every component. */
 fun modelName(id: String?, name: String? = null): String {
     val raw = id.orEmpty()
     if (!name.isNullOrBlank() && !name.equals(raw, ignoreCase = true)) return name
     val label = name?.takeIf { it.isNotBlank() } ?: raw
     val model = gptModelId.matchEntire(label)?.groupValues?.get(1) ?: return label
-    return model.split('-').mapIndexed { index, part ->
+    return "GPT-" + model.split('-').mapIndexed { index, part ->
         if (index == 0) part else part.replaceFirstChar { it.titlecase(java.util.Locale.ROOT) }
     }.joinToString(" ")
 }
@@ -204,9 +224,13 @@ data class AgentLauncher(
      * an Allow everything. Null for Claude Code's launchers, which take its five, and for every other one, which takes none.
      */
     @SerialName("permission_modes") val permissionModes: List<String>? = null,
+    /** Where the computer found the launcher, for example path, zshrc, or a managed provider. */
+    val source: String? = null,
+    /** Whether a runtime launcher can receive separate task follow-up supervision instructions. */
+    @SerialName("supervision_policy") val supervisionPolicy: Boolean = false,
 ) {
     /** What people read for it: its display name, else its startup name (the web's `providerTitle`). */
-    val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
+    val title: String get() = launcherTitle(name, agentType, displayName?.trim()?.takeIf(String::isNotEmpty), baseUrl, source)
 }
 
 /**
@@ -238,7 +262,25 @@ data class AssistantLaunchers(
     val launchers: List<AgentLauncher> = emptyList(),
     val default: LauncherDefault? = null,
     val unavailable: List<UnavailableLauncher> = emptyList(),
+    /** The active model profile's Agent presets whose launcher this computer has; empty on an older hub. */
+    val tiers: List<PickerTier> = emptyList(),
+    /** The profile [tiers] belongs to; null when there is no active profile or on an older hub. */
+    @SerialName("tiers_profile") val tiersProfile: PickerTierProfile? = null,
 )
+
+/** A named Agent launch preset from the active model profile (#2225). */
+@Serializable
+data class PickerTier(
+    val name: String,
+    val launcher: String,
+    val model: String? = null,
+    val effort: String? = null,
+    val description: String? = null,
+)
+
+/** The model profile whose Agent presets a computer's launcher list offers. */
+@Serializable
+data class PickerTierProfile(val id: String, val name: String)
 
 /** The explicit model a launcher names. Older nodes used the Chinese display placeholder for no model. */
 fun launcherExplicitModel(launcher: AgentLauncher): String? = launcher.model
@@ -268,7 +310,36 @@ data class UnavailableLauncher(
     val code: String = "",
     val reason: String = "",
 ) {
-    val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
+    val title: String get() = launcherTitle(name, agent, displayName?.trim()?.takeIf(String::isNotEmpty))
+}
+
+private val BUILTIN_LAUNCHER_TITLES = mapOf(
+    "claude" to "Claude Code",
+    "codex" to "Codex",
+    "claude-desktop" to "Claude Desktop",
+    "codex-app" to "Codex App",
+    "traex" to TraeCliDisplayName,
+    "traecli" to TraeCliDisplayName,
+    "trae-cli" to TraeCliDisplayName,
+    "agy" to "Antigravity CLI",
+    "omp" to "Oh My Pi",
+    "cursor" to "Cursor",
+    "gemini" to "Gemini CLI",
+)
+
+internal fun launcherTitle(
+    name: String, agent: String?, displayName: String?, baseUrl: String? = null, source: String? = null,
+): String {
+    // Older hubs identify the built-in launcher by its base URL marker before supplying an agent field.
+    val legacyMachineCli = name == "traex" && baseUrl == "(traex)" &&
+        (source.isNullOrEmpty() || source == "path" || source == "zshrc" || source == "builtin")
+    return when {
+        agent == PaseoAgent && isTraeCliId(name) -> unknownAgentName(agent, displayName, name)
+        (legacyMachineCli || isTraeCliId(agent)) && isTraeCliId(name) &&
+            (displayName == null || isTraeCliLabel(displayName)) -> TraeCliDisplayName
+        displayName != null && !displayName.equals(name, ignoreCase = true) -> displayName
+        else -> BUILTIN_LAUNCHER_TITLES[name.lowercase(java.util.Locale.ROOT)] ?: displayName ?: name
+    }
 }
 
 /**
@@ -318,7 +389,7 @@ data class AgentStartRequest(
     val ultracode: Boolean? = null,
     /** What the tab is named after when the first message goes as an ordinary message rather than [prompt]. */
     @SerialName("name_hint") val nameHint: String? = null,
-    /** The model picked for this start (an id of [AgentCreationService.launcherModels]); null: the default one. */
+    /** The model picked for this start, from the launcher's list or typed for omp; null follows the default. */
     val model: String? = null,
     @SerialName("todo_id") val todoId: String? = null,
     /** The engine whose workspace [workspaceId] is (a catalog row's `source`, #7259); null: the computer's default. */

@@ -40,6 +40,41 @@ func TestAssistantLauncherModelsAreScopedAndCachedSeparately(t *testing.T) {
 	}
 }
 
+func TestAgentLauncherModelsPassExplicitHost(t *testing.T) {
+	f := newFakeHub().withMachine()
+	s := newTestService(t, f)
+	f.answerNode(assistantwire.DeviceLaunchersModels, func(_ string, raw json.RawMessage) (any, error) {
+		var params map[string]any
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, err
+		}
+		model := "default-model"
+		switch params["host"] {
+		case proto.EngineHerdr:
+			model = "pane-model"
+		case "agy":
+			model = "companion-model"
+		}
+		if params["purpose"] == "assistant" && params["host"] != nil {
+			t.Error("assistant catalog has an engine host")
+		}
+		return proto.LauncherModels{Agent: "agy", Models: []proto.AgentModel{{ID: model}}}, nil
+	})
+	for _, tc := range []struct{ query, want string }{
+		{"", "default-model"},
+		{"?host=herdr", "pane-model"},
+		{"?host=agy", "companion-model"},
+		{"", "default-model"},
+		{"?purpose=assistant&host=herdr", "default-model"},
+		{"?purpose=assistant&host=agy", "default-model"},
+	} {
+		r := request(s, "GET", "/api/v1/machines/server/launchers/agy/models"+tc.query, "")
+		if r.Code != 200 || !strings.Contains(r.Body.String(), tc.want) {
+			t.Fatalf("%q: %d %s, want %s", tc.query, r.Code, r.Body.String(), tc.want)
+		}
+	}
+}
+
 func TestAssistantLauncherCheckPassesPurposeToNode(t *testing.T) {
 	f := newFakeHub().withMachine()
 	s := newTestService(t, f)
@@ -82,6 +117,7 @@ func TestAssistantFollowupKeepsModelFromAssistantCatalog(t *testing.T) {
 }
 
 func TestAssistantBotModelMenuUsesAssistantCatalog(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f := pickFixture(t)
 	f.answerNode(assistantwire.DeviceLaunchersModels, func(_ string, raw json.RawMessage) (any, error) {
 		var p struct{ Purpose string }
@@ -99,8 +135,8 @@ func TestAssistantBotModelMenuUsesAssistantCatalog(t *testing.T) {
 		note = p.Text
 		return map[string]any{}, nil
 	})
-	s.setBotCurrent(botTarget{Kind: targetMain})
-	s.botModels(context.Background(), FeishuFeatures{Main: true}, "message", "/modellist", "", "", "")
+	s.larkModule().SetTarget(botTarget{Kind: targetMain})
+	botSay(t, s, f, FeishuFeatures{Main: true}, "message", "/modellist", "", "")
 	if !strings.Contains(note, "shell-model") || strings.Contains(note, "engine-model") {
 		t.Fatalf("assistant bot listed the Agent catalog: %q", note)
 	}

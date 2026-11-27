@@ -39,7 +39,7 @@ function agents() {
 async function setup(t, o = {}) {
   const a = agents()
   const fake = await startFakePaseo(t, { providers: PROVIDERS, entries: ENTRIES, agents: Object.values(a).map((agent) => ({ agent, project: PROJECT })), ...o })
-  const node = await startFakeNode(t, { features: FEATURES, strict: o.strict })
+  const node = await startFakeNode(t, { features: o.nodeFeatures ?? FEATURES, strict: o.strict })
   const home = mkdtempSync('/tmp/ppaseo-')
   t.after(() => rmSync(home, { recursive: true, force: true }))
   // Where Paseo's own CLI finds its daemon: the address in the home's paseo.pid.
@@ -66,7 +66,7 @@ test("Paseo's agents are the engine's sessions: Claude Code's by its session and
   assert.equal(node.hello.runtime, 'paseo')
   assert.equal(node.hello.name, 'Paseo')
   assert.equal(node.hello.version, '0.14.0', "Paseo's version")
-  assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, rename: true, close: true, assistant: false, modes: true, model: true,
+  assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, queue_edit: false, queue_send_now: false, rename: true, close: true, assistant: false, modes: true, model: true,
     models: true, check: true, rewind: true, seen: true, workspaces: true, resume: true, readonly: true, same_kind: true })
   assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.agent, l.prompt_optional]),
     [['my-claude', 'claude', undefined], ['my-codex', 'codex', true], ['grok', 'paseo', undefined]])
@@ -431,7 +431,7 @@ test("rows say how far a rewind goes: Paseo's provider decides, conversation and
   // (Both also say the permission modes they take, #8261.)
   const both = ['default', 'bypassPermissions']
   assert.deepEqual(caps(`paseo-${a.codex.id}`), { rewind: true, rewind_code: false, permission_modes: both }, 'Codex: the conversation only')
-  assert.deepEqual(caps(`paseo-${a.grok.id}`), { rewind: false, rewind_code: false, permission_modes: both },
+  assert.deepEqual(caps(`paseo-${a.grok.id}`), { rewind: false, rewind_code: false, permission_modes: both, a2a_wake_on_send: true },
     'files and conversation only at once is no rewind of Persona\'s')
   assert.deepEqual(caps('paseo-e1'), { rewind: false, rewind_code: false }, 'a Paseo that does not say')
 })
@@ -567,6 +567,9 @@ test("seen in Persona, no longer unread in Paseo: a loaded agent's mark cleared,
   const { fake, node, a, rows } = await setup(t)
   fake.handlers.clear_agent_attention = (msg) => ({ payload: { agentId: msg.agentId, agents: [] } })
   fake.handlers['workspace.clear_attention.request'] = (msg) => ({ payload: { workspaceId: msg.workspaceId, clearedAgentIds: [a.grok.id], results: [], success: true, error: null } })
+  // A legacy row with a past turn already says done before the bridge receives the attention flag.
+  fake.update(a.claude.id, { requiresAttention: false })
+  await until('seen in Paseo', () => rows().find((r) => r.session_id === SID)?.status === 'idle')
   fake.update(a.claude.id, { requiresAttention: true })
   await until('unread', () => rows().find((r) => r.session_id === SID)?.status === 'done')
   await call(node, 'session.seen', { session_id: SID })
@@ -574,7 +577,7 @@ test("seen in Persona, no longer unread in Paseo: a loaded agent's mark cleared,
   // Stored (closed): through its workspace, while it is the only one flagged there; not the agent's own (it would start it).
   fake.update(a.claude.id, { requiresAttention: false })
   fake.update(a.grok.id, { requiresAttention: true, status: 'closed' })
-  await until('the grok flagged', () => fake.agents.get(a.grok.id).agent.requiresAttention === true)
+  await until('the grok flagged', () => rows().find((r) => r.session_id === `paseo-${a.grok.id}`)?.status === 'done')
   await until('known flagged', () => rows().find((r) => r.session_id === SID)?.status === 'idle')
   await call(node, 'session.seen', { session_id: `paseo-${a.grok.id}` })
   assert.deepEqual(fake.requestsOf('workspace.clear_attention.request').map((r) => r.workspaceId), ['wks_1'])
@@ -617,6 +620,24 @@ test("a new session gets Persona's agent tools, each server naming the session t
   const [first, second] = fake.requestsOf('agent.create.request').map((r) => r.config.mcpServers.persona.env.PERSONA_SESSION_ID)
   assert.notEqual(first, second, 'each agent has its own session id')
   assert.equal(JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers.persona.env.PERSONA_SESSION_ID, undefined, 'the shared config is not changed')
+})
+
+test('a Persona-started Paseo agent receives its own A2A MCP ticket', async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-mcp-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const mcpConfig = join(dir, 'mcp.json')
+  writeFileSync(mcpConfig, JSON.stringify(MCP_JSON))
+  const { fake, node, logs } = await setup(t, { mcpConfig, nodeFeatures: [...FEATURES, 'a2a_mcp'] })
+  const ticketRequests = []
+  node.a2aMcpToken = (id) => { ticketRequests.push(id); return 'test-a2a-ticket' }
+  const sessionId = 'paseo-a2a-test'
+  await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-codex', session_id: sessionId })
+  const { mcpServers } = fake.requestsOf('agent.create.request').at(-1).config
+  assert.deepEqual(ticketRequests, [sessionId])
+  assert.equal(mcpServers.persona.env.PERSONA_A2A_TOKEN, undefined)
+  assert.equal(mcpServers.persona_a2a.env.PERSONA_SESSION_ID, sessionId)
+  assert.equal(mcpServers.persona_a2a.env.PERSONA_A2A_TOKEN, 'test-a2a-ticket')
+  assert.ok(logs.every((line) => !line.includes('test-a2a-ticket')))
 })
 
 test("a new Claude Code session gets the Agent's own Persona tools preapproved; a provider that cannot is created again without that", async (t) => {
@@ -2419,6 +2440,69 @@ function projectFixture(t) {
 
 const makeTree = (node, cwd, extra = {}) => call(node, 'workspace.create', { cwd, branch: 'feature', create_branch: true, base: 'main', ...extra })
 
+test('cwd-only legacy worktree duplicates prefer the main project; explicit selection is unchanged', async (t) => {
+  const f = projectFixture(t)
+  const tree = join(f.dir, 'legacy')
+  f.git(f.repo, 'worktree', 'add', '-b', 'legacy', tree)
+  const legacy = workspaceDescriptor({ workspaceDirectory: tree, projectRootPath: tree, projectId: 'prj_legacy', projectDisplayName: 'legacy', name: 'legacy', workspaceKind: 'worktree',
+    project: { projectKey: 'prj_legacy', projectName: 'legacy', workspaceName: 'legacy',
+      checkout: { cwd: tree, isGit: true, currentBranch: 'legacy', worktreeRoot: tree, mainRepoRoot: f.repo, isPaseoOwnedWorktree: false } } })
+  const { fake, node } = await setup(t, { workspaces: [legacy] })
+  await until('the legacy workspace', () => node.last('runtime.workspaces'))
+  const projects = [f.project('prj_legacy', tree), f.project('prj_main', f.alias)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+
+  await call(node, 'session.start', { cwd: tree, launcher: 'my-codex' })
+  const made = fake.requestsOf('workspace.create.request').at(-1)
+  assert.ok(made, 'cwd-only start creates a workspace under the main project')
+  assert.deepEqual(made.source, { kind: 'directory', path: tree, projectId: 'prj_main' })
+  assert.equal(projects.length, 2, 'no project ID is allocated')
+  const mainWorkspaceId = fake.requestsOf('agent.create.request').at(-1).workspaceId
+  assert.notEqual(mainWorkspaceId, legacy.id)
+
+  const workspaceCreates = fake.requestsOf('workspace.create.request').length
+  await call(node, 'session.start', { cwd: tree, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).workspaceId, mainWorkspaceId, 'the main-project workspace is reused')
+  assert.equal(fake.requestsOf('workspace.create.request').length, workspaceCreates)
+  await call(node, 'session.start', { cwd: tree, workspace_id: legacy.id, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).workspaceId, legacy.id)
+  assert.equal(fake.requestsOf('workspace.create.request').length, workspaceCreates, 'an explicit workspace needs no replacement')
+  assert.ok(fake.workspaces.has(legacy.id), 'the legacy record remains readable and untouched')
+})
+
+test('a cwd-only start that finds its existing worktree workspace does not need the project list', async (t) => {
+  const f = projectFixture(t)
+  const tree = join(f.dir, 'legacy')
+  f.git(f.repo, 'worktree', 'add', '-b', 'legacy', tree)
+  const legacy = workspaceDescriptor({ workspaceDirectory: tree, projectRootPath: tree, projectId: 'prj_legacy', projectDisplayName: 'legacy', name: 'legacy', workspaceKind: 'worktree',
+    project: { projectKey: 'prj_legacy', projectName: 'legacy', workspaceName: 'legacy',
+      checkout: { cwd: tree, isGit: true, currentBranch: 'legacy', worktreeRoot: tree, mainRepoRoot: f.repo, isPaseoOwnedWorktree: false } } })
+  const { fake, node } = await setup(t, { workspaces: [legacy] })
+  await until('the legacy workspace', () => node.last('runtime.workspaces'))
+  fake.handlers['project.list.request'] = () => ({ payload: { error: 'project list is down' } })
+  await call(node, 'session.start', { cwd: tree, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1)?.workspaceId, legacy.id, 'reuses the existing worktree workspace')
+})
+
+test('a cwd-only start falls back to an existing workspace when project roots are ambiguous', async (t) => {
+  const f = projectFixture(t)
+  const tree = join(f.dir, 'legacy')
+  f.git(f.repo, 'worktree', 'add', '-b', 'legacy', tree)
+  const subdir = join(tree, 'sub')
+  mkdirSync(subdir)
+  const legacy = workspaceDescriptor({ workspaceDirectory: tree, projectRootPath: tree, projectId: 'prj_legacy', projectDisplayName: 'legacy', name: 'legacy', workspaceKind: 'worktree',
+    project: { projectKey: 'prj_legacy', projectName: 'legacy', workspaceName: 'legacy',
+      checkout: { cwd: tree, isGit: true, currentBranch: 'legacy', worktreeRoot: tree, mainRepoRoot: f.repo, isPaseoOwnedWorktree: false } } })
+  const existing = agentSnapshot({ provider: 'my-codex', cwd: subdir, workspaceId: legacy.id, status: 'idle' })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { fake, node } = await setup(t, { workspaces: [legacy], agents: [...base, { agent: existing, project: legacy.project }] })
+  await until('the legacy workspace', () => node.last('runtime.workspaces'))
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [f.project('prj_tree', tree), f.project('prj_subdir', subdir)] } })
+  await call(node, 'session.start', { cwd: subdir, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1)?.workspaceId, legacy.id, 'reuses the existing workspace despite ambiguous roots')
+  assert.equal(fake.requestsOf('workspace.create.request').length, 0, 'no replacement workspace is created')
+})
+
 test('path-only worktrees and direct Agent starts reuse the unique physical project, including a non-git directory', async (t) => {
   const f = projectFixture(t)
   const { fake, node } = await setup(t)
@@ -2441,7 +2525,35 @@ test('path-only worktrees and direct Agent starts reuse the unique physical proj
   assert.deepEqual(req.source, { kind: 'directory', path: folder, projectId: 'prj_notes' })
 })
 
-test('ambiguous projects refuse both path-only creation routes; an explicit workspace keeps its own project', async (t) => {
+test('projects at different non-main roots remain ambiguous and create nothing', async (t) => {
+  const f = projectFixture(t)
+  const tree = join(f.dir, 'ambiguous')
+  f.git(f.repo, 'worktree', 'add', '-b', 'ambiguous', tree)
+  const subdir = join(tree, 'sub')
+  mkdirSync(subdir)
+  const { fake, node } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [f.project('prj_tree', tree), f.project('prj_subdir', subdir)] } })
+
+  await assert.rejects(makeTree(node, subdir), (e) => e.code === 'project_ambiguous')
+  await assert.rejects(call(node, 'session.start', { cwd: subdir, launcher: 'my-codex' }), (e) => e.code === 'project_ambiguous')
+  assert.equal(fake.requestsOf('workspace.create.request').length, 0)
+  assert.equal(fake.requestsOf('agent.create.request').length, 0)
+})
+
+test('a distinct project at a selected main-checkout subdirectory stays ambiguous', async (t) => {
+  const f = projectFixture(t)
+  const subdir = join(f.repo, 'sub')
+  mkdirSync(subdir)
+  const { fake, node } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [f.project('prj_main', f.repo), f.project('prj_subdir', subdir)] } })
+
+  await assert.rejects(call(node, 'session.start', { cwd: subdir, launcher: 'my-codex' }), (e) => e.code === 'project_ambiguous')
+  await assert.rejects(makeTree(node, subdir), (e) => e.code === 'project_ambiguous')
+  assert.equal(fake.requestsOf('workspace.create.request').length, 0)
+  assert.equal(fake.requestsOf('agent.create.request').length, 0)
+})
+
+test('duplicate projects at one physical root resolve deterministically; an explicit workspace keeps its own project', async (t) => {
   const f = projectFixture(t)
   const w = workspaceDescriptor({ workspaceDirectory: f.alias, projectId: 'prj_original' })
   const { fake, node } = await setup(t, { workspaces: [w] })
@@ -2450,16 +2562,79 @@ test('ambiguous projects refuse both path-only creation routes; an explicit work
   fake.handlers['project.list.request'] = () => ({ payload: { projects } })
   for (const order of [projects, [...projects].reverse()]) {
     projects = order
-    await assert.rejects(makeTree(node, f.repo), (e) => e.code === 'project_ambiguous')
-    await assert.rejects(call(node, 'session.start', { cwd: f.repo, launcher: 'my-codex' }), (e) => e.code === 'project_ambiguous')
+    await assert.doesNotReject(makeTree(node, f.repo), 'duplicate main-root records must not refuse creation')
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_duplicate')
+    await assert.doesNotReject(call(node, 'session.start', { cwd: f.repo, launcher: 'my-codex' }), 'duplicate main-root records must not refuse an Agent start')
+    const agent = fake.requestsOf('agent.create.request').at(-1)
+    assert.equal(fake.workspaces.get(agent.workspaceId)?.projectId, 'prj_duplicate')
   }
-  assert.equal(fake.requestsOf('workspace.create.request').length, 0)
-  assert.equal(fake.requestsOf('agent.create.request').length, 0)
+  assert.ok(fake.requestsOf('workspace.create.request').every((r) => r.source.projectId === 'prj_duplicate'))
+  assert.equal(fake.requestsOf('agent.create.request').length, 2)
   fake.handlers['project.list.request'] = () => ({ type: 'rpc_error', payload: { error: 'Unavailable', code: 'unavailable' } })
   await makeTree(node, f.repo, { workspace_id: w.id })
   assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_original')
   await call(node, 'session.start', { cwd: f.alias, workspace_id: w.id, launcher: 'my-codex' })
   assert.equal(fake.requestsOf('agent.create.request').at(-1).workspaceId, w.id)
+})
+
+test('symlink-alias duplicate projects at one physical root resolve deterministically to the canonical path', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  let projects = [f.project('prj_canonical', f.repo), f.project('prj_alias', f.alias)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await makeTree(node, f.alias)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_canonical')
+    await call(node, 'session.start', { cwd: f.alias, launcher: 'my-codex' })
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_canonical')
+  }
+})
+
+test('symlink-alias duplicates with no record at the physical path prefer the project with more workspaces, then the lowest ID', async (t) => {
+  const f = projectFixture(t)
+  const alias2 = join(f.dir, 'alias2')
+  symlinkSync(f.repo, alias2)
+  const w = workspaceDescriptor({ workspaceDirectory: alias2, projectId: 'prj_zbusy' })
+  const { fake, node } = await setup(t, { workspaces: [w] })
+  await until('the workspace', () => node.last('runtime.workspaces'))
+  let projects = [f.project('prj_aidle', f.alias), f.project('prj_zbusy', alias2)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await makeTree(node, f.repo)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_zbusy', 'more workspaces beats a lower ID')
+  }
+  projects = [f.project('prj_b', f.alias), f.project('prj_a', alias2)]
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await makeTree(node, f.repo)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_a', 'equal workspaces fall back to the lowest ID')
+  }
+})
+
+test('a linked worktree start picks the canonical record among its main checkout\'s symlink duplicates', async (t) => {
+  const f = projectFixture(t)
+  const tree = join(f.dir, 'linked')
+  f.git(f.repo, 'worktree', 'add', '-b', 'linked', tree)
+  const { fake, node } = await setup(t)
+  let projects = [f.project('prj_legacy', tree), f.project('prj_alias', f.alias), f.project('prj_main', f.repo)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await call(node, 'session.start', { cwd: tree, launcher: 'my-codex' })
+    assert.deepEqual(fake.requestsOf('workspace.create.request').at(-1).source, { kind: 'directory', path: tree, projectId: 'prj_main' })
+  }
+})
+
+test('path-only creation with no existing Paseo project canonicalizes symlink cwd before calling Paseo', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [] } })
+  await makeTree(node, f.alias)
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.cwd, f.repo)
+  await call(node, 'session.start', { cwd: f.alias, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, f.repo)
 })
 
 for (const [name, reply] of [
@@ -2527,6 +2702,23 @@ test('a direct start does not create an Agent when its explicitly owned director
   fake.handlers['workspace.create.request'] = () => ({ payload: { workspace: null, error: 'Project was archived' } })
   await assert.rejects(call(node, 'session.start', { cwd: f.repo, launcher: 'my-codex' }), /Project was archived/)
   assert.equal(fake.requestsOf('agent.create.request').length, 0)
+})
+
+test('a managed start requires the prepared directory before creating an agent', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [f.project('prj_original', f.alias)] } })
+  const make = (path) => workspaceDescriptor({ workspaceDirectory: path, projectId: 'prj_original', workspaceKind: 'directory' })
+  fake.handlers['workspace.create.request'] = () => ({ payload: { workspace: make(f.dir) } })
+  const params = { cwd: f.repo, launcher: 'my-codex', prompt: 'Check the repository', backend_workspace_root: true }
+  await assert.rejects(call(node, 'session.start', params), /prepared task directory/)
+  assert.equal(fake.requestsOf('agent.create.request').length, 0)
+  fake.handlers['workspace.create.request'] = () => ({ payload: { workspace: make(f.repo) } })
+  const result = await call(node, 'session.start', params)
+  assert.equal(result.session.cwd, f.repo)
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, f.repo)
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).initialPrompt, undefined)
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).text, params.prompt)
 })
 
 test('a directory workspace whose reply was lost uses the same creation key before starting one Agent', async (t) => {

@@ -48,6 +48,7 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.sort.AgentListDisplay
 import persona.core.domain.sort.AgentListDisplaySettings
 import persona.core.domain.sort.AgentRowStyle
+import persona.core.domain.sort.AgentSeenRows
 
 /**
  * Settings › Interface style: three styles, applied at once and remembered on this phone, then "Theme color" (iOS `ThemeColor`) and "Appearance"
@@ -62,6 +63,8 @@ fun AppearanceSettings(modifier: Modifier = Modifier, agentsDisplay: AgentListDi
     val glass by store.glass.collectAsState()
     val palette = PersonaTheme.palette
     Column(modifier.fillMaxWidth()) {
+        SidebarOptions(store)
+        Spacer(Modifier.height(Tokens.Space.l))
         Text(stringResource(R.string.settings_style_intro), style = PersonaTheme.type.callout, color = palette.ink2)
         Spacer(Modifier.height(Tokens.Space.l))
         AppStyle.entries.forEach { style ->
@@ -86,7 +89,46 @@ fun AppearanceSettings(modifier: Modifier = Modifier, agentsDisplay: AgentListDi
         }
         // Glass draws the Agents list in the chosen row style (#4338 A9); Brief and Board keep Compact and Detailed (decision 8).
         if (current == AppStyle.Glass && agentsDisplay != null) AgentsListLayout(agentsDisplay)
+        if (agentsDisplay != null) SeenAgentsOptions(agentsDisplay)
     }
+}
+
+@Composable
+private fun SeenAgentsOptions(settings: AgentListDisplaySettings) {
+    val selected by settings.seenRows.collectAsState(AgentSeenRows.Stay)
+    val scope = rememberCoroutineScope()
+    JSectionHeader(stringResource(R.string.settings_seen_agents))
+    AgentSeenRows.entries.forEach { choice ->
+        val title = stringResource(when (choice) {
+            AgentSeenRows.Stay -> R.string.settings_seen_agents_stay
+            AgentSeenRows.Leave -> R.string.settings_seen_agents_leave
+        })
+        val isSelected = choice == selected
+        Row(
+            Modifier.fillMaxWidth().option(isSelected, onClick = {
+                scope.launch { settings.setSeenRows(choice) }
+            }).padding(Tokens.Space.m),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, Modifier.weight(1f), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+            JRadio(isSelected, null)
+        }
+    }
+}
+
+@Composable
+private fun SidebarOptions(store: AppStyleStore) {
+    val current by store.sidebar.collectAsState()
+    JSectionHeader(stringResource(R.string.settings_sidebar))
+    JSegmented(
+        listOf(
+            JSegment(stringResource(R.string.settings_sidebar_separate)),
+            JSegment(stringResource(R.string.settings_sidebar_merged)),
+        ),
+        SidebarLayout.entries.indexOf(current),
+        { store.setSidebar(SidebarLayout.entries[it]) },
+        modifier = Modifier.testTag("settings-sidebar-layout"),
+    )
 }
 
 /**

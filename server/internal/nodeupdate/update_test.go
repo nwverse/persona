@@ -66,7 +66,7 @@ func TestMain(m *testing.M) {
 func fixtures(t *testing.T) (string, string) {
 	t.Helper()
 	fixtureOnce.Do(func() {
-		for _, version := range []string{"old", "next"} {
+		for _, version := range []string{"old", "intermediate", "next"} {
 			cmd := exec.Command("go", "build", "-o", filepath.Join(fixtureDir, version), "-ldflags=-X main.version="+version, "./testdata")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				fixtureErr = fmt.Errorf("build fixture: %w: %s", err, out)
@@ -79,6 +79,17 @@ func fixtures(t *testing.T) (string, string) {
 	}
 	return filepath.Join(fixtureDir, "old"), filepath.Join(fixtureDir, "next")
 }
+
+func intermediateFixture(t *testing.T) []byte {
+	t.Helper()
+	fixtures(t)
+	data, err := os.ReadFile(filepath.Join(fixtureDir, "intermediate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func testManager(t *testing.T) (*Manager, []byte, *atomic.Int32) {
 	t.Helper()
 	old, next := fixtures(t)
@@ -96,7 +107,7 @@ func testManager(t *testing.T) (*Manager, []byte, *atomic.Int32) {
 		t.Fatal(err)
 	}
 	count := new(atomic.Int32)
-	m := &Manager{exe: exe, version: "old", timeout: time.Hour, restart: func() { count.Add(1) }, startWatch: func(string, string, string) error { return nil }}
+	m := &Manager{exe: exe, version: "old", timeout: time.Hour, restart: func(string) { count.Add(1) }, startWatch: func(string, string, string) error { return nil }}
 	t.Cleanup(m.Close)
 	return m, data, count
 }
@@ -178,6 +189,35 @@ func TestVerifiedCommitResponseAndExactConfirmation(t *testing.T) {
 	}
 }
 
+func TestRepeatedCommitReturnsPreflightFailureWithoutCancelingRollback(t *testing.T) {
+	m, data, restarts := testManager(t)
+	oldHash := hash(t, m.exe)
+	target := spec(data, "next")
+	id := receive(t, m, data, target)
+	if _, err := m.Commit(t.Context(), id, nil); err != nil {
+		t.Fatal(err)
+	}
+	m.ResponseWritten(id)
+	reason := errors.New("exit status 23")
+	m.PreflightFailed(id, reason)
+	if again := receive(t, m, data, target); again != id {
+		t.Fatalf("upload ID = %q, want %q", again, id)
+	}
+	if _, err := m.Commit(t.Context(), id, nil); err != reason {
+		t.Fatalf("commit error = %v, want %v", err, reason)
+	}
+	if err := m.Abort(id); err == nil {
+		t.Fatal("abort accepted after the candidate was installed")
+	}
+	p, err := loadPending(markerPath(m.exe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarts.Load() != 1 || hash(t, p.Backup) != oldHash || hash(t, m.exe) != target.SHA256 {
+		t.Fatal("failed preflight disturbed the rollback transaction")
+	}
+}
+
 func TestInvalidArtifactsNeverReplaceInstalledFile(t *testing.T) {
 	_, next := fixtures(t)
 	good, err := os.ReadFile(next)
@@ -255,6 +295,7 @@ func TestPersonaNodeNeverReplacesPersonad(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, _, _ := testManager(t) // the resident is the fixture, a build of another package: personad
+	installExternally(t, m, intermediateFixture(t))
 	before := hash(t, m.exe)
 	id := receive(t, m, data, spec(data, "next"))
 	if _, err := m.Commit(context.Background(), id, nil); err == nil || !strings.Contains(err.Error(), "not replacing it with persona-node") {
@@ -657,6 +698,16 @@ func TestProcessIdentityIgnoresResidentAndWatchdogTimezone(t *testing.T) {
 }
 
 func TestSupervisedProcessExecPreservesSymlinkArgsEnvironmentAndRoot(t *testing.T) {
+	t.Run("install", func(t *testing.T) { testSupervisedProcessExec(t, false) })
+	t.Run("adopt", func(t *testing.T) { testSupervisedProcessExec(t, true) })
+	t.Run("adopt legacy", func(t *testing.T) {
+		t.Setenv("FIXTURE_LEGACY_ADOPTION", "1")
+		testSupervisedProcessExec(t, true)
+	})
+}
+
+func testSupervisedProcessExec(t *testing.T, adopt bool) {
+	t.Helper()
 	old, next := fixtures(t)
 	dir, err := os.MkdirTemp("/tmp", "nu-process-*")
 	if err != nil {
@@ -723,10 +774,23 @@ func TestSupervisedProcessExecPreservesSymlinkArgsEnvironmentAndRoot(t *testing.
 		call(t, peer, "chunk", proto.NodeUpdateChunkParams{ID: begin.ID, Offset: offset, Data: data[offset:end]}, &chunk)
 		offset = chunk.Offset
 	}
+	var installed os.FileInfo
+	if adopt {
+		replaceExternally(t, exe, data)
+		installed, err = os.Stat(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	var accepted proto.NodeUpdateCommitResult
 	call(t, peer, "commit", proto.NodeUpdateCommitParams{ID: begin.ID}, &accepted)
 	if !accepted.Accepted {
 		t.Fatal("commit not accepted")
+	}
+	if adopt && os.Getenv("FIXTURE_LEGACY_ADOPTION") != "" {
+		if _, err := os.Stat(markerPath(exe)); !os.IsNotExist(err) {
+			t.Fatalf("legacy target would see an unsupported marker: %v", err)
+		}
 	}
 	before, _ := os.ReadFile(proof)
 	if !bytes.Contains(before, []byte(`"version":"old"`)) {
@@ -758,6 +822,9 @@ func TestSupervisedProcessExecPreservesSymlinkArgsEnvironmentAndRoot(t *testing.
 	call(t, peer, "confirm", proto.NodeUpdateConfirmParams{Version: "next"}, nil)
 	if _, err := os.Stat(markerPath(exe)); !os.IsNotExist(err) {
 		t.Fatal("pending transaction not confirmed")
+	}
+	if adopt {
+		assertInstalledUntouched(t, exe, installed, spec(data, "next").SHA256)
 	}
 	if st, err := os.Lstat(link); err != nil || st.Mode()&os.ModeSymlink == 0 {
 		t.Fatal("updater replaced symlink instead of its target")
@@ -814,7 +881,7 @@ func TestCapabilityRequiresResidentSupervisor(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XPC_SERVICE_NAME", "")
 	t.Setenv("INVOCATION_ID", "")
-	if ok, reason := New("old", func() {}, Options{}).Capability(); ok || reason == "" {
+	if ok, reason := New("old", func(string) {}, Options{}).Capability(); ok || reason == "" {
 		t.Fatal("unsupervised node advertised safe update")
 	}
 	var m *Manager
@@ -940,7 +1007,7 @@ func TestDeclaredSupervisorEnablesUpdatesWithoutServiceManager(t *testing.T) {
 	t.Setenv("XPC_SERVICE_NAME", "")
 	t.Setenv("INVOCATION_ID", "")
 	onlyPS(t, "")
-	declared := New("old", func() {}, Options{Supervised: true})
+	declared := New("old", func(string) {}, Options{Supervised: true})
 	t.Cleanup(declared.Close)
 	if ok, reason := declared.Capability(); !ok {
 		t.Fatalf("a node whose supervisor said so cannot take updates: %s", reason)
@@ -948,7 +1015,7 @@ func TestDeclaredSupervisorEnablesUpdatesWithoutServiceManager(t *testing.T) {
 	if declared.Executable() == "" {
 		t.Fatal("no executable resolved")
 	}
-	undeclared := New("old", func() {}, Options{})
+	undeclared := New("old", func(string) {}, Options{})
 	t.Cleanup(undeclared.Close)
 	if ok, _ := undeclared.Capability(); ok {
 		t.Fatal("a node nobody restarts advertised safe update")
@@ -968,7 +1035,7 @@ func TestDeclaredSupervisorNeedsPsThatReportsStartTimes(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			onlyPS(t, script)
-			m := New("old", func() {}, Options{Supervised: true})
+			m := New("old", func(string) {}, Options{Supervised: true})
 			t.Cleanup(m.Close)
 			if ok, reason := m.Capability(); ok || reason != psNoStart {
 				t.Fatalf("got %v %q, want the ps reason", ok, reason)
@@ -1057,8 +1124,17 @@ func TestDeclaredSupervisorUpdateConfirmsOrRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, outcome := range []string{"confirmed", "unconfirmed", "startup-crash"} {
-		t.Run(outcome, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, outcome string
+		diskDrift     bool
+	}{
+		{name: "confirmed", outcome: "confirmed"},
+		{name: "unconfirmed", outcome: "unconfirmed"},
+		{name: "startup-crash", outcome: "startup-crash"},
+		{name: "confirmed-with-disk-drift", outcome: "confirmed", diskDrift: true},
+		{name: "unconfirmed-with-disk-drift", outcome: "unconfirmed", diskDrift: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			dir, err := os.MkdirTemp("/tmp", "nu-declared-*")
 			if err != nil {
 				t.Fatal(err)
@@ -1072,20 +1148,27 @@ func TestDeclaredSupervisorUpdateConfirmsOrRollsBack(t *testing.T) {
 			if err := copyFile(old, exe); err != nil {
 				t.Fatal(err)
 			}
-			oldHash := hash(t, exe)
 			proof := filepath.Join(dir, "proof")
 			// The fake systemd-run on PATH records any call: a declared supervisor must not use it.
 			systemdLog := filepath.Join(dir, "systemd-run-called")
 			env := append(os.Environ(), "HOME="+dir, "PERSONA_HOME="+dir, "INVOCATION_ID=", "XPC_SERVICE_NAME=",
 				"FIXTURE_PROOF="+proof, "NODE_UPDATE_FAKE_SYSTEMD_LOG="+systemdLog)
-			if outcome == "startup-crash" {
+			if tc.outcome == "startup-crash" {
 				env = append(env, "FIXTURE_CRASH=next")
 			}
 			s := superviseFixture(t, exe, env)
 			waitFor(t, 5*time.Second, func() bool { b, _ := os.ReadFile(proof); return bytes.Contains(b, []byte(`"version":"old"`)) })
 			firstPID, _ := s.current()
 
+			rollbackVersion := "old"
+			if tc.diskDrift {
+				replaceExternally(t, exe, intermediateFixture(t))
+				rollbackVersion = "intermediate"
+			}
+			oldHash := hash(t, exe)
 			peer, c := fixturePeer(t, filepath.Join(dir, "fixture.sock"))
+			defer c.Close()
+			defer peer.Close(io.EOF)
 			var begin proto.NodeUpdateBeginResult
 			call(t, peer, "begin", spec(data, "next"), &begin)
 			for offset := int64(0); offset < int64(len(data)); {
@@ -1106,8 +1189,16 @@ func TestDeclaredSupervisorUpdateConfirmsOrRollsBack(t *testing.T) {
 			if p.WatchPID < 2 || p.WatchStart == "" {
 				t.Fatal("the detached watchdog did not record itself")
 			}
+			if p.From != rollbackVersion || p.OldHash != oldHash || hash(t, p.Backup) != oldHash {
+				t.Fatal("rollback did not capture the executable that was on disk")
+			}
 			_, watchBirth := procState(p.WatchPID) // while it runs: the pid names it as long as this start does
-			if outcome != "confirmed" {
+			// The watchdog reads the transaction's deadline on every tick, so the test can bring it forward. A crashing
+			// new program has nothing to show first: its deadline comes now. An unconfirmed one must be seen running in
+			// place before the watchdog takes it back, so its deadline comes once it is (below): set now, a slow start
+			// could outlast it and the new program would never be seen.
+			soon := func() {
+				t.Helper()
 				if err := locked(exe, func() error {
 					p, err := loadPending(markerPath(exe))
 					if err != nil {
@@ -1119,13 +1210,16 @@ func TestDeclaredSupervisorUpdateConfirmsOrRollsBack(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if tc.outcome == "startup-crash" {
+				soon()
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			_ = peer.Call(ctx, "response-written", proto.NodeUpdateCommitParams{ID: begin.ID}, nil)
 			cancel()
 			_ = c.Close()
 			peer.Close(io.EOF)
 
-			switch outcome {
+			switch tc.outcome {
 			case "confirmed":
 				// The new program replaced the old one in the same process: the supervisor saw nothing exit.
 				waitFor(t, 8*time.Second, func() bool { p, ok := proofOf(proof); return ok && p.Version == "next" })
@@ -1168,13 +1262,14 @@ func TestDeclaredSupervisorUpdateConfirmsOrRollsBack(t *testing.T) {
 			default:
 				// Nobody confirms: the watchdog restores the old file and stops the node; the supervisor's restart
 				// runs the old program, which clears the transaction.
-				if outcome == "unconfirmed" {
+				if tc.outcome == "unconfirmed" {
 					waitFor(t, 5*time.Second, func() bool { p, ok := proofOf(proof); return ok && p.Version == "next" && p.PID == firstPID })
+					soon()
 				}
 				waitFor(t, 10*time.Second, func() bool {
 					p, ok := proofOf(proof)
 					pid, _ := s.current()
-					return ok && p.Version == "old" && p.PID == pid && pid != firstPID
+					return ok && p.Version == rollbackVersion && p.PID == pid && pid != firstPID
 				})
 				waitFor(t, 5*time.Second, func() bool { _, err := os.Stat(markerPath(exe)); return os.IsNotExist(err) })
 				if hash(t, exe) != oldHash {

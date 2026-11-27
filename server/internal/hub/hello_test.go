@@ -53,39 +53,42 @@ func TestHealthSourceDisclosure(t *testing.T) {
 	}
 }
 
+// iosEnvelopeKeys are the keys the iOS app's socket Envelope (apple/Shared/LiveConnection.swift) already types: a new
+// top-level hello key must not be one of them.
+var iosEnvelopeKeys = strings.Fields("type machine_id session_id machines sessions items backlog has_more more_after history from_seq to_seq text status interaction id call_id name args event message last_assistant_message error revs feed_ids fleet features epoch seq full cols rows data unsupported state")
+
 func TestHelloCompatibility(t *testing.T) {
 	h := newPublicTestHub(t)
 	h.public.port, h.public.fp = 19443, "test-pin"
 	h.public.endpoints = []Endpoint{{URL: "https://example.com:19443", Kind: "name", Port: 19443, Scheme: "https", SeenAt: time.Now().UTC()}}
 	hello := h.hello()
-	if hello["type"] != "hello" || hello["server_version"] != h.version || len(hello["client_id"].(string)) != 12 {
+	if hello.Type != "hello" || hello.ServerVersion != h.version || len(hello.ClientID) != 12 {
 		t.Fatal("legacy hello fields changed")
 	}
-	features := hello["features"].([]string)
+	features := hello.Features
 	if !slices.Contains(features, "tls") || !slices.Contains(features, "endpoints") || !slices.Contains(features, proto.FeatureMessageSendState) {
 		t.Fatal("new capabilities were not declared")
 	}
-	if version, ok := hello[proto.FeatureMessageSendState].(int); !ok || version != proto.MessageSendStateVersion {
+	if hello.MessageSendState != proto.MessageSendStateVersion {
 		t.Fatal("hello did not carry the hub-authored receipt version")
 	}
-	if hello["hub_id"] != h.hubID() || hello["tls_port"] != 19443 || hello["fp"] != "test-pin" || len(hello["endpoints"].([]Endpoint)) != 1 {
+	if hello.HubID != h.hubID() || hello.TLSPort != 19443 || hello.FP != "test-pin" || len(hello.Endpoints) != 1 {
 		t.Fatal("missing public connection metadata")
 	}
-	if hello["public_url"] != "http://example.com:18660" {
-		t.Fatalf("public_url = %v", hello["public_url"])
+	if hello.PublicURL != "http://example.com:18660" {
+		t.Fatalf("public_url = %v", hello.PublicURL)
 	}
 	h.cfg.PublicURL = " https://hub.example.com:18660/ "
-	if got := h.hello()["public_url"]; got != "https://hub.example.com:18660" {
+	if got := h.hello().PublicURL; got != "https://hub.example.com:18660" {
 		t.Fatalf("public_url = %v", got)
 	}
 	h.cfg.PublicURL = ""
-	if _, ok := h.hello()["public_url"]; ok {
-		t.Fatal("public_url without one configured")
+	if got := h.hello().PublicURL; got != "" {
+		t.Fatalf("public_url without one configured: %q", got)
 	}
 	// The existing iOS Envelope must not see a new value under an already typed key.
-	known := strings.Fields("type machine_id session_id machines sessions items backlog has_more more_after history from_seq to_seq text status interaction id call_id name args event message last_assistant_message error revs feed_ids fleet features epoch seq full cols rows data unsupported state")
-	for _, key := range []string{"hub_id", "endpoints", "tls_port", "fp", "public_url", proto.FeatureMessageSendState} {
-		if slices.Contains(known, key) {
+	for _, key := range []string{"hub_id", "endpoints", "tls_port", "fp", "public_url", "push_grading", "read_only", "expires_at", proto.FeatureMessageSendState} {
+		if slices.Contains(iosEnvelopeKeys, key) {
 			t.Fatalf("new hello field collides with iOS Envelope: %s", key)
 		}
 	}

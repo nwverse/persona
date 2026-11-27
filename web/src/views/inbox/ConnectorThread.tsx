@@ -4,13 +4,14 @@
 // A thread that cannot be read (a CI run, a rate limit, a connector without threads) shows what the hub collected
 // about the item instead, with "Open in X". Read-only otherwise: no pages for browsing the source (CLAUDE.md).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, ApiError, errorText } from "../../lib/api";
+import { api, ApiError, errorText, isAbort } from "../../lib/api";
 import {
   chatHeadline, checkLabel, githubStateLabel, isChatThread, isGitHubThread, labelColor, loadThread, mediaLine, mediaURL, mergeNewest, mergeOlder,
-  reachMessage, replyInThread, reviewLabel, startsGroup, type ThreadChat, type ThreadMedia, type ThreadMessage, type ThreadPage,
+  reachMessage, replyInThread, reviewLabel, startsGroup, type ThreadChat, type ThreadMedia, type ThreadMessage, type ThreadPage, type ThreadPerson,
 } from "../../lib/connectors";
 import { connectorReference, itemPath, itemRequest, shortTime, tightCJK, withToken, type InboxItem } from "../../lib/inbox";
-import { defaultManager, useItemManager, withManager } from "../../lib/manager-choice";
+import { atNewest } from "../../lib/lark-history";
+import { defaultManager, ItemManager, useItemManager, withManager } from "../../lib/manager-choice";
 import { openLink } from "../../lib/links";
 import { t } from "../../i18n";
 import { Button, cx, Loading, Spinner, toast } from "../../ui/atoms";
@@ -18,7 +19,8 @@ import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { ImageViewer } from "../chat/ImageViewer";
 import { scrollBehavior } from "../../ui/stream/motion";
-import { Monogram } from "./InboxParts";
+import { Monogram, useFollowEnd } from "./InboxParts";
+import { useLarkWrites } from "./lark-write-gate";
 import { LarkInboxContent } from "./LarkInboxContent";
 import { ConnectorReadNotice, ConnectorReplyTarget, conversationFailure, type ConversationFailure } from "./ConnectorReadNotice";
 
@@ -38,11 +40,12 @@ export function ConnectorBody({ item }: { item: InboxItem }) {
   const shown = useItemManager();
   const manager = item.manager ?? shown;
   const ownerKey = JSON.stringify([manager || defaultManager(), item.id, item.source, item.connector?.thread ?? ""]);
-  return <ConnectorThreadBody key={ownerKey} item={item} manager={manager} />;
+  return <ItemManager.Provider value={manager}><ConnectorThreadBody key={ownerKey} item={item} manager={manager} /></ItemManager.Provider>;
 }
 
 function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: string }) {
   const id = item.source;
+  const readOnly = id === "larkcli" && !useLarkWrites();
   const thread = item.connector?.thread ?? "";
   const [page, setPage] = useState<ThreadPage | null>(null);
   const [failure, setFailure] = useState<ConversationFailure | null>(null);
@@ -153,7 +156,7 @@ function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: str
 
   const send = async (text: string, replyTo?: ThreadMessage) => {
     const scope = owner.current;
-    if (!scope || !page?.chat.reply) return false;
+    if (!scope || readOnly || !page?.chat.reply) return false;
     try {
       await replyInThread(id, { thread, action: page.chat.reply, text, reply_to: replyTo?.id }, manager);
     } catch (e) {
@@ -173,7 +176,7 @@ function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: str
     {failure && <div className="shrink-0 px-4 py-2"><ConnectorReadNotice failure={failure} onRetry={() => void load()} /></div>}
     {isGitHubThread(page.chat)
       ? <GitHubThread key={composerKey} id={id} item={item} page={page} older={older} onOlder={() => void loadOlder()} onSend={send} />
-      : <ChatThread key={composerKey} id={id} page={{ ...page, chat: { ...page.chat, name: page.chat.name || item.title } }} older={older} onOlder={() => void loadOlder()} onReach={reach} onSend={send} />}
+      : <ChatThread key={composerKey} id={id} page={{ ...page, chat: { ...page.chat, name: page.chat.name || item.title } }} older={older} readOnly={readOnly} onOlder={() => void loadOlder()} onReach={reach} onSend={send} />}
   </>;
 }
 
@@ -185,11 +188,13 @@ function ConnectorText({ item, problem, onRetry }: { item: InboxItem; problem?: 
   const c = item.connector;
   useEffect(() => {
     let live = true;
-    api<InboxItem>(itemPath(item.id), { headers: itemRequest(item) })
+    const abort = new AbortController();
+    api<InboxItem>(itemPath(item.id), { headers: itemRequest(item), signal: abort.signal })
       .then((r) => live && (setContext(r.context ?? ""), setFailure("")))
-      .catch((e) => live && setFailure(errorText(e)));
+      .catch((e) => { if (live && !isAbort(e)) setFailure(errorText(e)); });
     return () => {
       live = false;
+      abort.abort();
     };
   }, [item.id, item.manager]);
   return (
@@ -320,10 +325,11 @@ function OlderButton({ busy, onClick }: { busy: boolean; onClick: () => void }) 
 
 // ── a chat app's conversation (Telegram) ─────────────────
 
-function ChatThread({ id, page, older, onOlder, onReach, onSend }: {
+function ChatThread({ id, page, older, readOnly = false, onOlder, onReach, onSend }: {
   id: string;
   page: ThreadPage;
   older: boolean;
+  readOnly?: boolean;
   onOlder: () => void;
   /** Whether the message was reached; undefined when busy, retired or the read already reported its failure. */
   onReach: (id: string) => Promise<boolean | undefined>;
@@ -336,13 +342,22 @@ function ChatThread({ id, page, older, onOlder, onReach, onSend }: {
   const last = page.messages[page.messages.length - 1]?.id;
   const group = page.chat.kind !== "dm";
   const headline = chatHeadline(page.chat);
+  // Where the last scroll left the list (atNewest), and whether a quote's jump holds it.
+  const atEnd = useRef(true);
+  const away = useRef(false);
   // At the newest message on open and when one comes in (an older page leaves the scroll where it was).
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    atEnd.current = true;
   }, [last]);
+  // At its newest message the list keeps it in view (the keyboard, a longer answer, a picture loading); a quote's jump
+  // and an older page asked for are left alone.
+  useFollowEnd(scroller, () => atEnd.current && !away.current);
   // To the quoted message once it is drawn: centred, without the smooth scroll when the user asks for less motion.
   useEffect(() => {
+    away.current = flash !== null;
     if (!flash) return;
     const row = [...(scroller.current?.querySelectorAll<HTMLElement>("[data-mid]") ?? [])].find((el) => el.dataset.mid === flash.id);
     row?.scrollIntoView?.({ block: "center", behavior: scrollBehavior() });
@@ -357,17 +372,23 @@ function ChatThread({ id, page, older, onOlder, onReach, onSend }: {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {headline && <p className="shrink-0 truncate border-b border-line px-4 py-1.5 text-center text-[12px] text-ink-3 tabular-nums">{headline}</p>}
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scroller} onScroll={(e) => {
+        atEnd.current = atNewest(e.currentTarget);
+      }} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[760px] px-3 py-3 sm:px-5">
-          {page.before && <OlderButton busy={older} onClick={onOlder} />}
+          {page.before && <OlderButton busy={older} onClick={() => {
+            // asking for older messages leaves the end, even in a thread short enough to show it
+            atEnd.current = false;
+            onOlder();
+          }} />}
           {!page.messages.length && <p className="py-10 text-center text-[12.5px] text-ink-3">{t("inbox-connectorthread.empty")}</p>}
           {page.messages.map((m, i) => (
             <Bubble key={m.id} id={id} m={m} head={startsGroup(m, page.messages[i - 1])} group={group} lit={flash?.id === m.id}
-              onQuote={m.reply_to?.id ? () => void jump(m.reply_to!.id) : undefined} onReply={page.chat.reply ? () => setReplyTo(m) : undefined} />
+              onQuote={m.reply_to?.id ? () => void jump(m.reply_to!.id) : undefined} onReply={!readOnly && page.chat.reply ? () => setReplyTo(m) : undefined} />
           ))}
         </div>
       </div>
-      {page.chat.reply ? (
+      {!readOnly && page.chat.reply ? (
         <ThreadComposer placeholder={t("inbox-connectorthread.send_to", { name: page.chat.name })} replyTo={replyTo} onClearReply={() => setReplyTo(null)} onSend={onSend} />
       ) : null}
     </div>
@@ -394,7 +415,7 @@ function Bubble({ id, m, head, group, lit, onQuote, onReply }: {
   const bare = !m.text && !m.reply_to && !others.length; // only pictures: no bubble around them
   return (
     <div data-mid={m.id} className={cx("group/msg flex items-start gap-2 rounded-[16px] motion-safe:transition-colors motion-safe:duration-300", head || larkCard ? "mt-2.5" : "mt-0.5", mine && "flex-row-reverse", lit && "bg-accent-tint")}>
-      {!mine && <span className="w-8 shrink-0">{(head || larkCard) && <Monogram name={m.sender.name} size={32} src={m.sender.avatar ? mediaURL(id, m.sender.avatar) : undefined} />}</span>}
+      {!mine && <span className="w-8 shrink-0">{(head || larkCard) && <Monogram name={m.sender.name} size={32} avatarURL={m.sender.avatar_url} src={m.sender.avatar ? mediaURL(id, m.sender.avatar) : undefined} />}</span>}
       <div className={cx("flex min-w-0 flex-col", larkCard ? "w-full max-w-full" : "max-w-[78%]", mine ? "items-end" : "items-start")}>
         {(head || larkCard) && (group || id === "larkcli") && !mine && <span className="mb-0.5 px-1 text-[11.5px] font-medium text-ink-2">{m.sender.name || t("inbox-connectorthread.unknown_sender")}</span>}
         {pictures.map((x, i) => <Picture key={i} id={id} media={x} />)}
@@ -563,7 +584,7 @@ function GitHubHeader({ chat, reference }: { chat: ThreadChat; reference: string
 
 function Card({ id, who, at, title, tone, url, children }: {
   id: string;
-  who?: { name: string; avatar?: string };
+  who?: ThreadPerson;
   at?: string;
   title: React.ReactNode;
   tone?: string;
@@ -572,7 +593,7 @@ function Card({ id, who, at, title, tone, url, children }: {
 }) {
   return (
     <div className="flex gap-2.5">
-      <Monogram name={who?.name ?? "?"} size={28} src={who?.avatar ? mediaURL(id, who.avatar) : undefined} />
+      <Monogram name={who?.name ?? "?"} size={28} avatarURL={who?.avatar_url} src={who?.avatar ? mediaURL(id, who.avatar) : undefined} />
       <div className="min-w-0 flex-1 overflow-hidden rounded-[12px] bg-surface shadow-card">
         <div className="flex min-w-0 items-center gap-2 border-b border-line bg-inset px-3 py-1.5 text-[12px]">
           <span className={cx("min-w-0 truncate font-medium", tone ?? "text-ink")}>{title}</span>

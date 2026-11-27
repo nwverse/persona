@@ -16,6 +16,9 @@ type Launcher struct {
 	// RuntimeFallback is node-local discovery provenance: an ordinary CLI command yields to a connected runtime
 	// offering the same launcher. Explicit shell definitions never do. This flag is not part of the wire protocol.
 	RuntimeFallback bool `json:"-"`
+	// ConfigDir is the launcher's literal CLAUDE_CONFIG_DIR (when known), kept node-local for matching terminal
+	// sessions whose ANTHROPIC_BASE_URL is empty or ambiguous. Not part of the wire protocol.
+	ConfigDir string `json:"-"`
 	// Agent is what it starts when not Claude Code: "codex" (plain codex, or an alias running it; docs/integrations/codex.md
 	// "Starting from the phone").
 	Agent string `json:"agent,omitempty"`
@@ -34,6 +37,8 @@ type Launcher struct {
 	PermissionModes PermissionModeSet `json:"permission_modes,omitempty"`
 	// Assistant: a runtime's launcher that may run the Persona assistant (docs/integrations/runtimes.md "Assistant"), whatever its agent.
 	Assistant bool `json:"assistant,omitempty"`
+	// SupervisionPolicy is an explicitly verified runtime instruction channel, independent of Assistant.
+	SupervisionPolicy bool `json:"supervision_policy,omitempty"`
 	// External is a sanitized, machine-local adapter advertisement. It grants no execution authority.
 	External *ExternalLauncher `json:"external,omitempty"`
 	// AssistantFor: on an Assistant launcher, the Agent launcher of this computer it runs the assistant for, as the
@@ -53,6 +58,9 @@ type Launcher struct {
 	// Pi: a Persona-managed provider pi can use on this computer too (ManagedLauncher.PiAPI, docs/integrations/pi.md
 	// "Persona's model providers").
 	Pi bool `json:"pi,omitempty"`
+	// BuiltinCompanion: this runtime launcher is backed by the node's own built-in Antigravity companion (wrapping the
+	// local `agy` CLI), not an external runtime. Set only by the node when the verified built-in companion registers.
+	BuiltinCompanion bool `json:"builtin_companion,omitempty"`
 }
 
 // StartInstead is what a new session's start asked for and does not run with, as an engine runtime that runs only its
@@ -144,6 +152,8 @@ type LauncherModels struct {
 	Models []AgentModel `json:"models"`
 	// Locked: why a model picked here would not reach the agent (the launcher fixes its own --model); empty: it would.
 	Locked string `json:"locked,omitempty"`
+	// SupportsStartModel: the node verified a new native omp session can take a model in this host.
+	SupportsStartModel bool `json:"supports_start_model,omitempty"`
 }
 
 // ModelPrice is the catalog's reference price in USD per one million tokens. It is display metadata, not a gateway quote.
@@ -163,6 +173,9 @@ type AgentModel struct {
 	Description string `json:"description,omitempty"`
 	// Resolved: the model an alias stands for with this launcher's settings (opus → its model id).
 	Resolved string `json:"resolved,omitempty"`
+	// ResolvedOffered: the gateway's own catalog also lists Resolved verbatim as a selectable ID.
+	// Absent when unknown. The node preserves this evidence on the alias row without adding a picker row.
+	ResolvedOffered bool `json:"resolved_offered,omitempty"`
 	// Default: what the agent runs when no model is given; picking it is the same as picking none.
 	Default bool `json:"default,omitempty"`
 	// Efforts: the thinking efforts it takes, weakest first; none: no effort setting.
@@ -224,7 +237,7 @@ type ManagedLauncher struct {
 	// SubagentForce: CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 (the subagent model wins over an agent's own model:).
 	SubagentForce bool `json:"subagent_force,omitempty"`
 	// Headers: ANTHROPIC_CUSTOM_HEADERS, one "Name: value" a line. A secret like the key: sealed at rest, never sent
-	// back to clients (they see HasHeaders).
+	// back to clients (they see HasHeaders and, in the manager's LauncherView, only the configured names).
 	Headers    string `json:"headers,omitempty"`
 	HasHeaders bool   `json:"has_headers,omitempty"`
 	// Proxy / NoProxy: HTTP_PROXY and HTTPS_PROXY / NO_PROXY for the gateway.
@@ -238,8 +251,8 @@ type ManagedLauncher struct {
 	// TimeoutMS: API_TIMEOUT_MS; 0 is 3000000 for a gateway (BaseURL set), Claude Code's own default otherwise.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 	// CompactWindow: CLAUDE_CODE_AUTO_COMPACT_WINDOW; 0 is the default model's context window (none when unknown).
-	// Assistant conversations follow it like agents do (#3066); the main one is held to assistant.main_compact_window
-	// when that is smaller (#7314).
+	// Assistant conversations follow it like agents do (#3066); the main one and the leader conversations are held to
+	// assistant.main_compact_window when that is smaller (#7314, #15318).
 	CompactWindow int `json:"compact_window,omitempty"`
 	// MaxContext: CLAUDE_CODE_MAX_CONTEXT_TOKENS; 0 is the default model's context window when it is over 200K.
 	MaxContext int `json:"max_context,omitempty"`
@@ -337,6 +350,21 @@ func (l ManagedLauncher) AgentType() string {
 		return l.Agent
 	}
 	return "claude"
+}
+
+// CustomHeadersSupported reports whether this managed runtime has a real launch-time channel for every configured
+// header. A probe may send a header over HTTP even when the runtime cannot; those combinations must be refused instead
+// of presenting the probe as proof of a working launch.
+func (l ManagedLauncher) CustomHeadersSupported() bool {
+	switch l.AgentType() {
+	case "claude", "codex":
+		return true
+	case "omp":
+		// omp documents ANTHROPIC_CUSTOM_HEADERS for its Anthropic provider behind a non-Anthropic base URL.
+		return (l.API == "" || l.API == "messages") && !AnthropicAPI(l.LaunchBaseURL())
+	default:
+		return false
+	}
 }
 
 // PiAPI is the pi API (pi's registerProvider "api") a provider speaks when pi can use it too (docs/integrations/pi.md
@@ -495,8 +523,7 @@ func trimBasePathSuffix(base, suffix string) string {
 // Antigravity CLI. The node starts them with the two ignored rather than refusing the start (node/control.go, #8151).
 var WorkAgentTypes = []string{"pi", "cursor", "agy"}
 
-// NoModeAgentTypes are the other agents the node starts in a terminal, traex and Oh My Pi: it refuses a start of one
-// that names a permission mode or effort (node/control.go).
+// NoModeAgentTypes are the other terminal agents whose starts refuse Persona permission modes, TRAE CLI and Oh My Pi.
 var NoModeAgentTypes = []string{"traex", "omp"}
 
 // IsWorkAgentType: agent is one of WorkAgentTypes.

@@ -161,6 +161,89 @@ class RepairIntegrationTests(unittest.TestCase):
         branch = "refs/heads/pr-watch/repair-7-" + merged["headRefOid"][:12]
         self.assertEqual(self.git("ls-remote", "origin", branch).split()[0], merged["headRefOid"])
 
+    def test_fork_continuation_checks_github_before_publishing(self):
+        pr, merged, base = self.fork_merge()
+        existing = {"number": 8, "title": "fix: continue #7 verification repair", "body": "",
+                    "headRefOid": pr["headRefOid"]}
+        created = []
+        snapshots = {7: pr, 9: dict(merged, number=9)}
+
+        def github(argv, **kwargs):
+            if "--search" in argv:
+                return [existing]
+            if "--head" in argv:
+                return []
+            created.append(json.loads(kwargs["input_text"]))
+            return {"number": 9}
+
+        original_checked = pr_watch_repair.checked
+
+        def checked(argv, **kwargs):
+            if argv[:2] == ["gh", "api"]:
+                self.assertEqual(argv[2], "repos/example/one/commits/" + pr["headRefOid"])
+                return "2026-11-16T00:00:00Z\n"
+            return original_checked(argv, **kwargs)
+
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}), \
+                patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: snapshots[number]), \
+                patch.object(pr_watch_repair, "gh_json", side_effect=github), \
+                patch.object(pr_watch_repair, "checked", side_effect=checked):
+            for state, merged_at, expected in [("OPEN", None, (8, None)),
+                                               ("MERGED", "2026-11-17T00:00:00Z", (8, None)),
+                                               ("MERGED", "2026-11-15T00:00:00Z", (9, []))]:
+                with self.subTest(state=state, merged_at=merged_at):
+                    existing.update(state=state, mergedAt=merged_at)
+                    result = pr_watch_repair.commit_and_push_repair("example/one", merged, str(self.repo), base, "failure",
+                                                                      {"profile": "commands", "commands": [["true"]]},
+                                                                      allow_merge_only=True, original_pr=pr)
+                    self.assertEqual(result, expected)
+                    if expected[0] == 8:
+                        self.assertEqual(created, [])
+                        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/pr-watch/*"), "")
+        self.assertEqual(len(created), 1)
+
+    def test_stale_open_continuation_does_not_block_repair_after_fork_push(self):
+        fork, old_repair, base = self.fork_merge()
+        self.git("checkout", "-q", "--detach", fork["headRefOid"])
+        self.git("commit", "--allow-empty", "-qm", "new fork head")
+        fork["headRefOid"] = self.git("rev-parse", "HEAD")
+        repaired_head = pr_watch_repair.update_branch_with_main("example/one", fork, str(self.repo), base)
+        repaired = dict(fork, headRefOid=repaired_head)
+        old_head = old_repair["headRefOid"]
+        existing = {"number": 8, "title": "fix: verification repair", "body": "Continuation of #7.",
+                    "state": "OPEN", "headRefOid": old_head}
+
+        def github(argv, **kwargs):
+            if "--search" in argv:
+                return [existing]
+            if "--head" in argv:
+                return []
+            return {"number": 9}
+
+        original_checked = pr_watch_repair.checked
+
+        def checked(argv, **kwargs):
+            if argv[:2] == ["gh", "api"]:
+                self.assertEqual(argv[2], "repos/example/one/compare/%s...%s" % (fork["headRefOid"], old_head))
+                return "diverged\n"
+            return original_checked(argv, **kwargs)
+
+        snapshots = {7: fork, 9: dict(repaired, number=9)}
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}), \
+                patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: snapshots[number]), \
+                patch.object(pr_watch_repair, "gh_json", side_effect=github) as api, \
+                patch.object(pr_watch_repair, "checked", side_effect=checked):
+            number, results = pr_watch_repair.commit_and_push_repair(
+                "example/one", repaired, str(self.repo), base, "failure", {"profile": "commands", "commands": [["true"]]},
+                allow_merge_only=True, original_pr=fork)
+        self.assertEqual((number, results), (9, []))
+        branch = "pr-watch/repair-7-" + repaired_head[:12]
+        self.assertIn("headRefOid", api.call_args_list[0].args[0][-1].split(","))
+        self.assertEqual(json.loads(api.call_args.kwargs["input_text"])["head"], "example:" + branch)
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/" + branch).split()[0], repaired_head)
+
     def test_fork_continuation_retries_an_unchanged_absent_branch_without_force(self):
         pr, merged, base = self.fork_merge()
         snapshots = {7: pr, 8: dict(merged, number=8)}
@@ -391,6 +474,38 @@ class RepairIntegrationTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "HEAD"), updated)
         self.assertEqual(self.git("show", "-s", "--format=%P", updated).split(), [self.head, self.main])
         self.assertFalse((self.repo / ".git" / "MERGE_HEAD").exists())
+
+    # #16701: the whitespace gate saw every file the merge brought in, so one blank line at the end of a file main
+    # carries failed every conflict repair, naming a file no worker had edited.
+    def test_conflict_repair_ignores_an_unrelated_blank_line_at_eof_in_main(self):
+        self.conflicting_merge()
+        self.git("checkout", "-q", "main")
+        (self.repo / "main-note.txt").write_text("note\n\n")
+        self.git("add", "main-note.txt")
+        self.git("commit", "-qm", "a main file that ends with a blank line")
+        self.git("push", "-q", "origin", "main")
+        self.main = self.git("rev-parse", "HEAD")
+        self.pr["baseRefOid"] = self.main
+        self.git("checkout", "-q", "fix/example")
+        def resolve(root, edits):
+            (edits / "file.txt").write_text("pr\nmain conflict\n")
+        with self.conflict_worker(resolve), \
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=self.pr), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}):
+            updated = pr_watch_repair.update_branch_with_main("example/one", self.pr, str(self.repo), self.main, {"repair_command": "repair-worker"})
+        self.assertEqual(self.git("rev-parse", "HEAD"), updated)
+        self.assertEqual((self.repo / "main-note.txt").read_text(), "note\n\n")
+
+    def test_conflict_repair_still_refuses_a_blank_line_the_resolution_adds(self):
+        self.conflicting_merge()
+        def resolve(root, edits):
+            (edits / "file.txt").write_text("pr\nmain conflict\n\n")
+        with self.conflict_worker(resolve), \
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=self.pr), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}):
+            with self.assertRaisesRegex(pr_watch_repair.WatchError, "new blank line at EOF"):
+                pr_watch_repair.update_branch_with_main("example/one", self.pr, str(self.repo), self.main, {"repair_command": "repair-worker"})
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
 
     def test_conflict_worker_resolves_only_conflict_and_preserves_merge_parents(self):
         self.conflicting_merge()

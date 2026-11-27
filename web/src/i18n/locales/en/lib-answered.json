@@ -1,7 +1,7 @@
 {
-  "mode_accept_edits": "auto accept edits",
-  "mode_bypass": "full access",
-  "mode_default": "confirm each step",
+  "mode_accept_edits": "Auto accept edits",
+  "mode_bypass": "Full access",
+  "mode_default": "Default permissions",
   "dismissed": "Handed back to the computer",
   "by_assistant": "Answered by the assistant",
   "unanswered": "(No answer)",
@@ -18,6 +18,7 @@
   "entered": "(Entered)",
   "separator": ", ",
   "ended_expired": "This request expired, so the answer wasn't delivered",
+  "question_closed": "Question closed without an answer",
   "ended_cancelled": "The computer withdrew this request, so the answer wasn't delivered",
   "ended_dismissed": "This request was handed back to the computer, so the answer wasn't delivered",
   "ended_generic": "This request is over, so the answer wasn't delivered",

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // A release's files are fetched after its latest.json was read, and the source need not serve that release any more
@@ -60,6 +61,10 @@ func releaseBase(base, version string) string {
 	return (&url.URL{Scheme: "https", Host: "github.com", Path: repo + "/releases/download/v" + version}).String()
 }
 
+// ReleaseBase is the immutable GitHub release-tag base for a moving update source, or "" for other sources.
+// Managers use it to choose the release layout before trying the legacy versioned-directory download.
+func ReleaseBase(base, version string) string { return releaseBase(base, version) }
+
 // MovedError is a download that did not match the release checked because its source serves another release now
 // (Now): one published between the check and the download. It wraps the mismatch (IsMismatch).
 type MovedError struct {
@@ -90,7 +95,9 @@ func DownloadRelease(ctx context.Context, client *http.Client, base string, m *M
 	if !IsMismatch(err) {
 		return bin, err
 	}
-	now, cerr := Check(ctx, client, base)
+	// The release's own edition's feed: m was taken as that edition when it was read.
+	edition, _ := nodeproto.ParseEdition(m.Edition)
+	now, cerr := CheckFeed(ctx, client, base, edition)
 	if cerr != nil || now.Manifest.Build == m.Build && now.Manifest.Version == m.Version {
 		return "", err
 	}

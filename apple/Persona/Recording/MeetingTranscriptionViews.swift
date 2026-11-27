@@ -16,18 +16,19 @@ nonisolated enum MeetingTranscriptionWords {
     /// The line under Record (`RecordingsSection.startPrivacy`): what leaves the phone in the meeting about to start.
     /// `mode`: the mode it starts in (nil: the hub names none, as before phase 5); `service`: the extension the owner chose
     /// to transcribe, by name (nil: the built-in one, which the text doesn't name); `talk`: Talk would send its spans to
-    /// the voice service (phase 4); `days`: how long the text is kept.
-    static func startPrivacy(_ mode: MeetingTranscriptionMode?, service: String?, talk: Bool, days: Int) -> String {
+    /// the voice service (phase 4); `textDays`: how long Knowledge keeps the text (0 is forever).
+    static func startPrivacy(_ mode: MeetingTranscriptionMode?, service: String?, talk: Bool, textDays: Int) -> String {
+        let kept = RecordingRetentionText.kept(textDays)
         if mode == .hub {
             if let service {
-                return String(localized: "This meeting's audio, Talk included, goes through your hub to \(service). The hub deletes the audio once the minutes are written; the text is kept for \(days) days.")
+                return String(localized: "This meeting's audio, Talk included, goes through your hub to \(service). The hub deletes the audio once the minutes are written; the text in Knowledge is \(kept).")
             }
-            return String(localized: "This meeting's audio, Talk included, goes through your hub to the speech service it is set up with. The hub deletes the audio once the minutes are written; the text is kept for \(days) days.")
+            return String(localized: "This meeting's audio, Talk included, goes through your hub to the speech service it is set up with. The hub deletes the audio once the minutes are written; the text in Knowledge is \(kept).")
         }
         if talk {
-            return String(localized: "Audio stays on this iPhone, except while Talk is on: what is said then goes to the voice service. Its text syncs to Knowledge and is kept for \(days) days.")
+            return String(localized: "Audio stays on this iPhone, except while Talk is on: what is said then goes to the voice service. Its text syncs to Knowledge and is \(kept).")
         }
-        return String(localized: "Audio stays on this device. Its text syncs to Knowledge and is kept for \(days) days.")
+        return String(localized: "Audio stays on this device. Its text syncs to Knowledge and is \(kept).")
     }
 
     /// The meeting page's privacy line beside Talk (`MeetingPageBar`): privacy mode's Wording, or hub mode's in a meeting the
@@ -57,14 +58,92 @@ nonisolated enum MeetingTranscriptionWords {
 
     /// Why the Live box shows the phone's own lines in a hub-mode meeting, once it has fallen back
     /// (`MeetingTranscriptionRule.Shown.fellBack`): waiting for Wi-Fi, the hub stopped for this meeting, or anything else.
-    static func fallback(_ meeting: MeetingTranscription.Meeting) -> String {
+    /// `phoneCannot`: this iPhone can't transcribe the meeting either (`phoneCannot(_:locale:fellBack:)` says why under
+    /// it), so the notice says only what the hub is at, and never that this iPhone's transcript shows (#13385).
+    static func fallback(_ meeting: MeetingTranscription.Meeting, phoneCannot: Bool = false) -> String {
         if meeting.socket == .waitingForWiFi {
-            return String(localized: "Waiting for Wi-Fi to send the audio to the hub. Showing this iPhone's transcript.")
+            return phoneCannot ? String(localized: "Waiting for Wi-Fi to send the audio to the hub.")
+                : String(localized: "Waiting for Wi-Fi to send the audio to the hub. Showing this iPhone's transcript.")
         }
         if meeting.stopped != nil {
-            return String(localized: "The hub stopped transcribing this meeting. Showing this iPhone's transcript.")
+            return phoneCannot ? String(localized: "The hub stopped transcribing this meeting.")
+                : String(localized: "The hub stopped transcribing this meeting. Showing this iPhone's transcript.")
         }
-        return String(localized: "The hub isn't transcribing right now. Showing this iPhone's transcript.")
+        return phoneCannot ? String(localized: "The hub isn't transcribing right now.")
+            : String(localized: "The hub isn't transcribing right now. Showing this iPhone's transcript.")
+    }
+
+    /// What stopped the hub's transcription, by the `problem` code it sent (#13446, an open set:
+    /// spec/fixtures/meeting-transcription-problems): the speech service refused, is busy, can't be reached, or anything
+    /// else; nil for a code with no reason of its own (`no_interim`, one from a newer hub).
+    nonisolated enum UpstreamKind: String, Sendable {
+        case refused, busy, unreachable, failed
+    }
+
+    static func upstreamKind(_ problem: String?) -> UpstreamKind? {
+        switch problem {
+        case "upstream_forbidden": .refused
+        case "upstream_busy": .busy
+        case "upstream_unavailable": .unreachable
+        case "upstream_failed": .failed
+        default: nil
+        }
+    }
+
+    /// The fallback notice's lines (#13385, #13446): why the hub isn't transcribing and, when it knows the kind, what to
+    /// do; then what this iPhone shows, or why it can't (`phoneCannot`). `service`: the speech service chosen on the hub,
+    /// by name (nil: the built-in one). Never the service's own error, a log id or account details: the hub sends only
+    /// the kind.
+    struct Notice: Equatable, Sendable {
+        var words: String
+        var phone: String?
+    }
+
+    static func fallbackNotice(_ meeting: MeetingTranscription.Meeting, service: String?, phoneCannot: String?) -> Notice {
+        guard meeting.socket != .waitingForWiFi, meeting.stopped == nil, let kind = upstreamKind(meeting.problem) else {
+            return Notice(words: fallback(meeting, phoneCannot: phoneCannot != nil), phone: phoneCannot)
+        }
+        return Notice(words: upstream(kind, service: service),
+                      phone: phoneCannot ?? String(localized: "Showing this iPhone's transcript."))
+    }
+
+    /// Why the hub isn't transcribing, for each kind, and what to do.
+    static func upstream(_ kind: UpstreamKind, service: String?) -> String {
+        let name = service ?? String(localized: "the speech service [Meeting Transcription]")
+        switch kind {
+        case .refused:
+            return String(localized: "The hub isn't transcribing right now: \(name) refused the requests, maybe because speech recognition isn't turned on for the account, or its quota ran out or expired. The hub tries again by itself; if this goes on, check in its console.")
+        case .busy:
+            return String(localized: "The hub isn't transcribing right now: \(name) is busy, maybe because too many sessions are running at once or its quota is used up. The hub tries again by itself; if this goes on, check what's left in its console.")
+        case .unreachable:
+            return String(localized: "The hub isn't transcribing right now: it can't reach \(name). It tries again by itself; if this goes on, check the hub machine's network.")
+        case .failed:
+            return String(localized: "The hub isn't transcribing right now: \(name) had an error. The hub tries again by itself.")
+        }
+    }
+
+    /// Why this iPhone shows no lines of its own for a meeting it can't transcribe (`RecordingTranscription.cannot`,
+    /// #13385): which language and what happens next. `locale`: the meeting's language (`RecordingEntry.locale`), the one
+    /// it is transcribed in or not at all; `fellBack`: a hub-mode meeting whose hub isn't transcribing either, whose
+    /// lines come back once it does.
+    static func phoneCannot(_ error: RecordingSpeechError, locale: String, fellBack: Bool, interface: Locale = .interface) -> String {
+        switch error {
+        case .unsupportedLanguage:
+            let language = languageName(locale, in: interface)
+            return fellBack
+                ? String(localized: "This iPhone can't transcribe \(language) on the device either, so no lines show until the hub transcribes again.")
+                : String(localized: "This iPhone can't transcribe \(language) on the device, so it shows no lines for this meeting.")
+        case .needsNewerSystem where fellBack:
+            return String(localized: "This iPhone needs iOS 26 or later to transcribe on the device, so no lines show until the hub transcribes again.")
+        default:
+            return error.errorDescription ?? ""
+        }
+    }
+
+    /// A recording language's name in the interface language ("Chinese" for zh-CN), as the language pickers name it.
+    static func languageName(_ locale: String, in interface: Locale = .interface) -> String {
+        guard let code = Locale(identifier: locale).language.languageCode?.identifier else { return locale }
+        return interface.localizedString(forLanguageCode: code) ?? locale
     }
 
     /// The recording page's lines for its transcription (`RecordingTranscriptionFacts`): nil when there is nothing to say
@@ -119,8 +198,8 @@ nonisolated enum MeetingTranscriptionWords {
     }
 
     /// The recording page's footer for a meeting whose audio went to the hub: it no longer says the audio stayed here.
-    static func detailFooter(days: Int) -> String {
-        String(localized: "This meeting's audio also went through your hub to its speech service; the hub deletes it once the minutes are written. After the retention period (\(days) days) the recording is cleared from this device and Knowledge.")
+    static func detailFooter(audioDays: Int, textDays: Int) -> String {
+        String(localized: "This meeting's audio also went through your hub to its speech service; the hub deletes that audio once the minutes are written. Audio on this device is \(RecordingRetentionText.kept(audioDays)). Its text in Knowledge is \(RecordingRetentionText.kept(textDays)).")
     }
 
     /// Whether the recording page's footer says the audio went through the hub (pure, for the tests): `detail.meta`'s
@@ -287,20 +366,28 @@ struct MeetingGlossaryPage: View {
 
 /// The notice that hub transcription fell back to this iPhone (#3862 phase 5): why, in words
 /// (`MeetingTranscriptionWords.fallback`), with the phone's mark in the caution color. Under the Live box's title, under
-/// the Highlights card's (phase 2b) and atop the meeting's transcript.
+/// the Highlights card's (phase 2b) and atop the meeting's transcript. When this iPhone can't transcribe the meeting
+/// either (#13385), why, on a line of its own; with no fallback, the same notice says only that.
 struct MeetingTranscriptionFallbackNotice: View {
     var words: String
+    /// Why this iPhone can't transcribe the meeting either, on a line of its own under `words` (#13385).
+    var phone: String? = nil
+    /// `meeting-phone-cannot-transcribe` where `words` itself says why this iPhone can't (no fallback, #13385).
+    var identifier = "meeting-transcription-fallback"
 
     var body: some View {
         Label {
-            Text(words).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: Theme.Space.lines) {
+                Text(words).fixedSize(horizontal: false, vertical: true)
+                if let phone { Text(phone).fixedSize(horizontal: false, vertical: true) }
+            }
         } icon: {
             ThemedIcon(Theme.Icon.phone).foregroundStyle(Theme.caution)
         }
         .font(Theme.Font.caption)
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("meeting-transcription-fallback")
+        .accessibilityIdentifier(identifier)
     }
 }
 
@@ -310,11 +397,16 @@ struct MeetingTranscriptionFallbackNotice: View {
 struct MeetingTranscriptionFallbackRow: View {
     var id: UUID
     @State private var transcription = MeetingTranscription.shared
+    @State private var phone = RecordingTranscription.shared
 
     var body: some View {
         // Whether it fell back doesn't hang on the role (only which lines show does).
         if transcription.shown(id, role: .off).fellBack {
-            MeetingTranscriptionFallbackNotice(words: MeetingTranscriptionWords.fallback(transcription.meeting(id)))
+            let cannot = phone.cannot[id].map {
+                MeetingTranscriptionWords.phoneCannot($0, locale: RecordingLibrary.shared.entry(id)?.locale ?? RecordingDefaults.locale, fellBack: true)
+            }
+            let notice = MeetingTranscriptionWords.fallbackNotice(transcription.meeting(id), service: transcription.service, phoneCannot: cannot)
+            MeetingTranscriptionFallbackNotice(words: notice.words, phone: notice.phone)
         }
     }
 }
@@ -382,14 +474,15 @@ struct RecordingRetentionFooter: View {
     var id: UUID
     var attendance: RecordingAttendance?
     var meta: MeetingTranscriptionView?
-    var days: Int
+    var audioDays: Int
+    var textDays: Int
     /// The text when the audio stayed here.
     var device: String
     @State private var store = MeetingTranscription.shared
 
     var body: some View {
         let hub = MeetingTranscriptionWords.audioWentToHub(meta: meta, decided: store.meeting(id).decided, attendance: attendance)
-        Text(hub ? MeetingTranscriptionWords.detailFooter(days: days) : device)
+        Text(hub ? MeetingTranscriptionWords.detailFooter(audioDays: audioDays, textDays: textDays) : device)
     }
 }
 

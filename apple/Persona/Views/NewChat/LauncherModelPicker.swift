@@ -12,27 +12,54 @@ nonisolated struct LauncherModelChoice: Equatable {
     var configured = ""
     /// How Default's line names [configured]: Model Settings (New Agent), Inherited (Model Settings itself, where empty inherits).
     var configuredLabel = String(localized: "Model Settings [Launcher Model Picker 8cbcf7]")
+    /// An Agent preset explicitly chose the list's default model: send its id instead of following Model Settings.
+    var presetDefault = false
+    /// The launcher New Agent will actually start. A shared settings picker leaves this nil.
+    var startLauncher: Launcher? = nil
+    var startsInHerdr = false
 
-    /// A pick can reach the agent: the launcher does not pass its own --model, and there is a list to pick from or an ID
-    /// can be typed (Claude Code, Codex: their list may be empty).
-    var canPick: Bool { list.locked == nil && (!list.models.isEmpty || takesTyped) }
+    private var supportsTyping: Bool {
+        if let launcher = startLauncher, launcher.startsOmp || launcher.runtimeAgent == "omp" { return launcher.startsOmp }
+        return LauncherModels.takesTypedModel(agent: list.agent)
+    }
+    /// Only the native launcher in herdr can apply an omp start model, even when a different host's catalog has rows.
+    var startAllowsModel: Bool {
+        guard startLauncher?.startsOmp == true else { return true } // other runtimes keep their advertised lists
+        return startsInHerdr && list.supportsStartModel == true && list.locked == nil
+    }
+    private var offersModels: Bool { startAllowsModel && (!list.models.isEmpty || supportsTyping) }
+    /// A pick can reach the agent even when the list is empty if the launcher accepts a typed ID.
+    var canPick: Bool { list.locked == nil && offersModels }
     /// An ID the list doesn't have can be typed in: "Other Model…" (#1644).
-    var takesTyped: Bool { list.takesTypedModel }
+    var takesTyped: Bool { canPick && supportsTyping }
+    var typedStartNote: String {
+        startLauncher?.startsOmp == true ? String(localized: "Not in the list; this start uses the ID as typed")
+            : String(localized: "Used for this start only. Once it runs, it's listed under Typed Before.")
+    }
     /// New Agent shows the locked row: the launcher passes its own --model where a model could otherwise be picked
-    /// or typed (an empty Claude Code / Codex list too; `takesTyped` is off once it is locked).
-    var showsLocked: Bool { list.locked != nil && (!list.models.isEmpty || LauncherModels.takesTypedModel(agent: list.agent)) }
+    /// or typed, even when the list is empty.
+    var showsLocked: Bool {
+        guard list.locked != nil else { return false }
+        return startLauncher?.startsOmp == true ? startsInHerdr : offersModels
+    }
     /// The model the agent runs when it is given none.
     var defaultModel: AgentModel? { list.models.first(where: \.isDefault) }
     /// What can be picked besides the default: the agent's own models, then the IDs typed before.
     var choices: [AgentModel] { list.models.filter { !$0.isDefault } }
     /// The IDs typed before that ran here, most recent first (`custom`, remembered by the hub).
     var remembered: [AgentModel] { list.models.filter(\.custom) }
-    var selected: AgentModel? { picked.isEmpty ? nil : list.models.first { $0.id == picked } }
+    /// The listed row for a saved ID: exact row IDs win, then the hub's folded aliases (both case-sensitive, as on the
+    /// web). A saved alias keeps its original value until the user deliberately picks the canonical row.
+    func listed(_ id: String) -> AgentModel? {
+        list.models.first { $0.id == id } ?? list.models.first { ($0.aliases ?? []).contains(id) }
+    }
+    var selected: AgentModel? { picked.isEmpty ? nil : listed(picked) }
 
     /// The `model` a start sends: nil for the default; a typed ID the list lacks goes as it is when the agent takes one.
+    /// `presetDefault` keeps a preset's explicit choice of the default entry explicit too.
     var sent: String? {
-        guard list.locked == nil, !picked.isEmpty else { return nil }
-        if let m = selected { return m.isDefault ? nil : picked }
+        guard canPick, !picked.isEmpty else { return nil }
+        if let m = selected { return m.isDefault && !presetDefault ? nil : picked }
         return takesTyped && ModelID.isValid(picked) ? picked : nil
     }
 
@@ -61,7 +88,7 @@ nonisolated struct LauncherModelChoice: Equatable {
     /// The thinking efforts the model that will run takes; nil: not known (every level stays offered): a typed ID's.
     var efforts: [String]? {
         if unlisted != nil { return nil }
-        let running = selected ?? (configured.isEmpty ? defaultModel : list.models.first { $0.id == configured })
+        let running = selected ?? (configured.isEmpty ? defaultModel : listed(configured))
         guard let running, !running.custom else { return nil }
         return running.efforts ?? []
     }
@@ -69,14 +96,14 @@ nonisolated struct LauncherModelChoice: Equatable {
     /// What is typed, as an id to use when no model has exactly that id and the hub would take it (`ModelID`); nil: none.
     func customModelID(_ query: String) -> String? {
         let id = ModelID.cleaned(query)
-        guard ModelID.isValid(id), !list.models.contains(where: { $0.id == id }) else { return nil }
+        guard ModelID.isValid(id), listed(id) == nil else { return nil }
         return id
     }
 
     /// Why what is typed can't be used as a model ID; nil: it can, it is listed, or nothing is typed.
     func customProblem(_ query: String) -> String? {
         let id = ModelID.cleaned(query)
-        guard !id.isEmpty, !list.models.contains(where: { $0.id == id }) else { return nil }
+        guard !id.isEmpty, listed(id) == nil else { return nil }
         return ModelID.problem(id)?.text
     }
 
@@ -88,7 +115,7 @@ nonisolated struct LauncherModelChoice: Equatable {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return choices }
         return choices.filter { m in
-            [m.displayName, m.name, m.id, m.resolved ?? "", m.description ?? ""].contains { $0.localizedCaseInsensitiveContains(q) }
+            ([m.displayName, m.name, m.id, m.resolved ?? "", m.description ?? ""] + (m.aliases ?? [])).contains { $0.localizedCaseInsensitiveContains(q) }
         }
     }
 }
@@ -222,7 +249,7 @@ struct LauncherModelPicker: View {
             picked = id
             dismiss()
         }) {
-            TypedModelSheet(initial: choice.unlisted ?? "", note: String(localized: "Used for this start only. Once it runs, it's listed under Typed Before.")) { id in
+            TypedModelSheet(initial: choice.unlisted ?? "", note: choice.typedStartNote) { id in
                 typedPick = id
             }
         }
@@ -238,10 +265,10 @@ struct LauncherModelPicker: View {
         } label: {
             HStack(spacing: Theme.Space.m) {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(title).font(mono ? Theme.Font.heading.monospaced() : Theme.Font.heading).foregroundStyle(.primary)
+                    Text(title).font(mono ? Theme.Font.heading.monospaced() : Theme.Font.heading).foregroundStyle(Color.primary)
                         .lineLimit(1).truncationMode(mono ? .middle : .tail)
                     if let second {
-                        Text(second).font(Theme.Font.label.monospaced()).foregroundStyle(.secondary)
+                        Text(second).font(Theme.Font.label.monospaced()).foregroundStyle(Color.secondary)
                             .lineLimit(1).truncationMode(.middle)
                     }
                     if let description, !description.isEmpty {
@@ -249,7 +276,7 @@ struct LauncherModelPicker: View {
                     }
                 }
                 Spacer(minLength: Theme.Space.s)
-                if id == picked {
+                if id == picked || (!id.isEmpty && id == choice.selected?.id) {
                     ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold)
                 }
             }
@@ -343,7 +370,7 @@ struct TypedModelSheet: View {
                                 dismiss()
                             } label: {
                                 HStack(spacing: Theme.Space.m) {
-                                    Text(m.displayName).font(Theme.Font.body.monospaced()).foregroundStyle(.primary).lineLimit(1).truncationMode(.middle)
+                                    Text(m.displayName).font(Theme.Font.body.monospaced()).foregroundStyle(Color.primary).lineLimit(1).truncationMode(.middle)
                                     Spacer(minLength: Theme.Space.s)
                                     if m.id == id { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
                                 }
@@ -386,9 +413,6 @@ struct TypedModelSheet: View {
                 }
             }
         }
-        #if os(macOS)
-        .macSheet()
-        #endif
         .presentationDetents([.medium, .large])
         .onAppear {
             if text.isEmpty { text = initial }

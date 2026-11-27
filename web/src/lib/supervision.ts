@@ -1,20 +1,23 @@
 import { formatDate, t } from "../i18n";
+import { isLegacyCodexRouteNotice } from "./compatibility";
 import type { Todo } from "./todos";
+import type { Interaction } from "./types";
 
 // A task the main conversation supervises (#3124, docs/assistant/unified-entry.md "Supervision"): what done means, where its review
 // stands, and the reviews so far. Only such tasks carry `supervision`; an older hub sends none.
 
-export type ReviewState = "" | "pending_review" | "rework" | "needs_user" | "parked" | "accepted" | "cancelled";
+export type ReviewState = "" | "pending_review" | "user_check" | "rework" | "needs_user" | "parked" | "accepted" | "cancelled";
 
 /** What a parked task waits for (#3804, docs/assistant/todos.md "Parked tasks"): the reason in one sentence, until when,
  *  what kind of thing it waits on, and how many times in a row it was parked with no agent turn in between. */
 export interface Parked {
   reason: string;
   until: string;
-  waiting_on: "owner_priority" | "someone_else" | "external_event" | "date";
+  waiting_on: "owner_priority" | "someone_else" | "external_event" | "date" | "todo_handoff";
   count: number;
   /** Source-backed account recorded by task_review, not a provider receipt fetched by the hub. */
   evidence?: ParkEvidence;
+  handoff?: { todo_id: string; title: string; check: string };
 }
 
 export interface ParkContact {
@@ -33,8 +36,38 @@ export interface ParkEvidence {
   wake: string;
   contact?: ParkContact;
   ready?: boolean;
+  /** external_event only: the exact pending worker interaction the hub verified for this park. */
+  interaction_id?: string;
   /** Recording conversation, not the person who sent the request. */
   recorded_by?: string;
+}
+
+export function parkInteractionID(todo: Todo): string | undefined {
+  const evidence = todo.supervision?.parked?.evidence;
+  if (todo.done_at || todo.supervision?.state !== "parked" || evidence?.kind !== "external_event") return undefined;
+  return evidence.interaction_id?.trim() || undefined;
+}
+
+/** The current pending interaction an external-event park names, only when its exact worker belongs to this task. */
+export function linkedParkInteraction(todo: Todo, interactions: readonly Interaction[]): Interaction | undefined {
+  const id = parkInteractionID(todo);
+  const ix = id ? interactions.find((candidate) => candidate.id === id) : undefined;
+  if (!id || !ix) return undefined;
+  return (todo.agents ?? []).some((a) => !a.dismissed_at && !a.start_error && a.machine_id === ix.machine_id && a.session_id === ix.session_id) ? ix : undefined;
+}
+
+/** The manager's current owner-ask projection of the same linked interaction, for surfaces without the pending list. */
+export function linkedParkOwnerAsk(todo: Todo): boolean {
+  const id = parkInteractionID(todo);
+  return !!id && !!todo.view?.asks?.some((ask) => ask.interaction === id);
+}
+
+/** A local copy of a to-do whose linked request is homed elsewhere; its recorded evidence is not mutated. */
+export function withoutParkInteraction(todo: Todo): Todo {
+  if (!parkInteractionID(todo)) return todo;
+  const supervision = todo.supervision!;
+  const parked = supervision.parked!;
+  return { ...todo, supervision: { ...supervision, parked: { ...parked, evidence: { ...parked.evidence!, interaction_id: undefined } } } };
 }
 
 export interface ReviewCheck {
@@ -147,11 +180,13 @@ export function acceptanceStands(todo: { supervision?: Supervision }): boolean {
 }
 
 /** The review state that holds now: a cancelled task reopened goes on again; an accepted one stays accepted while
- *  its acceptance stands (acceptanceStands); a parked one that was closed is no longer parked. */
+ *  its acceptance stands (acceptanceStands); a closed task no longer waits for review or stays parked. */
 export function reviewState(todo: Pick<Todo, "done_at"> & { supervision?: Supervision }): ReviewState {
   const st = todo.supervision?.state ?? "";
+  if (todo.done_at && st === "user_check") return "accepted";
   if (!todo.done_at && st === "accepted" && !acceptanceStands(todo)) return "";
   if (!todo.done_at && st === "cancelled") return "";
+  if (todo.done_at && st === "pending_review") return "";
   if (st === "parked" && (todo.done_at || !todo.supervision?.parked)) return "";
   return st;
 }
@@ -182,6 +217,8 @@ export function reviewBadge(todo: Pick<Todo, "done_at" | "decision_review"> & { 
   switch (reviewState(todo)) {
     case "pending_review":
       return { label: t("assistant-tasks.review_pending"), tone: "accent" };
+    case "user_check":
+      return { label: t("assistant-tasks.review_user_check"), tone: "orange" };
     case "rework":
       return { label: t("assistant-tasks.review_rework", { round: sup.round ?? 1 }), tone: "orange" };
     case "needs_user":
@@ -245,19 +282,25 @@ export function checkCount(sup: Supervision | undefined): string {
   return `${list.filter((c) => c.mark === "met").length}/${list.length}`;
 }
 
+function isLegacyStartupProgress(p: TaskProgress | undefined): boolean {
+  return p?.kind === "progress" && isLegacyCodexRouteNotice(p.text);
+}
+
 /** "Step 3/5 · …", "Asked Persona: …": the agent's latest report in a line for a card, in the hub's paraphrase when it
  *  has one (#3181), else in the agent's words; undefined when it has none. */
 export function progressLine(sup: Supervision | undefined): string | undefined {
   const p = sup?.progress;
-  const text = p?.line?.trim() || p?.text;
-  if (!p || !text) return undefined;
+  if (!p || isLegacyStartupProgress(p)) return undefined;
+  const text = p.line?.trim() || p.text;
+  if (!text) return undefined;
   return reportLine(p.kind, text, p.step, p.steps);
 }
 
 /** The agent's latest report as it wrote it, for the task's details (Markdown); undefined when it has none. */
 export function reportText(sup: Supervision | undefined): string | undefined {
   const p = sup?.progress;
-  return p?.detail?.trim() || p?.text?.trim() || undefined;
+  if (!p || isLegacyStartupProgress(p)) return undefined;
+  return p.detail?.trim() || p.text?.trim() || undefined;
 }
 
 /** A report (on a card, or a feed item of kind "report") in a line. */

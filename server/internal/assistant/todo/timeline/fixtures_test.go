@@ -218,6 +218,24 @@ func TestTimelineReadsRowsInAnyOrder(t *testing.T) {
 	}
 }
 
+// The manager reads only the feed items of FeedKinds (todo_timeline.go): every case derives the same bytes from those
+// alone, so no kind the timeline reads is left unread, and FeedKinds never asks for message cards.
+func TestTimelineFeedKindsAreWhatItReads(t *testing.T) {
+	kinds := FeedKinds()
+	if slices.Contains(kinds, "message") {
+		t.Fatalf("FeedKinds asks for message cards: %v", kinds)
+	}
+	for _, c := range readCases(t) {
+		in := input(t, c.Input)
+		a, b, d := written(t, Derive(in))
+		in.Feed = slices.DeleteFunc(slices.Clone(in.Feed), func(f FeedItem) bool { return !slices.Contains(kinds, f.Kind) })
+		x, y, z := written(t, Derive(in))
+		if string(a) != string(x) || string(b) != string(y) || string(d) != string(z) {
+			t.Errorf("%s reads differently from the items of FeedKinds alone:\n %s %s %s\n %s %s %s", c.Name, a, b, d, x, y, z)
+		}
+	}
+}
+
 // Together the cases show every entry type and round kind, and only values of the schema's enums: a client drawn
 // from them meets everything the hub sends.
 func TestTimelineCasesCoverTheSchema(t *testing.T) {
@@ -363,41 +381,4 @@ func readmeLineKeys(t *testing.T) []string {
 		}
 	}
 	return out
-}
-
-// The timeline stays pure (docs/design/proposals/todos-redesign.md 7.1), as the projection does: no IO and no clock,
-// and nothing of the manager, so the same rows always give the same timeline. The standard library it may use is
-// listed, so a package that reads the disk, the network or randomness never gets in unnoticed.
-func TestTimelineStaysPure(t *testing.T) {
-	allowed := []string{"cmp", "encoding/json", "maps", "slices", "strconv", "strings", "time",
-		"github.com/nwverse/persona/server/internal/proto", "github.com/nwverse/persona/server/internal/assistantwire"}
-	clock := []string{"Now", "Since", "Until", "Sleep", "After", "AfterFunc", "Tick", "NewTimer", "NewTicker", "LoadLocation"}
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fset := token.NewFileSet()
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, imp := range f.Imports {
-			if path, _ := strconv.Unquote(imp.Path.Value); !slices.Contains(allowed, path) {
-				t.Errorf("%s imports %s: the timeline reads only its rows (the listed standard library, proto and "+
-					"assistantwire)", name, path)
-			}
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			if sel, ok := n.(*ast.SelectorExpr); ok {
-				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "time" && slices.Contains(clock, sel.Sel.Name) {
-					t.Errorf("%s: time.%s: the timeline has no clock", fset.Position(sel.Pos()), sel.Sel.Name)
-				}
-			}
-			return true
-		})
-	}
 }

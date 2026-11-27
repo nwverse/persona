@@ -2,6 +2,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { seedAgentsDisplay } from "../../lib/agents-display";
+import { setToken } from "../../lib/api";
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
   g.ResizeObserver ??= class {
@@ -68,6 +70,10 @@ let root: Root;
 beforeEach(() => {
   localStorage.clear();
   reset();
+  // Establish the fixture's credential before seeding: a later first credential read resets the display store.
+  setToken("agents-filter-fixture");
+  // Settings › Agents: the Filter is on for these tests (it is off until the hub says so)
+  seedAgentsDisplay({ show_botmux: true, configured: true, show_filter: true });
   resetAgentListFilters();
   vi.stubGlobal(
     "fetch",
@@ -154,6 +160,8 @@ describe("Agents list Filter menu (#4397) on the title row, the search in ⌘K (
     expect(rows[0].getAttribute("data-pinned")).toBe("true");
     expect(rows[0].textContent).toContain("Mac Studio");
     expect(rows[0].textContent).toContain("orca");
+    expect(rows[0].textContent).not.toContain("Codex");
+    expect(rows[1].textContent).not.toContain("Claude Code");
 
     // a facet page: pick one machine, the menu stays open and the chip appears
     await openFilterMenu();
@@ -245,6 +253,25 @@ describe("Agents list Filter menu (#4397) on the title row, the search in ⌘K (
     await act(async () => filterAgentList("orca"));
     expect(block().getAttribute("aria-expanded")).toBe("true");
   });
+
+  // #11511: 4 px apart, each button's centred 44 px touch-hit square overlapped the next, and the later one took the
+  // earlier one's taps (the right of Filter opened ⋯, the right of ⋯ opened New agent): on a touch screen each is a real
+  // 44 px box, as the fold-all button is
+  it("gives Filter, ⋯ and + a 44 px box of their own on a touch screen", async () => {
+    seed();
+    getState().features = ["agent_session_archives"];
+    await act(async () => {
+      root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />);
+    });
+    const row = host.querySelector<HTMLElement>('[data-sidebar-agents-controls] [data-testid="agent-filter-button"]')!.parentElement!;
+    const classes = (label: string) => row.querySelector<HTMLElement>(`:scope > button[aria-label^="${label}"]`)!.className.split(/\s+/);
+    expect(classes(t("lib-agent-filter.filter"))).toEqual(expect.arrayContaining(["[@media(pointer:coarse)]:h-11", "[@media(pointer:coarse)]:min-w-11"]));
+    expect(classes(t("sidebar.list_menu"))).toContain("[@media(pointer:coarse)]:size-11");
+    expect(classes(t("sidebar.new_agent"))).toContain("[@media(pointer:coarse)]:size-11");
+    // the look on a pointer is the one it had
+    expect(classes(t("lib-agent-filter.filter"))).toEqual(expect.arrayContaining(["h-5", "min-w-5"]));
+    expect(classes(t("sidebar.list_menu"))).toContain("size-5");
+  });
 });
 
 describe("an associated tab name in the complete Agents list (#7595)", () => {
@@ -304,7 +331,7 @@ describe("an associated tab name in the complete Agents list (#7595)", () => {
   });
 
   it("keeps the plain fallback in an idle multi-session space without duplicating an associated identity", async () => {
-    const plain = { ...sessions[1], session_id: "plain", title: "Plain fallback", space_id: "w1", space_name: "demo", slot_name: "Workspace only", status: "idle" as const, state: "idle" as const, updated_at: undefined };
+    const plain = { ...sessions[1], session_id: "plain", title: "Plain fallback", space_id: "w1", space_name: "demo", slot_name: "Workspace only", status: "idle" as const, state: "idle" as const, turn_error: undefined, updated_at: undefined };
     const associated = { ...plain, session_id: "associated", title: "Associated", slot_id: "w1:t1", tab_id: "w1:t1", slot_name: "Release Review", pane_id: "w1:p1" };
     seed();
     getState().sessions = { mac: [plain, associated] };

@@ -216,7 +216,7 @@ func errCode(err error) string {
 }
 
 // ConversationSent: how an app's message to one of the assistant's conversations went, as the hub sent it.
-func (s *Service) ConversationSent(_ context.Context, r ConversationSent) {
+func (s *Service) ConversationSent(ctx context.Context, r ConversationSent) {
 	outcome := outcomeFailed
 	switch r.Outcome {
 	case assistantwire.ConversationDelivered:
@@ -227,6 +227,12 @@ func (s *Service) ConversationSent(_ context.Context, r ConversationSent) {
 	if outcome == outcomeFailed {
 		s.availOwnerFailed(r.MachineID, r.SessionID) // nothing was sent: no reply to wait for (availability.go)
 	}
+	// A direction's notes block counts as given only once the node took the send (direction_notes.go).
+	s.notesOwnerOutcome(ctx, r.SessionID, r.ClientMsgID, outcome != outcomeFailed)
+	// Quiet messages kept for this conversation leave only once the node accepted the send (relay_later.go).
+	s.relayLaterOwnerOutcome(ctx, r.SessionID, r.ClientMsgID, outcome == outcomeOK)
+	// An exact decision choice typed in a supervisor conversation settles only once delivered (#13041).
+	s.supervisorSettleOutcome(ctx, r)
 	s.recordSend(r.MachineID, r.SessionID, "resume", originApp, false, outcome, r.Code, r.Error)
 }
 
@@ -383,7 +389,9 @@ type Availability struct {
 	ByOrigin      map[string]*Tally          `json:"by_origin"`
 	ByBuild       map[string]*Tally          `json:"by_build"`
 	Failures      []FailureReason            `json:"failures"`
-	Split         *AvailabilitySplit         `json:"split,omitempty"`
+	// FailuresByRole is the command's internal weekly aggregation seam; the daily JSON keeps its existing shape.
+	FailuresByRole map[string]map[string]int `json:"-"`
+	Split          *AvailabilitySplit        `json:"split,omitempty"`
 	// Gaps name what the window cannot see (docs/assistant/north-star.md "Coverage").
 	Gaps []string `json:"gaps"`
 }
@@ -609,7 +617,7 @@ func interruptions(q northStarQuery, roles convRoles, cards []db.NorthStarCard, 
 
 func availability(q northStarQuery, roles convRoles, attempts []nsAttempt, recordingSince *time.Time) Availability {
 	av := Availability{Conversations: []AvailabilityConversation{}, ByOp: map[string]*Tally{}, ByRole: map[string]*Tally{},
-		ByOrigin: map[string]*Tally{}, ByBuild: map[string]*Tally{}, Failures: []FailureReason{}, Gaps: []string{}}
+		ByOrigin: map[string]*Tally{}, ByBuild: map[string]*Tally{}, Failures: []FailureReason{}, FailuresByRole: map[string]map[string]int{}, Gaps: []string{}}
 	if roles.Main != "" {
 		av.Conversations = append(av.Conversations, AvailabilityConversation{SessionID: roles.Main, Role: roleMain})
 	}
@@ -634,7 +642,12 @@ func availability(q northStarQuery, roles convRoles, attempts []nsAttempt, recor
 		tally(av.ByOrigin, cmp.Or(a.Origin, "unknown")).add(a.Outcome)
 		tally(av.ByBuild, cmp.Or(a.Build, "before_recording")).add(a.Outcome)
 		if a.Outcome == outcomeFailed {
-			reasons[cmp.Or(a.Reason, "internal")]++
+			reason := cmp.Or(a.Reason, "internal")
+			reasons[reason]++
+			if av.FailuresByRole[a.Role] == nil {
+				av.FailuresByRole[a.Role] = map[string]int{}
+			}
+			av.FailuresByRole[a.Role][reason]++
 		}
 		if av.Split != nil {
 			if a.At.Before(av.Split.At) {
@@ -908,9 +921,15 @@ func (b briefNorthStar) body(lines []string) briefBodyNorthStar {
 
 // runFacts are the facts a task's run opens with: a routine with facts on has the briefing's (briefing.go), which open
 // with the north star; a daily report (Task.Report, such as a dot's) has the north star's lines alone; any other task
-// none.
+// none. Without the briefing module (modules.go) a routine with facts on opens with none, and a daily report with the
+// north star's lines alone, keeping no snapshot for a fallback.
 func (s *Service) runFacts(ctx context.Context, t Task, now time.Time) string {
 	switch {
+	case !s.briefingOn():
+		if t.Report {
+			return s.northStarRunFacts(ctx, now)
+		}
+		return ""
 	case t.Facts:
 		return s.briefStart(ctx, t, now)
 	case t.Report:

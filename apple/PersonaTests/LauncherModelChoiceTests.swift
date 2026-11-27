@@ -32,6 +32,33 @@ import PersonaWire
         #expect(bare.models[0].name == "model-a" && bare.models[0].defaultEffort == "medium" && bare.locked == "fixed")
     }
 
+    @Test func foldedAliasesSelectTheirRowWithoutRewritingTheSavedPick() throws {
+        let folded = try list(#"{"agent":"claude","models":[{"id":"default","name":"Default","default":true,"resolved":"claude-opus-5-5"},{"id":"claude-opus-5-5","name":"Opus 5.5","aliases":["opus","fable","sonnet","haiku"],"efforts":["low","high"]},{"id":"kiro/claude-opus-5-5","name":"Opus 5.5 (kiro)"}]}"#)
+        #expect(folded.models[1].aliases == ["opus", "fable", "sonnet", "haiku"])
+        var c = LauncherModelChoice(list: folded, picked: "sonnet", configured: "opus")
+        #expect(c.selected?.id == "claude-opus-5-5")
+        #expect(c.unlisted == nil && c.typed == nil, "a folded alias is listed, not a typed model")
+        #expect(c.sent == "sonnet", "restoring a pick does not silently rewrite it")
+        #expect(c.title == "Opus 5.5" && c.efforts == ["low", "high"])
+        c.picked = ""
+        #expect(c.efforts == ["low", "high"], "a configured alias inherits the folded row's efforts")
+        #expect(c.customModelID("fable") == nil && c.customProblem("opus") == nil)
+        #expect(c.matching("haiku").map(\.id) == ["claude-opus-5-5"])
+        c.picked = "claude-opus-5-5"
+        #expect(c.sent == "claude-opus-5-5", "a deliberate row pick uses the canonical ID")
+
+        // Exact row IDs win over another row's alias, however synthetic the collision.
+        let collision = LauncherModels(agent: "claude", models: [
+            AgentModel(id: "claude-opus-5-5", name: "Folded", aliases: ["sonnet"]),
+            AgentModel(id: "sonnet", name: "Exact"),
+        ], locked: nil, machine: nil)
+        #expect(LauncherModelChoice(list: collision, picked: "sonnet").selected?.name == "Exact")
+
+        let oldHub = try list(#"{"agent":"claude","models":[{"id":"opus","name":"Opus"}]}"#)
+        #expect(oldHub.models[0].aliases == nil)
+        #expect(LauncherModelChoice(list: oldHub, picked: "opus").selected?.id == "opus")
+    }
+
     @Test func theDefaultSendsNoModel() throws {
         var c = LauncherModelChoice(list: try claude)
         #expect(c.canPick && c.sent == nil && c.title == "默认" && c.detail == "claude-opus-5-5")
@@ -113,21 +140,22 @@ import PersonaWire
         ]}
         """)
         var c = LauncherModelChoice(list: l, picked: raw)
-        #expect(c.title == "6.1 Sol")
+        #expect(c.title == "GPT-6.1 Sol")
         #expect(c.selected?.displayName == SessionModes.modelName(raw))
         #expect(c.selected?.id == raw && c.selected?.name == "GPT-6.1-Sol")
         #expect(c.sent == raw && c.detail == raw)
         #expect(l.models[2].displayName == "我的日常模型")
         #expect(l.models[3].displayName == "gpt-6.1-sol") // explicit alias, not a raw id
-        #expect(l.models[4].displayName == "6.1 Codex")
+        #expect(l.models[4].displayName == "GPT-6.1 Codex")
         #expect(l.models[5].displayName == "GLM 5.3")
         let customDefault = AgentModel(id: "custom-model", name: "gpt-6.1-sol", isDefault: true)
         #expect(LauncherModelChoice(list: LauncherModels(agent: "codex", models: [customDefault])).defaultDetail == "gpt-6.1-sol")
         #expect(c.matching("6.1 Sol").contains { $0.id == raw })
+        #expect(c.matching("GPT-6.1 Sol").contains { $0.id == raw })
         c.picked = ""
-        #expect(c.title == "默认" && c.sent == nil && c.defaultDetail == "6.1")
+        #expect(c.title == "默认" && c.sent == nil && c.defaultDetail == "GPT-6.1")
         c.configured = raw
-        #expect(c.defaultDetail == "模型配置：6.1 Sol" && c.configured == raw)
+        #expect(c.defaultDetail == "模型配置：GPT-6.1 Sol" && c.configured == raw)
         c.picked = "not-listed" // typed for Codex (#1644)
         #expect(c.title == "not-listed" && c.unlisted == "not-listed" && c.sent == "not-listed")
         let request = APIClient.StartRequest(machineID: "example-box", cwd: "/code", launcher: "codex", model: raw)
@@ -164,7 +192,7 @@ import PersonaWire
         let empty = LauncherModelChoice(list: LauncherModels(agent: "claude", models: []), picked: "glm-5")
         #expect(empty.canPick && empty.sent == "glm-5" && empty.remembered.isEmpty)
         #expect(LauncherModelChoice(list: LauncherModels(agent: "codex", models: [])).canPick)
-        // Another agent (TRAEX, a runtime) takes no model: no row, nothing sent.
+        // Another agent (TRAE CLI, a runtime) takes no model: no row, nothing sent.
         let traex = LauncherModelChoice(list: LauncherModels(agent: "traex", models: []), picked: "glm-5")
         #expect(!traex.canPick && !traex.takesTyped && traex.sent == nil)
         var locked = l
@@ -178,6 +206,96 @@ import PersonaWire
         #expect(LauncherModelChoice(list: LauncherModels(agent: "codex", models: [], locked: "fixed")).showsLocked)
         #expect(!LauncherModelChoice(list: LauncherModels(agent: "traex", models: [], locked: "fixed")).showsLocked)
         #expect(!LauncherModelChoice(list: LauncherModels(agent: "claude", models: [])).showsLocked)
+    }
+
+    @Test func ompTakesAStartModelEvenWithoutCatalogEntries() {
+        let empty = LauncherModels(agent: "omp", models: [], supportsStartModel: true)
+        var choice = LauncherModelChoice(list: empty, startLauncher: Launcher(name: "omp", agent: "omp"), startsInHerdr: true)
+        #expect(choice.canPick && choice.takesTyped && choice.sent == nil)
+        for id in ["opus", "openai/gpt-5.2"] {
+            choice.picked = id
+            #expect(choice.typed == id && choice.sent == id)
+        }
+        choice.picked = "two words"
+        #expect(choice.sent == nil)
+        choice.list.models = [AgentModel(id: "listed-model", name: "Listed")]
+        choice.picked = "listed-model"
+        #expect(choice.sent == "listed-model")
+        choice.picked = ""
+        #expect(choice.sent == nil)
+
+        for advertised in [nil, false] as [Bool?] {
+            choice.list.supportsStartModel = advertised
+            choice.picked = "listed-model"
+            #expect(!choice.startAllowsModel && !choice.canPick && choice.sent == nil)
+        }
+        choice.list.supportsStartModel = true
+        choice.list.locked = "fixed"
+        choice.picked = "other"
+        #expect(choice.showsLocked && !choice.startAllowsModel && !choice.takesTyped && choice.sent == nil)
+        choice.list.supportsStartModel = nil
+        #expect(choice.showsLocked && !choice.canPick && choice.sent == nil)
+        choice.startsInHerdr = false
+        #expect(!choice.showsLocked)
+        let wrapper = Launcher(name: "my-wrapper", agentType: "omp")
+        for agent in ["omp", "claude"] {
+            let blocked = LauncherModelChoice(list: LauncherModels(agent: agent, models: [], supportsStartModel: true),
+                                              picked: "unlisted", startLauncher: wrapper, startsInHerdr: true)
+            #expect(!blocked.canPick && !blocked.takesTyped && blocked.sent == nil)
+        }
+        #expect(!empty.takesTypedModel)
+    }
+
+    @Test func aRegisteredOmpRuntimeKeepsItsOwnListedModelsAndPermissions() {
+        let runtime = Launcher(name: "omp", agent: "omp", source: "omp-provider", permissionModes: ["default", "bypassPermissions"])
+        let listed = AgentModel(id: "runtime-model", name: "Runtime model", efforts: ["high"])
+        var choice = LauncherModelChoice(list: LauncherModels(agent: "omp", models: [listed]), picked: listed.id, startLauncher: runtime)
+        #expect(!runtime.startsOmp && choice.canPick && !choice.takesTyped && choice.sent == listed.id)
+        #expect(StartModes.modes(for: runtime).map(\.id) == ["bypassPermissions"])
+        #expect(StartModes.efforts(known: choice.efforts, for: runtime).map(\.id) == ["high"])
+        choice.picked = "anything-else"
+        #expect(choice.sent == nil)
+    }
+
+    @Test func ompStartsWithItsOwnPermissionAndEffort() {
+        let omp = Launcher(name: "omp", agent: "omp")
+        #expect(omp.startsOmp && Launcher(name: "omp").startsOmp)
+        for source in ["", "path", "zshrc", "builtin"] {
+            #expect(Launcher(name: "omp", agent: "omp", source: source).startsOmp)
+        }
+        for source in ["persona", "runtime", "paseo"] {
+            #expect(!Launcher(name: "omp", agent: "omp", source: source).startsOmp)
+        }
+        #expect(!Launcher(name: "my-wrapper", agent: "omp").startsOmp)
+        #expect(!Launcher(name: "omp", agentType: "claude").startsOmp)
+        #expect(StartModes.limited(omp) && StartModes.modes(for: omp).isEmpty)
+        #expect(StartModes.sent("plan", for: omp) == nil)
+        #expect(StartModes.efforts(known: nil, for: omp).isEmpty)
+        #expect(StartModes.efforts(known: ["high"], for: omp).isEmpty)
+    }
+
+    @Test func ompModelFollowsTheWorkspaceHostOrMachinesDefaultHost() throws {
+        let data = Data(#"{"id":"box","name":"Box","kind":"local","online":true,"engine":"herdr-both","engine_hosts":["herdr","herdr-core"],"engine_default":"herdr-core"}"#.utf8)
+        var machine = try JSON.decoder.decode(Machine.self, from: data)
+        #expect(machine.defaultStartHost == "herdr-core")
+        var choice = LauncherModelChoice(list: LauncherModels(agent: "omp", models: [], supportsStartModel: true),
+                                         picked: "vendor/model", startLauncher: Launcher(name: "omp", agent: "omp"))
+        for host in [nil, "herdr-core", "orca", "tern", "paseo", "herdr"] as [String?] {
+            choice.startsInHerdr = machine.startsInHerdr(host: host)
+            #expect(choice.canPick == (host == "herdr"))
+            #expect(choice.sent == (host == "herdr" ? "vendor/model" : nil))
+        }
+        machine.engineDefault = "herdr"
+        #expect(machine.defaultStartHost == "herdr")
+        #expect(machine.startsInHerdr(host: nil) && !machine.startsInHerdr(host: "herdr-core"))
+        machine.engineHosts = []
+        #expect(machine.defaultStartHost == nil)
+        #expect(!machine.startsInHerdr(host: "herdr") && !machine.startsInHerdr(host: nil))
+        machine.engineHosts = nil
+        machine.engineDefault = nil
+        #expect(machine.startsInHerdr(host: nil))
+        machine.engine = .orca
+        #expect(!machine.startsInHerdr(host: nil) && !machine.startsInHerdr(host: "herdr"))
     }
 
     @Test func aStartCarriesThePick() throws {

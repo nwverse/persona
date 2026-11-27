@@ -553,15 +553,8 @@ struct AssistantTaskEditor: View {
             }
             whenSection
             Section {
-                #if os(macOS)
-                // A grouped Mac form shows a titled field as label + trailing value: the prompt took the right half.
-                TextField(String(localized: "What should Persona do?"), text: $draft.prompt, prompt: Text("What should Persona do?"), axis: .vertical)
-                    .labelsHidden()
-                    .lineLimit(8...)
-                #else
                 TextField(String(localized: "What should Persona do?"), text: $draft.prompt, axis: .vertical)
                     .lineLimit(8...)
-                #endif
             } header: {
                 Text("Prompt")
             } footer: {
@@ -629,7 +622,7 @@ struct AssistantTaskEditor: View {
                 }
             }
         }
-        .confirmationDialog("Delete “\(AssistantScheduleText.title(draft))”?", isPresented: $confirmDelete, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Delete “\(AssistantScheduleText.title(draft))”?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 guard let s = saved else { return }
                 deleted = true
@@ -857,11 +850,7 @@ struct AssistantTaskEditor: View {
             } else {
                 switch draft.repeats {
                 case .once: Text("Runs once at the set time, then leaves the list (it stays in the run history).")
-                #if os(macOS)
-                case .daily: Text("\(AssistantScheduleText.repeats(draft.weekdays)) at \(draft.time), in your time zone.")
-                #else
                 case .daily: Text("\(AssistantScheduleText.repeats(draft.weekdays)) at \(draft.time), in your phone's time zone.")
-                #endif
                 case .interval: Text("Runs \(AssistantScheduleText.every(draft.everyMinutes)), counting from when it's saved.")
                 case .cron: Text("Runs when its cron expression matches, in your time zone. To change the expression, edit it in Persona on the web or ask Persona.")
                 }
@@ -1191,12 +1180,6 @@ struct AssistantMemoryView: View {
                         .swipeActions(edge: .trailing) {
                             Button { pendingDelete = e } label: { Label("Delete", systemImage: Theme.Icon.delete) }.tint(Theme.danger)
                         }
-                        #if os(macOS)
-                        // A swipe needs a trackpad: the right click deletes too.
-                        .contextMenu {
-                            Button(role: .destructive) { pendingDelete = e } label: { Label("Delete", systemImage: Theme.Icon.delete) }
-                        }
-                        #endif
                     }
                 } footer: {
                     Text(health ? String(localized: "What's noted in health chats is read only by health chats; Persona's other chats can't see it. Fix anything wrong right here, or tell it in a health chat.")
@@ -1228,7 +1211,7 @@ struct AssistantMemoryView: View {
             }
         }
         .pageTitle(health ? String(localized: "Health Memory") : String(localized: "Memory [Assistant Profile View 7a6335]"))
-        .confirmationDialog("Delete This Memory?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+        .accessibleConfirmationDialog("Delete This Memory?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
                             titleVisibility: .visible, presenting: pendingDelete) { e in
             Button("Delete", role: .destructive) { Task { await delete(e) } }
         } message: { e in
@@ -1317,11 +1300,7 @@ struct AssistantMemoryDetail: View {
                     .markdownTheme(.persona)
                     .textSelection(.enabled)
                     .environment(\.openURL, OpenURLAction { url in
-                        #if os(macOS)
-                        url.scheme == nil ? .discarded : LinkPolicy.system(url) // NSWorkspace would run any scheme
-                        #else
                         url.scheme == nil ? .discarded : .systemAction
-                        #endif
                     })
                 Text(entry.file.name).font(Theme.Font.code).foregroundStyle(.tertiary).padding(.top, Theme.Space.s)
             }
@@ -1380,10 +1359,6 @@ struct AssistantMemoryEditor: View {
                 .onAppear { if opened == nil { opened = text } }
         }
         .interactiveDismissDisabled(saving)
-        #if os(macOS)
-        // A Mac sheet sizes to its content: a text editor alone came up a few lines tall.
-        .macSheet()
-        #endif
     }
 
     private func save() async {

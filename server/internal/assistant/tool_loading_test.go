@@ -20,7 +20,7 @@ func TestCoreToolsPinned(t *testing.T) {
 	want := []string{
 		"agent_archive", "agent_interrupt", "agent_read", "agent_send", "agent_start", "agent_supervise", "agents_list",
 		"ask_user", "cancel_followup", "conversation_read", "conversation_send", "conversations_list", "interaction_answer",
-		"kb_get", "kb_list", "kb_search", "kb_update", "lark_chats", "lark_messages", "lark_search", "larkcli_chats",
+		"kb_get", "kb_list", "kb_search", "kb_update", "lark_chats", "lark_image", "lark_messages", "lark_search", "larkcli_chats",
 		"larkcli_messages", "larkcli_search", "list_followups", "machines_list", "model_profiles_list", "notify_user",
 		"persona_settings", "schedule_followup", "schedule_routine", "supervision_finish", "task_plan", "task_review",
 		"task_scope", "todo_get", "todo_list", "todo_update",
@@ -235,7 +235,7 @@ func TestToolLoadingUsesTheConversationRole(t *testing.T) {
 		v.Main = "main0001"
 		v.Leaders = []string{"lead0001", "main0001"} // main is still main even if present here
 	})
-	wantLeader := []string{"leader_progress", "todo_create", "ask_escalate", "direction_name"}
+	wantLeader := []string{"agent_transfer", "leader_progress", "todo_create", "ask_escalate", "direction_name"}
 	if !slices.Equal(leaderCoreTools, wantLeader) {
 		t.Fatalf("leader tool defaults changed: %v", leaderCoreTools)
 	}
@@ -272,5 +272,71 @@ func TestToolLoadingUsesTheConversationRole(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWorkGuideLoadingScopeAndScheduledGrant(t *testing.T) {
+	s := newFleetTest(t).s
+	set := func(on, all bool) { setSettings(t, s, func(v *Settings) { v.WorkGuide = &on; v.LoadAllTools = &all }) }
+	ctx := t.Context()
+	tools := []proto.Tool{{Name: "todo_get"}, {Name: "task_plan"}, {Name: "todo_extension"}, {Name: "ask_user"}}
+	set(false, false)
+	baseline := s.withToolLoading(ctx, "ordinary", tools, true)
+	s.noteCleanRound("scheduled", "task-1")
+	set(true, false)
+	for _, tc := range []struct {
+		name                  string
+		ctx                   context.Context
+		self                  string
+		assistant, todo, plan bool
+	}{
+		{"assistant", ctx, "ordinary", true, true, true},
+		{"agent or guest", ctx, "ordinary", false, false, false},
+		{"background supervision", withToolSet(ctx, json.RawMessage(`{"tool_set":"supervise"}`)), "ordinary", true, false, false},
+		{"scheduled first plan", ctx, "scheduled", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s.withToolLoading(tc.ctx, tc.self, tools, tc.assistant)
+			if got[0].WorkGuideTool != tc.todo || got[1].WorkGuideTool != tc.plan || got[2].WorkGuideTool || got[3].WorkGuideTool {
+				t.Fatal(got)
+			}
+		})
+	}
+	set(true, true)
+	if !s.withToolLoading(ctx, "ordinary", tools, true)[0].WorkGuideTool {
+		t.Fatal("full-loading preference overrode lab")
+	}
+	set(false, true)
+	for _, tool := range s.withToolLoading(ctx, "ordinary", tools, true) {
+		if tool.WorkGuideTool || tool.DeferLoading {
+			t.Fatalf("rollback with load_all_tools: %+v", tool)
+		}
+	}
+	set(false, false)
+	b, _ := json.Marshal(baseline)
+	off, _ := json.Marshal(s.withToolLoading(ctx, "ordinary", tools, true))
+	if string(b) != string(off) || tools[0].WorkGuideTool {
+		t.Fatal("rollback or copy", string(off), string(b))
+	}
+}
+
+func TestWorkGuideScheduledPreflightKeepsOriginalTools(t *testing.T) {
+	s := newFleetTest(t).s
+	ctx := t.Context()
+	s.noteCleanRound("grant", "task")
+	tools := []proto.Tool{{Name: "task_plan"}}
+	for name := range grantSafeTools {
+		tools = append(tools, proto.Tool{Name: name})
+	}
+	before := s.withToolLoading(ctx, "grant", tools, true)
+	setSettings(t, s, func(v *Settings) { v.WorkGuide = ptr(true) })
+	after := s.withToolLoading(ctx, "grant", tools, true)
+	b, _ := json.Marshal(before)
+	a, _ := json.Marshal(after)
+	if string(b) != string(a) {
+		t.Fatalf("grant preflight changed: %s -> %s", b, a)
+	}
+	if grantSafeTools["work_tools_search"] {
+		t.Fatal("discovery should not authorize a scheduled dispatch")
 	}
 }

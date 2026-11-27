@@ -23,8 +23,21 @@ const (
 	// featureTodoView: every row of GET /api/v1/todos carries `view`, the list `counts`, and GET /api/v1/todos/{id}
 	// answers one row so (docs/protocol/protocol.md, the to-dos rows).
 	featureTodoView = assistantwire.CapabilityTodoView
+	// featureTodoRevision: GET /api/v1/todos/revision answers the pushed read's cheap merged validator.
+	featureTodoRevision = assistantwire.CapabilityTodoRevision
 	// featureTodoPlaces: GET /api/v1/todos/places answers the To-dos sidebar's places with the counts.
 	featureTodoPlaces = assistantwire.CapabilityTodoPlaces
+	// featureTodoAsks: POST /api/v1/todos/{id}/asks/{ask}/answer answers a to-do's own asks by their view's ids
+	// (#10465), with a receipt under X-Persona-Op-Id (todo_receipts.go).
+	featureTodoAsks = assistantwire.CapabilityTodoAsks
+	// featureTodoTimeline: GET /api/v1/todos/{id}/timeline answers a to-do's conversation, and GET /api/v1/todos/{id}
+	// carries the rounds the paper shows, its results and what changed since the owner looked (#10465).
+	featureTodoTimeline = assistantwire.CapabilityTodoTimeline
+	// featureTodoImages: POST /api/v1/todos persists images and serves their private bytes (#11084). A hub-wide flag
+	// cannot promise image creation for only some managers, so an older or offline one hides the picker.
+	featureTodoImages = assistantwire.CapabilityTodoImages
+	// todoRevisionRoute is the pushed read's cheap validator, answered by every manager and merged (mergeTodoRevision).
+	todoRevisionRoute = "GET /api/v1/todos/revision"
 	// todoPlacesRoute is answered by every manager the to-dos list merges, joined (mergeTodoPlaces).
 	todoPlacesRoute = "GET /api/v1/todos/places"
 )
@@ -51,21 +64,203 @@ func (h *Hub) todoViewFeatures() []string {
 	return nil
 }
 
+// todoRevisionFeatures promises the cheap merged read only when every manager has it. Otherwise the web sends no extra
+// probe at all and keeps the original full-list refresh throughout a rolling upgrade.
+func (h *Hub) todoRevisionFeatures() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for _, id := range h.listManagers(ctx) {
+		if h.archiveManagerHas(id, assistantwire.CapabilityTodoRevision) != http.StatusOK {
+			return nil
+		}
+	}
+	return []string{featureTodoRevision}
+}
+
+// todoAsksFeatures is todo_asks while every manager whose to-dos the list merges is connected and names it, as
+// todoViewFeatures lists the view's: an answer goes to the manager that holds the to-do, and a client that answers
+// through the route before every manager has it would get 404 for the others' asks.
+func (h *Hub) todoAsksFeatures() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for _, id := range h.listManagers(ctx) {
+		if h.archiveManagerHas(id, assistantwire.CapabilityTodoAsks) != http.StatusOK {
+			return nil
+		}
+	}
+	return []string{featureTodoAsks}
+}
+
+// todoTimelineFeatures is todo_timeline while every manager whose to-dos the list merges is connected and names it, as
+// todoViewFeatures has todo_view: a hub-wide feature cannot promise a to-do's history for part of the list, so an older
+// or offline manager hides it until it is ready, and clients draw no conversation, results or recap until then.
+func (h *Hub) todoTimelineFeatures() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for _, id := range h.listManagers(ctx) {
+		if h.archiveManagerHas(id, assistantwire.CapabilityTodoTimeline) != http.StatusOK {
+			return nil
+		}
+	}
+	return []string{featureTodoTimeline}
+}
+
+// todoImageFeatures is todo_images only while every manager whose to-dos the list merges is connected and names it.
+// An older manager would ignore the additive images field and create an image-less to-do, so the Web offers no picker
+// in that case. It does not gate reading metadata or bytes that a capable manager already stored.
+func (h *Hub) todoImageFeatures() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for _, id := range h.listManagers(ctx) {
+		if h.archiveManagerHas(id, assistantwire.CapabilityTodoImages) != http.StatusOK {
+			return nil
+		}
+	}
+	return []string{featureTodoImages}
+}
+
 // todoListSums are the members of a merged to-dos list the hub adds up over its answers (mergeList, before the list's
-// validator is taken): counts, those of every answer the merge takes that has them (sumTodoCounts). None when no such
-// answer has them (every manager is older): the merged list then has none either.
+// validator is taken): counts, those of every answer the merge takes that has them (sumTodoCounts), and optional
+// todos_v2 shared_blockers merged deterministically across managers when present.
 func todoListSums(answers []listAnswer) map[string]json.RawMessage {
 	var all []json.RawMessage
+	var blockers []json.RawMessage
 	for i := range answers {
 		if raw, ok := mergedMember(&answers[i], "todos", "counts"); ok {
 			all = append(all, raw)
 		}
+		if raw, ok := mergedMember(&answers[i], "todos", "shared_blockers"); ok {
+			blockers = append(blockers, raw)
+		}
 	}
-	sum, ok := sumTodoCounts(all)
-	if !ok {
-		return nil
+	var out map[string]json.RawMessage
+	if sum, ok := sumTodoCounts(all); ok {
+		out = map[string]json.RawMessage{"counts": sum}
 	}
-	return map[string]json.RawMessage{"counts": sum}
+	if merged, ok := mergeSharedBlockers(blockers); ok {
+		if out == nil {
+			out = map[string]json.RawMessage{}
+		}
+		out["shared_blockers"] = merged
+	}
+	if cursors := todoClosedCursors(answers); len(cursors) > 0 {
+		if out == nil {
+			out = map[string]json.RawMessage{}
+		}
+		raw, _ := json.Marshal(cursors)
+		out["closed_cursors"] = raw
+	}
+	return out
+}
+
+type todoClosedCursor struct {
+	NextCursor string `json:"next_cursor"`
+	HasMore    bool   `json:"has_more"`
+}
+
+// todoClosedCursors are the older-closed cursors each manager's default answer carries, keyed by the manager a
+// paginated read must name. A manager from before #15683 has none.
+func todoClosedCursors(answers []listAnswer) map[string]todoClosedCursor {
+	out := map[string]todoClosedCursor{}
+	for i := range answers {
+		rawHasMore, ok := mergedMember(&answers[i], "todos", "closed_has_more")
+		if !ok {
+			continue
+		}
+		var hasMore bool
+		if json.Unmarshal(rawHasMore, &hasMore) != nil || !hasMore {
+			continue
+		}
+		rawCursor, ok := mergedMember(&answers[i], "todos", "closed_next_cursor")
+		if !ok {
+			continue
+		}
+		var cursor string
+		if json.Unmarshal(rawCursor, &cursor) != nil || cursor == "" {
+			continue
+		}
+		out[answers[i].id] = todoClosedCursor{NextCursor: cursor, HasMore: true}
+	}
+	return out
+}
+
+type mergedSharedBlocker struct {
+	Key     string   `json:"key"`
+	Kind    string   `json:"kind"`
+	Label   string   `json:"label"`
+	URL     string   `json:"url,omitempty"`
+	TodoIDs []string `json:"todo_ids"`
+	Count   int      `json:"count"`
+}
+
+func mergeSharedBlockers(all []json.RawMessage) (json.RawMessage, bool) {
+	if len(all) == 0 {
+		return nil, false
+	}
+	var valid [][]mergedSharedBlocker
+	var first json.RawMessage
+	for _, raw := range all {
+		var list []mergedSharedBlocker
+		if json.Unmarshal(raw, &list) != nil || len(list) == 0 {
+			continue
+		}
+		if first == nil {
+			first = raw
+		}
+		valid = append(valid, list)
+	}
+	switch len(valid) {
+	case 0:
+		return nil, false
+	case 1:
+		return first, true
+	}
+	type group struct {
+		entry mergedSharedBlocker
+		todos map[string]bool
+	}
+	groups := map[string]*group{}
+	for _, list := range valid {
+		for _, item := range list {
+			if item.Key == "" {
+				continue
+			}
+			g := groups[item.Key]
+			if g == nil {
+				g = &group{entry: item, todos: map[string]bool{}}
+				groups[item.Key] = g
+			} else if item.Label != "" && (g.entry.Label == "" || item.Label < g.entry.Label) {
+				g.entry.Label = item.Label
+			}
+			for _, id := range item.TodoIDs {
+				if id != "" {
+					g.todos[id] = true
+				}
+			}
+		}
+	}
+	var merged []mergedSharedBlocker
+	for _, g := range groups {
+		if len(g.todos) < 2 {
+			continue
+		}
+		ids := make([]string, 0, len(g.todos))
+		for id := range g.todos {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		g.entry.TodoIDs = ids
+		g.entry.Count = len(ids)
+		merged = append(merged, g.entry)
+	}
+	if len(merged) == 0 {
+		return nil, false
+	}
+	slices.SortFunc(merged, func(a, b mergedSharedBlocker) int {
+		return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(a.Key, b.Key))
+	})
+	b, err := json.Marshal(merged)
+	return b, err == nil
 }
 
 // sumTodoCounts adds up the counts objects of all (each answer's; anything not an object, null included, is none):

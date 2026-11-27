@@ -24,6 +24,8 @@ func fakeRisk(words []string) string {
 		return "write"
 	case "im messages delete":
 		return "high-risk-write"
+	case "im messages get":
+		return larkCLIMissing // lark-cli 1.0.98's im messages has no get (#10845)
 	}
 	return ""
 }
@@ -31,6 +33,7 @@ func fakeRisk(words []string) string {
 // What the gate makes of lark-cli: reads run, writes and unknown commands are confirmed on the phone, logging in and
 // changing lark-cli's setup are refused (docs/plans/plan-lark-cli.md "Gate").
 func TestLarkCLIGate(t *testing.T) {
+	needsLarkGate(t)
 	for _, tc := range []struct{ cmd, want string }{
 		// Reads, by lark-cli's own risk level or because they only print.
 		{`lark-cli im +chat-list --types p2p,group --as user --sort active_time`, "allow"},
@@ -49,6 +52,8 @@ func TestLarkCLIGate(t *testing.T) {
 		{`/usr/local/bin/lark-cli calendar +agenda`, "allow"},
 		{`lark-cli im +messages-send --chat-id oc_x --text hi --dry-run=true`, "allow"},
 		{`lark-cli im +messages-send --help=1`, "allow"},
+		// A command lark-cli does not have: it only fails with "unknown subcommand".
+		{`lark-cli im messages get --params '{"message_id":"om_x"}' --as user`, "allow"},
 		// Writes, high-risk writes and commands lark-cli gives no risk for: confirmed.
 		{`lark-cli im +messages-send --chat-id oc_x --text "你好"`, "confirm"},
 		{`lark-cli im +messages-reply --message-id om_x --markdown '**好**' --reply-in-thread`, "confirm"},
@@ -133,11 +138,16 @@ func TestLarkCLIGate(t *testing.T) {
 }
 
 // Without a way to ask lark-cli (no lark.cli in the hub's config), every lark-cli command that is not one of its own
-// printing commands is confirmed.
+// printing commands or named as a read (#11193) is confirmed.
 func TestLarkCLIGateWithoutRisk(t *testing.T) {
-	v := classifyLark(`lark-cli im +chat-list`, nil, "", nil)
+	needsLarkGate(t)
+	v := classifyLark(`lark-cli im +chat-create --name x`, nil, "", nil)
 	if len(v.calls) != 1 || larkDecision(proto.AssistantLark{}, v.calls[0]) != "confirm" {
 		t.Fatalf("unknown risk should be confirmed: %+v", v)
+	}
+	v = classifyLark(`lark-cli im +chat-list`, nil, "", nil)
+	if len(v.calls) != 1 || larkDecision(proto.AssistantLark{}, v.calls[0]) != "allow" {
+		t.Fatalf("a list shortcut only reads: %+v", v)
 	}
 	v = classifyLark(`lark-cli skills list`, nil, "", nil)
 	if len(v.calls) != 1 || larkDecision(proto.AssistantLark{}, v.calls[0]) != "allow" {
@@ -147,6 +157,7 @@ func TestLarkCLIGateWithoutRisk(t *testing.T) {
 
 // hub.json's lark_gate rules decide lark-cli commands before their risk level.
 func TestLarkCLIRules(t *testing.T) {
+	needsLarkGate(t)
 	rules := []proto.LarkRule{
 		{Method: "CLI", Path: "/im/+messages-send", Action: "allow"},
 		{Method: "CLI", Path: "/docs/**", Action: "deny"},
@@ -176,6 +187,8 @@ func TestLarkCLIInComplexCommands(t *testing.T) {
 		`for id in a b c; do lark-cli calendar events get --params "{\"calendar_id\":\"primary\",\"event_id\":\"$id\"}" | jq -r '.' | head -3; done`: false,
 		`lark-cli im +messages-send --chat-id oc_x --text hi | python3 -c 'print(1)'`:                                                                true,
 		`lark-cli im +chat-list | python3 -c 'print(1)'`:                                                                                             false,
+		`for m in om_a om_b; do lark-cli im messages get --params "{\"message_id\":\"$m\"}"; done`:                                                   false,
+		`lark-cli im messages get --params '{"message_id":"om_x"}' | python3 -c 'print(1)'`:                                                          false,
 	} {
 		v := classifyLark(cmd, nil, "", fakeRisk)
 		if !v.other {
@@ -190,6 +203,7 @@ func TestLarkCLIInComplexCommands(t *testing.T) {
 
 // The phone card shows what the write does and the command as typed.
 func TestLarkCLISummary(t *testing.T) {
+	needsLarkGate(t)
 	v := classifyLark(`lark-cli im +messages-send --chat-id oc_x --text "下午三点开会" && lark-cli im messages delete --params '{"message_id":"om_x"}' && lark-cli wiki +move --node x && lark-cli im +messages-reply --as bot --message-id om_y --text 收到`, nil, "", fakeRisk)
 	s := larkSummary(nil, v.calls)
 	for _, want := range []string{"以你的身份在飞书上发消息\nlark-cli im +messages-send --chat-id oc_x --text 下午三点开会",
@@ -273,6 +287,7 @@ func TestLarkCLIRiskLive(t *testing.T) {
 	for cmd, want := range map[string]string{
 		"im +chat-list": "read", "im +messages-search": "read", "docs +fetch": "read", "calendar +agenda": "read",
 		"im +messages-send": "write", "im +messages-reply": "write", "im messages delete": "high-risk-write",
+		"im messages get": larkCLIMissing, // no such method in lark-cli 1.0.98 (#10845)
 	} {
 		if got := risk(strings.Fields(cmd)); got != want {
 			t.Errorf("%s: lark-cli says %q, the gate expects %q", cmd, got, want)
@@ -299,5 +314,25 @@ func TestAssistantEnvNamesTheLarkCLIProfile(t *testing.T) {
 		if profile != "" && got != profile || profile == "" && ok {
 			t.Fatalf("profile %q: %s=%q (set %v)", profile, larkProfileEnvName, got, ok)
 		}
+	}
+}
+
+// TestParseLoginPATH: only the marked line counts, the last one, and only its absolute directories. A shell that
+// printed no marked line is asked again later (nil), while a PATH of no directories is an answer.
+func TestParseLoginPATH(t *testing.T) {
+	for _, tc := range []struct{ name, out, want string }{
+		{"greeting before it", "welcome back\n__PERSONA_LOGIN_PATH__/usr/bin:/opt/tools/node/bin\n", "/usr/bin:/opt/tools/node/bin"},
+		{"the last line wins", "__PERSONA_LOGIN_PATH__/usr/bin\n__PERSONA_LOGIN_PATH__/opt/bin\n", "/opt/bin"},
+		{"relative and empty entries dropped", "__PERSONA_LOGIN_PATH__/usr/bin:relative::bin\n", "/usr/bin"},
+		{"an empty PATH is an answer", "__PERSONA_LOGIN_PATH__\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := strings.Join(parseLoginPATH([]byte(tc.out)), ":"); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if got := parseLoginPATH([]byte("no marker here\n")); got != nil {
+		t.Fatalf("no marked line: %q", got)
 	}
 }

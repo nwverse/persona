@@ -22,7 +22,7 @@ import (
 // them, the machines' session lists as sessions.changed, what the hub shows as the snapshot's report.
 
 // todoTestDB is a clean database for the tests that need Postgres; they skip without one.
-func todoTestDB(t *testing.T) *db.DB {
+func todoTestDB(t testing.TB) *db.DB {
 	t.Helper()
 	url := os.Getenv("PERSONA_TEST_DATABASE_URL")
 	if url == "" {
@@ -67,7 +67,11 @@ func todoStores(t *testing.T, body func(t *testing.T, e *todoEnv, database *db.D
 
 // do is an app's request as the hub relays it, from a device with role ("" a full one).
 func (e *todoEnv) doAs(role, method, path, body string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	return e.doAsContext(context.Background(), role, method, path, body)
+}
+
+func (e *todoEnv) doAsContext(ctx context.Context, role, method, path, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
 	if role != "" {
 		r.Header.Set(RoleHeader, role)
 	}
@@ -125,6 +129,8 @@ func (e *todoEnv) sessions(machine string, list ...proto.Session) {
 	}
 	e.f.setSessions(machine, copied...)
 	e.s.SessionsChanged(context.Background(), DeviceSessions{MachineID: machine, Sessions: copied})
+	// The conversations' spaces it noted are in the store (conversation_space.go), as a while after a list.
+	waitFor(e.t, "the listed conversations' spaces written", e.s.listedSpacesWritten)
 }
 
 // todoOf is the todo the agent works for, as the hub is told (the report: what its session list shows); "" for none.
@@ -533,7 +539,7 @@ func TestUserCompletionWinsLateSupervisorAcceptance(t *testing.T) {
 		t.Fatalf("PATCH %d, review closed %v: %v", status, closed, reviewErr)
 	}
 	reloadTodos(t, e.s)
-	e.s.taskWorking(ctx, "box", "s1")
+	e.s.taskWorking(ctx, "box", "s1", startRow{})
 	stored, err := g.GetTodo(ctx, todo.ID)
 	got := todoNow(e.s, todo.ID)
 	if err != nil || stored.DoneAt == nil || stored.DoneBy != "" || got.DoneAt == nil || got.DoneBy != "" {
@@ -833,8 +839,8 @@ type pausingAutoDoneStore struct {
 	stored, release chan struct{}
 }
 
-func (p *pausingAutoDoneStore) AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time) (*db.TodoRow, bool, error) {
-	r, ok, err := p.DB.AutoDoneTodo(ctx, id, reason, at, workSince)
+func (p *pausingAutoDoneStore) AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time, guard func() error) (*db.TodoRow, bool, error) {
+	r, ok, err := p.DB.AutoDoneTodo(ctx, id, reason, at, workSince, guard)
 	p.stored <- struct{}{}
 	<-p.release
 	return r, ok, err
@@ -960,5 +966,53 @@ func TestAutoDoneThenFailKeepsTheStartError(t *testing.T) {
 	}
 	if got := e.get(todo.ID); got.StartError != "agent did not start" {
 		t.Fatalf("memory start error %q; want the store's %q", got.StartError, rows[0].StartError)
+	}
+}
+
+// A delayed done creation-id uses the guarded automatic-link transaction and mirrors only its committed result. A
+// manual link committed after the automatic decision wins in both Postgres and assistant memory (#5732).
+func TestDelayedDoneCreationStoreKeepsManualChoice(t *testing.T) {
+	database := todoTestDB(t)
+	s, _ := newQuietServiceOn(t, database)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for _, row := range []db.TodoRow{
+		{ID: "t_done", Title: "done", CreatedAt: now, UpdatedAt: now, DoneAt: &now},
+		{ID: "t_hand", Title: "hand", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := database.CreateTodo(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reloadTodos(t, s)
+	if _, err := database.LinkTodoAgentWithSource(ctx, "t_hand", "box", "s_choice", "", "", "", "", "manual", "", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	linked := s.autoLinkTodos("box", []proto.Session{{SessionID: "s_choice", MachineID: "box", Status: proto.StatusWorking,
+		Hierarchy: &proto.SessionHierarchy{CreationID: "t_done"}, UpdatedAt: now.Add(2 * time.Second)}})
+	if linked {
+		t.Fatal("a late manual membership was reported as a new delayed auto-link")
+	}
+	if got := todoNow(s, "t_done"); len(got.Agents) != 0 {
+		t.Fatalf("memory overrode the later manual choice: %+v", got.Agents)
+	}
+	rows, err := database.ListAllTodoAgents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.MachineID == "box" && row.SessionID == "s_choice" && (row.TodoID != "t_hand" || row.ReleasedAt != nil) {
+			t.Fatalf("database membership = %+v", row)
+		}
+	}
+
+	linked = s.autoLinkTodos("box", []proto.Session{{SessionID: "s_exact", MachineID: "box", Status: proto.StatusWorking,
+		Hierarchy: &proto.SessionHierarchy{CreationID: "t_done"}, UpdatedAt: now.Add(3 * time.Second)}})
+	if !linked {
+		t.Fatal("the exact unlinked done creation was not retained")
+	}
+	got := todoNow(s, "t_done")
+	if got.DoneAt == nil || len(got.Agents) != 1 || got.Agents[0].SessionID != "s_exact" {
+		t.Fatalf("done creation after the guarded store write = %+v", got)
 	}
 }

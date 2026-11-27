@@ -1,3 +1,4 @@
+import { refreshAgentsDisplay } from "./agents-display";
 // The list transport stays separate from complete, subscribed chat details.
 import { SESSIONS_LIST_FEATURE, SessionList, compareListIds } from "./session-list";
 import { foldedState } from "./child-sessions";
@@ -38,7 +39,7 @@ export const runtimeOrder = (a: Session, b: Session) => {
 export const runtimeActiveAt = (s: Session) => Date.parse(s.updated_at ?? "");
 /** Needs the user by the hub's rule for `state.needs_you` counts, not the client's answered-here state: by the folded
  *  state, which a child that waits gives its parent (`roots=1` counts it so, #5120). */
-export const runtimeNeedsYou = (s: Session) => foldedState(s) === "needs_you";
+export const runtimeNeedsYou = (s: Session) => s.view ? s.view.counted === true : foldedState(s) === "needs_you";
 /** Where a row is, by the attributes the hub groups and filters it by (docs/protocol/protocol.md "Bounded Agents
  *  lists"): its computer, its project directory and its space. */
 // A Just finished row's state section is Just finished's on a hub that lists it apart (lib/session-groups.ts, #9751).
@@ -63,5 +64,6 @@ export const runtimeSessions = new SessionList<Session>("/sessions", runtimeIden
 });
 // A scoped removal can mean that a row is still present in the all-sessions list.
 export const runtimeAgents = new SessionList<Session>(RUNTIME_AGENTS_PATH, runtimeIdentity, runtimeOrder, undefined, runtimeRemoval, {
+  onRefresh: () => { void refreshAgentsDisplay(); },
   pageCounts: () => pageCounts,
 });

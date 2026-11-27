@@ -17,7 +17,7 @@ const (
 	maxCache            = 64
 	maxSnapshots        = 32
 	snapshotTTL         = 5 * time.Minute
-	maxJournalRevisions = 128
+	maxJournalRevisions = 4096
 	maxJournalChanges   = 16384
 )
 
@@ -41,8 +41,13 @@ type Item struct {
 	// Private: a row a reader with Options.NoPrivate is never shown, in its rows, totals or counts (a health-space
 	// conversation, which an extension's token does not see).
 	Private bool
+	// HiddenByDirectory remains indexed for explicit inspection, but is excluded by default.
+	HiddenByDirectory bool
 	// Assistant marks a Persona conversation, excluded from the Agents list and active Agent aggregate.
 	Assistant bool
+	// Subagent marks a delegated subagent session. Under Options.Roots, subagents (including orphans whose parent is
+	// archived or not listed) are excluded from the main Agents list so they never leak as top-level rows.
+	Subagent bool
 	// Fold is the item's optional per-row metadata: its place in the session hierarchy (#5120) and its open to-do
 	// (#6662). Nil for an item with neither, which shows its own State and BackgroundWaiting. It sits behind a pointer
 	// to keep Item in its allocation size class: an adapter builds a whole batch as one []Item, as the hub does on every
@@ -55,20 +60,25 @@ type Item struct {
 }
 
 // Fold is how an Item folds and the open to-do it is on. Root is the session id (as parent_session_id names it, not the
-// composite ID) of the item on the same Machine this one is folded under (a child session under its topmost listed
-// ancestor), only when that item is in the same batch; State is the state the item shows with the items folded under it
-// ("" for its own); BackgroundWaiting is Item.BackgroundWaiting for Options.Roots: none of the items folded under it
-// works or needs the user either. Todo is the id of the open to-do the row is on ("" for none): what Options.Todo
-// selects and Counts.Todo counts. The adapter knows which to-dos are open; the index only compares ids. Options.Roots
-// leaves out the items with a Root and filters and counts the others by their folded state; Options.Under selects the
-// items folded under one. SearchAs is the ID of the item (Root's) a search with Options.Roots returns a hit in this
-// item as, and SearchSession the session id the hit names it by (SearchHit.HitSessionID): the adapter sets both on a
-// side session folded under Root (#7944), whose chat is reached from Root's. Like the rest of an Item it is immutable
-// once handed to Replace: copies of the item share it.
+// composite ID) of the listed parent this item is folded under; RootMachine is that parent's machine id when it lives
+// on another computer (empty means the same Machine as this item). State is the state the item shows with the items
+// folded under it ("" for its own); BackgroundWaiting is Item.BackgroundWaiting for Options.Roots: none of the items
+// folded under it works or needs the user either. Todo is the id of the open to-do the row is on ("" for none): what
+// Options.Todo selects and Counts.Todo counts. The adapter knows which to-dos are open; the index only compares ids.
+// Options.Roots leaves out the items with a Root (and Subagent orphans) and filters and counts the others by their
+// folded state; Options.Under (with UnderMachine) selects the items folded under one parent across machines. SearchAs
+// is the ID of the item (Root's) a search with Options.Roots returns a hit in this item as, and SearchSession the
+// session id the hit names it by (SearchHit.HitSessionID): the adapter sets both on a side session folded under Root
+// (#7944), whose chat is reached from Root's. Like the rest of an Item it is immutable once handed to Replace: copies
+// of the item share it.
 type Fold struct {
-	Root, State, Todo       string
-	SearchAs, SearchSession string
-	BackgroundWaiting       bool
+	Root, RootMachine, State, Todo    string
+	DirectParent, DirectParentMachine string
+	SearchAs, SearchSession           string
+	LegacyState                       string
+	BackgroundWaiting                 bool
+	HasLegacyFold                     bool
+	LegacyBackgroundWaiting           bool
 }
 
 // root is the session v is folded under ("" for none).
@@ -77,6 +87,62 @@ func (v *Item) root() string {
 		return ""
 	}
 	return v.Fold.Root
+}
+
+// rootMachine is the machine of the session v is folded under ("" when not folded).
+func (v *Item) rootMachine() string {
+	if v.Fold == nil || v.Fold.Root == "" {
+		return ""
+	}
+	if v.Fold.RootMachine != "" {
+		return v.Fold.RootMachine
+	}
+	return v.Machine
+}
+
+// isCrossMachineFolded reports whether v is folded under a listed parent on another machine.
+func (v *Item) isCrossMachineFolded() bool {
+	return v.Fold != nil && v.Fold.Root != "" && v.Fold.RootMachine != "" && v.Fold.RootMachine != v.Machine
+}
+
+// isSameMachineFolded reports whether v is folded under a listed parent on its own machine.
+func (v *Item) isSameMachineFolded() bool {
+	return v.Fold != nil && v.Fold.Root != "" && (v.Fold.RootMachine == "" || v.Fold.RootMachine == v.Machine)
+}
+
+// hiddenByRoots reports whether Options.Roots excludes v. When crossMachine is true
+// (cross_machine_hierarchy=1), all folded children (same- and cross-machine) and all orphan
+// subagents are excluded. Without cross_machine_hierarchy=1, legacy clients do not read
+// folded_under_machine_id, so cross-machine folded rows and needs_you orphan subagents stay
+// listed so blocked subagents and their approval cards remain reachable.
+func (v *Item) hiddenByRoots(crossMachine bool) bool {
+	if crossMachine {
+		return v.root() != "" || v.Subagent
+	}
+	if v.isSameMachineFolded() {
+		return true
+	}
+	return v.Subagent && v.root() == "" && v.State != "needs_you"
+}
+
+// matchesUnder reports whether v belongs under parent (machine, session): either folded under it
+// (all depths) or, for an orphan subagent whose parent is no longer listed (e.g. archived), directly
+// naming that parent so the parent's Session Overview can still inspect its subagents.
+func (v *Item) matchesUnder(machine, session string) bool {
+	if v.Fold == nil {
+		return false
+	}
+	if v.Fold.Root != "" {
+		return v.Fold.Root == session && v.rootMachine() == machine
+	}
+	if v.Subagent && v.Fold.DirectParent != "" {
+		pm := v.Fold.DirectParentMachine
+		if pm == "" {
+			pm = v.Machine
+		}
+		return v.Fold.DirectParent == session && pm == machine
+	}
+	return false
 }
 
 // todo is the open to-do v is on ("" for none).
@@ -99,20 +165,32 @@ type Options struct {
 	AllowedMachines                                                                    []string
 	Limit                                                                              int
 	ID, Cursor, Since, State, Machine, Project, Group, Source, Provider, Q, PaneSource string
+	// Providers is the personal-Agent OR-set form of Provider. ParseProviderSets
+	// uses it for every nonempty provider value, including a singleton. Values are
+	// exact and case-sensitive; order and duplicates do not affect matching, cache
+	// keys or cursor bindings. At most 64 supplied values, none empty.
+	Providers []string
 	// Manager selects the rows of the batches replaced with that owner (ReplaceOwned); like the other filters, a
 	// cursor is bound to it. It is the adapter's to set (not a key Parse reads): the adapter knows which owners exist
 	// and who may ask for which.
 	Manager string
-	// Roots (roots=1) leaves the items folded under another (Fold.Root) out of the rows, the totals and every count,
-	// and filters and counts the rest by their folded state (Fold.State). Under (parent_session_id, which needs Machine) selects the
-	// items of Machine folded under that session, all depths; the two cannot be combined. Both bind a cursor, as the
-	// other filters do.
-	Roots   bool
-	Under   string
-	Summary bool
+	// Roots (roots=1) leaves the items folded under another (Fold.Root) and orphan subagents out of the rows,
+	// totals and every count, and filters and counts the rest by their folded state (Fold.State). When
+	// CrossMachineHierarchy (cross_machine_hierarchy=1) is set, cross-machine folded rows and all orphan subagents
+	// are folded/hidden too; without it, legacy clients keep cross-machine folded rows and needs_you orphan
+	// subagents reachable. Under (parent_session_id, with UnderMachine from parent_machine_id or machine_id)
+	// selects the items folded under that parent, all depths; optional Machine filters child rows to one machine
+	// when UnderMachine is given. Roots and Under cannot be combined. All bind a cursor.
+	Roots                 bool
+	CrossMachineHierarchy bool
+	Under                 string
+	UnderMachine          string
+	Summary               bool
 	// NoPrivate leaves the Private items out of the rows, the totals and every count; like Manager it is the adapter's
 	// to set (who asks), not a key Parse reads, and it binds a cursor as the other filters do.
 	NoPrivate bool
+	// IncludeHidden opts into directory-hidden rows without changing the stored rules.
+	IncludeHidden bool
 	// AgentsOnly excludes assistant and health-space conversations from the filtered view.
 	AgentsOnly bool
 	// Places (place=["<machine>","<project>"], repeatable) selects the items at any of these machine and project
@@ -147,10 +225,14 @@ type Page struct {
 	SearchHits map[string]SearchHit `json:"search_hits,omitempty"`
 	Sessions   []any                `json:"sessions"`
 	Remove     []string             `json:"remove"`
-	HasMore    bool                 `json:"has_more"`
-	NextCursor string               `json:"next_cursor,omitempty"`
-	Revision   string               `json:"revision"`
-	Total      int                  `json:"total"`
+	// Added identifies rows created or newly entering the filter after a delta's baseline, not rows that already
+	// matched and only changed. It is always an array so a client can distinguish no additions from an older hub that
+	// omits the field (#11801, #16389).
+	Added      []string `json:"added"`
+	HasMore    bool     `json:"has_more"`
+	NextCursor string   `json:"next_cursor,omitempty"`
+	Revision   string   `json:"revision"`
+	Total      int      `json:"total"`
 }
 
 // Counts describes the complete filtered membership, ignoring page size.
@@ -172,8 +254,14 @@ type Counts struct {
 	BackgroundWaiting int `json:"background_waiting,omitempty"`
 	// JustFinished: how many of State["idle"] are Just finished (#9751): a client that shows them apart takes them out
 	// of its Seen count.
-	JustFinished int    `json:"just_finished,omitempty"`
-	Revision     string `json:"revision"`
+	JustFinished int `json:"just_finished,omitempty"`
+	// HeldNeeds: how many of State["needs_you"] only wait on held non-interrupting cards (P1/P2) for push grading.
+	HeldNeeds int `json:"held_needs,omitempty"`
+	// SupervisorHeld: how many of State["needs_you"] only wait on cards their task's supervisor holds (a non-question
+	// card marked delegating, docs/assistant/unified-entry.md "Asks go to the supervisor first"): not the user's until
+	// the supervisor escalates them, so clients take them out of every Needs you count. None of them is in HeldNeeds.
+	SupervisorHeld int    `json:"supervisor_held,omitempty"`
+	Revision       string `json:"revision"`
 }
 
 // PageWithCounts is a page with its view's current counts (with_counts=1): what a separate ?counts=1 read with the
@@ -210,10 +298,11 @@ type journalEntry struct {
 }
 
 type filters struct {
-	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, Todo, Waiting, ExcludePaneSource, JustFinished string
-	// Places and Spaces are Options' as placesKey spells them: filters stay comparable.
-	Places, Spaces               string
-	Roots, NoPrivate, AgentsOnly bool
+	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, UnderMachine, Todo, Waiting, ExcludePaneSource, JustFinished string
+	// Places and Spaces are Options' as placesKey spells them, Providers as
+	// providersKey spells the set: filters stay comparable.
+	Places, Spaces, Providers                                          string
+	Roots, CrossMachineHierarchy, NoPrivate, IncludeHidden, AgentsOnly bool
 }
 
 type binding struct {
@@ -232,6 +321,7 @@ type event struct {
 	id      string
 	updated time.Time
 	value   *record // nil means a removal
+	added   bool    // created or newly entering the filter after a delta's baseline; full pages leave this false
 }
 
 type result struct {
@@ -256,7 +346,7 @@ type snapshot struct {
 // Index is safe for concurrent use. Its zero value is ready to use; do not copy
 // it after first use. Cached views live only for the current revision. Cursors
 // retain at most 32 immutable views for five minutes, and the journal retains
-// at most 128 revisions and 16,384 changed IDs (whole revisions are evicted).
+// at most 4,096 revisions and 16,384 changed IDs (whole revisions are evicted).
 type Index struct {
 	mu             sync.Mutex
 	epoch          string
@@ -361,13 +451,17 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 	}
 	for id, c := range changes {
 		if c.before != nil {
-			addCount(&i.counts, c.before.item, false, -1)
+			if !c.before.item.HiddenByDirectory {
+				addCount(&i.counts, c.before.item, filters{}, -1)
+			}
 			if c.before.searchDocument == nil {
 				i.undecoded--
 			}
 		}
 		if c.after != nil {
-			addCount(&i.counts, c.after.item, false, 1)
+			if !c.after.item.HiddenByDirectory {
+				addCount(&i.counts, c.after.item, filters{}, 1)
+			}
 			i.undecoded++ // a new record: its document is decoded by the first search that reads it
 		}
 		if c.after == nil {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -16,6 +17,9 @@ import (
 
 // deviceBusMethod keeps cancellation scoped to the long file operations whose node side supports it.
 func deviceBusMethod(method string) string {
+	if method == nodeproto.StopIfIdle {
+		return devicewire.MethodRetireCall
+	}
 	if method == "file.copy" || method == "file.zip" {
 		return devicewire.MethodFileCall
 	}
@@ -37,11 +41,17 @@ func (b *busNode) Call(ctx context.Context, method string, params, out any) erro
 	if err := b.h.waitDevicesFor(ctx, owner); err != nil {
 		return fmt.Errorf("%s: %w", b.id, err)
 	}
+	var streamVersion int
+	if dial, ok := params.(devicewire.PortDial); method == devicewire.MethodPortDial && ok {
+		// An old manager ignores the outer offer and forwards only the legacy port.dial parameters.
+		streamVersion, dial.StreamVersion = dial.StreamVersion, 0
+		params = dial
+	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err
 	}
-	p := devicewire.NodeCall{MachineID: b.id, Method: method, Params: raw}
+	p := devicewire.NodeCall{MachineID: b.id, Method: method, Params: raw, StreamVersion: streamVersion}
 	if method == "session.interrupt" {
 		attachNodeCaller(ctx, &p)
 	}
@@ -155,6 +165,12 @@ func deviceError(id string, err error) error {
 // modesActor is who asks for a session.modes call, for the manager's record of mode changes (#10297): the device and
 // its name, the hub's own token, or an extension. Display only; the request was checked before it got here.
 func modesActor(ctx context.Context) *devicewire.Actor {
+	if a := devicewire.ModeActorOf(ctx); a != nil {
+		return a
+	}
+	if _, ok := callerOf(ctx); ok {
+		return devicewire.AssistantModeActor()
+	}
 	pr := principalOf(ctx)
 	switch {
 	case pr.Role == roleExtension:

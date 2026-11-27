@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -170,13 +172,109 @@ func testSnapshotIsStripped(t *testing.T, tag string) {
 	}
 }
 
-// /compact (typed, or sent by Persona to an idle assistant conversation) is a notice, not a message: it must not count
-// as activity either, or a compacted conversation would turn up unread.
+// Resource labels are Antigravity export syntax, not generic user-message markup.
+func TestOtherEnginesPreserveContextResourceLabels(t *testing.T) {
+	const text = "Content of persona-context:///snapshot.txt:\nPlease reply OK."
+	quoted, err := json.Marshal(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, line string
+		codex      bool
+	}{
+		{"Claude", `{"type":"user","uuid":"u1","message":{"role":"user","content":` + string(quoted) + `}}`, false},
+		{"Codex", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":` + string(quoted) + `}]}}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := only(t, ParseLine(1, []byte(tc.line), &Meta{Codex: tc.codex}))
+			if it.Role != "user" || it.Text != text {
+				t.Fatalf("got %+v, want literal user text %q", it, text)
+			}
+		})
+	}
+}
+
+// /compact (typed, or sent by Persona with instructions to compact an assistant conversation) is a notice, not a
+// message: it must not count as a user turn or activity either, or a compacted conversation would turn up unread.
 func TestCompactCommandIsANotice(t *testing.T) {
 	items, meta := parse(t, `{"type":"user","uuid":"u1","timestamp":"2026-11-01T07:00:00Z","message":{"role":"user","content":"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}`)
 	it := only(t, items)
-	if it.Role != "system" || it.Kind != proto.KindNotice || it.Text != "压缩上下文" || !meta.LastActivity.IsZero() {
-		t.Fatalf("got %+v, activity %v", it, meta.LastActivity)
+	if it.Role != "system" || it.Kind != proto.KindNotice || it.Text != "压缩上下文" || !meta.LastActivity.IsZero() || meta.Turns != 0 {
+		t.Fatalf("got %+v, activity %v, turns %d", it, meta.LastActivity, meta.Turns)
+	}
+}
+
+func TestCompactCommandWithInstructionsIsANotice(t *testing.T) {
+	command := func(args string) string {
+		return "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args>" + args + "</command-args>"
+	}
+	marshalLine := func(t *testing.T, v map[string]any) string {
+		t.Helper()
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	cases := []struct {
+		name string
+		line string
+	}{
+		{
+			name: "zh-Hans managed instructions",
+			line: marshalLine(t, map[string]any{
+				"type": "user", "uuid": "u1", "timestamp": "2026-11-01T07:00:00Z",
+				"message": map[string]any{"role": "user", "content": command(prompts.RenderCompactInstructions("zh-Hans"))},
+			}),
+		},
+		{
+			name: "en managed instructions",
+			line: marshalLine(t, map[string]any{
+				"type": "user", "uuid": "u2", "timestamp": "2026-11-01T07:00:00Z",
+				"message": map[string]any{"role": "user", "content": command(prompts.RenderCompactInstructions("en"))},
+			}),
+		},
+		{
+			name: "ja managed instructions",
+			line: marshalLine(t, map[string]any{
+				"type": "user", "uuid": "u3", "timestamp": "2026-11-01T07:00:00Z",
+				"message": map[string]any{"role": "user", "content": command(prompts.RenderCompactInstructions("ja"))},
+			}),
+		},
+		{
+			name: "block array with persona-context and instructions",
+			line: marshalLine(t, map[string]any{
+				"type": "user", "uuid": "u4", "timestamp": "2026-11-01T07:00:00Z",
+				"message": map[string]any{
+					"role": "user",
+					"content": []map[string]any{
+						{"type": "text", "text": "<persona-context>\nsnapshot\n</persona-context>"},
+						{"type": "text", "text": command(prompts.RenderCompactInstructions("zh-Hans"))},
+					},
+				},
+			}),
+		},
+		{
+			name: "system local_command with custom focus",
+			line: marshalLine(t, map[string]any{
+				"type": "system", "subtype": "local_command", "uuid": "s1", "timestamp": "2026-11-01T07:00:00Z",
+				"content": command("focus on auth tests"),
+			}),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			items, meta := parse(t, tc.line)
+			it := only(t, items)
+			if it.Role != "system" || it.Kind != proto.KindNotice || it.Text != CompactNotice {
+				t.Fatalf("got %+v, want system notice %q", it, CompactNotice)
+			}
+			if !meta.LastActivity.IsZero() || meta.Turns != 0 || meta.FirstUser != "" || meta.TurnOpen {
+				t.Fatalf("unexpected meta mutation: activity=%v turns=%d firstUser=%q turnOpen=%v",
+					meta.LastActivity, meta.Turns, meta.FirstUser, meta.TurnOpen)
+			}
+		})
 	}
 }
 
@@ -1158,14 +1256,32 @@ func TestLongToolOutputIsCutForPages(t *testing.T) {
 }
 
 // A message with a picture typed while the agent worked is absorbed mid-turn as a queued_command whose prompt is
-// blocks: the picture is part of the message (it used to be dropped, and the phone showed the text alone).
+// blocks: the picture is part of the message (it used to be dropped, and the phone showed the text alone). Newer
+// Claude Code puts the pictures first: each item still has an id of its own, in block order, or an app merging by
+// id keeps the picture and loses the text (#10854).
 func TestQueuedPromptKeepsItsImages(t *testing.T) {
-	line := `{"type":"attachment","uuid":"a1","attachment":{"type":"queued_command","commandMode":"prompt","prompt":[` +
-		`{"type":"text","text":"[Image #1]看这个"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}}`
-	items, _ := parse(t, line)
-	if len(items) != 2 || items[0].Kind != proto.KindText || !items[0].Queued ||
-		items[1].Kind != proto.KindImage || !items[1].Queued || items[1].Image == nil || items[1].ID != "a1#1" {
-		t.Fatalf("items = %+v", items)
+	const img = `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}`
+	for _, c := range []struct {
+		name   string
+		blocks string
+		want   []string // id and kind of each item, in order
+	}{
+		{"text first", `{"type":"text","text":"[Image #1]看这个"},` + img, []string{"a1#0 text", "a1#1 image"}},
+		{"picture first", img + `,{"type":"text","text":"看这个"}`, []string{"a1#0 image", "a1#1 text"}},
+		{"two pictures first", img + `,` + img + `,{"type":"text","text":"看这两个"}`, []string{"a1#0 image", "a1#1 image", "a1#2 text"}},
+	} {
+		line := `{"type":"attachment","uuid":"a1","attachment":{"type":"queued_command","commandMode":"prompt","prompt":[` + c.blocks + `]}}`
+		items, _ := parse(t, line)
+		var got []string
+		for _, it := range items {
+			got = append(got, it.ID+" "+it.Kind)
+			if !it.Queued || it.Kind == proto.KindImage && it.Image == nil || it.Kind == proto.KindText && !strings.Contains(it.Text, "看这") {
+				t.Errorf("%s: item %+v", c.name, it)
+			}
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: items %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

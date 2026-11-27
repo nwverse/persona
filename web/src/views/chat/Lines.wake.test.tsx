@@ -44,8 +44,13 @@ describe.each(["assistant", "agents"] as const)("%s background continuation", (s
     // the turn before the wake was over: its last words stay where they were, its summary is untouched
     expect(slots()[0]).toBe(answered);
     expect(answered.textContent).toContain("Earlier progress.");
-    // the woken work opens with its notice and has one summary and one text slot of its own
+    // the woken work opens with its notice (hairline divider, no capsule or bell icon) and has one summary and one text slot of its own
     expect(host.textContent).toContain(wake.text);
+    const wakeNotice = host.querySelector<HTMLElement>("[data-wake-notice]");
+    expect(wakeNotice).not.toBeNull();
+    expect(wakeNotice?.getAttribute("role")).toBe("separator");
+    expect(wakeNotice?.querySelector("svg")).toBeNull();
+    expect(wakeNotice?.className).not.toContain("rounded-full");
     expect(host.querySelectorAll("[data-segment]")).toHaveLength(2);
     expect(headers()).toHaveLength(2);
     expect(slots()).toHaveLength(2);
@@ -55,6 +60,7 @@ describe.each(["assistant", "agents"] as const)("%s background continuation", (s
     // nothing opens by itself, during execution or after it (super rule 2)
     expect(headers().map((h) => h.getAttribute("aria-expanded"))).toEqual(["false", "false"]);
     act(() => headers()[1].click());
+    for (const h of host.querySelectorAll<HTMLButtonElement>("[data-work-detail] [data-work-group] > button")) if (h.getAttribute("aria-expanded") === "false") act(() => h.click());
     for (const seq of [5, 7]) expect(details().join("\n")).toContain(`echo example-${seq}`);
     expect(details().join("\n")).not.toContain("echo example-2");
     const done = [...live, item(9, "text", "Final result.")];

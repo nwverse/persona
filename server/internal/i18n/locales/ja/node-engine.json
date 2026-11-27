@@ -1,4 +1,5 @@
 {
+  "agy_pane_integration": "メッセージの送信とターミナルの操作はできます。Persona 自身の agy フック、または herdr の Antigravity 連携がこのペインの会話を報告すると、Persona に会話が表示されます。表示されない場合は personad node doctor を実行し、agy-hooks の行を確認してください。",
   "paseo_unreachable": "Paseoは実行中ですが、Personaから接続できません：{reason}",
   "paseo_not_connected": "Paseoは実行中ですが、Personaはまだ接続できていません",
   "paseo_not_connected_why": "Paseoは実行中ですが、Personaはまだ接続できていません：{reason}",

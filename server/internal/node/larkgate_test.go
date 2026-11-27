@@ -45,9 +45,12 @@ func TestAssistantLarkAccountEnvironment(t *testing.T) {
 // ex is on the assistant's PATH only when the example skill is in the user's space (~/.persona/skills, linked into
 // the assistant's directory): skills are no longer inside personad (docs/operations/hub-update.md).
 func TestGatedCommandOnlyWithTheSkill(t *testing.T) {
-	user, cwd := t.TempDir(), t.TempDir()
+	user := t.TempDir()
 	t.Setenv("PERSONA_SKILLS_DIR", user)
-	n := &Node{dir: t.TempDir(), larkCfgAt: time.Now(), logger: log.New(io.Discard, "", 0), larkCfg: olCfg()}
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	n, _ := testNode(t)
+	n.dir, n.larkCfgAt, n.logger, n.larkCfg = t.TempDir(), time.Now(), log.New(io.Discard, "", 0), olCfg()
+	cwd := prepareAssistantForTest(t, n, ".persona/assistant", nil, nil)
 	ex := filepath.Join(n.assistantBin(cwd), "ex")
 	n.assistantLarkEnv(cwd, "")
 	if _, err := os.Stat(ex); !os.IsNotExist(err) {
@@ -56,8 +59,12 @@ func TestGatedCommandOnlyWithTheSkill(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(user, "example", "scripts"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_ = os.WriteFile(filepath.Join(user, "example", "SKILL.md"), []byte("---\nname: example\n---\n"), 0o644)
-	_ = os.WriteFile(filepath.Join(user, "example", "scripts", "ex.sh"), []byte("#!/bin/bash\n"), 0o755)
+	if err := os.WriteFile(filepath.Join(user, "example", "SKILL.md"), []byte("---\nname: example\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(user, "example", "scripts", "ex.sh"), []byte("#!/bin/bash\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	n.assistantLarkEnv(cwd, "")
 	if _, err := os.Stat(ex); err != nil {
 		t.Fatalf("no ex with the skill: %v", err)
@@ -169,6 +176,49 @@ EOF`, "other"},
 		if got != tc.want {
 			t.Errorf("%s\n  got %s, want %s (%+v)", tc.cmd, got, tc.want, v)
 		}
+	}
+}
+
+// zsh precommand modifiers must not hide a gated call, and emulate -c is opaque when its code names a gate.
+func TestLarkGateZshPrecommandModifiersAndCodeBuiltins(t *testing.T) {
+	gates := olGate("")
+	for _, tc := range []struct {
+		name, command string
+		method        string
+		unknown       bool
+	}{
+		{"noglob read", `noglob ex GET /links/open`, "GET", false},
+		{"nocorrect read", `nocorrect ex GET /links/open`, "GET", false},
+		{"dash read", `- ex GET /links/open`, "GET", false},
+		{"noglob write", `noglob ex POST /conversations/7123/messages '{"text":"hi"}'`, "POST", false},
+		{"nocorrect write", `nocorrect ex POST /messages/99/recall`, "POST", false},
+		{"dash write", `- ex POST /conversations/7123/messages '{"text":"hi"}'`, "POST", false},
+		{"emulate read", `emulate zsh -c 'ex GET /links/open'`, "", true},
+		{"emulate write", `emulate sh -c 'ex POST /conversations/7123/messages'`, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := classifyLark(tc.command, gates, "", nil)
+			if tc.unknown {
+				if !v.other || !v.unknown || len(v.calls) != 0 || v.deny != "" {
+					t.Fatalf("%s: got %+v, want an opaque whole command", tc.command, v)
+				}
+				return
+			}
+			if v.other || v.unknown || v.unparsed || v.unsure || v.deny != "" || len(v.calls) != 1 {
+				t.Fatalf("%s: got %+v, want one classified call", tc.command, v)
+			}
+			if v.calls[0].Method != tc.method {
+				t.Fatalf("%s: method %q, want %q", tc.command, v.calls[0].Method, tc.method)
+			}
+			if got := larkDecision(olCfg(), v.calls[0]); got != "confirm" {
+				t.Fatalf("%s: decision %q, want confirm", tc.command, got)
+			}
+			if tc.method == "POST" {
+				if _, write := gateWrite(gates, tc.command); !write {
+					t.Fatalf("%s: write was not classified as a write", tc.command)
+				}
+			}
+		})
 	}
 }
 

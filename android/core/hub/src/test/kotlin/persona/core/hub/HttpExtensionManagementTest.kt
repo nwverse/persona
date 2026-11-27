@@ -42,7 +42,7 @@ class HttpExtensionManagementTest {
 
         server.enqueue(MockResponse().setBody(detail))
         api.extension("example-notes")
-        assertEquals("/api/v1/extensions/example-notes/-/", (server.takeRequest().path).zhAny())
+        assertEquals("/api/v1/extensions/example-notes/-/?entry_lists=1", (server.takeRequest().path).zhAny())
 
         server.enqueue(MockResponse().setBody("""{"markets":[{"id":"m1","spec":"github:example/team","name":"团队","extensions":3,
             "signature":{"state":"verified","key_id":"32ed46cdbe349656"}}]}"""))
@@ -128,9 +128,78 @@ class HttpExtensionManagementTest {
         }
     }
 
+    @Test fun savesAnExplicitReferenceAndRemovesAConfirmedHandoffRule() = withHub { server, api ->
+        server.enqueue(MockResponse().setBody(detail))
+        api.setSecretReference("example-notes", "api_key", "op://Dev/Notes/new")
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/plugins/example-notes/-/secrets/api_key?entry_lists=1", it.path)
+            assertEquals("""{"reference":"op://Dev/Notes/new"}""", it.body.readUtf8())
+        }
+        server.enqueue(MockResponse().setBody(detail))
+        api.removeHandoffRule("example-vault", "0123456789abcdef")
+        server.takeRequest().let {
+            assertEquals("DELETE", it.method)
+            assertEquals("/api/v1/plugins/example-vault/-/handoff-rules/0123456789abcdef?entry_lists=1", it.path)
+        }
+        assertTrue(runCatching { api.removeHandoffRule("example-vault", "../bad") }.exceptionOrNull() is IllegalArgumentException)
+    }
+
+    @Test fun modernRoutesSaveAReferenceAndRemoveAHandoffRule() = withHub(legacy = false) { server, api ->
+        server.enqueue(MockResponse().setBody(detail))
+        api.setSecretReference("example-notes", "api_key", "op://Dev/Notes/new")
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/extensions/example-notes/-/secrets/api_key?entry_lists=1", it.path)
+            assertEquals("""{"reference":"op://Dev/Notes/new"}""", it.body.readUtf8())
+        }
+        server.enqueue(MockResponse().setBody(detail))
+        api.removeHandoffRule("example-vault", "0123456789abcdef")
+        server.takeRequest().let {
+            assertEquals("DELETE", it.method)
+            assertEquals("/api/v1/extensions/example-vault/-/handoff-rules/0123456789abcdef?entry_lists=1", it.path)
+        }
+    }
+
+    @Test fun entryListOptInAndPreservingImmediateWrites() = withHub(legacy = false) { server, api ->
+        repeat(4) { server.enqueue(MockResponse().setBody(detail)) }
+        api.setConfig("example-notes", buildJsonObject { put("x", 1) })
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/extensions/example-notes/-/config?entry_lists=1", it.path)
+            assertEquals("""{"config":{"x":1}}""", it.body.readUtf8())
+        }
+        api.setConfigPreservingEntries("example-notes", buildJsonObject { put("x", 2) })
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/extensions/example-notes/-/config?entry_lists=1&preserve_entries=1", it.path)
+            assertEquals("""{"config":{"x":2}}""", it.body.readUtf8())
+        }
+        val entryId = "entry_0123456789abcdef0123456789"
+        api.setSecret("example-notes", entryId, "placeholder-secret-5678")
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/extensions/example-notes/-/secrets/$entryId?entry_lists=1", it.path)
+            assertEquals("""{"value":"placeholder-secret-5678"}""", it.body.readUtf8())
+        }
+        api.clearSecret("example-notes", entryId)
+        server.takeRequest().let {
+            assertEquals("DELETE", it.method)
+            assertEquals("/api/v1/extensions/example-notes/-/secrets/$entryId?entry_lists=1", it.path)
+        }
+
+        server.enqueue(MockResponse().setResponseCode(400).setBody(
+            """{"error":"accounts[0].address: must be a URL","code":"invalid_config","field":"accounts[0].address","message":"must be a URL"}"""))
+        val refused = runCatching { api.setConfig("example-notes", JsonObject(emptyMap())) }.exceptionOrNull() as ExtensionConfigRejected
+        assertEquals("accounts[0].address", refused.field)
+        assertEquals("must be a URL", refused.message)
+        assertEquals("/api/v1/extensions/example-notes/-/config?entry_lists=1", server.takeRequest().path)
+    }
+
     // What the phone says of itself in every view's context; a fixed one so the bodies are exact.
-    private val device = ExtensionUiContext(tz = "Asia/Shanghai", locale = "zh-Hans-CN", platform = "android", uiVersion = 2)
-    private val deviceJson = """"tz":"Asia/Shanghai","locale":"zh-Hans-CN","platform":"android","ui_version":2"""
+    private val device = ExtensionUiContext(tz = "Asia/Shanghai", locale = "zh-Hans-CN", platform = "android",
+        uiVersion = 12)
+    private val deviceJson = """"tz":"Asia/Shanghai","locale":"zh-Hans-CN","platform":"android","ui_version":12"""
 
     private val detail = """{"id":"example-notes","name":"Example Notes","kind":"connectors","status":"needs_setup","version":"1.2.0",
         "source":"installed","enabled":true,"description":"同步笔记","contributes":{"connectors":["examplenotes"]},
@@ -164,7 +233,7 @@ class HttpExtensionManagementTest {
     @Test fun decodesTheDetailFromOneObject() = withHub { server, api ->
         server.enqueue(MockResponse().setBody(detail))
         val d = api.extension("example-notes")
-        assertEquals("/api/v1/plugins/example-notes/-/", (server.takeRequest().path).zhAny())
+        assertEquals("/api/v1/plugins/example-notes/-/?entry_lists=1", (server.takeRequest().path).zhAny())
         assertEquals("Example Notes", (d.extension.name).zhAny())
         assertEquals("1.1.0", (d.previousVersion).zhAny())
         assertFalse(d.readOnly)
@@ -190,21 +259,21 @@ class HttpExtensionManagementTest {
         repeat(4) { server.enqueue(MockResponse().setBody(detail)) }
         api.setEnabled("example-notes", false)
         server.takeRequest().let {
-            assertEquals("PUT", (it.method).zhAny()); assertEquals("/api/v1/plugins/example-notes/-/enabled", (it.path).zhAny())
+            assertEquals("PUT", (it.method).zhAny()); assertEquals("/api/v1/plugins/example-notes/-/enabled?entry_lists=1", (it.path).zhAny())
             assertEquals("""{"enabled":false}""", (it.body.readUtf8()).zhAny())
         }
         api.setConfig("example-notes", buildJsonObject { put("base_url", "https://x.example.com") })
         server.takeRequest().let {
-            assertEquals("PUT", (it.method).zhAny()); assertEquals("/api/v1/plugins/example-notes/-/config", (it.path).zhAny())
+            assertEquals("PUT", (it.method).zhAny()); assertEquals("/api/v1/plugins/example-notes/-/config?entry_lists=1", (it.path).zhAny())
             assertEquals("""{"config":{"base_url":"https://x.example.com"}}""", (it.body.readUtf8()).zhAny())
         }
         api.setSecret("example-notes", "api_key", "s3cret")
         server.takeRequest().let {
-            assertEquals("PUT", (it.method).zhAny()); assertEquals("/api/v1/plugins/example-notes/-/secrets/api_key", (it.path).zhAny())
+            assertEquals("PUT", (it.method).zhAny()); assertEquals("/api/v1/plugins/example-notes/-/secrets/api_key?entry_lists=1", (it.path).zhAny())
             assertEquals("""{"value":"s3cret"}""", (it.body.readUtf8()).zhAny())
         }
         api.clearSecret("example-notes", "api_key")
-        server.takeRequest().let { assertEquals("DELETE", (it.method).zhAny()); assertEquals("/api/v1/plugins/example-notes/-/secrets/api_key", (it.path).zhAny()) }
+        server.takeRequest().let { assertEquals("DELETE", (it.method).zhAny()); assertEquals("/api/v1/plugins/example-notes/-/secrets/api_key?entry_lists=1", (it.path).zhAny()) }
     }
 
     @Test fun aRefusedFieldComesBackAsItsPathAndReason() = withHub { server, api ->
@@ -385,8 +454,9 @@ class HttpExtensionManagementTest {
     @Test fun theDeviceContextIsThePhones() {
         val context = HttpExtensionManagement.deviceContext()
         assertEquals("android", (context.platform).zhAny())
-        // UI version 8 (#9158): the columns layout and a section's span, icon, link and rows side by side are drawn.
-        assertEquals(8, context.uiVersion)
+        // Android renders the version 12 map and the version 11 scene.
+        assertEquals(12, context.uiVersion)
+        assertTrue(context.unsupported.isNullOrEmpty())
         assertEquals(java.util.TimeZone.getDefault().id, context.tz)
         assertFalse(context.locale.isNullOrEmpty())
     }
@@ -557,7 +627,7 @@ class HttpExtensionManagementTest {
         server.enqueue(MockResponse().setBody(detail))
         api.setAutoUpgrade("example-ui", false)
         server.takeRequest().let {
-            assertEquals("/api/v1/extensions/example-ui/-/auto-upgrade", (it.path).zhAny())
+            assertEquals("/api/v1/extensions/example-ui/-/auto-upgrade?entry_lists=1", (it.path).zhAny())
             assertEquals("""{"auto":false}""", (it.body.readUtf8()).zhAny())
         }
 
@@ -578,5 +648,43 @@ class HttpExtensionManagementTest {
         assertEquals("扩展开着时这台 Mac 不会自动锁屏。", (field.confirm).zhAny())
         assertEquals("machines", (d.nodeMachines).zhAny())
         assertEquals("running", (d.extension.nodes!!.single().state).zhAny())
+    }
+
+    @Test fun extensionUiCallsUseAReadTimeoutBeyondTheHubsUiTimeout() = runBlocking {
+        MockWebServer().use { server ->
+            val http = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+            val timeouts = mutableListOf<Pair<String, Long?>>()
+            val api = HttpExtensionManagement({ path, method, body, timeout ->
+                timeouts += path to timeout
+                http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
+            }, device = { device }, legacy = false)
+
+            server.enqueue(MockResponse().setBody("""{"extensions":[],"can_install":false,"markets":false}"""))
+            api.listing()
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"view":{"title":"Markets","sections":[]}}"""))
+            assertEquals("Markets", api.renderUi("example-markets", "watchlist").title)
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"view":{"title":"Markets","sections":[]}}"""))
+            api.uiAction("example-markets", "watchlist", "refresh")
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"view":{"title":"Subscriptions","sections":[]}}"""))
+            api.renderUi(persona.core.contracts.api.SUBSCRIPTIONS_UI, "pages")
+            server.takeRequest()
+
+            assertTrue(HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS >= 30L)
+            assertEquals(
+                listOf(
+                    "/api/v1/extensions" to null,
+                    "/api/v1/extensions/example-markets/-/ui/watchlist" to HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS,
+                    "/api/v1/extensions/example-markets/-/ui/watchlist" to HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS,
+                    "/api/v1/subscriptions/-/ui" to HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS,
+                ),
+                timeouts,
+            )
+        }
     }
 }

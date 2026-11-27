@@ -4,6 +4,8 @@
 // Catalogs are locales/<lang>/<namespace>.json, flat "name": "text", embedded in the binary; a key is
 // "<namespace>.<name>". Placeholders are {name}; a numeric "count" picks <key>_one / <key>_other when those exist.
 // A key missing in a language falls back to en, then zh-Hans, then the key itself (the catalog test keeps them equal).
+//
+//persona:layer library
 package i18n
 
 import (
@@ -244,6 +246,9 @@ func loadLang(l Lang) map[string]string {
 // Args are a text's placeholder values.
 type Args map[string]any
 
+// Verbatim is a source value whose punctuation must survive insertion, such as a quoted name or message.
+type Verbatim string
+
 func lookup(l Lang, key string, args Args) (string, bool) {
 	cat := catalog(l)
 	if n, ok := count(args); ok {
@@ -333,7 +338,7 @@ func fill(s string, a Args) string {
 		if j > i+1 && j < len(s) && s[j] == '}' {
 			if v, ok := a[s[i+1:j]]; ok {
 				val := argText(v)
-				if markAfter(s[j+1:]) {
+				if _, source := v.(Verbatim); !source && markAfter(s[j+1:]) {
 					val = withoutFullStop(val)
 				}
 				if done == 0 {
@@ -389,6 +394,8 @@ func argText(v any) string {
 	switch v := v.(type) {
 	case string:
 		return v
+	case Verbatim:
+		return string(v)
 	case int:
 		return strconv.Itoa(v)
 	case int64:

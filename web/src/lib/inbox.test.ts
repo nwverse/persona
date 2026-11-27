@@ -1,3 +1,4 @@
+import { registerTestMailbox } from "../test/mailbox-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hub = vi.hoisted(() => ({ listeners: new Map<string, (() => void)[]>() }));
@@ -38,6 +39,8 @@ const mail2 = item("mail:acc2:t2:9", { source: "mail", kind: "mail", account: "a
   mail: { account_id: "acc2", mailbox: "INBOX", uids: [9] } });
 const done = item("lark:f6:1", { done_at: at(30), done_by: "user" });
 const doneLater = item("lark:f7:1", { done_at: at(2), done_by: "replied", tier: "noise" });
+
+registerTestMailbox();
 
 describe("一件事", () => {
   it("还没分拣的算需要你，角标只数未读未处理", () => {
@@ -176,7 +179,7 @@ describe("等你的 Agent", () => {
     expect(interactionTitle(ix("a", { agent: "paseo", agent_label: "Grok", kind: "permission" }))).toBe("Grok 在等你批准");
     expect(interactionTitle(ix("a", { agent: "paseo", agent_label: "Grok" }))).toBe("Grok 在问你");
     expect(interactionTitle(ix("a", { agent: "dsh", agent_label: "DSH" }))).toBe("DSH 在问你");
-    expect(interactionTitle(ix("a", { agent: "traex", kind: "permission" }))).toBe("TRAEX 在等你批准");
+    expect(interactionTitle(ix("a", { agent: "traex", kind: "permission" }))).toBe("TRAE CLI 在等你批准");
   });
 
   it("助手的会话跳到 Persona，其余跳到会话页", () => {

@@ -17,6 +17,8 @@ struct MessageBarInfo {
     /// Who wrote it, when not the chat's Agent or Persona (`messageActionBar(from:)`).
     var from: String? = nil
     var delete: MessageBarDelete? = nil
+    var starItem: Item? = nil
+    var starredAction: StarredMenuAction? = nil
 }
 
 /// The bar's last item on a message that is only on this phone (`PendingMessage.onlyHere`, #4626), in the danger color:
@@ -133,11 +135,7 @@ nonisolated final class LiftScrolled {
 /// parts above the pressed one after the first frame (`AnswerPartsLift`), and Select Text's steps (`LiftUITextView`).
 /// Steps run on the main thread; held by what runs them and stopped when it goes.
 @MainActor final class LiftFrames {
-    #if os(macOS)
-    private var link: Timer?
-    #else
     private var link: CADisplayLink?
-    #endif
     private var step: (() -> Bool)?
     private var skip = 0
 
@@ -147,16 +145,8 @@ nonisolated final class LiftScrolled {
         stop()
         self.step = step
         skip = 1
-        #if os(macOS)
-        let t = Tick(self)
-        // The timer is not handed into the main-actor closure (Swift 6 reads that as a race): the tick keeps it weakly.
-        let l = Timer(timeInterval: 1.0 / 60, repeats: true) { _ in MainActor.assumeIsolated { t.fire() } }
-        t.timer = l
-        RunLoop.main.add(l, forMode: .common)
-        #else
         let l = CADisplayLink(target: Tick(self), selector: #selector(Tick.tick))
         l.add(to: .main, forMode: .common)
-        #endif
         link = l
     }
 
@@ -181,20 +171,10 @@ nonisolated final class LiftScrolled {
 
         init(_ frames: LiftFrames) { self.frames = frames }
 
-        #if os(macOS)
-        /// The timer firing it, which the run loop keeps.
-        weak var timer: Timer?
-
-        func fire() {
-            guard let frames else { timer?.invalidate(); return }
-            MainActor.assumeIsolated { frames.tick() }
-        }
-        #else
         @objc func tick(_ link: CADisplayLink) {
             guard let frames else { return link.invalidate() }
             MainActor.assumeIsolated { frames.tick() }
         }
-        #endif
     }
 }
 
@@ -809,7 +789,8 @@ private struct LiftedMessage: View {
                                            deletes: lift.bar.delete != nil)
         let barWidth = min(MessageActionBar.width(count: count), bounds.width - 2 * Theme.Space.s)
         let selects = MessageActionBar.selects(id: lift.bar.id, menu: menu, pending: lift.bar.pending)
-        let bar = CGSize(width: barWidth, height: MessageActionBar.height(selects: selects))
+        let star = lift.bar.starredAction
+        let bar = CGSize(width: barWidth, height: MessageActionBar.height(selects: selects, stars: star != nil))
         let p = LiftLayout.place(message: message, press: lift.press.y + pad.top + above, bar: bar, bounds: bounds,
                                  margin: Theme.Space.s, gap: Theme.Space.s, trailing: lift.bar.isUser,
                                  part: lift.part != nil ? above : nil, pressInSight: Theme.Size.tapTarget)
@@ -829,7 +810,7 @@ private struct LiftedMessage: View {
             if !selecting {
                 MessageActionBar(id: lift.bar.id, text: lift.bar.text, isUser: lift.bar.isUser, date: lift.bar.date, menu: menu,
                                  pending: lift.bar.pending, from: lift.bar.from, delete: lift.bar.delete,
-                                 itemWidth: MessageActionBar.itemWidth(barWidth, count: count))
+                                 itemWidth: MessageActionBar.itemWidth(barWidth, count: count), starredAction: star)
                     .position(x: p.bar.midX, y: p.bar.midY)
                     .transition(.scale(scale: 0.85, anchor: p.below ? .top : .bottom).combined(with: .opacity))
             }

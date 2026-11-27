@@ -116,10 +116,12 @@ func TestExternalDirectoryNameStaysTheSameWhenUnavailable(t *testing.T) {
 	l.DisplayName = "Another display label"
 	for _, available := range []bool{true, false} {
 		if !available {
-			l.External.CredentialState = "missing"
+			external := *l.External
+			external.CredentialState = "missing"
+			l.External = &external
 		}
 		setExternalAdvertisement(f, l)
-		r := appRequest(t, s, "GET", "/api/v1/machines/server/launchers?purpose=assistant", "", "en")
+		r := appRequest(t, s, "GET", "/api/v1/machines/server/launchers?purpose=assistant&refresh=1", "", "en")
 		var out struct {
 			Launchers   []ConfiguredLauncher  `json:"launchers"`
 			Unavailable []unavailableLauncher `json:"unavailable"`
@@ -315,7 +317,8 @@ func TestExternalDirectoryRequiresASourceTaggedAnswer(t *testing.T) {
 
 func TestExternalLaunchersChangedDoesNotWaitForConversationReads(t *testing.T) {
 	st := &memStore{}
-	s := &Service{store: func() Store { return st }}
+	s := &Service{}
+	s.setStore(func() Store { return st })
 	// Block Store reads as a stalled tombstone read would. A machine-level
 	// directory invalidation neither reads nor forwards a conversation's data.
 	st.mu.Lock()

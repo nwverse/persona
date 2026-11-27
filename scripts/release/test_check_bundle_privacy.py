@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import io
 import ipaddress
+import os
 from pathlib import Path
 import plistlib
 import shutil
@@ -246,16 +247,23 @@ class PublicConstantTests(unittest.TestCase):
                          {"email", "private IP", "private value (18 chars)"})
 
     def test_adjacent_go_constants_are_not_a_banned_name_or_email(self):
-        join = "applink.feishu.cn/client/chat/" + "open" + "Lark" + " via lark-cli"
-        self.assertEqual(self.kinds("edit_titlerecipe.other_tool" + join + "devices.reconnect"), set())
-        # The wrong dependency set, other joins and look-alikes still count, and the kind is named truthfully.
-        banned = self.kinds("x" + join + "y", dependencies=())
-        self.assertEqual(len(banned), 1)
-        self.assertTrue(next(iter(banned)).startswith("banned name"))
-        for text in (join.replace("feishu.cn", "example.cn"), join.replace(" via lark-cli", ""),
-                     "chat/open" + "Lark via other", join + " open" + "Lark"):
-            with self.subTest(text=text):
-                self.assertTrue(self.kinds(text))
+        for prefix in ("applink.feishu.cn", "not a typedstream"):
+            join = prefix + "/client/chat/" + "open" + "Lark" + " via lark-cli"
+            with self.subTest(join=join):
+                self.assertEqual(self.kinds("edit_titlerecipe.other_tool" + join + "devices.reconnect"), set())
+                # The wrong dependency set, other joins and look-alikes still count, and the kind is named truthfully.
+                banned = self.kinds("x" + join + "y", dependencies=())
+                self.assertEqual(len(banned), 1)
+                self.assertTrue(next(iter(banned)).startswith("banned name"))
+                altered = [join.replace(" via lark-cli", ""), "chat/open" + "Lark via other", join + " open" + "Lark"]
+                if prefix == "not a typedstream":
+                    altered += [join.replace("not a typedstream", "not another parser")]
+                else:
+                    altered.append(join.replace("feishu.cn", "example.cn"))
+                for text in altered:
+                    with self.subTest(text=text):
+                        self.assertTrue(self.kinds(text))
+                self.assertIn("private value (%d chars)" % len(join), self.kinds(join, words=(join,)))
         # Gmail's source-domain constants next to a field name are not addresses; other domains still are.
         gmail = "title_mail@" + "gmail.com" + "extension. updated" + "@googlemail.com" + "no extension"
         self.assertEqual(self.kinds(gmail), set())
@@ -636,19 +644,38 @@ class GoDependenciesTests(unittest.TestCase):
                 code, _ = self.scan(bad + "/dl", words=(bad + "/dl",), config={"publish": {"site_url": bad}})
                 self.assertNotEqual(code, 0)
 
-    def test_published_binary_accepts_only_the_exact_configured_update_url(self):
-        # publish.update_url (#4522): the binaries carry it instead of <site>/dl, exactly as configured.
+    def test_published_binary_accepts_the_configured_update_url_and_site_feed(self):
+        # publish.update_url (#4522): the binaries carry it, while the site itself still legitimately serves /dl.
         url = "https://releases.example.test/owner/repo/releases/latest/download"
-        words = ("releases.example.test",)
+        words = ("releases.example.test", "site.example.test")
         config = {"publish": {"site_url": "https://site.example.test", "update_url": url + "/"}}
-        code, output = self.scan(url, words=words, config=config)
+        code, output = self.scan(url + "\nhttps://site.example.test/dl", words=words, config=config)
         self.assertEqual(code, 0, output)
         for text in (url + "/private", url + "?token=placeholder", "https://releases.example.test/owner",
-                     "https://site.example.test/dl", "person@releases.example.test"):
+                     "person@releases.example.test"):
             with self.subTest(text=text):
                 code, output = self.scan(text, words=words + ("site.example.test",), config=config)
                 self.assertNotEqual(code, 0)
                 self.assertIn("private value", output)
+
+    def test_published_binary_scan_uses_the_inherited_update_url_override(self):
+        configured = "https://configured.example.test/releases/latest/download"
+        override = "https://override.example.test/releases/latest/download"
+        config = {"publish": {"update_url": configured}}
+        with patch.dict(os.environ, {"PERSONA_UPDATE_URL": override}):
+            code, output = self.scan(override, words=("override.example.test",), config=config)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(cbp.public_download_url(config), (override, "/releases/latest/download"))
+
+    def test_published_binary_scan_allows_override_and_site_dl_feeds(self):
+        configured = "https://configured.example.test/releases/latest/download"
+        override = "https://override.example.test/releases/latest/download"
+        site = "https://site.example.test"
+        config = {"publish": {"site_url": site, "update_url": configured}}
+        with patch.dict(os.environ, {"PERSONA_UPDATE_URL": override}):
+            code, output = self.scan(override + "\n" + site + "/dl", words=("override.example.test", "site.example.test"), config=config)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(cbp.public_download_urls(config), [(override, "/releases/latest/download"), (site + "/dl", "/dl")])
 
     def test_the_app_ssh_algorithm_names_are_not_emails(self):
         names = "\n".join(a + "@" + d for a, d in (("aes256-gcm", "openssh.com"), ("curve25519-sha256", "libssh.org"),

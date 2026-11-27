@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""Run a `go test` command with the partitioned packages split (scripts/test/test-server.sh on the hub machine).
+"""Run a `go test` command with the partitioned packages split (scripts/test/test-server.sh on the hub machine,
+scripts/test/check-fast.sh's Go checks).
 
     python3 go_test_partitioned.py go test -count=1 -p 1 [flags] [packages]
 
 internal/node's and internal/assistant's serial runs outgrew Go's ten-minute -timeout (#5328, #5594, #7644). When the
-packages are the whole module (`./...`) or name one of go_partitions.PACKAGES, and no -run narrows the tests, the other
-packages run in one `go test` as before and each partitioned package's tests in the partitions go_partitions.py makes
-for CI's shards and the release build, all at once. Every command keeps the caller's flags (a deploy's -skip, -v,
--timeout). Anything else runs exactly as given.
+packages are the whole module (`./...`), name one of go_partitions.PACKAGES, or include a `./<dir>/...` that covers one
+the runner splits (#12765: check-fast's `./internal/assistant/...`), and no -run narrows the tests, the other packages
+run in one `go test` as before and each partitioned package's tests in the partitions go_partitions.py makes for CI's
+shards and the release build, all at once. A `./<dir>/...` is expanded with `go list`; a package found there that
+splits itself (go_partitions.SPLITS_ITSELF, internal/node) stays with the other packages, where its own TestMain splits
+it. Every command keeps the caller's flags (a deploy's -skip, -v, -timeout). Anything else runs exactly as given: this
+process becomes that command.
 
 Only this process writes the output: the other packages' lines as they come, each partition's whole when it ends, so
 lines never mix and `FAIL <package>` / `--- FAIL` read as in a serial run. The exit status is non-zero when any fails.
 """
 import os
+import posixpath
 import subprocess
 import sys
 import tempfile
@@ -51,6 +56,13 @@ VALUE_FLAGS |= {"test." + name for name in TEST_VALUE_FLAGS}
 BOOL_FLAGS |= {"test." + name for name in TEST_BOOL_FLAGS}
 COVERPROFILE_FLAGS = {"coverprofile", "test.coverprofile"}
 RUN_FLAGS = {"run", "test.run"}
+# Build-affecting flags safe to forward to `go test -list .*` so discovery compiles with the exact same build action
+# ID and build constraints as the fanned-out partitions (warm GOCACHE, accurate tag-gated test lists).
+BUILD_VALUE_FLAGS = {
+    "asmflags", "buildmode", "compiler", "covermode", "coverpkg", "gccgoflags", "gcflags",
+    "installsuffix", "ldflags", "mod", "modfile", "overlay", "pgo", "pkgdir", "tags", "toolexec",
+}
+BUILD_BOOL_FLAGS = {"asan", "buildvcs", "cover", "linkshared", "modcacherw", "msan", "race", "trimpath"}
 
 
 class ParsedTestArgs:
@@ -162,6 +174,28 @@ def parse_test_args(args, goflags=""):
     return parsed
 
 
+def build_flags(flags):
+    """Build-affecting flags from parsed.flags to forward to go test -list so GOCACHE and build tags match."""
+    result = []
+    i = 0
+    while i < len(flags):
+        token = flags[i]
+        flag = flag_token(token)
+        if flag is None:
+            i += 1
+            continue
+        name, _, has_value = flag
+        if name in VALUE_FLAGS and not has_value:
+            if name in BUILD_VALUE_FLAGS and i + 1 < len(flags):
+                result.extend((token, flags[i + 1]))
+            i += 2
+            continue
+        if name in BUILD_VALUE_FLAGS or name in BUILD_BOOL_FLAGS:
+            result.append(token)
+        i += 1
+    return result
+
+
 def split(args):
     """The go test flags with their values (in order) and package arguments, parsed with Go's flag semantics."""
     parsed = parse_test_args(args)
@@ -174,10 +208,33 @@ def has_coverage_profile(args, goflags=""):
     return not parsed.valid or parsed.passthrough or bool(parsed.coverprofile)
 
 
+def subtree(token):
+    """The directory a `./<dir>/...` package argument names, normalized ("internal" for ./internal/...), or None for
+    any other argument. ./... itself is the whole module, planned on its own."""
+    if token == WHOLE_MODULE or not token.startswith("./") or not token.endswith("/..."):
+        return None
+    directory = posixpath.normpath(token[:-len("/...")])
+    return None if "..." in directory or directory.startswith("../") or directory == ".." else directory
+
+
+def covers(token):
+    """Whether a `./<dir>/...` argument covers a partitioned package that does not split itself."""
+    directory = subtree(token)
+    if directory is None:
+        return False
+    for name in go_partitions.PACKAGES:
+        package = posixpath.normpath(name)
+        if name not in go_partitions.SPLITS_ITSELF and (directory == "." or package == directory or
+                                                         package.startswith(directory + "/")):
+            return True
+    return False
+
+
 def plan(argv, list_packages, list_patterns, goflags=""):
     """The commands to run for argv: [argv] unchanged, or the other packages' command and one per partition.
-    list_packages() is the module's packages (`go list ./...`), list_patterns(package) a partitioned package's -run
-    patterns. goflags is injected by main so pure planner tests never depend on the process environment."""
+    list_packages(patterns) is what `go list <patterns>` prints (the module's packages for ./...), list_patterns(package)
+    a partitioned package's -run patterns. goflags is injected by main so pure planner tests never depend on the
+    process environment."""
     if argv[:2] != ["go", "test"]:
         return [argv]
     parsed = parse_test_args(argv[2:], goflags)
@@ -185,11 +242,21 @@ def plan(argv, list_packages, list_patterns, goflags=""):
         return [argv]
     packages = parsed.packages
     whole = WHOLE_MODULE in packages
+    subtrees = [p for p in packages if covers(p)]
     if (not parsed.valid or parsed.coverprofile or parsed.run or
-            not (whole or any(map(go_partitions.is_partitioned, packages)))):
+            not (whole or subtrees or any(map(go_partitions.is_partitioned, packages)))):
         return [argv]
-    named = [p for p in packages if p != WHOLE_MODULE]
-    rest, parts = go_partitions.split((list_packages() if whole else []) + named)
+    named = [p for p in packages if p != WHOLE_MODULE and p not in subtrees]
+    listed, own = [], []  # own: the packages a subtree has that split themselves, left to their TestMain
+    if whole:
+        listed = list_packages([WHOLE_MODULE])  # the subtrees are in it
+    elif subtrees:
+        for package in list_packages(subtrees):
+            (own if go_partitions.partitioned(package) in go_partitions.SPLITS_ITSELF else listed).append(package)
+    rest, parts = go_partitions.split(listed + named)
+    if not parts:  # go list found no partitioned package under the subtrees: nothing to split
+        return [argv]
+    rest += [package for package in own if go_partitions.partitioned(package) not in parts]
     commands = [["go", "test", *parsed.flags, *rest, *parsed.trailing]] if rest else []
     return commands + [["go", "test", *parsed.flags, "-run", pattern, package, *parsed.trailing]
                        for package in parts for pattern in list_patterns(package)]
@@ -244,8 +311,8 @@ def run(commands):
     return max(statuses, key=lambda status: status != 0)
 
 
-def go_list():
-    return subprocess.check_output(["go", "list", WHOLE_MODULE], text=True, timeout=600).split()
+def go_list(patterns):
+    return subprocess.check_output(["go", "list", *patterns], text=True, timeout=600).split()
 
 
 def main(argv):
@@ -254,14 +321,17 @@ def main(argv):
         return 2
     try:
         goflags = os.environ.get("GOFLAGS", "")
+        parsed = parse_test_args(argv[2:], goflags) if argv[:2] == ["go", "test"] else ParsedTestArgs()
+        discovery_flags = build_flags(parsed.flags) if parsed.valid else []
         # An explicit empty command-line profile can cancel GOFLAGS. Discovery must not recreate the canceled file:
-        # go_partitions.list_patterns runs its own go test without the caller's command-line flags.
+        # go_partitions.list_patterns runs its own go test without the caller's command-line profile flag.
         discovery_env = None
         if parse_test_args([], goflags).coverprofile:
             discovery_env = os.environ.copy()
             discovery_env["GOFLAGS"] = (goflags + " -coverprofile=").strip()
         commands = plan(argv, go_list,
-                        lambda package: go_partitions.list_patterns(os.getcwd(), package, env=discovery_env),
+                        lambda package: go_partitions.list_patterns(os.getcwd(), package, env=discovery_env,
+                                                                    flags=discovery_flags),
                         goflags=goflags)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as err:
         # A package does not build or list (its error is above): run the command as given, which reports it.
@@ -269,7 +339,10 @@ def main(argv):
                                                                                   err), flush=True)
         commands = [argv]
     if len(commands) == 1:
-        return subprocess.call(commands[0])
+        # Become the command, as if it had been run without this runner: callers see its process, its signals and its
+        # exit status (check-fast's timeout and heavy slot wrap go itself).
+        sys.stdout.flush()
+        os.execvp(commands[0][0], commands[0])
     return run(commands)
 
 

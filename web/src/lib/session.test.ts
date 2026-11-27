@@ -39,7 +39,7 @@ describe("session capability contract", () => {
     for (const op of ["interrupt", "approve", "terminal"] as const) expect(sessionCan(desktop, op)).toBe(false);
     expect(sessionMenuActions(desktop)).toEqual([]);
     const terminal: Session = { ...desktop, source_kind: "claude_cli", capabilities: { read: true }, read_only_reason: "回复请在电脑上" };
-    expect(sourceSubtitle(terminal)).toBe("终端里的 Claude · 仅查看：回复请在电脑上");
+    expect(sourceSubtitle(terminal)).toBe("在标签页中的 Claude · 仅查看：回复请在电脑上");
     expect(sessionCan(terminal, "send")).toBe(false);
   });
 
@@ -98,6 +98,7 @@ describe("session capability contract", () => {
   it("says a runtime's session comes from its agent, by name, never a raw id (#8142)", () => {
     const paseo: Session = { ...legacy, source_kind: "runtime", source_instance_id: "paseo", capabilities: { read: true, send: true } };
     expect(sourceSubtitle({ ...paseo, agent: "paseo", agent_label: "Grok", launcher: "grok" })).toBe("Grok");
+    expect(sourceSubtitle({ ...paseo, agent: "paseo", agent_label: "TRAE CLI", launcher: "traecli" })).toBe("TRAE CLI");
     expect(sourceSubtitle({ ...paseo, agent: "claude", launcher: "my-claude" })).toBe("Claude Code");
     // a row Paseo names no label for yet: its provider, never "paseo"
     expect(sourceSubtitle({ ...paseo, agent: "paseo", launcher: "kimi" })).toBe("kimi");
