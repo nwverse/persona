@@ -223,12 +223,13 @@ def matches(rows, element_id=None, label=None, label_contains=None):
 
 
 def require(ctl, element_id=None, label=None, label_contains=None, seconds=30):
-    return wait_for(ctl, element_id or label or label_contains, seconds,
-                    lambda: matches(elements(ctl), element_id, label, label_contains) or None)
-
-
-def has(ctl, element_id):
-    return bool(visible_matches(ctl, element_id=element_id))
+    def probe():
+        found = matches(elements(ctl), element_id, label, label_contains)
+        if found:
+            return found
+        dismiss_interruptions(ctl)
+        return None
+    return wait_for(ctl, element_id or label or label_contains, seconds, probe)
 
 
 def visible_matches(ctl, element_id=None, label=None):
@@ -281,6 +282,17 @@ def ensure_active(ctl):
     return False
 
 
+def dismiss_interruptions(ctl):
+    """Handle first-run controls that can arrive after pairing, without accepting an obscured page as evidence."""
+    for control in ("engine.save", "checklist.later", "checklist.done"):
+        if visible_matches(ctl, element_id=control):
+            ctl.tap(id=control)
+            ctl.call("settle", timeout=4, stable=2, pixels=600)
+            return
+    if ctl.call("state").get("appState") != "active":
+        ensure_active(ctl)
+
+
 def no_errors(ctl, page):
     ensure_active(ctl)
     rows = elements(ctl)
@@ -293,6 +305,7 @@ def no_errors(ctl, page):
 
 
 def capture(ctl, shots, edition, page, appearance, evidence):
+    dismiss_interruptions(ctl)
     ctl.appearance(appearance)
     wait_for(ctl, f"{appearance} appearance", 10,
              lambda: ctl.call("state").get("appearance") == appearance or None)
@@ -373,10 +386,7 @@ def exercise_app(ctl, base, code, edition, shots, container):
     proof["entries"] = {}
 
     # Post-pairing setup is part of the real first-run path, not a mocked page.
-    for control in ("engine.save", "checklist.later", "checklist.done"):
-        if has(ctl, control):
-            ctl.tap(id=control)
-            ctl.call("settle", timeout=4, stable=2, pixels=600)
+    dismiss_interruptions(ctl)
     capture_both(ctl, shots, edition, "assistant", proof)
 
     navigate(ctl, "agents")
