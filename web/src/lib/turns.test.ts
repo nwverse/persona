@@ -243,6 +243,19 @@ describe("chatLines", () => {
     expect(empty({ stale: true })).toBe(false);
   });
 
+  it("omits the empty-response fallback on the latest turn while waiting on user input (needsYou)", () => {
+    const firstTurn = [u(1, "Earlier question"), { id: "t2#0", seq: 2, role: "assistant", kind: "thinking", text: "Hmm" } as Item];
+    const latestTurn = [u(3, "Need approval"), tool(4, "persona_settings")];
+    const lines = chatLines([...firstTurn, ...latestTurn], { needsYou: true });
+    expect(lines).toHaveLength(2);
+    expect(lines[0].kind === "segment" && lines[0].seg.emptyResponse).toBe(true);
+    expect(lines[1].kind === "segment" && lines[1].seg.emptyResponse).toBeUndefined();
+    expect(lines[1].kind === "segment" && lines[1].live).toBe(false);
+
+    const settled = chatLines([...firstTurn, ...latestTurn], { needsYou: false });
+    expect(settled[1].kind === "segment" && settled[1].seg.emptyResponse).toBe(true);
+  });
+
   it("omits the empty-response fallback after a silent supervision finish", () => {
     const finish = { ...tool(2, "finish"), tool_name: "mcp__persona__supervision_finish", tool_input: { visibility: "silent" } };
     const receipt = { ...res(3, "finish"), text: '{"visibility":"silent"}' };

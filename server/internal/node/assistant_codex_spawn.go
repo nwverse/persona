@@ -138,8 +138,15 @@ func (n *Node) codexAssistantCommand(shell, launcher string, args []string) *exe
 }
 
 func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, mode string, options ...modelExecution) (*assistantProc, error) {
+	return n.spawnAssistantAppServer("codex", id, cwd, launcher, resume, spare, mode, options...)
+}
+
+func (n *Node) spawnAssistantAppServer(agent, id, cwd, launcher string, resume, spare bool, mode string, options ...modelExecution) (*assistantProc, error) {
 	execution := executionOption(options)
-	if err := execution.check("codex"); err != nil {
+	if agent == traexAgent && (spare || execution.Origin != originInbox || !execution.OriginKnown) {
+		return nil, errTraexAssistantOrigin
+	}
+	if err := execution.check(agent); err != nil {
 		return nil, err
 	}
 	if err := n.prepareAssistantCwd(cwd, execution.Strict); err != nil {
@@ -156,7 +163,13 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	if instructions := n.assistantCompactInstructions(id); instructions != "" {
 		args = append(args, codexCompactPromptArgs(instructions)...)
 	}
-	cmd := n.codexAssistantCommand(shell, launcher, args)
+	var cmd *exec.Cmd
+	if agent == traexAgent {
+		args, personaMCPOnly = n.traexAssistantArgs(key, execution.Effort)
+		cmd = n.traexAssistantCommand(shell, launcher, args)
+	} else {
+		cmd = n.codexAssistantCommand(shell, launcher, args)
+	}
 	cmd.Dir = root
 	gateEnv, releaseGates, nameGates := n.assistantLarkEnvNamed(cwd, id) // its addresses at the gate proxy go with the process
 	categories := categoriesFromEnv(gateEnv)
@@ -187,7 +200,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 		return nil, fmt.Errorf("start %s: %w", launcher, err)
 	}
 	started = true
-	p := &assistantProc{id: id, agent: "codex", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}),
+	p := &assistantProc{id: id, agent: agent, launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}),
 		born: time.Now(), lastActive: time.Now(), model: execution, fingerprint: n.executionFingerprint(launcher, execution),
 		instructions: instructions, personaMCPOnly: personaMCPOnly, categories: categories, origin: execution.Origin}
 	c := &codexConn{n: n, p: p, key: key, memDir: memDir, pending: map[int64]chan codexReply{}, asks: map[string]context.CancelFunc{}, files: map[string][]string{},
@@ -198,7 +211,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	n.mu.Unlock()
 	go logLines(stderr, func(l string) {
 		if strings.Contains(l, "ERROR") && !strings.Contains(l, "unrecognized configuration") {
-			n.logger.Printf("assistant codex %s: %s", key, l)
+			n.logger.Printf("assistant %s %s: %s", agent, key, l)
 		}
 	})
 	p.owner.Store(n)
@@ -249,7 +262,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	defer cancel()
 	if err := c.start(ctx, id, root, resume, mode); err != nil {
 		p.stop()
-		return nil, fmt.Errorf("%s（codex app-server）没有启动起来: %w", launcher, err)
+		return nil, fmt.Errorf("%s（%s app-server）没有启动起来: %w", launcher, agent, err)
 	}
 	if !spare {
 		n.mu.Lock()
