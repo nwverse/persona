@@ -85,9 +85,11 @@ import (
 // interval keeps evaluating). It uses main's object-shaped transcriptVersion key, keeps main's #16604 compact,
 // CHECKPOINT and availability-model edits through the merge, and ships summary-db.js through the antigravity/lib/*.js
 // glob. Re-aligned onto the main carrying #16604, the union measures 296,417 B exactly (+1,779 B over 294,638 B).
+// Main carrying #17140 (Antigravity background-task restart/list reconciliation, +2,241 B) measured 298,658 B.
+// Deterministic runtime compaction settlement (`session.compaction.settled` in runtime-sdk and antigravity runtime) adds 211 B (298,869 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 296_417
+	const budget = 298_869
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
