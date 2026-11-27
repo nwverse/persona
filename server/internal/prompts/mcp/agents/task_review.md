@@ -1,8 +1,10 @@
-accepted closes work after the delivery gate (default delivery_gate=merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback to that Agent. If opted in at Start, accepted done cleans up the idle tab unless user_check. Report closed/skipped/pending; never close the tab yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new cap at 10 total); accept with a brief note instead of bouncing for low-ROI edge cases or style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits and needs_user if only the owner can contact, approve, or trigger work.
+accepted closes after delivery_gate (default merged: park verified open PRs; linked issues must close). user_check keeps task/Agent open until owner Pass and routes feedback there. If opted in at Start, accepted done cleans the idle tab unless user_check; report closed/skipped/pending, never close tabs yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new: 10 total); accept with a note over low-ROI edge/style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits; needs_user if only the owner can contact, approve, or trigger work.
 
-For accepted (outcome=done), include each done_when criterion once in checks (met=true, nonblank evidence), even with user_check. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts can omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers or Agent claims.
+For accepted (outcome=done), list each done_when once in checks (met=true, nonblank evidence), even with user_check; outcome=cannot, cancelled and criteria-free tasks keep prior rules. Other verdicts may omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers/Agent claims; uncovered scope needs needs_user, user_check, or a linked follow-up to-do—never chat text alone.
 
-Give accepted outcome/reason/link. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline. Irreversible or visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.
+If an outcome decision or your review leaves part of the original brief for later, use needs_user to ask, or include deferred_scope with user_check or an open linked follow_up_todo_id. Keep the remaining scope visible even when every done_when check passes.
+
+Give accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.
 
 A non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.{{template "shared/mcp_language" .}}
 
@@ -17,7 +19,29 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     },
     "verdict": {
       "type": "string",
-      "enum": ["accepted", "rework", "needs_user", "parked", "cancelled"]
+      "enum": ["accepted", "rework", "needs_user", "parked", "cancelled", "findings"]
+    },
+    "findings_review": {
+      "type": "object",
+      "description": "verdict=findings: omit to read; supply the displayed version to confirm and record dispositions without moving task state.",
+      "required": ["version"],
+      "properties": {
+        "version": {"type":"integer","minimum":1},
+        "dispositions": {
+          "type":"array",
+          "items": {
+            "type":"object",
+            "required":["id"],
+            "properties": {
+              "id":{"type":"string"},
+              "follow_up_todo_id":{"type":"string","description":"Independent supervised to-do with the finding’s exact next action in done_when."},
+              "wait_target":{"type":"string","description":"A single finding may match the park evidence's target."},
+              "done_evidence":{"type":"string","description":"Evidence that this finding was resolved."},
+              "owner_drop_decision_id":{"type":"string","description":"Owner's manual decision, question 'Drop investigation finding <id>?', choice 'Drop', with reason."}
+            }
+          }
+        }
+      }
     },
     "rework_kind": {
       "type": "string",
@@ -32,10 +56,10 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
         "properties": {
           "criterion": {"type": "string", "description": "one done_when criterion (or what the task was for, when it had none)"},
           "met": {"type": "boolean"},
-          "evidence": {"type": "string", "description": "what shows it is met (a link, a command's output), or what is missing"}
+          "evidence": {"type": "string", "description": "proof it is met (link, command output), or what is missing"}
         }
       },
-      "description": "each criterion (met or not) with evidence/gap; updates persisted state, evidence, time, and supervisor. Omitted entries keep progress"
+      "description": "each criterion with evidence/gap; updates state, evidence, time, and supervisor. Omitted entries keep progress"
     },
     "note": {
       "type": "string",
@@ -61,7 +85,7 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     },
     "link": {
       "type": "string",
-      "description": "accepted/needs_user: one evidence link (PR/page/doc); defaults to task PR, note/checks link, or agent chat"
+      "description": "accepted/needs_user: direct PR/MR/doc URL when available (shown on decision card); defaults to task PR/MR, note/checks URL, or chat"
     },
     "recommend": {
       "type": "string",
@@ -80,7 +104,7 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
         "type": "object",
         "required": ["label", "leads_to"],
         "properties": {
-          "label": {"type": "string", "description": "the option in a few words, as a button says it"},
+          "label": {"type": "string", "description": "short button label"},
           "leads_to": {"type": "string", "description": "one sentence: what choosing it leads to"}
         }
       },
@@ -88,7 +112,7 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     },
     "cost_of_waiting": {
       "type": "string",
-      "description": "needs_user (required): one sentence saying what it costs if the user does not answer soon"
+      "description": "needs_user (required): one sentence on the cost of waiting"
     },
     "question_quote": {
       "type": "string",
@@ -115,6 +139,15 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     "user_check": {
       "type": "boolean",
       "description": "accepted only: user must inspect result (e.g. UI change); shows \"Please verify\" card awaiting \"Pass\" instead of auto-passing; default false"
+    },
+    "deferred_scope": {
+      "type": "string",
+      "maxLength": 600,
+      "description": "accepted: describe in the owner's language which work in the original brief is deferred or requires separate approval. The personal verification card shows the first 120 characters"
+    },
+    "follow_up_todo_id": {
+      "type": "string",
+      "description": "With deferred_scope and without user_check, identify the open to-do that owns the remaining work. Its part_of must name this to-do, or its after must name this piece of the same request"
     },
     "reversible": {
       "type": "boolean",

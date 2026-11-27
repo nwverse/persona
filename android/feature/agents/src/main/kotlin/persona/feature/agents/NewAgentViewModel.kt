@@ -2,6 +2,7 @@ package persona.feature.agents
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import persona.core.contracts.ImageLimits
 import persona.core.contracts.Machine
 import persona.core.contracts.PaseoAgent
 import persona.core.contracts.ProtocolCompatibility
@@ -13,8 +14,12 @@ import persona.core.domain.models.ModelPanel
 import persona.feature.chat.ChatLinkContext
 import persona.feature.chat.ComposerUploadLimiter
 import persona.feature.chat.ForwardMessage
+import persona.core.domain.sort.AgentProjectFolder
 import persona.feature.chat.ForwardPlacements
 import persona.feature.chat.ForwardPlacement
+import persona.feature.chat.PhotoCandidate
+import persona.feature.chat.composerPhotoRoom
+import persona.feature.chat.planComposerPhotos
 import persona.feature.chat.R as ChatR
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -32,11 +37,15 @@ import java.util.UUID
 private const val PaseoHost = "paseo"
 
 /** The same host a fresh start uses: the explicit workspace host, or the selected computer's default. */
-private fun Machine.startsInHerdr(host: String?): Boolean {
+private fun Machine.supportsOmpStartModel(host: String?): Boolean {
     val enabled = engineHosts
-    if (enabled != null) return "herdr" in enabled && (host ?: engineDefault) == "herdr"
+    if (enabled != null) {
+        val target = host ?: engineDefault
+        return (target == "herdr" || target == "orca") && target in enabled
+    }
     val legacyHerdr = engine.isEmpty() || engine == "herdr" || engine == "herdr-both"
-    return legacyHerdr && (host == null || host == "herdr")
+    if (legacyHerdr) return host == null || host == "herdr"
+    return engine == "orca" && (host == null || host == "orca")
 }
 
 /** What the Git status of the folder picked is asked by: the computer, the folder, a space, and the engine asked. */
@@ -84,6 +93,7 @@ internal data class NewAgentModels(
 internal data class NewAgentState(
     val initialized: Boolean = false,
     val space: AgentSpacePreset? = null,
+    val project: AgentProjectFolder? = null,
     val machineId: String = "",
     val startMachine: Machine? = null,
     val selection: AgentDefaults = AgentDefaults(),
@@ -199,7 +209,7 @@ internal data class NewAgentState(
         it.agentType == "omp" && it.name == "omp" && it.source in nativeLauncherSources
     } == true
     val ompStart: Boolean get() = nativeOmpLauncher &&
-        startMachine?.startsInHerdr(workspace?.source?.takeIf { space == null && it.isNotEmpty() }) == true
+        startMachine?.supportsOmpStartModel(workspace?.source?.takeIf { space == null && it.isNotEmpty() }) == true
     /** What people call [modelLauncher]: its display name (Paseo's label for its provider, #8261), else its name. */
     val modelLauncherTitle: String get() = runningLauncher?.title ?: modelLauncher
     /**
@@ -376,8 +386,10 @@ internal class NewAgentViewModel(
                         }
                         if (state.value.machineId.isEmpty() && !state.value.locked) {
                             val space = state.value.space
+                            val project = state.value.project
                             val wanted = prefill?.machineId?.takeIf { it.isNotBlank() }
-                            val pick = if (space != null) list.firstOrNull { it.id == space.machineId && it.online }
+                            val fixedMachine = space?.machineId ?: project?.machineId
+                            val pick = if (fixedMachine != null) list.firstOrNull { it.id == fixedMachine && it.online }
                                 else (wanted?.let { id -> list.firstOrNull { it.id == id && it.online } }
                                     ?: list.firstOrNull { it.id == last && it.online } ?: list.firstOrNull { it.online })
                             if (pick != null) {
@@ -393,20 +405,22 @@ internal class NewAgentViewModel(
             catch (_: Exception) { mutable.update { it.copy(error = AgentText(R.string.agents_new_error_record)) } }
         }
     }
-    /** Opens the form for a new session, or for a new tab in [space]; an unconfirmed start keeps its own form. */
-    fun startIn(space: AgentSpacePreset?) {
+    /** Opens the usual form, optionally in a space or with a project's computer and folder selected. */
+    fun startIn(space: AgentSpacePreset?, project: AgentProjectFolder? = null) {
         val current = state.value
         if (current.pending != null || current.created != null || current.starting) return
         // A provider's mode and effort are picked each time the form opens (#8261), never kept from the last one.
         mutable.update { it.copy(providerMode = "", providerEffort = "") }
-        if (current.space == space) return
+        if (project == null && current.space == space && current.project == null) return
         machineJob?.cancel()
         browseJob?.cancel()
         workspacesJob?.cancel()
-        // The space's machine is the only choice; until it is online nothing is selected and nothing can start.
-        mutable.update { it.copy(space = space, machineId = if (space != null) "" else it.machineId,
-            browsing = false, browser = null, loading = false, error = null, workspaces = emptyList(), workspace = null, folderBeforeWorkspace = "") }
-        val machine = space?.machineId ?: current.machineId
+        val target = space?.machineId ?: project?.machineId
+        mutable.update { it.copy(space = space, project = project, machineId = if (target != null) "" else it.machineId,
+            browsing = false, browser = null, loading = false, error = null, workspaces = emptyList(), workspace = null, folderBeforeWorkspace = "",
+            inWorktree = it.inWorktree && project == null, worktreeBranch = it.worktreeBranch.takeIf { project == null }.orEmpty(),
+            modelConfig = if (project != null || it.project != null) NewAgentModelConfig.Unknown else it.modelConfig) }
+        val machine = target ?: current.machineId
         if (current.initialized && machine.isNotEmpty()) selectMachine(machine)
     }
     fun selectMachine(id: String) = load(id)
@@ -435,15 +449,19 @@ internal class NewAgentViewModel(
         machineJob = viewModelScope.launch {
             try {
                 val defaults = store.defaults(service.scope, id)
-                val known = state.value.modelConfig.takeIf { it is NewAgentModelConfig.Follow || it is NewAgentModelConfig.Unsupported }
+                val project = state.value.project
+                val known = state.value.modelConfig.takeIf {
+                    project == null && (it is NewAgentModelConfig.Follow || it is NewAgentModelConfig.Unsupported)
+                }
                 val (listed, dirs, config) = coroutineScope {
                     val l = async { service.launcherList(id) }
                     val d = async { service.directories(id) }
-                    // The "New Agent" configuration is the hub's, not the machine's: read once per form.
-                    val c = async { known ?: modelConfig() }
+                    // A project may be on a different hub from the one currently selected in Agents.
+                    val c = async { known ?: modelConfig(id.takeIf { project != null }) }
                     Triple(l.await(), d.await(), c.await())
                 }
-                val prefilledCwd = prefill?.cwd?.takeIf { prefill.machineId == id && it.isNotBlank() }
+                val prefilledCwd = state.value.project?.takeIf { it.machineId == id }?.path
+                    ?: prefill?.cwd?.takeIf { prefill.machineId == id && it.isNotBlank() }
                 val launchers = listed.launchers
                 val launcher = defaultLauncher(config, defaults, launchers)
                 mutable.update { it.copy(loading = false, launchers = launchers, unavailable = listed.unavailable,
@@ -608,8 +626,9 @@ internal class NewAgentViewModel(
         mutable.update { it.copy(model = model, pickedTier = if (model == it.model) it.pickedTier else null,
             error = null, pickedSetup = null).settled() }
     }
-    private suspend fun modelConfig(): NewAgentModelConfig = try {
-        service.newAgentModel()?.let { NewAgentModelConfig.Follow(it) } ?: NewAgentModelConfig.Unsupported
+    private suspend fun modelConfig(machineId: String?): NewAgentModelConfig = try {
+        val purpose = if (machineId == null) service.newAgentModel() else service.newAgentModel(machineId)
+        purpose?.let { NewAgentModelConfig.Follow(it) } ?: NewAgentModelConfig.Unsupported
     } catch (e: CancellationException) { throw e }
     catch (error: Exception) { NewAgentModelConfig.Failed(failureReasonText(error)) }
     fun selection(value: AgentDefaults) {
@@ -841,14 +860,36 @@ internal class NewAgentViewModel(
     val attachable: Boolean get() = uploads != null && sender != null
     /** Whether [machineId]'s hub can take uploads now (none offline or in the demo): the add menu shows only then. */
     fun canUpload(machineId: String): Boolean = machineId.isNotEmpty() && uploads?.service?.invoke(machineId) != null
-    /** How many more photos fit (iOS `MessagePhotos.limit`, 4). */
-    fun photoRoom(): Int = (NewAgentAttachments.MAX_PHOTOS - state.value.attachments.count { it.media }).coerceAtLeast(0)
-    /** How many more ordinary files fit; this is separate from the photo/video places. */
-    fun fileRoom(): Int = (NewAgentAttachments.MAX_FILES - state.value.attachments.count { !it.media }).coerceAtLeast(0)
+    /** The hub's image limits for the selected computer and agent (defaults to [ImageLimits.Standard]). */
+    fun imageLimits(): ImageLimits = uploads?.imageLimits?.invoke(state.value.machineId, state.value.agentType) ?: ImageLimits.Standard
+    /** How many more inline photos fit by count alone. */
+    fun photoRoom(): Int = composerPhotoRoom(state.value.attachments, imageLimits())
+    /** How many more ordinary files fit; this is separate from inline photos. */
+    fun fileRoom(): Int = (NewAgentAttachments.MAX_FILES - state.value.attachments.count { !it.media && it.uploadState != DraftUploadState.Invalid }).coerceAtLeast(0)
+    /** Selection room for the photo picker (inline photos plus file slots pictures can spill into). */
+    fun photoPickerRoom(): Int = photoRoom() + if (canUpload(state.value.machineId)) fileRoom() else 0
     private val noticeChannel = Channel<AgentText>(Channel.BUFFERED)
     /** What the form's toast says (iOS `model.toast`): a pick not taken, an upload that failed. */
     val notices: Flow<AgentText> = noticeChannel.receiveAsFlow()
     fun notice(text: AgentText) { noticeChannel.trySend(text) }
+    /** Picked photos with measured scaled sizes join the form, spilling overflow photos into file attachments. */
+    fun attachPhotos(candidates: List<PhotoCandidate>, showLimit: Boolean = true, forward: ChatLinkContext? = null): Int {
+        val uploads = uploads
+        val current = state.value
+        if (uploads == null || candidates.isEmpty() || current.locked || !current.takesAttachments || current.machineId.isEmpty()) {
+            candidates.forEach { uploads?.discard?.invoke(it.attachment) }
+            return candidates.size
+        }
+        val limits = imageLimits()
+        val plan = planComposerPhotos(current.attachments, candidates, limits, canSpill = canUpload(current.machineId))
+        plan.refused.forEach(uploads.discard)
+        if (showLimit) emitPhotoPlanNotices(plan, limits)
+        if (plan.added.isEmpty()) return plan.refused.size
+        forward?.photoSource?.let { source -> plan.added.forEach { photoSources[it.id] = source } }
+        mutable.update { it.copy(attachments = it.attachments + plan.added, attachedOn = it.machineId, attachNote = null) }
+        plan.added.forEach { upload(it.id) }
+        return plan.refused.size
+    }
     /** Picked photos and files join the form and go to the computer picked, three at a time. Returns how many did not fit. */
     fun attach(picked: List<persona.feature.chat.ComposerAttachment>, showLimit: Boolean = true, forward: ChatLinkContext? = null): Int {
         val uploads = uploads
@@ -857,21 +898,47 @@ internal class NewAgentViewModel(
             picked.forEach { uploads?.discard?.invoke(it) }
             return picked.size
         }
-        var files = fileRoom()
-        var media = photoRoom()
-        val accepted = picked.filter { attachment ->
-            if (attachment.media) (media > 0).also { if (it) media-- }
-            else (files > 0).also { if (it) files-- }
+        val (photos, other) = picked.partition { it.image }
+        val limits = imageLimits()
+        val photoPlan = if (photos.isNotEmpty()) {
+            planComposerPhotos(current.attachments, photos.map { PhotoCandidate(it, it.scaledBytes) }, limits, canSpill = canUpload(current.machineId))
+        } else null
+        val afterPhotos = current.attachments + photoPlan?.added.orEmpty()
+        var files = (NewAgentAttachments.MAX_FILES - afterPhotos.count { !it.media && it.uploadState != DraftUploadState.Invalid }).coerceAtLeast(0)
+        val acceptedOther = other.filter { attachment ->
+            if (attachment.video) false else (files > 0).also { if (it) files-- }
         }
-        val refused = picked.filterNot { it in accepted }
-        refused.forEach(uploads.discard)
-        if (showLimit && refused.isNotEmpty()) notice(AgentText(
-            if (refused.any { it.media }) R.string.agents_attach_photo_limit else ChatR.string.chat_composer_file_limit))
-        if (accepted.isEmpty()) return refused.size
+        val refusedOther = other.filterNot { it in acceptedOther }
+        photoPlan?.refused.orEmpty().forEach(uploads.discard)
+        refusedOther.forEach(uploads.discard)
+        if (showLimit) {
+            if (photoPlan != null) emitPhotoPlanNotices(photoPlan, limits)
+            if (refusedOther.isNotEmpty()) notice(AgentText(ChatR.string.chat_composer_file_limit))
+        }
+        val accepted = photoPlan?.added.orEmpty() + acceptedOther
+        if (accepted.isEmpty()) return (photoPlan?.refused?.size ?: 0) + refusedOther.size
         forward?.photoSource?.let { source -> accepted.forEach { photoSources[it.id] = source } }
         mutable.update { it.copy(attachments = it.attachments + accepted, attachedOn = it.machineId, attachNote = null) }
         accepted.forEach { upload(it.id) }
-        return refused.size
+        return (photoPlan?.refused?.size ?: 0) + refusedOther.size
+    }
+    private fun emitPhotoPlanNotices(plan: persona.feature.chat.ComposerPhotoPlan, limits: ImageLimits) {
+        if (plan.spilledByCount > 0) notice(
+            if (plan.spilledByCount == 1) AgentText(ChatR.string.chat_composer_photos_as_files_one, limits.perMessage)
+            else AgentText(ChatR.string.chat_composer_photos_as_files_other, limits.perMessage, plan.spilledByCount)
+        )
+        if (plan.spilledByBytes > 0) notice(
+            if (plan.spilledByBytes == 1) AgentText(ChatR.string.chat_composer_photos_bytes_as_files_one)
+            else AgentText(ChatR.string.chat_composer_photos_bytes_as_files_other, plan.spilledByBytes)
+        )
+        if (plan.refusedByCount > 0) notice(
+            if (plan.spilledByCount > 0) AgentText(ChatR.string.chat_composer_file_limit)
+            else AgentText(R.string.agents_attach_photo_limit, limits.perMessage)
+        )
+        if (plan.refusedByBytes > 0) notice(
+            if (plan.spilledByBytes > 0) AgentText(ChatR.string.chat_composer_file_limit)
+            else AgentText(ChatR.string.chat_composer_photos_too_large)
+        )
     }
     /** A failed file stays in the form; Retry goes through the same three-slot pump. */
     fun retryAttachment(id: String) {
@@ -951,13 +1018,21 @@ internal class NewAgentViewModel(
                             if (it.id == id) it.copy(error = null, uploadState = DraftUploadState.Uploading) else it
                         })
                     }
-                    uploads.upload(service, persona.core.contracts.SessionKey(machine, ""), attachment) { size ->
+                    val limits = imageLimits()
+                    val onStaged: suspend (Long) -> Unit = { size ->
                         mutable.update { s ->
                             s.copy(attachments = s.attachments.map {
-                                if (it.id == id) it.copy(size = size) else it
+                                if (it.id == id) {
+                                    if (it.image) {
+                                        val staged = size.takeIf { v -> v > 0L }
+                                        it.copy(size = staged ?: it.size, scaledBytes = staged ?: it.scaledBytes)
+                                    } else it.copy(size = size)
+                                } else it
                             })
                         }
                     }
+                    uploads.uploadWithLimits?.invoke(service, persona.core.contracts.SessionKey(machine, ""), attachment, limits, onStaged)
+                        ?: uploads.upload(service, persona.core.contracts.SessionKey(machine, ""), attachment, onStaged)
                 }
                 // Another computer picked meanwhile: this one's path is no use there.
                 mutable.update { s ->

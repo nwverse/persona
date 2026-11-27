@@ -24,6 +24,11 @@ const modules = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { q
 const moduleCatalogs: Record<string, Record<string, () => Promise<Catalog>>> = {
   health: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-health" }),
   voice: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-voice" }),
+  mail: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-mail" }),
+  office: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-office" }),
+  recording: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-recording" }),
+  lark: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-lark" }),
+  "screen-share": import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-screen-share" }),
 };
 /** flatten() over a language's namespace files of one kind, keyed like the import form's entries. The files are read
  *  from disk, not through an eager import.meta.glob: that made ~900 JSON modules, the slowest import of the suite. */
@@ -32,7 +37,13 @@ function expected(lang: string, kind: "client" | "admin"): Record<string, string
   const files = readdirSync(dir).filter((name) =>
     name.endsWith(".json") && !name.startsWith("_") && name.startsWith("admin-") === (kind === "admin"));
   const read = (name: string) => JSON.parse(readFileSync(join(dir, name), "utf8")) as Record<string, string>;
-  return flatten(Object.fromEntries(files.map((name) => [`./${name}`, read(name)])));
+  const resources = Object.fromEntries(files.map((name) => [`./${name}`, read(name)]));
+  if (kind === "client") {
+    for (const id of ["office", "mail"]) {
+      resources[`./${id}.json`] = JSON.parse(readFileSync(join(dir, "../../../modules", id, "locales", lang, `${id}.json`), "utf8"));
+    }
+  }
+  return flatten(resources);
 }
 
 const langs = Object.keys(metas).map((path) => path.split("/").at(-2)!);
@@ -86,7 +97,8 @@ describe("i18n catalogs under Vitest", () => {
       expect(fallbacks).toEqual(whole.fallbacks);
     });
 
-    it(`${lang}: each module's catalog holds its namespaces only, and together they are all the modules' strings`, async () => {
+    // The core-only lane (web/core-only.ts, #13932) has an empty module list, while the modules' catalogs stay on disk.
+    it.skipIf(process.env.PERSONA_WEB_MODULES === "none")(`${lang}: each module's catalog holds its namespaces only, and together they are all the modules' strings`, async () => {
       const { MODULES } = await import("./src/modules");
       expect(Object.keys(moduleCatalogs).sort()).toEqual(MODULES.map((m) => m.id).sort());
       const all = await modules[key]();

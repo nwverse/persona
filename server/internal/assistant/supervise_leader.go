@@ -12,8 +12,6 @@ import (
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
-	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Direction leads supervise the tasks they plan; main supervises its own work (#13362). Explicit transfers
@@ -51,8 +49,8 @@ func (s *Service) supervises(ctx context.Context, id string) bool {
 	return s.isMain(ctx, id) || s.isLeader(ctx, id)
 }
 
-// defaultPlanSupervisor assigns a direction lead its own plans, and otherwise uses main. A task leader's
-// workers and active reporting conversations retain their specialized topology.
+// defaultPlanSupervisor assigns a direction lead or live assistant side conversation its own plans, and otherwise uses
+// main. A task leader's workers and active reporting conversations retain their specialized topology.
 func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, parent string) (string, bool) {
 	if parent != "" || conversation == "" {
 		return "", false
@@ -62,6 +60,9 @@ func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, paren
 	}
 	if _, reports := s.reporterOf(ctx, conversation); reports {
 		return "", false
+	}
+	if s.liveSideSupervisor(ctx, conversation) {
+		return conversation, true
 	}
 	main := s.settings(ctx).Main
 	return main, main != ""
@@ -269,7 +270,8 @@ func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids m
 func (s *Service) digestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
 	// Explicit escalations keep their destination; needs_user alone is not an escalation.
 	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.assigned() &&
-		g.Kind != sigAsk && g.Kind != sigEscalated {
+		g.Kind != sigAsk && g.Kind != sigEscalated &&
+		!(g.Kind == sigDecide && g.Unreachable && g.Recipient != "" && g.To == cfg.Main) {
 		return s.effectiveSupervisor(ctx, cfg, t)
 	}
 	own := s.ownSupervisor(cfg)
@@ -454,14 +456,27 @@ func (s *Service) leadersChange(ctx context.Context, cfg Settings, in []string) 
 					return fmt.Errorf("assistant.leaders changed after the card was shown, so nothing was saved: get it and set it again for a new card (%w)", approvalops.ErrStale)
 				}
 				v.Leaders = list
+				s.directionRolesChanged(ctx, before, list)
 				return nil
 			}); err != nil {
 				return "", err
 			}
+			// A lead taken out ends its direction as Unpin does: its open tasks go to main's supervision.
+			handed := 0
+			for _, id := range before {
+				if !slices.Contains(list, id) {
+					handed += s.handBackDirectionTasks(context.WithoutCancel(ctx), id)
+				}
+			}
 			s.settingsChanged(ctx)
-			return fmt.Sprintf("assistant.leaders is %q: a manually started Agent the owner explicitly puts under one keeps its ordinary "+
+			out := fmt.Sprintf("assistant.leaders is %q: a manually started Agent the owner explicitly puts under one keeps its ordinary "+
 				"supervision there. A direction lead supervises its own task_plan work, including failed starts, retry and review; "+
-				"main supervises its own tasks and receives the lead's owner-decision escalations.", list), nil
+				"main supervises its own tasks and receives the lead's owner-decision escalations.", list)
+			if handed > 0 {
+				out += fmt.Sprintf(" The %d open tasks of the leads taken out are supervised by the main conversation now, as "+
+					"agent_transfer moves a task; making a lead again does not take them back.", handed)
+			}
+			return out, nil
 		}}, nil
 }
 
@@ -501,113 +516,15 @@ func sameLeaders(a, b []string) bool {
 	return slices.Equal(a, b) || len(a) == 0 && len(b) == 0
 }
 
-// ---- a cancelled task's agents ----
-
-// cancelStopWait is how long a cancelled task's closed agent may still read busy before it is left unarchived;
-// cancelStopPoll how often it is looked at meanwhile.
-var cancelStopWait, cancelStopPoll = 30 * time.Second, 500 * time.Millisecond
-
-// stopTaskAgents stops what task t's agents still ask of the user once t is cancelled: each agent on it is closed on
-// its computer (session.close: its tab and process go, its transcript stays, and where its engine can resume it a
-// message does), its
-// cards still waiting end, and it is archived (reversible, nothing deleted). It runs in the background: closing can
-// take a while and the review is answered first.
-func (s *Service) stopTaskAgents(ctx context.Context, t Todo) {
-	var agents []TodoAgent
-	for _, a := range t.Agents {
-		if a.ReleasedAt == nil && a.DismissedAt == nil && a.SessionID != "" {
-			agents = append(agents, a)
-		}
-	}
-	if len(agents) == 0 {
-		return
-	}
-	ctx = context.WithoutCancel(ctx)
-	go func() {
-		for _, a := range agents {
-			s.stopCancelledAgent(ctx, t.ID, a.MachineID, a.SessionID)
-		}
-	}()
-}
-
-// stopCancelledAgent stops, ends the cards of and archives one agent of cancelled task id; one that works for another
-// open task now, an assistant conversation (the user's to stop) or a session its machine does not list is left alone.
-// The agent quits and its terminal stays (session.stop, #4754); a session with no terminal (another tool's, an engine
-// that runs agents itself) is closed as before.
-func (s *Service) stopCancelledAgent(ctx context.Context, id, machine, session string) {
-	s.todos.mu.RLock()
-	other, linked := s.todos.activeBySession[[2]string{machine, session}]
-	s.todos.mu.RUnlock()
-	if linked && other != id {
-		s.logf("task %s cancelled: agent %s/%s works for %s now, left alone", id, machine, short(session), other)
-		return
-	}
-	c, err := s.agentArchiveTarget(ctx, machine, session) // refuses an assistant conversation and an unknown session
-	if err != nil {
-		s.logf("task %s cancelled: agent %s/%s left alone: %v", id, machine, short(session), err)
-		return
-	}
-	machine = c.MachineID
-	closed := false
-	if !agentCloseBusy(c) && s.closeEndedTerminals(ctx) {
-		// A cancelled task ends its idle Agent's session: with the owner's close-on-end setting its terminal goes
-		// too (#10355); a busy one is only stopped below and keeps its terminal.
-		var err error
-		if closed, err = s.closeEndedTerminal(ctx, machine, session, proto.StopUser); err != nil {
-			s.logf("task %s cancelled: close agent %s/%s: %v", id, machine, short(session), err)
-		}
-	}
-	if c.Status != proto.StatusOffline && !closed {
-		cctx, cancel := context.WithTimeout(ctx, agentArchiveCloseTimeout)
-		err := s.call(cctx, machine, deviceSessionStop, map[string]any{"session_id": session}, nil)
-		if re := (*rpc.Error)(nil); errors.As(err, &re) && re.Code == "no_terminal" {
-			err = s.call(cctx, machine, "session.close", map[string]any{"session_id": session}, nil)
-		}
-		if err != nil {
-			s.logf("task %s cancelled: stop agent %s/%s: %v", id, machine, short(session), err)
-		}
-		cancel()
-	}
-	s.endSessionCards(machine, session)
-	// The archive waits for the list to show it closed: a row still busy there (working, a card waiting) would bring
-	// it straight back (archivedSessions).
-	var row proto.Session
-	for deadline := time.Now().Add(cancelStopWait); ; time.Sleep(cancelStopPoll) {
-		r, err := s.agentArchiveTarget(ctx, machine, session)
-		if err != nil {
-			s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
-			return
-		}
-		if !agentArchiveBusy(r) {
-			row = r
-			break
-		}
-		if time.Now().After(deadline) {
-			s.logf("task %s cancelled: agent %s/%s still busy, left unarchived", id, machine, short(session))
-			return
-		}
-	}
-	changedAt, err := s.noteAgentArchiveAt(ctx, row, true)
-	if err != nil {
-		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
-		return
-	}
-	row.ArchiveChangedAt = archiveChangedAt(changedAt)
-	publishMark, err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), false) // what it writes as it goes is not new work
-	if err != nil {
-		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
-		s.publishList(row.MachineID) // the archive itself committed; secondary metadata failure must not hide it
-	} else if publishMark != 0 {
-		s.publishListAtArchiveMark(row.MachineID, publishMark)
-	}
-	s.logf("task %s cancelled: closed and archived agent %s/%s", id, machine, short(session))
-}
-
 // endSessionCards ends the cards machine/session still waits on (cancelled in the history), as when its node goes away.
-func (s *Service) endSessionCards(machine, session string) {
+// A caller that inspected particular cards before stopping the session can limit cancellation to those ids.
+func (s *Service) endSessionCards(machine, session string, only ...string) {
 	s.fleet.mu.Lock()
 	var ids []string
 	for id, p := range s.fleet.interactions {
+		if len(only) > 0 && !slices.Contains(only, id) {
+			continue
+		}
 		if p.ix.SessionID == session && s.sameMachine(p.ix.MachineID, machine) && (p.prepared != nil || !p.claimed) {
 			if p.prepared == nil {
 				p.claimed = true
@@ -616,7 +533,7 @@ func (s *Service) endSessionCards(machine, session string) {
 		}
 	}
 	s.fleet.mu.Unlock()
-	s.feishuDetach(ids)
+	s.larkModule().AskDetached(ids, resumeGrace)
 	for _, id := range ids {
 		if s.endPreparedByID(id, "cancelled", "The conversation that owned this approval ended; nothing changed.") {
 			continue

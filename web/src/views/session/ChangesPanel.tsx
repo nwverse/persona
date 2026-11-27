@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { CHANGES_TREE_INDENT, CHANGES_TREE_INDENT_MAX_SHARE, CHANGES_DIFF_MIN, CHANGES_TREE_DEFAULT, CHANGES_TREE_MIN, CHANGES_TREE_MAX } from "../../lib/layout";
-import { ResizeHandle } from "../../ui/ResizeHandle";
+import { CHANGES_TREE_INDENT, CHANGES_TREE_INDENT_MAX_SHARE, CHANGES_DIFF_MIN, CHANGES_TREE_DEFAULT, CHANGES_TREE_MIN, CHANGES_TREE_MAX, CHANGES_TREE_WIDTH_KEY } from "../../lib/layout";
+import { TreePaneSplitter, useResizableTreeWidth } from "../../ui/TreePaneSplitter";
 import { errorText } from "../../lib/api";
 import { relativeTo } from "../../lib/comments";
 import { below, toolFile } from "../../lib/files";
@@ -13,20 +13,11 @@ import { cx, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { PanelHeader } from "../../ui/PanelHeader";
 import { t } from "../../i18n";
+import { useDiffMode } from "../../lib/code-view";
+import { useMedia } from "../../ui/media-query";
 import { DiffBlocks, diffStats, editDiffs } from "../chat/ActionRow";
 import { useSharedTranscript } from "../chat/transcript-share";
 import type { Transcript } from "../chat/useTranscript";
-
-const TREE_WIDTH_KEY = "persona.changesTreeWidth";
-
-function storedTreeWidth() {
-  try {
-    const width = Number(localStorage.getItem(TREE_WIDTH_KEY));
-    return Number.isFinite(width) && width > 0 ? Math.max(CHANGES_TREE_MIN, Math.min(CHANGES_TREE_MAX, width)) : CHANGES_TREE_DEFAULT;
-  } catch {
-    return CHANGES_TREE_DEFAULT;
-  }
-}
 
 type Opened = Extract<Panel, { kind: "changes" }>;
 type Scope = "exchange" | "session";
@@ -70,8 +61,9 @@ function FileTree({ root, collapsed, toggle, select, selected }: {
           const closed = collapsed.has(path);
           return (
             <div key={path}>
-              <button type="button" aria-expanded={!closed} onClick={() => toggle(path)} className="flex h-8 w-full items-center gap-1 rounded-control px-2 text-left text-label font-medium text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11" style={{ paddingLeft: `${8 + depth * 12}px` }}>
-                <Icon name="chevronRight" size={12} style={{ transform: closed ? undefined : "rotate(90deg)" }} />
+              <button type="button" aria-expanded={!closed} onClick={() => toggle(path)} className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-tree-row font-medium text-ink-2 transition-colors hover:bg-hover [@media(pointer:coarse)]:min-h-11" style={{ paddingLeft: `${8 + depth * CHANGES_TREE_INDENT}px` }}>
+                <Icon name="chevronRight" size={12} className="shrink-0 text-ink-3" style={{ transform: closed ? undefined : "rotate(90deg)" }} />
+                <Icon name="folder" size={14} className="shrink-0 text-ink-3" />
                 <span className="truncate">{name}</span>
               </button>
               {!closed && draw(child, `${path}/`, depth + 1)}
@@ -79,10 +71,10 @@ function FileTree({ root, collapsed, toggle, select, selected }: {
           );
         })}
         {[...node.files].sort((a, b) => a.shown.localeCompare(b.shown)).map((file) => (
-          <button key={file.path} type="button" title={file.path} data-change-file={file.path} aria-current={selected === file.path ? "true" : undefined} onClick={() => select(file.path)} className={cx("flex min-h-8 w-full items-center gap-2 rounded-control px-2 py-1 text-left text-label hover:bg-hover [@media(pointer:coarse)]:min-h-11", selected === file.path && "bg-hover text-ink")}>
+          <button key={file.path} type="button" title={file.path} data-change-file={file.path} aria-current={selected === file.path ? "true" : undefined} onClick={() => select(file.path)} className={cx("flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-tree-row text-ink-2 transition-colors hover:bg-hover [@media(pointer:coarse)]:min-h-11", selected === file.path && "bg-hover-2 font-medium text-ink")}>
             <span className="min-w-0 flex-1 overflow-hidden">
-              <span className="flex items-center gap-2" style={{ paddingLeft: `min(${(depth + 1) * CHANGES_TREE_INDENT}px, ${CHANGES_TREE_INDENT_MAX_SHARE * 100}%)` }}>
-                <Icon name="file" size={13} className="shrink-0 text-ink-3" />
+              <span className="flex items-center gap-1.5" style={{ paddingLeft: `min(${(depth + 1) * CHANGES_TREE_INDENT}px, ${CHANGES_TREE_INDENT_MAX_SHARE * 100}%)` }}>
+                <Icon name="file" size={14} className="shrink-0 text-ink-3" />
                 <span className="min-w-0 flex-1 truncate">{file.shown.split(/[\\/]/).pop()}</span>
               </span>
             </span>
@@ -127,6 +119,9 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
   const turnId = called?.id ?? (call ? undefined : opened.turn ?? all.findLast((segment) => turnChanges(exchangeSteps(segment), cwd))?.id ?? all.at(-1)?.id);
   const exchange = turnId ? all.find((segment) => segment.id === turnId) : undefined;
   const [scope, setScope] = useState<Scope>("exchange");
+  const [diffMode, setDiffMode] = useDiffMode();
+  const roomy = useMedia("(min-width: 1024px)");
+  const split = diffMode === "split" && roomy;
   const shown = scope === "session" ? all : resolvingCall ? candidates : exchange ? [exchange] : [];
   const edits = useMemo(() => {
     const out: ChangeEdit[] = [];
@@ -186,33 +181,15 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const treeId = useId();
   const columns = useRef<HTMLDivElement>(null);
-  const [treeWidth, setTreeWidth] = useState(storedTreeWidth);
-  const [room, setRoom] = useState(CHANGES_TREE_MAX + CHANGES_DIFF_MIN);
-  const treeMax = Math.max(CHANGES_TREE_MIN, Math.min(CHANGES_TREE_MAX, room - CHANGES_DIFF_MIN));
-  const treeShown = Math.round(Math.max(CHANGES_TREE_MIN, Math.min(treeMax, treeWidth)));
-
-  useLayoutEffect(() => {
-    const element = columns.current;
-    if (!element) return;
-    const measure = () => {
-      const width = element.getBoundingClientRect().width;
-      if (width > 0) setRoom(width);
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [resolvingCall]);
-
-  function keepTreeWidth(width: number) {
-    setTreeWidth(width);
-    try { localStorage.setItem(TREE_WIDTH_KEY, String(width)); } catch { /* page-only choice when storage is unavailable */ }
-  }
-  function resetTreeWidth() {
-    setTreeWidth(CHANGES_TREE_DEFAULT);
-    try { localStorage.removeItem(TREE_WIDTH_KEY); } catch { /* as above */ }
-  }
+  const treePane = useResizableTreeWidth({
+    storageKey: CHANGES_TREE_WIDTH_KEY,
+    defaultWidth: CHANGES_TREE_DEFAULT,
+    minWidth: CHANGES_TREE_MIN,
+    maxWidth: CHANGES_TREE_MAX,
+    minViewerWidth: CHANGES_DIFF_MIN,
+    containerRef: columns,
+    observeKey: resolvingCall,
+  });
 
 
   useEffect(() => {
@@ -402,6 +379,22 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
             {t("session-changes.new_changes", { count: pending.count })}
           </button>
         )}
+        {roomy && (
+          <div role="group" aria-label={t("extensions-codeviews.unified")} className={cx("flex rounded-control bg-field p-0.5", !pending.count && "ml-auto")}>
+            {(["unified", "split"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                data-change-diff-mode={m}
+                aria-pressed={diffMode === m}
+                onClick={() => setDiffMode(m)}
+                className={cx("min-h-7 rounded-[6px] px-2 text-label whitespace-nowrap", diffMode === m ? "bg-surface text-ink shadow-btn" : "text-ink-3 hover:text-ink")}
+              >
+                {m === "unified" ? t("extensions-codeviews.unified") : t("extensions-codeviews.split")}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {scope === "session" && (tr.hasMore || tr.loadingEarlier) && (
         <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-label text-ink-3" data-history-loading>
@@ -415,15 +408,26 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
         </div>
       )}
       <div ref={columns} className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div className="relative min-h-0 shrink-0 lg:w-(--changes-tree-w)" style={{ "--changes-tree-w": `${treeShown}px` } as React.CSSProperties}>
-          <nav id={treeId} aria-label={t("session-changes.files_label")} className="max-h-40 overflow-auto border-b border-line py-1 lg:h-full lg:max-h-none lg:border-r lg:border-b-0">
-            <FileTree root={tree} collapsed={collapsed} selected={selectedPath} select={selectFile} toggle={(path) => setCollapsed((old) => { const next = new Set(old); if (next.has(path)) next.delete(path); else next.add(path); return next; })} />
-          </nav>
-          <ResizeHandle edge="right" value={treeShown} min={CHANGES_TREE_MIN} max={treeMax}
-            onResize={setTreeWidth} onCommit={keepTreeWidth} onReset={resetTreeWidth}
-            label={t("session-changes.resize_label")} title={t("session-changes.resize_title")} controls={treeId}
-            className="hidden lg:block" />
-        </div>
+        <nav
+          id={treeId}
+          aria-label={t("session-changes.files_label")}
+          className="scrollbar-thin max-h-40 min-h-0 shrink-0 overflow-auto border-b border-line px-1.5 py-1 lg:h-full lg:max-h-none lg:w-(--changes-tree-w) lg:border-b-0"
+          style={{ "--changes-tree-w": `${treePane.width}px` } as React.CSSProperties}
+        >
+          <FileTree root={tree} collapsed={collapsed} selected={selectedPath} select={selectFile} toggle={(path) => setCollapsed((old) => { const next = new Set(old); if (next.has(path)) next.delete(path); else next.add(path); return next; })} />
+        </nav>
+        <TreePaneSplitter
+          value={treePane.width}
+          min={treePane.min}
+          max={treePane.max}
+          onResize={treePane.setWidth}
+          onCommit={treePane.commitWidth}
+          onReset={treePane.resetWidth}
+          label={t("session-changes.resize_label")}
+          title={t("session-changes.resize_title")}
+          controls={treeId}
+          className="hidden lg:flex"
+        />
         <div ref={diffBody} className="relative min-h-0 min-w-0 flex-1 overflow-auto p-2" data-change-diff>
           {foldLoading && <div className="flex items-center gap-2 p-2 text-label text-ink-3"><Spinner size={12} />{t("session-changes.loading_fold")}</div>}
           {foldError && (
@@ -434,7 +438,7 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
           )}
           {selectedEdits.map((edit) => (
             <section key={edit.id} data-change-id={edit.id} data-change-call={edit.call} className="mb-2">
-              <DiffBlocks diffs={edit.diffs} />
+              <DiffBlocks diffs={edit.diffs} mode={split ? "split" : "unified"} />
             </section>
           ))}
           {!foldLoading && !selectedEdits.length && (

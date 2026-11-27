@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -69,19 +70,14 @@ func (c *briefFallbackPosts) cards() []string {
 
 func briefFallbackFacts() *briefFacts {
 	now := time.Now().UTC()
-	return &briefFacts{At: now, l: i18n.ZhHans, web: testWeb, loc: time.UTC, Changed: map[string]string{}, Asks: map[string]acceptAsk{},
+	return &briefFacts{At: now, Lang: string(i18n.ZhHans), Web: testWeb, Loc: time.UTC, Changed: map[string]string{}, Asks: map[string]modapi.BriefAsk{},
 		Directions: []prompts.BriefDirection{{ID: "main", Name: "Main", Owner: true, Open: 1, Link: testWeb + "/persona/main",
 			Waits: []prompts.BriefWait{{TodoID: "todo-stopped", Title: "Stopped on quota", Kind: "stalled", Since: now.Add(-time.Hour),
 				WaitingOn: "technical", Link: testWeb + "/todos/todo-stopped", Line: "Stopped on quota · stopped for 1 hour"}}}}}
 }
 
 func attachBriefFallback(s *Service, session, label string, fallbackOnly bool) {
-	s.brief.mu.Lock()
-	defer s.brief.mu.Unlock()
-	if s.brief.bySession == nil {
-		s.brief.bySession = map[string]*briefRun{}
-	}
-	s.brief.bySession[session] = &briefRun{facts: briefFallbackFacts(), label: label, fallbackOnly: fallbackOnly}
+	s.briefSetSessionRun(session, &briefRun{Facts: briefFallbackFacts(), Label: label, FallbackOnly: fallbackOnly})
 }
 
 func initBriefFallbackState(s *Service) {
@@ -94,12 +90,13 @@ func initBriefFallbackState(s *Service) {
 	s.accept.mu.Lock()
 	s.accept.loaded, s.accept.asks = true, map[string]*acceptAsk{}
 	s.accept.mu.Unlock()
-	s.standing.fleetUp.Store(true)
+	s.fleetUp.Store(true)
 }
 
 // One routine at one scheduled due has one receipt, independent of the run id and of the bounded display history. A
 // restarted hub reads the same receipt. Missing facts and a failed receipt write consume nothing, so a later attempt can send.
 func TestBriefFallbackDeduplicatesOccurrenceAcrossRetryAndRestart(t *testing.T) {
+	needsBriefingModule(t)
 	ctx := context.Background()
 	st := &memStore{}
 	f := newFakeHub().withMachine()
@@ -192,6 +189,7 @@ func TestBriefFallbackDeduplicatesOccurrenceAcrossRetryAndRestart(t *testing.T) 
 }
 
 func TestBriefNotStartedFallbackDeduplicatesRetryAndRestart(t *testing.T) {
+	needsLarkLayer(t)
 	needsBriefingModule(t)
 	ctx := context.Background()
 	st := &memStore{}
@@ -270,6 +268,7 @@ func TestBriefNotStartedFallbackDeduplicatesRetryAndRestart(t *testing.T) {
 // Report keeps its old successful behavior: north-star model input, no Facts feed/card/push. The full snapshot is attached
 // only so a model failure can still deliver deterministic facts.
 func TestBriefReportFactsAreFallbackOnly(t *testing.T) {
+	needsBriefingModule(t)
 	ctx := context.Background()
 	f := newFakeHub().withMachine()
 	s := newStorelessService(t, f)
@@ -280,7 +279,7 @@ func TestBriefReportFactsAreFallbackOnly(t *testing.T) {
 	}
 	s.briefSent(task.ID, "s-report", false)
 	run := s.briefOf("s-report")
-	if run == nil || !run.fallbackOnly || run.facts == nil {
+	if run == nil || !run.FallbackOnly || run.Facts == nil {
 		t.Fatalf("Report has no retained fallback facts: %+v", run)
 	}
 	if got, claimed := s.briefClaim("s-report", "⏰ Evening report", "report-turn", false); got != nil || claimed {
@@ -304,6 +303,8 @@ func TestBriefReportFactsAreFallbackOnly(t *testing.T) {
 // A transient Feishu failure retries the same card with the same UUID while the failed scheduled turn is still last.
 // The fallback itself has no assistant answer, so its retry guard follows that failed turn rather than a synthetic one.
 func TestBriefFallbackFeishuRetryUsesStableCardAndFailedTurn(t *testing.T) {
+	needsLarkLayer(t)
+	needsBriefingModule(t)
 	oldDelay, oldRetries := feishuMirrorRetry, feishuMirrorRetries
 	feishuMirrorRetry, feishuMirrorRetries = 10*time.Millisecond, 1
 	t.Cleanup(func() { feishuMirrorRetry, feishuMirrorRetries = oldDelay, oldRetries })
@@ -434,7 +435,7 @@ func briefRetryRun(t *testing.T, succeedRetry bool) (*Service, *fakeHub, *briefF
 		for _, r := range sc.runs {
 			if r.RefID == "morning" && r.Retried {
 				if succeedRetry {
-					return r.Status == runOK && s.briefOf("s1") != nil && s.briefOf("s1").facts.At.After(time.Now().Add(-time.Minute))
+					return r.Status == runOK && s.briefOf("s1") != nil && s.briefOf("s1").Facts.At.After(time.Now().Add(-time.Minute))
 				}
 				return r.Status == runFailed
 			}
@@ -449,6 +450,7 @@ func briefRetryRun(t *testing.T, succeedRetry bool) (*Service, *fakeHub, *briefF
 }
 
 func TestBriefingFailureFallbackIsNotRepeatedByAutomaticRetry(t *testing.T) {
+	needsLarkLayer(t)
 	_, f, capture, _, runs := briefRetryRun(t, false)
 	if got := len(capture.list()); got != 1 {
 		t.Fatalf("failed first turn plus failed retry posted %d fallbacks, want one", got)
@@ -481,6 +483,7 @@ func TestBriefingFailureFallbackIsNotRepeatedByAutomaticRetry(t *testing.T) {
 }
 
 func TestBriefingRetrySuccessSendsNormalCardWithoutRetractingFallback(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, capture, sess, runs := briefRetryRun(t, true)
 	if got := len(f.pushed()); got != 1 {
 		t.Fatalf("the one fallback notification was duplicated or retracted: %+v", f.pushed())

@@ -1,5 +1,6 @@
 package persona.feature.assistant
 
+import persona.core.moduleapi.serves
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -323,7 +324,8 @@ fun AssistantScreen(
     val healthPage = active == null && newChat?.space == persona.core.contracts.api.AssistantSpace.HEALTH
     // The domain spaces (#13500, docs/android/android.md "Domain spaces"): the tracks as last read (shared with the
     // sidebar), each space's chats as last read, and every chat known to be one's, so New on it opens its home.
-    val spaces = rememberSpaces(managerChoice.hubId, management, enabled = conversationsOf != null && !demo)
+    val spacesEnabled = LocalSpaceConversationsEnabled.current?.collectAsStateWithLifecycle()?.value == true
+    val spaces = rememberSpaces(managerChoice.hubId, management, enabled = spacesEnabled && conversationsOf != null && !demo)
     val spacesApi = remember(management, managerChoice.hubId) { management?.forManager(null) }
     val spaceChatsState = remember(managerChoice.hubId) { mutableStateOf<Map<String, List<Session>>>(emptyMap()) }
     var spaceChats by spaceChatsState
@@ -708,13 +710,40 @@ fun AssistantScreen(
             // composer of the page that starts it, here.
             proactiveOpen = false; settingsOpen = false; drawerOpen = false
             if (hasChat && !demo) {
-                latestMain?.let { askMain(it); return@collect }
-                // On a cold start the conversations may still be on their way: the main one takes the cursor when it comes.
-                if (!openedMain) scope.launch {
-                    kotlinx.coroutines.withTimeoutOrNull(3_000) { snapshotFlow { latestMain }.first { it != null } }
-                        ?.let { main -> if (!openedMain || main == SessionKey(activeMachine.orEmpty(), activeSession.orEmpty())) askMain(main) }
+                latestMain?.let { main ->
+                    persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Session(main))
+                    askMain(main)
+                    return@collect
                 }
                 if (activeSession != null || newChat != null) newConversation()
+                val shownSession = activeSession?.let { sid ->
+                    activeMachine?.takeIf { it.isNotBlank() }?.let { mid -> SessionKey(mid, sid) }
+                }
+                if (shownSession != null) {
+                    // Active conversation remained hosted (for example while sending); keep the
+                    // pending handoff routed to it instead of parking it on the hidden starter page.
+                    persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Session(shownSession))
+                    return@collect
+                }
+                // On a cold start the conversations may still be on their way: wait before claiming
+                // the starter composer so a pending assist draft lands in the main chat once ready.
+                if (!openedMain) {
+                    scope.launch {
+                        val arrived = kotlinx.coroutines.withTimeoutOrNull(3_000) {
+                            snapshotFlow { latestMain }.first { it != null }
+                        }
+                        if (arrived != null && (!openedMain || arrived == SessionKey(activeMachine.orEmpty(), activeSession.orEmpty()))) {
+                            persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Session(arrived))
+                            askMain(arrived)
+                        } else if (latestMain == null && activeSession == null) {
+                            persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Starter)
+                        }
+                    }
+                } else if (latestMain == null && activeSession == null) {
+                    persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Starter)
+                }
+            } else {
+                persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Starter)
             }
             // After the tab's first layout and the saved draft: the text field has to be attached (the old app waited 300 ms).
             kotlinx.coroutines.withTimeoutOrNull(3_000) { snapshotFlow { draftEditor == null || savedComposer != null }.first { it } }
@@ -921,13 +950,19 @@ fun AssistantScreen(
                         // A forward waiting for the new conversation (#3901): its card and source photos over the composer.
                         val homeForwards = if (active == null) persona.feature.chat.ForwardPlacements.home else emptyList()
                         val homePhotoHandoffs = if (active == null) persona.feature.chat.ForwardPlacements.homePhotoHandoffs() else emptyMap()
-                        LaunchedEffect(homeForwards, composer, homePhotoHandoffs, composer.attachments.map { it.id }) {
+                        val assistantImageLimits = persona.core.designsystem.LocalHubImageLimits.current.forAgent(null)
+                        val assistantComposerService = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage && !spacePage }
+                        LaunchedEffect(homeForwards, composer, homePhotoHandoffs, composer.attachments.map { it.id }, assistantImageLimits) {
                             if (homeForwards.isEmpty()) return@LaunchedEffect
                             val present = composer.attachments.mapTo(mutableSetOf()) { it.id }
                             val pending = homePhotoHandoffs.mapValues { (_, handoff) ->
                                 handoff.copy(attachments = handoff.attachments.filterNot { it.id in present })
                             }
-                            val rejected = persona.feature.chat.attachForwardedPhotos(context, composer, pending.values.toList())
+                            val rejected = persona.feature.chat.attachForwardedPhotos(context, composer, pending.values.toList(),
+                                limits = assistantImageLimits, canSpill = assistantComposerService != null,
+                                onNotice = { message ->
+                                    if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
+                                })
                             val lost = pending.values.sumOf { it.lost } + rejected.size
                             if (lost > 0) {
                                 val message = persona.feature.chat.forwardedPhotoNotice(resources, lost)
@@ -937,9 +972,39 @@ fun AssistantScreen(
                                 persona.feature.chat.ForwardPlacements.finishHomePhotoHandoffs(rejected.mapTo(mutableSetOf()) { it.id })
                             }
                         }
+                        val pendingAssist by persona.feature.chat.AssistDraftBus.pending.collectAsStateWithLifecycle()
+                        LaunchedEffect(pendingAssist, active, composer, composer.draftLoaded, draftReady, assistantImageLimits) {
+                            if (active != null && hasChat && !demo) return@LaunchedEffect
+                            val draft = pendingAssist ?: return@LaunchedEffect
+                            if (draft.target != persona.feature.chat.AssistDraftTarget.Starter || !draft.hasUnappliedContent) return@LaunchedEffect
+                            if (!draftReady || !composer.draftLoaded) return@LaunchedEffect
+                            val result = persona.feature.chat.applyAssistDraft(
+                                context = context,
+                                composer = composer,
+                                draft = draft,
+                                bus = persona.feature.chat.AssistDraftBus,
+                                existingContextIds = persona.feature.chat.ForwardPlacements.home.mapTo(mutableSetOf()) { it.id },
+                                onContext = { ref ->
+                                    if (active == null) persona.feature.chat.ForwardPlacements.home =
+                                        persona.feature.chat.ForwardPlacements.home + ref
+                                },
+                                limits = assistantImageLimits,
+                                onPhotoLimit = {
+                                    val message = resources.getString(
+                                        persona.feature.chat.R.string.chat_composer_photo_limit,
+                                        assistantImageLimits.perMessage,
+                                    )
+                                    if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
+                                },
+                            )
+                            if (result.screenshotAdded || result.contextAdded) {
+                                composer.focusRequest++
+                            }
+                        }
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
                             // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
-                            canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage && !spacePage },
+                            canClear = false, service = assistantComposerService,
+                            imageLimits = assistantImageLimits,
                             uploadDestination = if (onHealthChat) "health" else null,
                             upload = composerUpload,
                             onSend = { submit() }, onCommand = { composer.insert(it, composer.focused) },
@@ -1062,7 +1127,7 @@ fun AssistantScreen(
             }
         }
             // The page's own toast (no app feedback), at the top, where the root draws the app's.
-            persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
+            persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = persona.core.designsystem.ToastTopBarClearance))
         }
         }
     }
@@ -1125,7 +1190,8 @@ fun AssistantScreen(
         val sections = assistantMenu(offline = connection != null && connection != persona.core.contracts.api.ConnectionState.Online,
             modules = moduleActions, main = snapshot.mainSession, active = active, compact = active != null && mainActions.compact,
             newMain = onMain && mainActions.newMain, working = interrupt != null && persona.core.domain.lines.isLiveStatus(shown?.status),
-            clear = onMain && mainActions.clear)
+            clear = onMain && mainActions.clear,
+            knowledge = persona.core.moduleapi.LocalModulePlaces.current.serves(persona.core.navigation.KnowledgeRoute::class))
         fun rawAction(item: AssistantMenuItem, separator: Boolean): JAction = when (item) {
             AssistantMenuItem.ConnectionDetails -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = openConnectionDetails)

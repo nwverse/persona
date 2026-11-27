@@ -7,6 +7,7 @@ import persona.core.contracts.api.MailReference
 import persona.core.contracts.api.MailTransport
 import persona.core.contracts.api.pinned
 import persona.core.inbox.MailAttachmentTransport
+import persona.core.inbox.*
 
 /** This transport with a page's [pins] on its requests (MailTransport.pinned), still a [MailAttachmentTransport] when it was one. */
 internal fun MailTransport.pinnedForPage(pins: ManagerPins?): MailTransport {

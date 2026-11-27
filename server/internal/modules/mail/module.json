@@ -3,5 +3,6 @@
   "id": "mail",
   "api": 1,
   "origin": "builtin",
-  "title": "Mail"
+  "title": "Mail",
+  "feature": "module.mail"
 }

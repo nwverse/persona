@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
+	"github.com/nwverse/persona/server/internal/node/iphoneport"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -90,7 +92,7 @@ func TestEveryOldNameIsABuiltinMethod(t *testing.T) {
 			names = append(names, name)
 		}
 	}
-	if len(names) != 17 {
+	if len(names) != 19 {
 		t.Fatalf("%d old names: %v", len(names), names)
 	}
 	builtinSrc, _ := os.ReadFile("builtin.go")
@@ -114,6 +116,14 @@ func TestBuiltinProgramsInInfoAndNeverAPackage(t *testing.T) {
 	n, _ := pluginTestNode(t)
 	if !slices.Equal(builtinProgramIDs, []string{"cua", "ego", "imessage", "iphone"}) {
 		t.Fatalf("builtin_programs %v", builtinProgramIDs)
+	}
+	// node.info lists iphone only with the phone-extra module (internal/node/iphoneport).
+	want := []string{"cua", "ego", "imessage"}
+	if iphoneport.Get(moduleswitch.Set{}) != nil {
+		want = append(want, "iphone")
+	}
+	if got := builtinProgramsInfo(); !slices.Equal(got, want) {
+		t.Fatalf("node.info's builtin_programs %v, want %v", got, want)
 	}
 	for _, id := range builtinProgramIDs {
 		s := proto.PluginNodeStart{ID: id, Version: "1.0.0", Command: "x", RPC: true, Keep: extension.KeepLease}

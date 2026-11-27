@@ -37,6 +37,7 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
 - **PIDs are reused quickly and do not increase monotonically**: Sorting by PID to put wrappers first does not work on Windows. Sort by start time; when walking the parent chain, require ancestors to have started before the current process.
 - **Git Bash breaks the process tree**: MSYS2 emulates `fork`, and for `cd x && cmd` the forked bash that runs `cmd` as a new Windows process exits, so `cmd`'s parent pid names a process that is gone. A walk down from the agent (port discovery) or up to it misses everything below that point, and whether it happens depends on the command line: a lone `python -m http.server` keeps its chain, `cd dir && npx …` loses it (#9815).
   Claude Code's Bash tool is Git Bash on Windows, so this is the usual case, not an edge. A process's engine pane variables (`ORCA_PANE_KEY`, `HERDR_PANE_ID`…) survive it: MSYS passes the environment through its fork and exec. Use them where the tree comes up empty.
+- **A companion on Node.js guessed Unix names**: the Antigravity companion checked `~/.persona/bin/personad` with `existsSync` (which adds no `.exe`), concluded personad was missing and quietly gave the main chat no Persona tools; and its media guard hook was `/bin/sh -c …`, which agy runs through `cmd.exe` on Windows, so every `read_file` failed with "The system cannot find the path specified" (`integrations/antigravity/lib/compat.js`, `lib/media-guard.js`). Both hid behind the companion never connecting at all (#14480). A file check for a program needs `.exe` on Windows, and a hook written for a tool needs that tool's Windows shell.
 
 ## Paths the hub reads
 
@@ -121,9 +122,9 @@ The Windows project/session extension was checked with local tests, mock protoco
 - **A folder alone cannot identify a Codex project:** multiple projects can share it. Carry the catalog source ID, check its profile tag, resolve only verified legacy/native mappings and recheck the selected project's live roots. An unmigrated JSON-only project must fail explicitly instead of selecting another one by folder.
 - **A failed start can already have created a conversation:** preserve the returned session ID and separate creation from first-message delivery. Retry content through that session's send route; retry an empty Claude conversation with its known `resume_session_id` to finish import only. An unknown delivery result must stay uncertain, not trigger another creation.
 
-## Historical tray (WebView2, notification area)
+## Tray (WebView2, notification area)
 
-Retired with the independent Link service (#6770); the implementation notes are in [windows-records.md](../archive/operations/windows-records.md) and [link-menu-tray.md](../archive/operations/link-menu-tray.md). These findings are historical, not a reason to restore a tray UI. Found on a physical Windows 11 machine on 2026-11-07:
+The tray (`server/internal/linktray`, [windows.md](../operations/windows.md), "Tray") was removed with #6770 and restored, without notifications and with the Persona helper as its icon, on 2026-11-25. Found on a physical Windows 11 machine on 2026-11-07:
 
 - **WebView2 holds back its callbacks while one of them runs**: creating a WebView inside a `WebMessageReceived` handler gets the environment back, but the controller's completion waits until the handler returns.
   go-webview2's `Embed` spins a nested message loop until then, so it never returned: the pairing window stayed hidden, and the tray's thread stayed inside that loop (which also swallowed the quit message). Handle page messages after the event has returned (`app.fromPage` queues them).
@@ -141,6 +142,7 @@ Retired with the independent Link service (#6770); the implementation notes are 
 See [windows.md](../operations/windows.md) ("Codex") and [codex.md](../integrations/codex.md) ("Windows"). Found on a physical Windows 11 machine on 2026-11-07:
 
 - **The Codex App's bus is a named pipe, not `<CODEX_HOME>/ipc/ipc.sock`**: `\\.\pipe\codex-ipc`, one per user session whatever the Codex home. Without it the App's chats stayed "view only" and nothing said why: the node looked for a socket file that never exists on Windows.
+- **Node.js cannot connect to an AF_UNIX socket on Windows**: `net.connect(path)` always treats the path as a named pipe, so a runtime on Node.js dialing `runtime.sock` gets `connect EACCES`. The runtime SDK retries quietly, so the node log showed the companion running and never connected, and agy stayed a plain CLI launcher that cannot run the main chat. The node hands those runtimes a named pipe instead (`server/internal/node/runtimepipe_windows.go`).
 - **`os.Stat` on a named pipe connects to it**: Go's Stat opens the path with `CreateFile`. On a pipe that takes one of the server's free instances (a test listener saw a client arrive) or fails with "All pipe instances are busy".
   To see whether a pipe exists, list it (`FindFirstFile` on the full name; it does not connect).
 - **go-winio pipes have no buffer by default**: `ListenPipe(name, nil)` makes a pipe whose write waits for the other side to read. A fake server that writes two frames in a row (the answer to `initialize` and its own question) deadlocked against a client

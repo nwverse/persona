@@ -146,7 +146,7 @@ func TestExternalCannotEnterProfilesTiersOrManagedProviders(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.tierModel(t.Context(), "standard")
+	_, err := s.pickTierCandidate(t.Context(), "standard", tierFacts{})
 	requireExternalError(t, err, "purpose_unsupported")
 	if _, err := s.applyModelProfile(t.Context(), "old", ProfileActor{Kind: "user"}); err == nil {
 		t.Fatal("an old external profile became active")
@@ -194,7 +194,8 @@ func TestExternalNeverEntersAutomaticFallbackCandidates(t *testing.T) {
 	if got := s.mainChatInstead(t.Context(), Device{ID: "server"}, "missing", "claude", []ConfiguredLauncher{{Launcher: l, AgentType: "claude"}}, []string{l.Name}); got != "" {
 		t.Fatalf("external launcher chosen as main-chat fallback: %s", got)
 	}
-	if startableLauncher(l) || startableLauncher(fakeShell) || s.launcherEverywhere(t.Context(), l.Name) {
+	withoutList, _ := s.launcherWithoutInventory(t.Context(), "mac", l.Name)
+	if startableLauncher(l) || startableLauncher(fakeShell) || withoutList.agent != "" {
 		t.Fatal("reserved external identity was treated as an ordinary automatic launcher")
 	}
 	if !startableLauncher(proto.Launcher{Name: "external_example", Source: "path"}) {
