@@ -7,6 +7,10 @@
   another writer's. Exercise both direct held-rollout selection and new-thread filtering, including a different pane
   that must still be refused. Open-file fixture paths may be canonicalized by the OS; resolve symlinks in assertions.
 
+## Shared Codex app-server snapshots can lag events (#17428)
+
+Keep pending requests and same-turn blocked state across metadata refreshes. When waiting for an interrupt, read the current thread on each poll.
+
 ## A delivery label does not prove a disabled feature (#16936)
 
 - A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require
