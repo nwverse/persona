@@ -1,6 +1,7 @@
 package extmgr
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -31,6 +32,11 @@ import (
 // inbox item's page is drawn from that item (context.item), only for the items of the plugin's own connector.
 
 const uiTimeout = 20 * time.Second
+
+const (
+	settingsPrefillMost    = 2 << 10
+	settingsPrefillURLMost = 32 << 10
+)
 
 // UIPlace is one thing a plugin draws, as the apps list it.
 type UIPlace struct {
@@ -474,6 +480,12 @@ func checkOpenURL(id string, m *extension.Manifest, ui extension.UIItem, itemID,
 	if raw == "" || raw == extension.SettingsURL(id) {
 		return nil
 	}
+	if strings.HasPrefix(raw, extension.SettingsURL(id)+"?") {
+		if ownSettingsPrefill(id, m, raw) {
+			return nil
+		}
+		return i18n.Err("hub-extension_ui.open_not_settings")
+	}
 	if ui.Placement == "inbox_item" && itemID != "" && raw == extension.InboxSourceURL(itemID) {
 		return nil
 	}
@@ -500,6 +512,62 @@ func checkOpenURL(id string, m *extension.Manifest, ui extension.UIItem, itemID,
 		return i18n.Err("hub-extension_ui.open_not_https")
 	}
 	return nil
+}
+
+// ownSettingsPrefill accepts exactly persona://settings/extensions/<id>?set=<url-encoded JSON object>: proposed values
+// for this extension's ordinary configuration fields, never its secrets, entry lists or another extension's settings.
+func ownSettingsPrefill(id string, m *extension.Manifest, raw string) bool {
+	prefix := extension.SettingsURL(id) + "?set="
+	if m == nil || len(raw) > settingsPrefillURLMost || !strings.HasPrefix(raw, prefix) {
+		return false
+	}
+	encoded := raw[len(prefix):]
+	if encoded == "" || strings.ContainsAny(encoded, "&#;") {
+		return false
+	}
+	decoded, err := url.QueryUnescape(encoded)
+	if err != nil || len(decoded) > settingsPrefillMost {
+		return false
+	}
+	var patch map[string]json.RawMessage
+	if json.Unmarshal([]byte(decoded), &patch) != nil || patch == nil {
+		return false
+	}
+	schema, err := extension.ParseSchema(m.Configuration)
+	if err != nil || schema == nil {
+		return false
+	}
+	secrets := make(map[string]struct{}, len(m.Secrets))
+	for _, secret := range m.Secrets {
+		secrets[secret.Name] = struct{}{}
+	}
+	if !ordinarySettingsFields(schema.Fields, patch, secrets) {
+		return false
+	}
+	return schema.CheckPartial([]byte(decoded)) == nil
+}
+
+func ordinarySettingsFields(fields []extension.Field, patch map[string]json.RawMessage, secrets map[string]struct{}) bool {
+	for name, raw := range patch {
+		if _, secret := secrets[name]; secret || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return false
+		}
+		i := slices.IndexFunc(fields, func(f extension.Field) bool { return f.Name == name })
+		if i < 0 {
+			return false
+		}
+		f := fields[i]
+		if f.EntryList() || f.Secret != nil {
+			return false
+		}
+		if f.Type == "object" {
+			var group map[string]json.RawMessage
+			if json.Unmarshal(raw, &group) != nil || group == nil || !ordinarySettingsFields(f.Fields, group, nil) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 var (

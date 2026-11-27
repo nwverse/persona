@@ -2340,6 +2340,12 @@ manifest can ask for four things. A hub from before them refuses the manifest, s
   - Deleting a secret is never checked.
 - **`open_url: "persona://settings/extensions/<its own id>"`** from an action: the apps open 设置 › 扩展 › that extension
   (the web `/settings?tab=extensions&extension=<id>`). Another extension's id is refused like any non-https link.
+- **`open_url: "persona://settings/extensions/<its own id>?set=<url-encoded JSON object>"`** from an action: the Web
+  settings form opens that extension with the proposed ordinary configuration values filled in. `set` may name only
+  known configuration fields of this extension, with valid values; secrets, entry lists, unknown fields, another
+  extension's id, an extra path/query/fragment, malformed JSON or more than 2 KiB decoded are refused. This is only a
+  prefill: the saved configuration stays the base and nothing is written until the owner presses Save. Apple and Android
+  do not apply this prefill in this slice; the host-drawn confirmation sheet remains the broader follow-up.
 - **`open_url: "persona://compose?prompt=<quick prompt id>&text=<url-encoded prompt text>"`** from an action: the web
   and Android put that prompt's `text` in the assistant's main composer without sending it; Android opens the
   new-chat page when there is no main conversation yet. The id and text must be exactly one of this extension's own
@@ -2347,8 +2353,8 @@ manifest can ask for four things. A hub from before them refuses the manifest, s
   refused. iOS does not yet handle this link.
 
 Code: `extension/configured.go`, `extension/egress` (`Target`, `dialConfigured`, `Proxy.Check`), `extmgr/extension_settings_check.go`,
-`sdk/go/ext/settings_check.go`;
-the clients `web/src/lib/extensions.ts`, `web/src/views/settings/Extensions.tsx`,
+`sdk/go/ext/settings_check.go`; the Web prefill is `web/src/lib/extension-ui.ts`, `web/src/lib/settings-prefill.ts`,
+`web/src/lib/extensions.ts`, `web/src/views/settings/Extensions.tsx`; Apple's settings pages
 `apple/Persona/Views/Settings/ExtensionsModel.swift`, `ExtensionUIModel.swift`.
 
 ## The hub's API
