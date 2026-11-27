@@ -165,7 +165,7 @@ describe("sending from another page", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ ok: true, waits_on_computer: true })).mockResolvedValueOnce(response({ ok: true })));
     expect(await sendToSession("m", "s", { text: "为什么没得点" })).toBe(true);
     expect(outbox()["m/s"][0].state).toBe("sent");
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining("电脑上的那个问题答完后"), "info");
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("电脑上的问题回复后"), "info");
     vi.mocked(toast).mockClear();
     expect(await sendToSession("m", "s", { text: "还有一条" })).toBe(true);
     expect(toast).not.toHaveBeenCalled();
@@ -198,7 +198,7 @@ describe("sending from another page", () => {
     vi.stubGlobal("fetch", fetcher);
     expect(await sendToSession("m", "s", { text }, { launcher: "claude" })).toBe(false);
     const failed = outbox()["m/s"][0];
-    expect(failed).toMatchObject({ state: "failed", error: "电脑上的输入框里有没发出去的字", clearable: "old" });
+    expect(failed).toMatchObject({ state: "failed", error: "电脑上的输入框中还有未发送的内容", clearable: "old" });
     expect(await retryOutbox("m", "s", failed.id, failed.clearable)).toBe(true);
     const again = JSON.parse(fetcher.mock.calls[1][1].body);
     expect(again.launcher).toBe("claude");
