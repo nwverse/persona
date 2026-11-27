@@ -128,6 +128,154 @@ class GitModelsTest {
         assertNotNull(GitDiffs.part(show, SessionGitFile("c.go", originalPath = "old.go", index = "R")).diff)
     }
 
+    @Test fun splitsQuotedNonAsciiAndEscapedGitDiffPaths() {
+        // Git C-quotes non-ASCII paths by default (core.quotePath=true) and always quotes paths with tabs, quotes, or backslashes.
+        val chinese = "文档/设计.md"
+        val escaped = "a\t\"b\"\\c.txt"
+        val emojiTab = "🚀\tnotes.md"
+        val show = listOf(
+            """diff --git "a/\346\226\207\346\241\243/\350\256\276\350\256\241.md" "b/\346\226\207\346\241\243/\350\256\276\350\256\241.md"""",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+            """diff --git "a/a\t\"b\"\\c.txt" "b/a\t\"b\"\\c.txt"""",
+            "@@ -0,0 +1 @@",
+            "+escaped",
+            """diff --git "a/🚀\tnotes.md" "b/🚀\tnotes.md"""",
+            "@@ -0,0 +1 @@",
+            "+emoji",
+            """diff --git a/plain.txt "b/\346\226\260.txt"""",
+            "similarity index 100%",
+            "rename from plain.txt",
+            """rename to "\346\226\260.txt"""",
+            """diff --git "a/\346\227\247.txt" b/ascii.txt""",
+            "similarity index 100%",
+            """rename from "\346\227\247.txt"""",
+            "rename to ascii.txt",
+        ).joinToString("\n")
+        val parts = GitDiffs.split(show)
+        assertEquals(setOf(chinese, escaped, emojiTab, "新.txt", "ascii.txt"), parts.keys)
+        assertTrue(GitDiffs.part(show, SessionGitFile(chinese)).diff!!.endsWith("+new"))
+        assertTrue(GitDiffs.part(show, SessionGitFile(escaped)).diff!!.endsWith("+escaped"))
+        assertTrue(GitDiffs.part(show, SessionGitFile(emojiTab)).diff!!.endsWith("+emoji"))
+        assertNotNull(GitDiffs.part(show, SessionGitFile("新.txt", originalPath = "plain.txt", index = "R")).diff)
+        assertNotNull(GitDiffs.part(show, SessionGitFile("ascii.txt", originalPath = "旧.txt", index = "R")).diff)
+    }
+
+    @Test fun splitsPathsContainingSpaceBSlash() {
+        val samePath = "dir b/sub b/note.txt"
+        val renamedNew = "dir b/new b/file.txt"
+        val show = listOf(
+            "diff --git a/$samePath b/$samePath",
+            "@@ -1 +1 @@",
+            "-a",
+            "+b",
+            "diff --git a/old b/x.txt b/$renamedNew",
+            "similarity index 80%",
+            "rename from old b/x.txt",
+            "rename to $renamedNew",
+            "--- a/old b/x.txt",
+            "+++ b/$renamedNew",
+            "@@ -1 +1 @@",
+            "-1",
+            "+2",
+        ).joinToString("\n")
+        val parts = GitDiffs.split(show)
+        assertEquals(setOf(samePath, renamedNew), parts.keys)
+        assertTrue(GitDiffs.part(show, SessionGitFile(samePath)).diff!!.endsWith("+b"))
+        assertTrue(GitDiffs.part(show, SessionGitFile(renamedNew, originalPath = "old b/x.txt", index = "R")).diff!!.endsWith("+2"))
+    }
+
+    @Test fun splitsDiffEdgeCasesMixedQuotesHunkBodyCopyLiteralBPrefixCrlfAndMalformed() {
+        // Mixed-quote headers WITHOUT rename to (exercises parseHeaderNewPath mixed-quote branches directly),
+        // 4-byte UTF-8 octal (\360\237\230\200 -> 😀), copy to, literal b/foo.txt, rename to inside hunk body,
+        // commit preamble, deletion, binary diff, CRLF headers, and malformed/unterminated quote safety.
+        val show = listOf(
+            "commit abc1234",
+            "Author: Dev <dev@example.com>",
+            "",
+            "    commit message preamble",
+            "",
+            """diff --git a/plain.txt "b/\346\226\260-no-rename.txt"""",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new-mixed-1",
+            """diff --git "a/\346\227\247-no-rename.txt" b/ascii-no-rename.txt""",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new-mixed-2",
+            """diff --git "a/\360\237\230\200.txt" "b/\360\237\230\200.txt"""",
+            "@@ -0,0 +1 @@",
+            "+emoji-octal",
+            "diff --git a/real.txt b/real.txt",
+            "--- a/real.txt",
+            "+++ b/real.txt",
+            "@@ -1,2 +1,2 @@",
+            "rename to fake-in-hunk.txt",
+            "+real-line",
+            "diff --git a/src.txt b/dir b/copied.txt",
+            "similarity index 100%",
+            "copy from src.txt",
+            "copy to dir b/copied.txt",
+            "diff --git a/b/foo.txt b/b/foo.txt",
+            "@@ -1 +1 @@",
+            "-1",
+            "+literal-b",
+            "diff --git a/old.txt b/b/bar.txt",
+            "similarity index 100%",
+            "rename from old.txt",
+            "rename to b/bar.txt",
+            "diff --git a/gone.txt b/gone.txt",
+            "deleted file mode 100644",
+            "--- a/gone.txt",
+            "+++ /dev/null",
+            "@@ -1 +0,0 @@",
+            "-bye",
+            "diff --git a/img.png b/img.png",
+            "Binary files a/img.png and b/img.png differ",
+            """diff --git "a/unterminated.txt b/broken.txt""",
+            "@@ -1 +1 @@",
+            "+ignored-malformed",
+        ).joinToString("\n")
+        val parts = GitDiffs.split(show)
+        assertEquals(
+            setOf(
+                "新-no-rename.txt",
+                "ascii-no-rename.txt",
+                "😀.txt",
+                "real.txt",
+                "dir b/copied.txt",
+                "b/foo.txt",
+                "b/bar.txt",
+                "gone.txt",
+                "img.png",
+            ),
+            parts.keys,
+        )
+        assertFalse("fake-in-hunk.txt" in parts)
+        assertTrue(parts.getValue("新-no-rename.txt").endsWith("+new-mixed-1"))
+        assertTrue(parts.getValue("ascii-no-rename.txt").endsWith("+new-mixed-2"))
+        assertTrue(parts.getValue("😀.txt").endsWith("+emoji-octal"))
+        assertTrue(parts.getValue("real.txt").endsWith("+real-line"))
+        assertTrue(parts.getValue("b/foo.txt").endsWith("+literal-b"))
+        assertTrue(parts.getValue("gone.txt").endsWith("-bye"))
+        assertTrue(parts.getValue("img.png").contains("Binary files"))
+
+        // CRLF headers with quoted rename and copy paths.
+        val crlf = listOf(
+            """diff --git "a/\346\226\207.txt" "b/\346\226\207.txt"""",
+            "@@ -1 +1 @@",
+            "+crlf",
+            "diff --git a/x.txt b/y.txt",
+            "rename from x.txt",
+            """rename to "\346\226\260.txt"""",
+            "@@ -1 +1 @@",
+            "+renamed",
+        ).joinToString("\r\n")
+        val crlfParts = GitDiffs.split(crlf)
+        assertEquals(setOf("文.txt", "新.txt"), crlfParts.keys)
+    }
+
     @Test fun totalsAddUpTheChanges() {
         assertEquals(5 to 1, GitDiffs.totals(listOf(SessionGitFile("a", added = 3, deleted = 1), SessionGitFile("b", added = 2))))
     }

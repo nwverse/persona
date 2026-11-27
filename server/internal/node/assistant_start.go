@@ -214,8 +214,8 @@ func (n *Node) spawnAssistantWith(id, cwd, launcher string, resume, spare bool, 
 		// this; a compaction (assistant_compact.go) resumes a process that is not running through here alone.
 		return nil, errGuestAgent
 	}
-	if agent == "codex" {
-		return n.spawnCodex(id, cwd, launcher, resume, spare, options...)
+	if agent == "codex" || agent == traexAgent {
+		return n.spawnAssistantAppServer(agent, id, cwd, launcher, resume, spare, "", options...)
 	}
 	if id == "" {
 		id = newUUID()

@@ -61,6 +61,7 @@ type Node struct {
 	memoryMergeRetry map[string]time.Time
 
 	memoryMu     sync.Mutex
+	scratchMu    sync.Mutex
 	Version      string
 	skillImports assistantskills.Importer
 	updater      *nodeupdate.Manager // resident-owned, shared across attach connections
@@ -2136,7 +2137,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if err == nil && id != "" {
 				n.expectFirstLine(id, opts.ClientMsgID, p.Text, len(p.Images), at)
 			}
-			return map[string]any{"session_id": id}, err
+			return n.assistantSendResult(id), err
 		}
 		var once struct {
 			OnceID string `json:"once_id"`
@@ -2170,11 +2171,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 					n.recordSegmentInput(id, opts.ClientMsgID)
 				}
 			}
-			return round.answer(map[string]any{"session_id": id}), err
+			return round.answer(n.assistantSendResult(id)), err
 		}
 		if p.NewSessionID == "" || opts.ClientMsgID == "" {
 			id, err := send()
-			return round.answer(map[string]any{"session_id": id}), err
+			return round.answer(n.assistantSendResult(id)), err
 		}
 		// A start under a given id with its first message's client_msg_id (a meeting's room, its follow-up, Just me's
 		// new main chat): sent once, and its transcript item carries the id, as a session.send's (echo.go).
@@ -2188,7 +2189,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err == nil && id == "" {
 			id = p.NewSessionID // the same start asked again while it went: that conversation
 		}
-		return map[string]any{"session_id": id}, err
+		return n.assistantSendResult(id), err
 	case "assistant.guest_prepare": // a guest conversation's directory (assistant_guest.go)
 		return n.assistantGuestPrepare(params)
 	case "assistant.guest_delete": // a meeting's room, at its transcript's cut (assistant_guest.go)

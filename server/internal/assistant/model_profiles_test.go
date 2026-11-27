@@ -1126,6 +1126,32 @@ func TestModelProfileRollbackHistoryBounded(t *testing.T) {
 	}
 }
 
+func TestPresetHostProfileRoundTrip(t *testing.T) {
+	s, _, _ := modelService(t)
+	for _, tc := range []struct {
+		name, fields, want string
+		status             int
+	}{
+		{name: "set", fields: `,"host":" herdr "`, want: "herdr", status: http.StatusOK},
+		{name: "omit", want: "herdr", status: http.StatusOK},
+		{name: "invalid", fields: `,"host":"tmux"`, want: "herdr", status: http.StatusBadRequest},
+		{name: "clear", fields: `,"host":""`, status: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"revision":%d,"name":"Host preset","tiers":{"agy-work":{"launcher":"agy"%s}}}`, profilesOf(t, s).Revision, tc.fields)
+			res := request(s, http.MethodPut, "/api/v1/model-profiles/host-preset", body)
+			if res.Code != tc.status {
+				t.Fatalf("PUT = %d %s, want %d", res.Code, res.Body, tc.status)
+			}
+			ps, _ := storedTiers(t, s)
+			tier, ok := tierOf(ps, "host-preset", "agy-work")
+			if !ok || tier.startHost() != tc.want {
+				t.Fatalf("stored tier = %+v, want host %q", tier, tc.want)
+			}
+		})
+	}
+}
+
 func TestModelProfilePutCrossVersionTolerantDecoding(t *testing.T) {
 	s, _, st := modelService(t)
 	key, err := s.sealKey("test-key")

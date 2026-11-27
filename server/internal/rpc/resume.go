@@ -59,12 +59,13 @@ var errResumed = errors.New("rpc: transport replaced")
 // resumeState is a peer's resuming (mu): enabled with a window, on once negotiated, the token, the transport's
 // generation, and whether it is lost.
 type resumeState struct {
-	window time.Duration
-	on     bool
-	token  string
-	gen    uint64
-	lost   bool
-	timer  *time.Timer
+	window   time.Duration
+	on       bool
+	token    string
+	gen      uint64
+	lost     bool
+	timer    *time.Timer
+	timerGen uint64 // incremented under p.mu whenever timer is armed, disarmed, or closed
 	// accepting: an AcceptResume is writing its answer.
 	accepting bool
 	// prev is the token the last AcceptResume was asked with, still taken until the new transport carries a byte
@@ -72,6 +73,8 @@ type resumeState struct {
 	prev string
 	sr   *swapReader
 	fr   *frameReader
+	// testWindowExpire, when non-nil in tests, wraps the window timer's expire call.
+	testWindowExpire func(expire func())
 }
 
 type resumeRequest struct {
@@ -246,9 +249,19 @@ func (p *Peer) armWindowLocked(err error) {
 	if rs.timer != nil {
 		rs.timer.Stop()
 	}
-	window := rs.window
+	rs.timerGen++
+	gen, tgen, window, hook := rs.gen, rs.timerGen, rs.window, rs.testWindowExpire
+	expire := func() {
+		p.closeIf(fmt.Errorf("rpc: not resumed within %s: %w", window, err), func() bool {
+			return p.resume == rs && rs.lost && rs.gen == gen && rs.timerGen == tgen
+		})
+	}
 	rs.timer = time.AfterFunc(window, func() {
-		p.Close(fmt.Errorf("rpc: not resumed within %s: %w", window, err))
+		if hook != nil {
+			hook(expire)
+			return
+		}
+		expire()
 	})
 }
 
@@ -427,6 +440,7 @@ func (p *Peer) installLocked(r io.Reader, w io.Writer, peerRead uint64) {
 	rs := p.resume
 	rs.gen++
 	rs.lost = false
+	rs.timerGen++
 	if rs.timer != nil {
 		rs.timer.Stop()
 		rs.timer = nil

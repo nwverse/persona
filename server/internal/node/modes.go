@@ -323,6 +323,9 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 		return err
 	}
 	if n.isAssistantSession(id) {
+		if mode == proto.ModePlan && n.conversationAgent(id) == traexAgent {
+			return fmt.Errorf("TRAE CLI Inbox does not support plan mode")
+		}
 		n.mu.Lock()
 		p := n.procs[id]
 		n.mu.Unlock()
@@ -386,9 +389,25 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 				if env := n.assistantEnvForRuntime(h, n.runtimeAssistantCwd(id, "", st), id); env != nil {
 					params["env"] = env
 				}
+				var res struct {
+					PermissionMode string `json:"permission_mode"`
+				}
 				cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
-				_ = h.peer.Call(cctx, "session.modes", params, nil)
+				err := h.peer.Call(cctx, "session.modes", params, &res)
 				cancel()
+				if err != nil && mode == "auto" && h.agent() == agyAgent && isAgyAutoModeUnavailableErr(err) {
+					params["permission_mode"] = proto.ModeBypass
+					rctx, rcancel := context.WithTimeout(ctx, runtimeCallTimeout)
+					if rerr := h.peer.Call(rctx, "session.modes", params, &res); rerr == nil && res.PermissionMode == "" {
+						res.PermissionMode = proto.ModeBypass
+					}
+					rcancel()
+				}
+				if res.PermissionMode != "" && res.PermissionMode != mode && slices.Contains(permissionModes, res.PermissionMode) {
+					mode = res.PermissionMode
+					n.noteModes(id, mode, effort)
+					n.persistModes(id, mode, effort, true)
+				}
 			}
 		}
 		if p != nil && p.alive() {
@@ -907,8 +926,8 @@ func effortOutcome(screen, effort string) error {
 
 // syncAssistantModes applies the settings for a new or resumed process before its next message.
 func (n *Node) syncAssistantModes(ctx context.Context, p *assistantProc) error {
-	if p.agent == "codex" {
-		return nil // Codex gets them with each turn (codexPolicy).
+	if p.cx != nil {
+		return nil // App-server launchers get their settings with each turn (codexPolicy).
 	}
 	p.settingsMu.Lock()
 	defer p.settingsMu.Unlock()

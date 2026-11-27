@@ -138,7 +138,7 @@ func (n *Node) takeoverSource(id string) (codexSource, bool) {
 	if (!o.cli && !o.desktop && !o.interactive()) || o.exec || o.sub || o.parent != "" || o.guardian {
 		return codexSource{}, false
 	}
-	if o.cli && (src.path == "" || src.thread != id) {
+	if o.cli && (src.path == "" || !n.codices.matchesSourceID(id, src)) {
 		return codexSource{}, false
 	}
 	if o.desktop && src.path == "" {
@@ -243,7 +243,7 @@ func (n *Node) codexTakeoverRowIn(id string, src codexSource, m quickMeta, runni
 	if (!o.cli && !o.desktop && !o.interactive()) || o.exec || o.sub || o.parent != "" || o.guardian {
 		return nil
 	}
-	if o.cli && (src.thread != id || src.path == "") {
+	if o.cli && (src.path == "" || !n.codices.matchesSourceID(id, src)) {
 		return nil
 	}
 	desktop := o.desktopThread(src, pass)
@@ -286,6 +286,7 @@ func (n *Node) codexTakeoverRowIn(id string, src codexSource, m quickMeta, runni
 				state.CanResume, state.Reason = false, "unavailable"
 			}
 		}
+		// App takeover, like ordinary terminal resume, is supported only in the legacy home.
 		if state.CanResume && (src.path == "" || src.thread != id || n.codexTurnRunning(src, m) || n.codexWriterLockHeld(src)) {
 			state.CanResume, state.Reason = false, "unavailable"
 		}
@@ -417,7 +418,7 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 		return nil, takeoverRefusal("confirmation_required")
 	}
 	src, ok := n.takeoverSource(id)
-	if !ok || src != p.source || src.path == "" || src.thread != id {
+	if !ok || src != p.source || src.path == "" || !n.codices.matchesSourceID(id, src) {
 		return nil, takeoverRefusal("changed")
 	}
 	o := readCodexOrigin(src.path)

@@ -1487,8 +1487,10 @@ workspace sharing the probe prefix while it still exists.
 
 Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
 IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. ACP can
-also discard the selected model when a process restarts (#15537). Before the first prompt on the new connection, apply
-the configured default to an idle conversation unless the caller chose a model or the connection already applied one.
+also discard the selected model when a process restarts (#15537, #16458). Before the first prompt on the new connection,
+prefer the caller's model and then the remembered selection. An older idle session can recover a model from its last
+recorded turn when the catalog still advertises it. Use the configured default when there is no remembered selection.
+Retry persisting the accepted model after the turn because the native brain directory can appear after `session/new`.
 Leave history reads passive and announce a model only after ACP accepts it.
 
 ## A long-running agy acp keeps the account it saw (#10368)

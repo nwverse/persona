@@ -68,6 +68,73 @@ class SheetsTest {
         assertEquals("1900-02-28", Xlsx.date("59"))
         assertEquals("1900-02-29", Xlsx.date("60"))
         assertEquals("1900-03-01", Xlsx.date("61"))
+        // Boundary & rollover cases: serial 0 is midnight time-only, negative serials are invalid, and rounding past
+        // 23:59:59.5 carries cleanly across the 1900-02-29 boundary instead of emitting "1900-02-29 00:00".
+        assertEquals("00:00", Xlsx.date("0"))
+        assertEquals("00:00", Xlsx.date("0.000001"))
+        assertEquals("-0.5", Xlsx.date("-0.5"))
+        assertEquals("1900-01-01", Xlsx.date("0.999999"))
+        assertEquals("1900-02-29", Xlsx.date("59.999999"))
+        assertEquals("1900-02-29 12:00", Xlsx.date("60.5"))
+        assertEquals("1900-03-01", Xlsx.date("60.999999"))
+        assertEquals("2024-01-16", Xlsx.date("45306.999999"))
+    }
+
+    @Test fun escapedAndPaddedCustomNumberFormatsAreNotTreatedAsDates() {
+        val parts = mapOf(
+            "xl/workbook.xml" to """<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Units" sheetId="1" r:id="rId1"/></sheets></workbook>""",
+            "xl/_rels/workbook.xml.rels" to """<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>""",
+            "xl/styles.xml" to """<styleSheet>
+                <numFmts>
+                    <numFmt numFmtId="164" formatCode="#,##0\m"/>
+                    <numFmt numFmtId="165" formatCode="0.0\s"/>
+                    <numFmt numFmtId="166" formatCode="#,##0_m"/>
+                    <numFmt numFmtId="167" formatCode="*d0"/>
+                    <numFmt numFmtId="168" formatCode="yyyy\-mm\-dd"/>
+                    <numFmt numFmtId="169" formatCode="0\"/>
+                </numFmts>
+                <cellXfs>
+                    <xf numFmtId="0"/>
+                    <xf numFmtId="164"/>
+                    <xf numFmtId="165"/>
+                    <xf numFmtId="166"/>
+                    <xf numFmtId="167"/>
+                    <xf numFmtId="168"/>
+                    <xf numFmtId="169"/>
+                </cellXfs>
+            </styleSheet>""",
+            "xl/worksheets/sheet1.xml" to """<worksheet><sheetData>
+                <row r="1">
+                    <c r="A1" s="1"><v>45306</v></c>
+                    <c r="B1" s="2"><v>12.5</v></c>
+                    <c r="C1" s="3"><v>100</v></c>
+                    <c r="D1" s="4"><v>100</v></c>
+                    <c r="E1" s="5"><v>45306</v></c>
+                    <c r="F1" s="6"><v>7</v></c>
+                </row>
+            </sheetData></worksheet>""",
+        )
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip -> parts.forEach { (name, xml) -> zip.putNextEntry(ZipEntry(name)); zip.write(xml.toByteArray()); zip.closeEntry() } }
+        val sheet = Xlsx.read(out.toByteArray()).single()
+        assertEquals(listOf("45306", "12.5", "100", "100", "2024-01-15", "7"), sheet.rows.single())
+    }
+
+    @Test fun inlineStringsIgnorePhoneticRubyRuns() {
+        val parts = mapOf(
+            "xl/workbook.xml" to """<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Inline" sheetId="1" r:id="rId1"/></sheets></workbook>""",
+            "xl/_rels/workbook.xml.rels" to """<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>""",
+            "xl/worksheets/sheet1.xml" to """<worksheet><sheetData>
+                <row r="1">
+                    <c r="A1" t="inlineStr"><is><r><t>東</t></r><r><t>京</t></r><rPh sb="0" eb="2"><t>とうきょう</t></rPh></is></c>
+                    <c r="B1" t="inlineStr"><is><t>渋谷</t><rPh sb="0" eb="2"><t>しぶや</t></rPh></is></c>
+                </row>
+            </sheetData></worksheet>""",
+        )
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip -> parts.forEach { (name, xml) -> zip.putNextEntry(ZipEntry(name)); zip.write(xml.toByteArray()); zip.closeEntry() } }
+        val sheet = Xlsx.read(out.toByteArray()).single()
+        assertEquals(listOf("東京", "渋谷"), sheet.rows.single())
     }
 
     @Test fun readsAWorkbook() {
