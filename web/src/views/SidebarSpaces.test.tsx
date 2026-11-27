@@ -5,6 +5,24 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.hoisted(() => {
+  globalThis.ResizeObserver ??= class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  window.matchMedia ??= ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia;
+});
+
 const hub = vi.hoisted(() => ({
   tracks: [] as Array<{ slug: string; title: string; icon?: string; description?: string; archived?: boolean }>,
   conversations: {} as Record<string, Array<{ session_id: string; title: string; updated_at?: string }>>,
@@ -165,8 +183,9 @@ describe("SidebarSpaces", () => {
     const mdBtn = readingRow.querySelector(`button[aria-label="${t("sidebar.space_edit_md", { name: "Reading" })}"]`) as HTMLButtonElement;
     expect(mdBtn).not.toBeNull();
     act(() => mdBtn.click());
-    await flush();
+    await vi.waitFor(() => {
+      expect(document.querySelector("textarea")?.value).toContain("Notes for reading.");
+    });
     expect(document.body.textContent).toContain(t("spaces.md_title"));
-    expect(document.querySelector("textarea")?.value).toContain("Notes for reading.");
   });
 });

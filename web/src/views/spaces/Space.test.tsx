@@ -52,7 +52,7 @@ vi.mock("../chat/Composer", () => ({
 
 import { NEW_CONVERSATION, pickEffort, pickLauncher, pickModel, pickServiceTier } from "../../lib/assistant-chat";
 import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../../lib/assistant-models";
-import { setState } from "../../lib/store";
+import { getState, reset } from "../../lib/store";
 import { resetTracksForTest } from "../../lib/tracks";
 import { NewSpace } from "./NewSpace";
 import { Space } from "./Space";
@@ -88,6 +88,10 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   document.body.innerHTML = "";
+  reset();
+  pickLauncher(NEW_CONVERSATION, undefined);
+  pickEffort(NEW_CONVERSATION, undefined);
+  pickServiceTier(undefined);
 });
 
 describe("a space's home", () => {
@@ -125,8 +129,8 @@ describe("a space's home", () => {
   });
 
   it("shows the model selector pill and forwards picked launcher, model, effort and service tier on start", async () => {
-    setState({
-      assistant: { machine_id: "mac", launcher: "claude", conversations: [] } as never,
+    Object.assign(getState(), {
+      assistant: { machine_id: "mac", launcher: "claude", conversations: [] },
       features: [ASSISTANT_START_SERVICE_TIER_FEATURE],
     });
     pickLauncher(NEW_CONVERSATION, "codex");

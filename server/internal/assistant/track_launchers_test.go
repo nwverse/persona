@@ -14,7 +14,7 @@ import (
 func TestTrackLaunchersForExtension(t *testing.T) {
 	f := healthHub()
 	f.devices[0].Online = true
-	f.launchers = map[string][]proto.Launcher{
+	f.zshrc = map[string][]proto.Launcher{
 		"server": {
 			{Name: "claude", DisplayName: "Claude Code", Model: "claude-sonnet-4-6"},
 			{Name: "codex", DisplayName: "Codex", Model: "gpt-5.4"},
