@@ -46,6 +46,7 @@ import { Pairing, PairingTarget } from '../platform/Pairing';
 import { scopeKey, sessionCapabilities, projectToolTurn, TranscriptReducer } from '../core/Domain';
 import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptItem, TranscriptSnapshot, ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
 import { extractPublishedModules, isRecordingModuleAllowed, parseStoredHubModules, serializeStoredHubModules } from '../core/XiaoYiActions';
+import { LARK_MODULE_FEATURE, MAIL_MODULE_FEATURE, hasHubPushRoute, isHubModuleAllowed, parseHiddenHubPages } from '../core/HubModules';
 
 
 
@@ -133,6 +134,22 @@ export class ClientModel {
   isRecordingModuleAllowed(): boolean {
     return isRecordingModuleAllowed(this.features, this.rememberedHubModules);
   }
+  mailModuleAllowed(): boolean {
+    return this.demo || isHubModuleAllowed(MAIL_MODULE_FEATURE, this.features, this.rememberedHubModules);
+  }
+  larkModuleAllowed(): boolean {
+    return this.demo || isHubModuleAllowed(LARK_MODULE_FEATURE, this.features, this.rememberedHubModules);
+  }
+  inboxPageVisible(): boolean {
+    return this.demo || !parseHiddenHubPages(this.sidebarConfig).has('inbox');
+  }
+  todosPageVisible(): boolean {
+    const hidden = parseHiddenHubPages(this.sidebarConfig);
+    return this.demo || (!hidden.has('todos') && !hidden.has('todo'));
+  }
+  hasPushRoute(): boolean {
+    return this.demo || hasHubPushRoute(this.features);
+  }
   @Trace forgottenProfile: string = '';
   @Trace forgottenEpoch: number = 0;
   @Trace busy: boolean = false;
@@ -206,9 +223,17 @@ export class ClientModel {
   @Trace mainMachineId: string = '';
   @Trace sidebarConfig: string = '';
   acceptSidebarConfig(assistant: Record<string,Object>, confirmedEdit: boolean = false): void {
-    const config = JSON.stringify(Wire.payload(['main','main_machine_id','leaders','background_supervisor','recent_task_chats'],
+    const existing = Wire.parse(this.sidebarConfig);
+    const payload = Wire.payload(['main','main_machine_id','leaders','background_supervisor','recent_task_chats'],
       [Wire.text(assistant,'main'),Wire.text(assistant,'main_machine_id',Wire.text(assistant,'machine_id')),
-        Wire.strings(assistant,'leaders'),Wire.text(assistant,'background_supervisor'),Wire.bool(assistant,'recent_task_chats')]));
+        Wire.strings(assistant,'leaders'),Wire.text(assistant,'background_supervisor'),Wire.bool(assistant,'recent_task_chats')]);
+    if (Wire.has(assistant, 'pages')) payload['pages'] = assistant['pages'];
+    else if (Wire.has(existing, 'pages')) payload['pages'] = existing['pages'];
+    if (Wire.has(assistant, 'hidden')) payload['hidden'] = assistant['hidden'];
+    else if (Wire.has(existing, 'hidden')) payload['hidden'] = existing['hidden'];
+    if (Wire.has(assistant, 'hidden_pages')) payload['hidden_pages'] = assistant['hidden_pages'];
+    else if (Wire.has(existing, 'hidden_pages')) payload['hidden_pages'] = existing['hidden_pages'];
+    const config = JSON.stringify(payload);
     if (this.sidebarConfig !== config) this.sidebarConfig = config;
     // A scoped settings page can use a detached model. Publish its confirmed Hub preference to the visible drawer only for the same owner.
     const parent = this.directoryParent;
@@ -217,6 +242,18 @@ export class ClientModel {
       current['recent_task_chats'] = Wire.bool(assistant,'recent_task_chats');
       parent.sidebarConfig = JSON.stringify(current);
     }
+  }
+  applyNavigationConfig(data: Record<string, Object>): void {
+    const existing = Wire.parse(this.sidebarConfig);
+    const current: Record<string, Object> = Wire.payload([], []);
+    Object.keys(existing).filter((key: string) => key !== 'pages').forEach((key: string) => {
+      current[key] = existing[key];
+    });
+    if (Wire.has(data, 'pages')) current['pages'] = data['pages'];
+    if (Wire.has(data, 'hidden')) current['hidden'] = data['hidden'];
+    if (Wire.has(data, 'hidden_pages')) current['hidden_pages'] = data['hidden_pages'];
+    const next = JSON.stringify(current);
+    if (this.sidebarConfig !== next) this.sidebarConfig = next;
   }
   private preferenceTask: Promise<void> = Promise.resolve();
   private async changePreferences(action: () => Promise<void>): Promise<void> { const task = this.preferenceTask.then(action, action); this.preferenceTask = task.catch(() => {}); await task; }
@@ -927,6 +964,10 @@ export class ClientModel {
         this.reconcileWrites().then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.refresh(); }).then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.flushNotification(); }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
       } else if (type === 'notify') { if (!this.detached) nativeNotifications.receive(this, data); }
       else if (type === 'fleet') { if (!this.detached) nativeLiveView.receiveFleetEvent(this, data).catch(() => {}); }
+      else if (type === 'navigation') {
+        if (Wire.has(data, 'pages') || Wire.has(data, 'hidden') || Wire.has(data, 'hidden_pages')) this.applyNavigationConfig(data);
+        else if (this.repository && !this.demo) this.refreshNavigation(this.repository, this.generation, this.scope()).catch(() => {});
+      }
       else if (type === 'items' || type === 'items_replace') { this.transcript?.receive(data); } else if (type === 'terminal') {
         if (Wire.text(data, 'machine_id') === this.selected.machine && Wire.text(data, 'session_id') === this.selected.session)
           this.terminalText = (this.terminalText + Wire.text(data, 'data')).slice(-200000);
@@ -1011,6 +1052,7 @@ export class ClientModel {
       if (this.section === 2) await this.refreshPhoneList('inbox', repo, generation, scope, true);
       else if (!this.detached) this.refreshPhoneList('inbox', repo, generation, scope, false).catch(() => {});
       this.refreshAgentsDisplay(repo, generation, scope).catch(() => {});
+      this.refreshNavigation(repo, generation, scope).catch(() => {});
     } catch (error) { if (this.owns(generation, scope)) this.failure(error as Error); }
     finally { if (this.owns(generation, scope)) { this.busy = false; this.publishDirectory(); } }
   }
@@ -1021,6 +1063,14 @@ export class ClientModel {
         view.useHerdrTabName = enabled;
       }
     }
+  }
+  async refreshNavigation(repo: HubRepository, generation: number, scope: string): Promise<void> {
+    if (this.demo) return;
+    try {
+      const result = await repo.call('/api/v1/navigation');
+      if (!this.owns(generation, scope)) return;
+      this.applyNavigationConfig(result);
+    } catch (_) { /* Older hubs omit /api/v1/navigation; leave existing page visibility untouched. */ }
   }
   async refreshAgentsDisplay(repo: HubRepository, generation: number, scope: string): Promise<void> {
     if (this.demo || this.agentsDisplaySaving) return;
@@ -2169,7 +2219,7 @@ export class ClientModel {
   }
   releaseTerminal(): void { this.workspace?.hide(); this.terminalControl = false; }
   async background(): Promise<void> {
-    this.foreground = false; if (!this.detached) nativeLiveView.setForeground(false); this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.clearPendingDecisions(); this.releaseTerminal();
+    this.foreground = false; if (!this.detached) nativeLiveView.setForeground(false, this.hasPushRoute(), this.demo); this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.clearPendingDecisions(); this.releaseTerminal();
     this.feedbackChanged();
     const repository = this.repository; repository?.close();
     const children = Array.from(this.views.values()).map((view: ClientModel): Promise<void> => view.background());
