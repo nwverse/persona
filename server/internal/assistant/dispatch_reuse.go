@@ -71,18 +71,16 @@ func (s *Service) checkDispatchReuse(ctx context.Context, self string, task Plan
 	}
 	var todo Todo
 	similar := false
-	switch len(exact) {
-	case 0:
+	if len(exact) == 1 {
+		todo = exact[0]
+	} else {
+		// Several IDs can be mentioned for context. Still check whether the proposed work overlaps a task.
 		var found bool
 		todo, found = s.similarDispatch(ctx, task, request, eligible)
 		if !found {
 			return nil
 		}
 		similar = true
-	case 1:
-		todo = exact[0]
-	default:
-		return nil
 	}
 	for _, reason := range task.DistinctFrom {
 		if strings.TrimSpace(reason.TodoID) == todo.ID && strings.TrimSpace(reason.Reason) != "" {

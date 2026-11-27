@@ -3,6 +3,8 @@ package assistant
 import (
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const similarityReply = `{"candidate":1,"proposed_evidence":"landscape login crash","existing_evidence":"landscape crash on login"}`
@@ -111,5 +113,34 @@ func TestDispatchSimilarityRequiresGroundedEvidence(t *testing.T) {
 				t.Fatalf("got %q, found=%t, err=%v", match.ID, found, err)
 			}
 		})
+	}
+}
+
+func TestDispatchReuseChecksOverlapWhenRequestNamesMultipleTodos(t *testing.T) {
+	s, f, _ := briefService(t, "")
+	old, err := s.createTodo(t.Context(), "Fix the landscape crash on login", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgent(t.Context(), old.ID, "box", "previous", "login", "/code/app", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.createTodo(t.Context(), "Update the billing receipts", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.setItems(proto.Item{ID: "request", Role: "user", Kind: proto.KindText,
+		Text: "Compare " + other.ID + " with " + old.ID + ", then reproduce the landscape login crash."})
+	f.mu.Lock()
+	f.dispatchMatch = similarityReply
+	f.mu.Unlock()
+
+	intent := "Reproduce the landscape login crash on a rotated phone"
+	got, refused := tool(t, s, "task_plan", briefTask(map[string]any{"title": intent, "prompt": intent, "owner_step": "outward"}))
+	if !refused || !strings.Contains(got, old.ID) || !strings.Contains(got, "high overlap") {
+		t.Fatalf("multiple references bypassed the reuse choice for %s: %v %s", old.ID, refused, got)
+	}
+	if todoCount(s) != 2 || len(f.started()) != 0 {
+		t.Fatal("refused planning started new work")
 	}
 }
