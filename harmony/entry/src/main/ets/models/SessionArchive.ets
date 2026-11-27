@@ -22,7 +22,9 @@ export class SessionArchive {
     if (!Array.isArray(data['sessions'])) throw new Error('incomplete_sessions');
     const rows: ResourceRow[] = [];
     for (const entry of Wire.rows(data, 'sessions')) {
-      if (Wire.bool(entry, 'assistant') || !Wire.bool(entry, 'archived')) continue;
+      if (Wire.bool(entry, 'assistant') || (Wire.has(entry, 'archived') && !Wire.bool(entry, 'archived'))) continue;
+      // Older archive responses identify archived sessions by the collection alone.
+      entry['archived'] = true;
       const row = ResourceRow.from(entry, 'session');
       if (!row.manager) row.manager = manager;
       if (row.manager !== manager || !row.machine || !row.id || (machine && row.machine !== machine)) continue;

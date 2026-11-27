@@ -2,6 +2,7 @@ import type { NextStepProposal, ToolTurnProjection, TranscriptItem } from '../co
 
 // Decode untrusted JSON at the transport boundary. Unknown keys never become executable actions.
 export class Wire {
+  static readonly legacyStartedBy: string = 'started_by_jarvis';
   static payload(keys: string[], values: Object[]): Record<string, Object> {
     const result: Record<string, Object> = {}; keys.forEach((key: string, index: number) => result[key] = values[index]); return result;
   }
@@ -45,6 +46,30 @@ export class Wire {
     return (result as Object[]).filter((item: Object) => typeof item === 'string').map((item: Object) => item as string);
   }
 }
+
+/** Keep the small directory fields needed by the home badge out of serialized navigation rows. */
+export class SessionBadgeFields {
+  readonly snapshot: string;
+  readonly hidden: boolean;
+  readonly quietTodo: string;
+  readonly childrenWaiting: boolean;
+  readonly pending: boolean;
+  readonly parent: string;
+  readonly space: string;
+
+  constructor(snapshot: string, data: Record<string, Object>) {
+    this.snapshot = snapshot;
+    this.hidden = Wire.bool(data, 'assistant') || Wire.bool(data, 'hidden_by_directory') ||
+      Wire.bool(data, 'muted') || Wire.bool(data, 'quiet');
+    this.quietTodo = Wire.text(Wire.object(data, 'todo'), 'id');
+    this.childrenWaiting = Wire.number(Wire.object(data, 'children'), 'needs_you') > 0;
+    this.pending = Wire.number(data, 'pending_interactions') > 0;
+    this.parent = Wire.text(data, 'folded_under');
+    this.space = Wire.text(data, 'space_name');
+  }
+}
+
+const sessionBadgeFields: WeakMap<ResourceRow, SessionBadgeFields> = new WeakMap();
 
 export class SessionLauncher {
   readonly name: string;
@@ -109,6 +134,13 @@ export class ResourceRow {
     return this.kind === 'machine' && ['', 'mac', 'macos', 'darwin'].includes(os.toLowerCase()) && Wire.bool(data, 'online') &&
       !Wire.bool(data, 'pending') && !Wire.bool(data, 'pending_confirm') && ['', 'confirmed', 'personal', 'work'].includes(Wire.text(data, 'trust'));
   }
+  badgeFields(): SessionBadgeFields {
+    const known = sessionBadgeFields.get(this);
+    if (known && known.snapshot === this.raw) return known;
+    const fields = new SessionBadgeFields(this.raw, this.data());
+    sessionBadgeFields.set(this, fields);
+    return fields;
+  }
   copy(group: string = this.group, state: string = this.state): ResourceRow {
     const row = new ResourceRow(this.id, this.title, this.kind);
     row.group = group; row.state = state; row.manager = this.manager; row.machine = this.machine;
@@ -142,7 +174,12 @@ export class ResourceRow {
     row.session = Wire.text(data, 'session_id', kind === 'session' ? row.id : '');
     row.path = Wire.text(data, 'cwd', Wire.text(data, 'path'));
     row.raw = JSON.stringify(data);
+    if (kind === 'session') sessionBadgeFields.set(row, new SessionBadgeFields(row.raw, data));
     return row;
+  }
+  isInstallingManager(): boolean {
+    const data = this.data();
+    return !!Wire.text(data, 'installing') || Wire.bool(data, 'installing');
   }
   isDone(): boolean { const data = this.data(); return !!Wire.text(data, 'done_at') || Wire.bool(data, 'done'); }
   key(): string { return JSON.stringify(this.group ? [this.group, this.kind, this.manager, this.machine, this.id] : [this.kind, this.manager, this.machine, this.id]); }
@@ -169,15 +206,25 @@ export class HeldAgentMessage {
   }
 }
 
+export interface ConversationRecapItem {
+  id: string;
+  text: string;
+  at: number;
+}
+
 export class ChatMessage {
   id: string = '';
   role: string = 'assistant';
+  recaps: ConversationRecapItem[] = [];
+  terminalRecap: boolean = false;
   at: number = 0;
   text: string = '';
   liveSummary: string = '';
   providerRetry: boolean = false;
   narration: boolean = false;
   work?: ToolTurnProjection;
+  toolCount: number = 0;
+  thoughtCount: number = 0;
   nextStep?: NextStepProposal;
   event?: TranscriptItem;
   queued: boolean = false;

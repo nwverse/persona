@@ -1,5 +1,7 @@
+import { decisionSourceItem } from './InteractionHistory';
 import type { LiveToolCall } from '../core/Domain';
-import { transcriptExchanges, TranscriptReducer, TranscriptSync, TranscriptItem, TranscriptBatch, TranscriptAction, TranscriptSnapshot } from '../core/Domain';
+import type { TranscriptItem, TranscriptBatch, TranscriptAction, TranscriptSnapshot } from '../core/Domain';
+import { TranscriptReducer, TranscriptSync, transcriptExchanges } from '../core/Domain';
 import { ConversationPlanReplay, samePlanSummary } from '../core/ConversationPlan';
 import type { ConversationPlan } from '../core/ConversationPlan';
 import { HubRepository, segment } from './HubRepository';
@@ -47,6 +49,7 @@ interface OlderPage {
 
 // A visible conversation owns its subscription, paging and continuity state.
 export class TranscriptModel {
+  decisionSource(toolUseId: string): string { return decisionSourceItem(this.reducer.items, toolUseId); }
   private reducer: TranscriptReducer = new TranscriptReducer();
   private sync: TranscriptSync = new TranscriptSync(this.reducer);
   private active: boolean = true;
@@ -60,6 +63,7 @@ export class TranscriptModel {
   private refreshAgain: boolean = false;
   private fillRequested: boolean = false;
   private pendingFetches: Promise<void> = Promise.resolve();
+  private readonly liveSubscription: boolean;
   private historyReaders: number = 0;
   private pendingItems: boolean = false;
   private pendingTools: boolean = false;
@@ -92,8 +96,9 @@ export class TranscriptModel {
 
   constructor(row: ResourceRow, repository: HubRepository, local: LocalStore, key: string,
     publish: (items: readonly TranscriptItem[], hasMore: boolean, historyReady: boolean) => void, failure: (error: Error) => void,
-    preview: (text: string) => void = (_text: string): void => {}, toolsChanged: () => void = (): void => {}) {
+    preview: (text: string) => void = (_text: string): void => {}, toolsChanged: () => void = (): void => {}, liveSubscription: boolean = true) {
     this.row = row; this.repository = repository; this.local = local; this.key = key; this.publish = publish; this.failure = failure; this.preview = preview; this.toolsChanged = toolsChanged;
+    this.liveSubscription = liveSubscription;
   }
   // A historical viewport can finish a gesture without rebuilding its live tail.
   // The reducer continues accepting every event. Explicit history reads still publish immediately.
@@ -213,7 +218,7 @@ export class TranscriptModel {
         this.emit();
       } catch (_) {}
     }
-    await this.drive(this.sync.reconnect());
+    if (this.liveSubscription) await this.drive(this.sync.reconnect());
     await this.latest();
   }
   async latest(): Promise<void> {
@@ -367,6 +372,7 @@ export class TranscriptModel {
           throw new Error('failed');
         } finally { if (this.currentRead(owner)) this.fillRunning = false; }
       } else if (action.kind === 'subscribe') {
+        if (!this.liveSubscription) continue;
         const payload: Record<string, Object> = Wire.payload(['type', 'machine_id', 'session_id'], ['subscribe', this.row.machine, this.row.session || this.row.id]);
         if (action.sinceSeq !== undefined) payload['since_seq'] = action.sinceSeq;
         this.repository.transport.send(JSON.stringify(payload));
@@ -411,7 +417,7 @@ export class TranscriptModel {
     const snapshot: TranscriptSnapshot = {items:this.publishedItems, history:this.reducer.history, covered:this.reducer.covered,
       hasMore:this.reducer.hasMore, loadedOnce:this.reducer.loadedOnce};
     const stamp = JSON.stringify([this.publishedVersion,snapshot.history,snapshot.covered,snapshot.hasMore,snapshot.loadedOnce]);
-    if (stamp !== this.cachedStamp) {
+    if (this.liveSubscription && stamp !== this.cachedStamp) {
       this.cachedStamp = stamp;
       this.local.put('transcript:' + this.key, boundedTranscriptCache(snapshot)).catch((error: Error) => {
         if (this.cachedStamp === stamp) this.cachedStamp = '';
@@ -423,8 +429,9 @@ export class TranscriptModel {
   }
   close(): void {
     if (!this.active) return;
-    if (this.pendingItems) this.local.put('transcript:' + this.key, boundedTranscriptCache(this.reducer.snapshot())).catch(() => {});
+    if (this.liveSubscription && this.pendingItems) this.local.put('transcript:' + this.key, boundedTranscriptCache(this.reducer.snapshot())).catch(() => {});
     this.active = false; this.clearLive(); this.publishedItems = []; this.bufferedOlder = undefined;
+    if (!this.liveSubscription) return;
     try { this.repository.transport.send(JSON.stringify(Wire.payload(['type', 'machine_id', 'session_id'], ['unsubscribe', this.row.machine, this.row.session || this.row.id]))); } catch (_) {}
   }
 }
