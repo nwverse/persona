@@ -119,9 +119,17 @@ func TestTaskActivitySurvivesRestartAndViewExit(t *testing.T) {
 	ft := newFleetTest(t)
 	ctx := context.Background()
 	ft.s.UserSpoke(ctx, SessionRef{MachineID: "mac", SessionID: "s1"})
+	ft.s.markSeen(ctx, "mac", "s3")
+	ft.s.markSessionRead(ctx, "mac", "s4")
 	restarted := New(Options{Hub: ft.f, Store: func() Store { return ft.st }, Devices: ft.d, Logf: t.Logf})
 	if why := restarted.sessionActivityReason(ctx, "mac", "s1", time.Now()); why == "" {
 		t.Fatal("a restart lost the recent user message")
+	}
+	if why := restarted.sessionActivityReason(ctx, "mac", "s3", time.Now()); why == "" {
+		t.Fatal("a restart lost the owner's explicit read")
+	}
+	if why := restarted.sessionActivityReason(ctx, "mac", "s4", time.Now()); why != "" {
+		t.Fatalf("an automatic read was counted as owner activity: %s", why)
 	}
 	setTaskViewer(t, restarted, "mac", "s2", true)
 	setTaskViewer(t, restarted, "mac", "s2", false)

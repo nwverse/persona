@@ -107,7 +107,7 @@ func TestTaskReviewLateOwnerActivityCommitsNothing(t *testing.T) {
 						decisionBefore := askOf(s, todo.ID)
 						briefBefore, _ := s.briefOfTodo(todo.ID)
 
-						lock, method := &s.supervise.writeMu, "updateSupervisionWithClose"
+						lock, method := &s.supervise.writeMu, "updateSupervisionGuardedWithClose"
 						if boundary == "closure" {
 							lock = &s.todos.writing
 							if reviewer == "no ledger" && verdict == reviewCancelled {
@@ -146,7 +146,7 @@ func TestTaskReviewLateOwnerActivityCommitsNothing(t *testing.T) {
 							}
 							return false
 						})
-						if boundary == "closure" && method == "updateSupervisionWithClose" {
+						if boundary == "closure" && method == "updateSupervisionGuardedWithClose" {
 							if !s.supervise.writeMu.TryLock() {
 								t.Fatal("terminal review took the ledger lock before the to-do lock")
 							}

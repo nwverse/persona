@@ -25,12 +25,20 @@ import (
 // the same bytes and the list's ETag (#9590) holds while nothing changes. The manager names CapabilityTodoView and
 // CapabilityTodoPlaces in its hello; the hub adds the counts and places of several managers up.
 
-// todosList is GET /api/v1/todos's answer: the rows, each with its view, the list's counts,
-// and optional todos_v2 shared external blockers.
+// todosList is GET /api/v1/todos's answer: the rows, each with its view, the list's counts, optional todos_v2 shared
+// external blockers and board projection, and the cursor for closed rows beyond the bounded default window.
 type todosList struct {
 	Todos          []listedTodo               `json:"todos"`
 	Counts         assistantwire.TodoCounts   `json:"counts"`
 	SharedBlockers []projection.SharedBlocker `json:"shared_blockers,omitempty"`
+	Board          *todoBoardProjection       `json:"board,omitempty"`
+	// ClosedNextCursor and ClosedHasMore let a client ask the existing paginated read for closed rows older than the
+	// default window. They are absent when the whole closed list is already in Todos.
+	ClosedNextCursor string `json:"closed_next_cursor,omitempty"`
+	ClosedHasMore    bool   `json:"closed_has_more,omitempty"`
+	// Partial: an extension's list left out a to-do it cannot be told about yet (todoUntold), which is not one that
+	// was deleted: read the list again later (#12216). Never on a device's list.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // listedTodos are the to-dos as GET /api/v1/todos lists them, newest created first: each formatted, with its decision
@@ -118,6 +126,7 @@ func (s *Service) viewed(ctx context.Context, list []listedTodo, now time.Time) 
 	p := s.todoProjectionOf(ctx, list, now)
 	for i := range list {
 		list[i].View = &p.views[i]
+		list[i].Wait = p.waits[i]
 	}
 	return p
 }
@@ -135,6 +144,7 @@ func (s *Service) todosViewed(ctx context.Context, briefs bool) ([]listedTodo, t
 	if s.todoViewsSeen(gen, p, nil) {
 		s.todoViewDiffers()
 	}
+	s.todosCounted(gen, p) // the counts view's to-dos (counts_view.go)
 	return list, p, nil
 }
 
@@ -159,6 +169,9 @@ func (s *Service) viewedTodoRuns(ctx context.Context, id string) (listedTodo, []
 	list, p, err := s.todosViewed(ctx, false)
 	if err != nil {
 		return listedTodo{}, nil, false, err
+	}
+	if s.settings(ctx).todosV2On() {
+		populateTodoEffectiveDirections(list, s.todoBoardDirectionLabels(ctx))
 	}
 	for i, t := range list {
 		if t.ID == id {

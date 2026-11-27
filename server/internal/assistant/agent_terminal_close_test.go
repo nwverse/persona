@@ -144,18 +144,20 @@ func TestIdleStopClosesTheTerminalWithTheSetting(t *testing.T) {
 }
 
 // Cancellation never stops an Agent immediately. After the inactivity grace, the same guarded pass honors the
-// terminal setting; working Agents and background work are still left alone.
+// terminal setting; working Agents and background work are still left alone. A loop running when the task is
+// cancelled refuses the cancellation itself (taskCloseWorkSnapshot, #15416), so the loop here starts after it, as
+// the owner's follow-up in the conversation the cancelled task leaves usable would.
 func TestCancelledTaskAgentTerminal(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		on   bool
-		edit func(*proto.Session)
-		want string
+		name        string
+		on          bool
+		edit, after func(*proto.Session)
+		want        string
 	}{
-		{"off", false, nil, nodeproto.StopIfIdle + " retire=true,stop_cause=task_completed"},
-		{"on idle", true, nil, nodeproto.StopIfIdle + " retire=true,close_terminal=true,stop_cause=task_completed"},
-		{"on working", true, func(c *proto.Session) { c.Status, c.State = proto.StatusWorking, proto.StateWorking }, ""},
-		{"on loop", true, func(c *proto.Session) { c.Loop = &proto.LoopInfo{} }, ""},
+		{"off", false, nil, nil, nodeproto.StopIfIdle + " retire=true,stop_cause=task_completed"},
+		{"on idle", true, nil, nil, nodeproto.StopIfIdle + " retire=true,close_terminal=true,stop_cause=task_completed"},
+		{"on working", true, func(c *proto.Session) { c.Status, c.State = proto.StatusWorking, proto.StateWorking }, nil, ""},
+		{"on loop", true, nil, func(c *proto.Session) { c.Loop = &proto.LoopInfo{} }, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ft, row := closeTestService(t, tc.edit)
@@ -170,6 +172,10 @@ func TestCancelledTaskAgentTerminal(t *testing.T) {
 			}
 			if ok, err := s.reviewDoneTodo(ctx, todo.ID, "Cancelled", false); err != nil || !ok {
 				t.Fatalf("cancel: %v %v", ok, err)
+			}
+			if tc.after != nil {
+				tc.after(&row)
+				ft.d.setSessions("mac", []proto.Session{row})
 			}
 			if got := retireCalls(ft.f); len(got) != 0 {
 				t.Fatalf("cancellation stopped an Agent immediately: %v", got)

@@ -304,6 +304,11 @@ export interface Permissions {
    */
   agent_runtimes?: boolean;
   /**
+   * The routine sends its local date and language to this extension and may include its facts and report sections in
+   * the briefing.
+   */
+  routine_facts?: boolean;
+  /**
    * It receives the error and crash reports of the hub and the user's devices, scrubbed (no message text, tokens,
    * user names, machine names or IP addresses). Needed by contributes.error_reports.
    */
@@ -359,6 +364,7 @@ export interface Contributes {
   triage_templates?: TriageTemplateItem[];
   agent_filters?: AgentFilterItem[];
   tunnels?: TunnelItem[];
+  routine_facts?: RoutineFactsItem[];
   error_reports?: ErrorReportsItem[];
   auth_relay?: AuthRelayItem[];
   secret_providers?: SecretProviderItem[];
@@ -378,6 +384,8 @@ export interface Contributes {
  */
 export interface SkillItem {
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   /** The directory, relative to the package (or to the data directory with source data). */
   dir: string;
   source?: ContentSource;
@@ -664,6 +672,24 @@ export type RepositoryLinkKind = "issue" | "pull_request" | (string & {});
 export const REPOSITORY_LINK_KINDS = ["issue", "pull_request"] as const;
 
 /**
+ * Identifies one routine facts source within its extension.
+ */
+export type RoutineContributionID = string & { readonly __brand: "RoutineContributionID" };
+/** A RoutineContributionID from its raw string. */
+export function routineContributionID(raw: string): RoutineContributionID {
+  return raw as RoutineContributionID;
+}
+
+/**
+ * A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
+ * permissions.routine_facts.
+ */
+export interface RoutineFactsItem {
+  id: RoutineContributionID;
+  title: string;
+}
+
+/**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
  * program to speak the protocol, on_startup and permissions.error_reports.
  */
@@ -827,6 +853,8 @@ export interface APIReceipt {
 
 export interface AssistantItem {
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   skills?: string[];
   instructions?: string;
   gate?: string;
@@ -840,6 +868,8 @@ export interface AssistantItem {
 export interface MCPServerItem {
   /** The server's name for the assistant; not persona or persona. */
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   /** Looked up on PATH, then in ~/bin. */
   command: string;
   /**
@@ -1583,11 +1613,13 @@ export interface SecretsResolveResult {
 }
 
 /**
- * A public field name/type; never a value or source path.
+ * A public field name/type or edit action (delete, keep_value); never a value or source path.
  */
 export interface SecretStoreField {
   name: string;
-  type: string;
+  type?: string;
+  delete?: boolean;
+  keep_value?: boolean;
 }
 
 /**
@@ -2084,6 +2116,13 @@ export interface CodeComponent {
    * (…/blob/<sha>/a.go#L{start}-L{end}).
    */
   line_url?: string;
+  /**
+   * Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7
+   * for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word,
+   * intent: definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app
+   * leaves it out.
+   */
+  navigate?: Action;
 }
 
 /**
@@ -2926,8 +2965,8 @@ export interface Action {
    */
   reply?: string;
   /**
-   * Assistant only: an https URL or a validated persona/persona session, task, kb or file target, opened inside the
-   * app.
+   * Assistant only, except that a full extension page may open persona://session/<machine>/<session> or
+   * persona://task/<id>: an https URL or a validated persona session, task, kb or file target, opened inside the app.
    */
   open?: string;
   /** Assistant only: return one page within the card. */
@@ -4050,6 +4089,26 @@ export type ConnectorGroupTool = "messages_before" | "messages_around" | "search
 export const CONNECTOR_GROUP_TOOLS = ["messages_before", "messages_around", "search"] as const;
 
 /**
+ * How the hub's write gate authorized actions.do besides an ordinary phone card or connector_gate allow rule:
+ * auto_confirm means the hub accepted the short-lived credential actions.describe returned under an explicit hub-side
+ * guarded auto-confirm policy.
+ */
+export type ConnectorApprovalMode = "auto_confirm" | (string & {});
+export const CONNECTOR_APPROVAL_MODES = ["auto_confirm"] as const;
+
+/**
+ * Short-lived, single-use credential returned from actions.describe when the hub negotiated approval_protocol and the
+ * extension's own guard checks passed. Bound by the extension to the exact action and raw args JSON; ignored unless
+ * the hub also authorizes guarded auto-confirm for the call.
+ */
+export interface ConnectorAutoConfirm {
+  /** Opaque single-use approval token generated by the extension; never logged or persisted by the hub. */
+  token: string;
+  /** RFC 3339 timestamp after which the token is no longer valid. */
+  expires_at: string;
+}
+
+/**
  * An answer with nothing in it: {}.
  */
 export interface Empty {
@@ -4157,6 +4216,12 @@ export interface ConnectorCallParams {
   name: string;
   args?: unknown;
   /**
+   * actions.describe only (tools.call never sets and ignores it): the guarded auto-confirm protocol the hub is
+   * willing to accept for this call when a hub-side policy matches (for example guarded-auto-confirm-v1). Absent when
+   * no policy applies or on older hubs.
+   */
+  approval_protocol?: string;
+  /**
    * The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
    */
   track?: string;
@@ -4227,6 +4292,11 @@ export interface ConnectorAction {
 export interface ConnectorDescribeResult {
   action: ConnectorAction;
   summary: string;
+  /**
+   * Optional short-lived single-use credential returned only when approval_protocol was negotiated and the
+   * extension's own guard checks passed. Ignored unless the hub also authorizes guarded auto-confirm for this call.
+   */
+  auto_confirm?: ConnectorAutoConfirm;
 }
 
 /**
@@ -4238,6 +4308,16 @@ export interface ConnectorDoParams {
   name: string;
   args?: unknown;
   request_id: string;
+  /**
+   * Present together with approval_token only when the hub gate let the write through via guarded auto-confirm;
+   * absent for phone-card approvals, connector_gate allow rules and user-initiated writes.
+   */
+  approval_mode?: ConnectorApprovalMode;
+  /**
+   * The exact opaque token returned by actions.describe in auto_confirm.token, sent together with approval_mode only
+   * when the hub gate approved guarded auto-confirm.
+   */
+  approval_token?: string;
   /**
    * The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
    */
@@ -4579,7 +4659,8 @@ export interface ConnectorThingGroup {
 }
 
 /**
- * What the thing grew out of: kind inbox (an item's id), todo (a todo's id) or session (<machine>/<session>).
+ * What the thing grew out of: kind inbox (an item's id), todo (a todo's id), session (a coding Agent's
+ * <machine>/<session>) or agent (a personal Agent's <source>:<sessionKey>).
  */
 export interface ConnectorThingParent {
   kind: string;
@@ -5457,6 +5538,57 @@ export interface ChannelEditParams {
   text: string;
 }
 
+/**
+ * The host selects the provider, source, account and chat for this import.
+ */
+export interface KBImportCheckpointParams {
+}
+
+/**
+ * The host importer’s committed state for the selected chat.
+ */
+export type KBImportState = "pending" | "running" | "done" | "paused" | "error" | "unreadable";
+export const KBIMPORT_STATES: readonly KBImportState[] = ["pending", "running", "done", "paused", "error", "unreadable"];
+
+/** A KBImportState this app does not know, kept as it came. */
+export interface UnknownKBImportState {
+  unknown: string;
+}
+
+/** A raw KBImportState: one this app knows, or UnknownKBImportState with the raw value. */
+export function parseKBImportState(raw: string): KBImportState | UnknownKBImportState {
+  const known = KBIMPORT_STATES.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownKBImportState = { unknown: raw };
+  return unknown;
+}
+
+export interface KBImportCheckpointResult {
+  state: KBImportState;
+  approval: string;
+  read: number;
+  written: number;
+}
+
+export interface KBSentMarkersParams {
+  day: string;
+  approval: string;
+  after?: number;
+}
+
+export interface KBSentMarker {
+  n: number;
+  sent_by: string;
+  recalled_at?: string;
+}
+
+export interface KBSentMarkersResult {
+  markers: KBSentMarker[];
+  next_after?: number;
+}
+
 export type KBKind = "projects" | "chats" | "people" | "docs" | "meetings" | "events" | "recordings" | "topics" | (string & {});
 export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"] as const;
 
@@ -5464,10 +5596,11 @@ export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "even
  * error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing): invalid_params,
  * not_found, assistant_offline (the manager is away), kb_unavailable (not open yet), conflict (kb.update touches
  * fields the user or another extension holds; data KBConflict, nothing was written). assistant_offline and
- * kb_unavailable are worth trying again; conflict is for the user to decide.
+ * kb_unavailable are worth trying again; conflict is for the user to decide. deleted: kb.put_recording of a recording
+ * the user deleted, which is not made again.
  */
-export type KBErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "kb_unavailable" | "conflict" | (string & {});
-export const KBERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict"] as const;
+export type KBErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "kb_unavailable" | "conflict" | "deleted" | (string & {});
+export const KBERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict", "deleted"] as const;
 
 /**
  * The data of a conflict error: field → who holds it (user, or ext:<extension id>); a linked entity's field is
@@ -5929,6 +6062,167 @@ export interface KBUpdateResult {
    * that the user removed: not applied, each with why.
    */
   ignored?: KBIgnoredField[];
+}
+
+/**
+ * A recording's UUID, picked by the extension so a retry lands on the same recording.
+ */
+export type KBRecordingID = string & { readonly __brand: "KBRecordingID" };
+/** A KBRecordingID from its raw string. */
+export function kBRecordingID(raw: string): KBRecordingID {
+  return raw as KBRecordingID;
+}
+
+/**
+ * An action item's id, picked by the extension and stable across writes.
+ */
+export type KBMinutesActionID = string & { readonly __brand: "KBMinutesActionID" };
+/** A KBMinutesActionID from its raw string. */
+export function kBMinutesActionID(raw: string): KBMinutesActionID {
+  return raw as KBMinutesActionID;
+}
+
+/**
+ * A to-do's id, set by the hub when the user makes a to-do of an action item.
+ */
+export type KBTodoID = string & { readonly __brand: "KBTodoID" };
+/** A KBTodoID from its raw string. */
+export function kBTodoID(raw: string): KBTodoID {
+  return raw as KBTodoID;
+}
+
+/**
+ * Whether a recording's meeting is a calendar item (events) or an imported meeting (meetings).
+ */
+export type KBRecordingMeetingKind = "events" | "meetings";
+export const KBRECORDING_MEETING_KINDS: readonly KBRecordingMeetingKind[] = ["events", "meetings"];
+
+/** A KBRecordingMeetingKind this app does not know, kept as it came. */
+export interface UnknownKBRecordingMeetingKind {
+  unknown: string;
+}
+
+/** A raw KBRecordingMeetingKind: one this app knows, or UnknownKBRecordingMeetingKind with the raw value. */
+export function parseKBRecordingMeetingKind(raw: string): KBRecordingMeetingKind | UnknownKBRecordingMeetingKind {
+  const known = KBRECORDING_MEETING_KINDS.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownKBRecordingMeetingKind = { unknown: raw };
+  return unknown;
+}
+
+/**
+ * A calendar item's or imported meeting's id in the knowledge base.
+ */
+export type KBRecordingMeetingID = string & { readonly __brand: "KBRecordingMeetingID" };
+/** A KBRecordingMeetingID from its raw string. */
+export function kBRecordingMeetingID(raw: string): KBRecordingMeetingID {
+  return raw as KBRecordingMeetingID;
+}
+
+/**
+ * kb.put_recording (kb.write): create or update the extension's own recording with its minutes and, optionally, its
+ * transcript (docs/extensions/extensions.md "Writing recordings and minutes"). It is the extension's: no other
+ * extension may write it, and no extension a recording the phone uploaded (permission_denied). The same params again
+ * change nothing; a recording the user deleted is not made again (deleted). A recording with minutes is kept past
+ * recording_days, its minutes until minutes_days.
+ */
+export interface KBPutRecordingParams {
+  /** A UUID the extension picks; one derived from its own source id makes a retry land on the same recording. */
+  id: KBRecordingID;
+  title?: string;
+  /** An RFC 3339 time. */
+  started_at: string;
+  /** An RFC 3339 time, not before started_at. */
+  ended_at?: string;
+  /** An i18n code (zh-Hans, en, ja). */
+  language?: string;
+  minutes?: KBRecordingMinutes;
+  /**
+   * Optional; n, source and echo are the hub's and are dropped. Without minutes, the hub makes minutes of it when the
+   * recording module is on.
+   */
+  transcript?: KBRecordingSegment[];
+  /** Slugs of existing projects to link it to; a later write never removes a link. */
+  projects?: string[];
+  meeting?: KBRecordingMeeting;
+}
+
+/**
+ * The minutes the extension wrote, stored as minutes.json and minutes.md. The hub sets version, revision,
+ * generated_at, when, start and end. Minutes or a transcript is required.
+ */
+export interface KBRecordingMinutes {
+  title?: string;
+  where?: string;
+  attendees?: string[];
+  points?: KBMinutesPoint[];
+  decisions?: KBMinutesItem[];
+  actions?: KBMinutesAction[];
+  open?: KBMinutesItem[];
+  /** An i18n code: what the minutes are written in. */
+  language?: string;
+  /** The minutes as Markdown: minutes.md, what searches and kb.get read. Required, not blank. */
+  markdown: string;
+}
+
+/**
+ * A decision or an open question of the minutes.
+ */
+export interface KBMinutesItem {
+  text: string;
+  /** Seconds from the recording's start. */
+  at: number;
+  photo?: number;
+}
+
+/**
+ * A point discussed; who only when the source names the person.
+ */
+export interface KBMinutesPoint {
+  text: string;
+  /** Seconds from the recording's start. */
+  at: number;
+  photo?: number;
+  who?: string;
+}
+
+/**
+ * An action item. id is the extension's, stable across writes (at most 64 characters): a to-do the user made of it
+ * stays on it.
+ */
+export interface KBMinutesAction {
+  id: KBMinutesActionID;
+  who?: string;
+  what: string;
+  /** The deadline as said. */
+  by?: string;
+  /** YYYY-MM-DD, when by is one date. */
+  due_date?: string;
+  /** Seconds from the recording's start. */
+  at: number;
+  photo?: number;
+  /** The hub's: the to-do made of it. */
+  todo_id?: KBTodoID;
+}
+
+/**
+ * The calendar item (events) or imported meeting (meetings) the recording was; it must exist.
+ */
+export interface KBRecordingMeeting {
+  kind: KBRecordingMeetingKind;
+  id: KBRecordingMeetingID;
+}
+
+export interface KBPutRecordingResult {
+  id: KBRecordingID;
+  /** The hub's revision of the recording: 1 when created, one more for each write that changed it. */
+  revision: number;
+  created?: boolean;
+  /** The write was the same as the last one; nothing was written. */
+  unchanged?: boolean;
+  minutes_version?: number;
 }
 
 /**
@@ -6452,6 +6746,12 @@ export type AssistantEventSeverity = "info" | "warning" | "critical" | (string &
 export const ASSISTANT_EVENT_SEVERITIES = ["info", "warning", "critical"] as const;
 
 /**
+ * Where the thing an event's key names is now, in the extension's own words (firing, resolved, ...): a label each
+ * extension chooses. Free text, not a closed set.
+ */
+export type AssistantEventState = string;
+
+/**
  * assistant.event (assistant.events): one event for the assistant's main conversation. The assistant gets it as
  * something an extension observed, never as the user's words, and decides what to tell the user. An event with the
  * same key as one of this extension's still waiting behind a running turn replaces it, unless replace is false.
@@ -6470,7 +6770,7 @@ export interface AssistantEventParams {
   /** What the extension suggests be done about it: a suggestion for the assistant to weigh, not an order. */
   action_hint?: string;
   /** Where the thing the key names is now, in the extension's words (firing, resolved, ...). */
-  state?: string;
+  state?: AssistantEventState;
   /** false keeps an earlier event with the same key as its own message instead of replacing it. Absent is true. */
   replace?: boolean;
 }
@@ -7738,6 +8038,27 @@ export interface OffloadError {
   items?: OffloadRunItem[];
 }
 
+export interface RoutineFactsParams {
+  contribution: RoutineContributionID;
+  /** Calendar date in the routine's time zone. */
+  date: string;
+  language: string;
+}
+
+export interface RoutineReportSection {
+  title: string;
+  /** Plain text. The host owns report layout. */
+  body: string;
+}
+
+/**
+ * A read-only snapshot. Return an empty object when the contribution has nothing for this date.
+ */
+export interface RoutineFactsResult {
+  facts?: string[];
+  sections?: RoutineReportSection[];
+}
+
 /** One call or event of an extension point's protocol: who sends it, and the definitions its params and
  * its answer hold to (no result: any JSON; an event has no answer). */
 export interface Call {
@@ -7806,6 +8127,9 @@ export const CALLS: Record<string, Call> = {
   "kb.update": { from: "program", params: "KBUpdateParams", result: "KBUpdateResult" },
   "kb.owner": { from: "program", params: "KBOwnerParams", result: "KBOwner" },
   "kb.recent": { from: "program", params: "KBRecentParams", result: "KBRecentResult" },
+  "kb.import_checkpoint": { from: "program", params: "KBImportCheckpointParams", result: "KBImportCheckpointResult" },
+  "kb.sent_markers": { from: "program", params: "KBSentMarkersParams", result: "KBSentMarkersResult" },
+  "kb.put_recording": { from: "program", params: "KBPutRecordingParams", result: "KBPutRecordingResult" },
   "event.kb.changed": { from: "hub", params: "KBChangedEvent", event: true },
   "event.kb.forgotten": { from: "hub", params: "KBForgottenEvent", event: true },
   "event.todo.changed": { from: "hub", params: "TodoChangedEvent", event: true },
@@ -7854,4 +8178,5 @@ export const CALLS: Record<string, Call> = {
   "offload.run": { from: "hub", params: "OffloadRunParams", result: "OffloadRunResult" },
   "offload.job": { from: "hub", params: "OffloadJobParams", result: "OffloadJob" },
   "offload.cancel": { from: "hub", params: "OffloadJobParams", result: "Empty" },
+  "routine_facts.collect": { from: "hub", params: "RoutineFactsParams", result: "RoutineFactsResult" },
 };

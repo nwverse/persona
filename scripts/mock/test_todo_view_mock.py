@@ -466,6 +466,17 @@ class ViewTests(Case):
         self.hub.call("/api/v1/todos/t07/seen", "PUT")
         self.assertEqual(self.row("t07")["view"]["reason"], "finished_recent")
 
+    def test_a_closed_todo_moved_back(self):
+        before = self.row("t08")["done_at"]
+        self.hub.call("/api/v1/todos/t08/seen", "PUT")
+        self.hub.get("/mock/todo-view?done_hours=t08:50")
+        t08 = self.row("t08")
+        hours = (datetime.now(timezone.utc) - datetime.fromisoformat(t08["done_at"].replace("Z", "+00:00"))).total_seconds() / 3600
+        self.assertTrue(49.9 < hours < 50.1, hours)
+        self.assertEqual(t08["view"]["section"], "done")
+        self.hub.get("/mock/reset")
+        self.assertEqual(self.row("t08")["done_at"], before)
+
     def test_a_parent_follows_its_steps(self):
         t02 = self.row("t02")["view"]
         self.assertEqual((t02["section"], t02["reason"], t02["line"]["args"]["step"], t02["steps"]),

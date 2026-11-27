@@ -7,6 +7,14 @@
 - The hook must print `{}` and exit fast on every path (no node, unknown pane, bad input), or agy waits on it. Subagent conversations inherit the pane's environment and report too, so the node still has to prove the conversation is not a subagent's (#13336) before it reads or resumes.
 - herdr's own report and Persona's can disagree for a moment after a new conversation; the node treats a disagreement as unknown instead of picking one.
 
+## What the node starts is told the node's program, never left to find it by name (#14582)
+
+- The node's program has more than one name: `personad`, `persona-node` in a Persona Link install, either with `.exe` on
+  Windows. The Antigravity companion looked only for `<state>/bin/personad`, found nothing on a Link install and attached
+  no MCP server, so its chats had no Persona tools and nothing said why. Hand a process the node starts the node's own
+  spelling of its program (`selfProgram`'s `bin`, as the generated hooks and MCP configs have it), keep a lookup by name
+  only for a process started some other way, and log when it finds nothing.
+
 ## Visibility-only `TurnErrorCode` values must not trip `readinessBlocks` or `CutOff` on node `TurnError` (#13372)
 
 - `readinessBlocks` (`server/internal/assistant/readiness.go`) defaults every `StepProblem` code to `mode: "setup"` unless explicitly excluded. Any non-user-fix `TurnErrorCode` (such as `upstream_unavailable`, alongside `rate_limited`, `model_fallback_unavailable`, and `tool_search_unsupported`) must be excluded in `readinessBlocks` and paired with `test_assistant` and plain-language readiness strings, or an upstream outage locks every client's composer with "Connect a model first".
@@ -35,6 +43,9 @@
 
 ## A one-start speed must not become a resume default (#11141)
 
+- A terminal Codex speed switch uses `/model --speed=standard` to reset the speed on Codex 0.172. The native setting
+  records `default`. Confirm the switch from a new `thread_settings_applied` record because an already-running turn
+  can still write its previous speed.
 - Codex's per-start `service_tier` belongs only in the initial argv; validate it against the selected model's catalog rather than trusting Codex to refuse an unadvertised tier.
 - Claude Code fast mode needs `"fastMode": true` in the effective single `--settings` file. Give the initial command a merged copy and keep the base `claudeLaunch` spec for herdr's `resume_argv`, or an automatic resume silently inherits the billable choice. A shell function that supplies its own `--settings` cannot be merged: refuse fast mode rather than appending a fast-only file that would discard the function's credentials and model.
 - A new `session.start` field needs its own node capability: older nodes otherwise accept it and start at the launcher's speed. Faster speed on a resume or another runtime is a coded refusal before approval or launch.
@@ -134,6 +145,21 @@ App for a turn, look whether one runs (rollout tail, or the history database for
 message on the node until it ends; count a turn the node just started as running until the App writes it down, or two
 sends in a row steer the second into the first's turn. On Codex's own app-server, steer with `turn/steer` and the
 observed turn id instead; never send both a steer and a start for one message.
+
+## Task workspace sources and ownership (#16161)
+
+For a local linked checkout, keep the source Git directory's identity separate from the
+owned task path. Otherwise a generic delete guard can claim the user's source repository.
+Save the chosen commit and operation before dispatching a side effect. A missing capability
+can select the older checkout path. An uncertain prepare or start must retain the same operation.
+Use the same path check at preview and prepare so existing symlinks cannot pass one check
+and fail the other.
+
+On hosts with a symlinked home, Git records physical worktree paths (#16305).
+Resolve the configured home prefix before deriving the task and repository paths, and
+resolve the configured state prefix before appending control directories. Checking the
+remaining components as written preserves the distinction between host aliases and
+links inside the workspace.
 
 ## Task branch reuse is not forced worktree creation (#8357)
 
@@ -366,6 +392,8 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   Drop the reported id only when the index knows that thread under a different name, and never under a name it gave the thread before (a rename leaves the earlier line in the index, and the node keeps only the latest); a remembered pane binding is still dropped.
   Check the name of the thread herdr reported, not of the main chat a sub-Agent id was replaced with: that name says nothing about the reported thread.
   Claude panes likewise: pane bindings for Persona-started sessions live in hub's database and reload after node restart, but can be stale; `sessions/<pid>.json` takes priority.
+  Pane ids are reused too: herdr numbers its workspaces again after its server restarts, so a new tab can get the id (`wD:p1`) of a tab that closed days
+  ago, and the binding of the session that ran there comes back on every hub connection. A tab Persona opens forgets every binding of its id first (#14682).
   After changing pane identification logic, rerun verification after deployment (restart); pre- and post-restart results may differ.
 - herdr `agent.prompt` pastes, then waits about 300 ms before Enter: serialize sends to the same session, or the second screen read mistakes the first message for an input draft. Sending deduplication lives in hub Postgres (`sent_messages`):
   node's in-memory deduplication disappears on reconnect / hub restart, exactly when the App auto-retries. Full session-reading and sending verification, with per-hop timings: `docs/archive/integrations/session-verify.md`.
@@ -773,6 +801,11 @@ an input box but herdr doesn't know claude is present (`agent_not_found` or empt
 then explain process-name / `HERDR_AGENT=claude` recognition and cases where the prefix doesn't reach claude. Foreground process name comes from herdr `pane.process_info`. With no input box, retain the shell-not-started error;
 other engines' panes (Orca) keep their original error.
 
+`pane.process_info` in herdr 0.9.5 names each foreground process by `name`, `argv` and `cmdline`, with no `argv0`, and Claude Code's `name` is its version
+(`2.1.330`). Its list starts with the foreground group's leader: a launcher's wrapper when claude runs under one. Code that takes the first process for
+claude itself must pick Claude Code out first (`herdr.Client.PaneProcesses`): matching `argv0` found nothing, and the port scan reported Claude Code's own
+loopback listener as a server the Agent runs, which kept every idle Agent behind a wrapper from Close (#14681).
+
 - A Claude Code turn ending with a model API error ("API Error: Connection lost mid-response…", overload, rate limit, expired login) is done in herdr just like normal completion, so hub counts it unread:
   task_plan tasks once showed green "Done" cards with the raw error as summary and "finished" in snapshots (#1516). Only the last text distinguishes this: when a session is stopped and `last_text` begins with these errors, hub sets `turn_error` (prefix only;
   mentioning "API Error" in an answer doesn't count), marks the task interrupted, doesn't auto-close it, and writes an `interrupted` receipt. Ordinary Agent pushes also stop using a success marker.
@@ -797,6 +830,15 @@ other engines' panes (Orca) keep their original error.
   Manually adding `enableArtifact: false` to `launcher-settings/<name>-env-settings.json` seems ineffective: node rewrites that file at every launch, losing the edit before the next Agent starts.
   Both `enableArtifact: false` in `--settings` and environment `CLAUDE_CODE_DISABLE_ARTIFACT=1` worked in tests (interactive claude in tmux, three configs compared);
   Persona-managed launchers now carry both (`docs/integrations/launchers.md` ("Running Persona-managed launchers")).
+
+## A launchd node has no `$SHELL`, and macOS's `/etc/passwd` has no users (2026-11-26, #16217)
+
+The model list failed on a Mac with `claude did not provide a model list: unexpected EOF (zsh:1: command not found: claude)` while sessions started fine.
+- A launchd agent's environment has no `SHELL` and `PATH=/usr/bin:/bin:/usr/sbin:/sbin`. The `/etc/passwd` fallback that works under systemd finds nothing on macOS, which keeps accounts in Directory Services: the node guessed zsh for a bash user.
+- Even bash would not have helped: `bash -ic` reads `~/.bashrc`, but Terminal opens login shells, so Mac setups (nvm's installer, `brew shellenv`) live in `~/.bash_profile` / `~/.zprofile`. The session worked only because herdr's tab is a login shell.
+- On macOS read the shell with `dscl . -read /Users/<user> UserShell` (the node builds with `CGO_ENABLED=0`, so no `getpwuid`; `os/user` has no shell field) and run it as `-lic`; a bash with no `~/.bash_profile`, `~/.bash_login` or `~/.profile` stays `-ic`, since a login bash would read none of the user's files.
+- `zsh -l` runs `/etc/zprofile`'s `path_helper`, which moves the system directories ahead of the inherited PATH: a test that checks an exact PATH through the login shell expects `path_helper -s`'s order. Check with the node's own environment, not your terminal's: `env -i HOME=$HOME PATH=/usr/bin:/bin:/usr/sbin:/sbin bash -lic 'command -v claude'`.
+- A test that the node "runs the user's shell" must unset `SHELL`; a developer's terminal always has it, which hid this. The other way round, the node package's `TestMain` pins `SHELL` to zsh on macOS (`pinTestLoginShell`), so a developer whose login shell is bash runs the `~/.zshrc` fixtures in zsh.
 
 ## "the tab's shell had not run it yet (is the machine busy?)" when the launcher isn't there at all (#1642)
 
@@ -935,6 +977,19 @@ grouping looks fine and the bug shows only in the other one. Hosts set it (herdr
 need the node to set one: the Codex App's always had one, the Claude desktop app's had none until #8521. A new source of
 sessions outside the engines should set a space too. On the list path, take the repository from the list's Git places
 (`fillGitPlace`, read in the background) rather than running git per row: it runs every second.
+
+## One folder was a project for each way its Agents ran (2026-11-23, #13533)
+
+Every way an Agent runs names its space its own way: herdr by its workspace id (`w1`), the desktop apps by
+`codex-project:<root>`, a runtime without workspaces by its directory. A folder worked in more than one way was a project
+for each in every client's **Project** list, all with the folder's name, and one CLI split too: Claude Code in herdr
+against the Claude desktop app, an agy pane in herdr against an agy runtime conversation. Pins, mutes and to-do space
+links go by `machine/space name`, so nothing there showed it. The node's last pass now gives every session whose space
+only stands for a folder that folder's space (`server/internal/node/folderspace.go`); a new source that names its space by
+a folder needs nothing more, and should not invent another path-keyed id. Compare folders by their physical paths: the
+same folder reaches the list as written by a runtime and resolved by herdr or a desktop app, and a home directory on
+Linux is often a link to another volume. A joined space holds several `space_kind`s, and a client may name its host by
+any of its sessions' kinds, so a space action takes a kind that is no host's to mean the workspace's host.
 
 ## The session list runs every second: per-row lookups add up (2026-11-09, #2538)
 
@@ -1408,8 +1463,10 @@ workspace sharing the probe prefix while it still exists.
 ## AGY ACP can ignore the configured initial model (#3817)
 
 Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
-IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. Preserve
-explicit caller choices and the native state of resumed conversations. Announce a model only after ACP accepts it.
+IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. ACP can
+also discard the selected model when a process restarts (#15537). Before the first prompt on the new connection, apply
+the configured default to an idle conversation unless the caller chose a model or the connection already applied one.
+Leave history reads passive and announce a model only after ACP accepts it.
 
 ## A long-running agy acp keeps the account it saw (#10368)
 
@@ -1430,6 +1487,9 @@ node RPC so an older node cannot silently ignore a billable setting in `session.
 
 Persona-owned Codex conversations use a separate stdio connection. Share catalog parsing across both transports and
 include the owned connection in session projection, setting routing and native notifications.
+
+The web composer keeps the tier ID through live updates and the new-conversation draft. A Fast boolean drops
+Ultrafast from the pill and loses the tier needed by the first request.
 
 ## Runtime assistant identity comes from persisted state (#4202)
 
@@ -1757,7 +1817,9 @@ terminal never saw it, and the companion's turn overwrote the stored steps from 
 probe it by taking even a shared `flock` (`LOCK_SH|LOCK_NB`), because a starting `agy` tries `LOCK_EX|LOCK_NB` once and
 runs its whole session without a lock if that fails (#14561). On Linux, read `/proc/locks` for the file's device and
 inode; where no lock table can be read, fall back to the presence file plus recent transcript writes by another process.
-Calls that drive the conversation go to the pane, or are refused (`agy_in_terminal`) while held.
+Calls that drive the conversation go to the pane, or are refused (`agy_in_terminal`) while held. So every engine that can
+run agy must list it as a pane and learn the pane's conversation: Orca did neither, and every message to an agy open in
+an Orca terminal was refused (#16531).
 
 ## First tool discovery can precede the session list (#14855)
 

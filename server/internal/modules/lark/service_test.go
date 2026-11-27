@@ -201,9 +201,10 @@ type Service struct {
 	lists   map[string][]time.Duration
 	ctx     context.Context
 	logs    []string
-	wbd     *wbData     // the workbench's data (wb)
-	thd     *threadData // the to-do threads (th)
-	chd     *chatData   // the chat side (ch)
+	wbd     *wbData      // the workbench's data (wb)
+	thd     *threadData  // the to-do threads (th)
+	chd     *chatData    // the chat side (ch)
+	hod     *handoffFake // a proxy reply's asks of the core (chat_fake_test.go)
 }
 
 func newTestService(t testing.TB, f Hub) *Service {
@@ -330,7 +331,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
 	if res.Held {
 		r.Held = true
 		delete(r.Ext, "card")
-		for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_calls", "cot_done", "cot_off"} {
+		for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_calls", "cot_done", "cot_off", "cot_answer"} {
 			delete(r.Ext, k)
 		}
 		prog.steps, prog.from = nil, 0
@@ -536,6 +537,11 @@ func (s *Service) Unreachable(err error) bool {
 }
 
 func (s *Service) Offline(err error) bool { return errors.Is(err, errOffline) }
+
+func (s *Service) Answered(err error) bool {
+	var reply *rpc.Error
+	return errors.As(err, &reply)
+}
 
 // StepParts is a tool call's step in the words of the core's botStepParts, for the tools these tests call.
 func (s *Service) StepParts(_ i18n.Lang, it proto.Item) (string, string) {
@@ -749,10 +755,6 @@ func (s *Service) WorkbenchItem(id string) (assistantwire.WorkbenchItem, bool) {
 
 func (s *Service) WorkbenchBoard(context.Context, i18n.Lang, string, time.Time) []assistantwire.WorkbenchBoardRow {
 	return s.wb().board
-}
-
-func (s *Service) SessionNames(_ context.Context, sess proto.Session) (string, string) {
-	return sess.Title, ""
 }
 
 func (s *Service) NextMeeting(context.Context, time.Time) *assistantwire.WorkbenchMeeting { return nil }

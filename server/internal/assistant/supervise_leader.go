@@ -456,6 +456,7 @@ func (s *Service) leadersChange(ctx context.Context, cfg Settings, in []string) 
 					return fmt.Errorf("assistant.leaders changed after the card was shown, so nothing was saved: get it and set it again for a new card (%w)", approvalops.ErrStale)
 				}
 				v.Leaders = list
+				s.directionRolesChanged(ctx, before, list)
 				return nil
 			}); err != nil {
 				return "", err
@@ -516,10 +517,14 @@ func sameLeaders(a, b []string) bool {
 }
 
 // endSessionCards ends the cards machine/session still waits on (cancelled in the history), as when its node goes away.
-func (s *Service) endSessionCards(machine, session string) {
+// A caller that inspected particular cards before stopping the session can limit cancellation to those ids.
+func (s *Service) endSessionCards(machine, session string, only ...string) {
 	s.fleet.mu.Lock()
 	var ids []string
 	for id, p := range s.fleet.interactions {
+		if len(only) > 0 && !slices.Contains(only, id) {
+			continue
+		}
 		if p.ix.SessionID == session && s.sameMachine(p.ix.MachineID, machine) && (p.prepared != nil || !p.claimed) {
 			if p.prepared == nil {
 				p.claimed = true

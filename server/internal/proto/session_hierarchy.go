@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/agentviewwire"
 )
 
 // IsCodexSubagent identifies delegated tasks from source metadata, even when
@@ -92,8 +94,9 @@ type SessionHierarchy struct {
 	// Aliases are the other session ids its machine knows this row's conversation by, none of which it lists beside it
 	// (one conversation, one row): the Claude session holding the conversation of a runtime's session listed under an
 	// id of its own, and the sessions that one was forked from, newest first (docs/integrations/paseo.md "Session
-	// IDs", #8131). The manager shows no archive record under one of them: the conversation was listed under it once,
-	// and its archived row repeated the row listed now. Set by the node.
+	// IDs", #8131); the transcripts a Claude desktop app session went on from, newest first, on the row of the one it
+	// runs now (#14394). The manager shows no archive record under one of them: the conversation was listed under it
+	// once, and its archived row repeated the row listed now. Set by the node.
 	Aliases []string `json:"aliases,omitempty"`
 	// BackgroundEnded retains recent shell / Monitor outcomes separately from Session.Background, so older clients keep
 	// counting only running work. Oldest first, at most eight; the node lists entries from the last day. Sparse storage
@@ -104,6 +107,40 @@ type SessionHierarchy struct {
 	// "context_breakdown" wire key.
 	ContextBreakdown *ContextBreakdown `json:"context_breakdown,omitempty"`
 	Deleted          bool              `json:"deleted,omitempty"` // Permanent manager tombstone; use Session.IsDeleted/SetDeleted.
+	// OutputTokens is cumulative generated output, not the latest context size or transcript revision.
+	// Stored here so ordinary Session rows stay inside their 1,536-byte allocation size class.
+	OutputTokens int32 `json:"output_tokens,omitempty"`
+	// View is the session as every client draws it: one of five phases, why, whether its row counts in the Agents
+	// list's Needs you, and its rank (docs/protocol/agent-states.md "Five phases", #15397), encoded as the top-level
+	// "view" key. The manager computes it on the lists it publishes (assistant/agentview); state and status stay as
+	// they are for older clients. Here rather than on Session, which has no room left (TestSessionFitsItsSizeClass).
+	// Use Session.View / SetView.
+	View *agentviewwire.AgentView `json:"view,omitempty"`
+	// BotmuxExternalTrigger: on a botmux session whose botmux instance was probed and does not advertise ownerActor
+	// (an older botmux without GET /api/sessions/:id/turns or without actor:"owner"), sends go through the untrusted
+	// external-event trigger; clients show a one-line notice in the composer. Stored here so ordinary Session rows
+	// stay inside their 1,536-byte allocation size class; encoded as top-level "botmux_external_trigger".
+	BotmuxExternalTrigger bool `json:"botmux_external_trigger,omitempty"`
+}
+
+// View is the session's five-phase view, nil from a hub that does not send one (FeatureAgentView) and on a row the
+// manager did not compute it for. Shared with the row's other copies: not to be modified in place.
+func (s *Session) View() *agentviewwire.AgentView {
+	if s.Hierarchy == nil {
+		return nil
+	}
+	return s.Hierarchy.View
+}
+
+// SetView replaces the session's view without changing other copies of the row; nil takes it away. The view is
+// shared from then on: the caller does not change it after.
+func (s *Session) SetView(v *agentviewwire.AgentView) {
+	if v == nil && s.View() == nil {
+		return
+	}
+	h := s.hierarchy()
+	h.View = v
+	s.setHierarchy(h)
 }
 
 // ContextBreakdown returns the session's structured context window breakdown, or nil when unavailable.
@@ -198,7 +235,40 @@ func (h *SessionHierarchy) empty() bool {
 		h.FoldedUnder == "" && h.FoldedUnderMachineID == "" && h.FoldedAs == "" && h.FoldedSide == "" &&
 		h.ParentMachineID == "" && h.A2ATaskID == "" && h.SubagentOrigin == "" &&
 		h.Children == nil && len(h.EngineHistory) == 0 && h.CompletedTodo == nil && len(h.Aliases) == 0 &&
-		len(h.BackgroundEnded) == 0 && h.ContextBreakdown == nil && !h.Deleted
+		len(h.BackgroundEnded) == 0 && h.ContextBreakdown == nil && h.OutputTokens == 0 && !h.Deleted && h.View == nil && !h.BotmuxExternalTrigger
+}
+
+// OutputTokensValue is the cumulative generated output recorded for the row.
+func (s Session) OutputTokensValue() int32 {
+	if s.Hierarchy == nil {
+		return 0
+	}
+	return s.Hierarchy.OutputTokens
+}
+
+// SetOutputTokens records cumulative generated output without growing the ordinary Session row.
+func (s *Session) SetOutputTokens(n int) {
+	if s.OutputTokensValue() == Tokens32(n) {
+		return
+	}
+	h := s.hierarchy()
+	h.OutputTokens = Tokens32(n)
+	s.setHierarchy(h)
+}
+
+// BotmuxExternalTrigger reports whether this botmux session's sends fall back to the untrusted external-event trigger.
+func (s *Session) BotmuxExternalTrigger() bool {
+	return s.Hierarchy != nil && s.Hierarchy.BotmuxExternalTrigger
+}
+
+// SetBotmuxExternalTrigger updates the sparse external-trigger flag without mutating shared copies of the row.
+func (s *Session) SetBotmuxExternalTrigger(v bool) {
+	if s.BotmuxExternalTrigger() == v {
+		return
+	}
+	h := s.hierarchy()
+	h.BotmuxExternalTrigger = v
+	s.setHierarchy(h)
 }
 
 // HiddenByDirectory reports the manager's directory visibility without growing every session row.

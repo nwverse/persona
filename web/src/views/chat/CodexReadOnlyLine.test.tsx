@@ -86,8 +86,10 @@ describe("CodexReadOnlyLine", () => {
     expect(host.querySelector("[data-stopped-agent]")?.textContent).toContain(readOnlyCodex.read_only_reason);
     expect(host.querySelector("[data-codex-readonly-line]")).toBeTruthy();
     const labels = [...host.querySelectorAll("button")].map((b) => b.textContent?.trim());
+    // t() returns an unknown key as is, so compare with real words too: a raw key is not a label
+    expect(labels.filter((label) => /^[a-z-]+\.[a-z_]+$/.test(label ?? ""))).toEqual([]);
     expect(labels).toContain(t("lib-terminals.terminal"));
-    expect(labels).toContain(t("chat-closed.resume"));
+    expect(labels).toContain(t("session-terminalpanel.resume"));
     expect(labels).toContain(t("chat-takeover.takeover"));
     const more = host.querySelector(`button[aria-label="${t("chat-chatview.more_actions")}"]`);
     expect(more).toBeTruthy();

@@ -27,7 +27,7 @@ export type Tab = CoreTab | ModuleTab;
 export const TABS: CoreTab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "integrations", "channels", "connectors", "sources", "extensions", "shortcuts", "advanced", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
-export type SettingsSection = "providers" | "model-config" | "translation" | "seen-rows" | AgentTab;
+export type SettingsSection = "providers" | "model-config" | "translation" | "seen-rows" | "repositories" | "knowledge-items" | AgentTab;
 /** A host-owned secondary page, not a connector ID. */
 export const SENT_SUB = "-sent";
 
@@ -146,7 +146,8 @@ export function settingsAt(search: string, hash = ""): { tab: Tab | null; sub: s
   if (!isCoreTab(t)) return isModuleTab(t) ? { tab: t, sub: null, section: null } : { tab: null, sub: null, section: sectionOfHash(hash, "general") };
   const param = SUB[t];
   // ?tab=plugins&plugin=<id>: a link from before #1845
-  const sub = old === "sent" ? SENT_SUB : param ? (q.get(param) ?? (t === "extensions" ? q.get("plugin") : null)) : null;
+  const requested = old === "sent" ? SENT_SUB : param ? (q.get(param) ?? (t === "extensions" ? q.get("plugin") : null)) : null;
+  const sub = t === "hub" && requested !== "recovery" ? null : requested;
   if (t === "extensions" && sub === "-channels") return { tab: "channels", sub: null, section: null };
   if (t === "extensions" && sub?.startsWith("-channels/")) return { tab: "channels", sub: sub.slice("-channels/".length), section: null };
   const section = legacy?.section ?? sectionOfHash(hash, t);
@@ -247,11 +248,13 @@ export function redirectLegacySettings(
   }
 
   if (!changed) return null;
-  const frag = section ? `#settings-${section}` : hash;
+  const frag = section && section !== "repositories" && section !== "knowledge-items" ? `#settings-${section}` : hash;
   return `/settings?${q.toString()}${frag}`;
 }
 
 function sectionOfHash(hash: string, tab: Tab): SettingsSection | null {
+  if (tab === "persona" && hash === "#repositories") return "repositories";
+  if (tab === "knowledge" && hash === "#knowledge-items") return "knowledge-items";
   const section = hash.startsWith("#settings-") ? hash.slice("#settings-".length) : "";
   if (tab === "models" && (section === "providers" || section === "model-config")) return section;
   if (tab === "agents" && (AGENT_KINDS as readonly string[]).includes(section)) return section as AgentTab;
@@ -293,11 +296,12 @@ export function categoryState(state: unknown): Record<string, unknown> | null {
   if (!openedFromList(state)) return null;
   const rest = { ...(state as Record<string, unknown>) };
   delete rest[FROM_SUB];
+  delete rest.integrationParent;
   return rest;
 }
 
 /** Whether a category's item is a page one level below the category's page. A model purpose opens in a dialog, which
  *  Back closes only where it is a sheet (ui/atoms Dialog), so it stays on the category's entry. */
 export function itemIsPage(tab: Tab): boolean {
-  return tab === "channels" || tab === "connectors" || tab === "extensions" || tab === "integrations";
+  return tab === "channels" || tab === "connectors" || tab === "extensions" || tab === "integrations" || tab === "hub";
 }

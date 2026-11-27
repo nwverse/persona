@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/managerconf"
@@ -64,6 +65,10 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 	for _, pattern := range assistantwire.Routes {
 		if pattern == "GET /api/v1/sessions/archived" || pattern == "POST /api/v1/sessions/{mid}/{sid}/archive" || pattern == "POST /api/v1/sessions/{mid}/{sid}/unarchive" {
 			api.HandleFunc(pattern, h.forwardAgentArchives)
+			continue
+		}
+		if pattern == assistantwire.RouteAgentIdleArchive || pattern == assistantwire.RouteAgentIdleArchiveAudit {
+			api.HandleFunc(pattern, h.forwardAgentIdleArchive)
 			continue
 		}
 		if pattern == "POST /api/v1/sessions/{mid}/{sid}/autoname" { // a full device, a capable owner (agent_autoname.go)
@@ -140,8 +145,9 @@ var storedTerminalTexts = []string{
 
 // startConversationOnce relays a new conversation's start (its first message) with an operation receipt (#1349): an app
 // whose answer was lost asks again with the same X-Persona-Op-Id and gets the first answer instead of a second
-// conversation. An accepted start finishes even if the caller went away. Offline nothing reached the assistant, so no
-// receipt is kept (the same op id tries again once it is back); cut off on the way it may have started
+// conversation. An accepted start finishes even if the caller went away. Offline nothing reached the assistant, and
+// answered that its node got nothing (node_unreachable, delivered "none") nothing started, so no receipt is kept (the
+// same op id tries again once they are back, clientOpRetry); cut off on the way it may have started
 // (assistant_in_doubt, kept as unknown).
 func (h *Hub) startConversationOnce() http.HandlerFunc {
 	receipt := h.withClientOp("assistant_start", func(w http.ResponseWriter, r *http.Request) {
@@ -178,18 +184,22 @@ type assistantLink struct{ h *Hub }
 // cards' switches and the finished push's timings (hub.json's, the hub's), the user's language. The manager's own
 // sections (owner, notes, agents, kb, models, a card's wait) are in its manager.json, not here (docs/operations/config.md
 // "manager.json").
-func (l assistantLink) Hello(context.Context) (assistantwire.Hello, error) {
+func (l assistantLink) Hello(ctx context.Context) (assistantwire.Hello, error) {
+	out := l.helloBase()
+	out.QuietPush, out.PushGradingCards = l.h.pushGradingForHello(ctx, assistantwire.AssistantID)
+	return out, nil
+}
+
+func (l assistantLink) helloBase() assistantwire.Hello {
 	h := l.h
 	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go). ArchivedApart: it takes a
 	// machine's archived rows apart from its list (fleet.archived, fleet_link.go).
-	// QuietPush: this hub's push tiering switch, which the managers follow for what is not a hub push (cards they
-	// post, cards they hand up); a change sends manager.updated.
-	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true, QuietPush: h.push.pushGradingOn()}
+	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true}
 	if m, ok := h.mutesEvent(); ok { // the hub's mutes, before the manager pushes anything (fleet_link.go)
 		out.Mutes = m.Mutes
 	}
 	if h.cfg == nil {
-		return out, nil
+		return out
 	}
 	out.Assistant = assistantwire.Placement{MachineID: h.defaultAssistantMachine(), Standby: h.isMember()}
 	out.Assistant.Machines = h.machineIDs()
@@ -204,7 +214,29 @@ func (l assistantLink) Hello(context.Context) (assistantwire.Hello, error) {
 	out.Notify = assistantwire.NotifyTimings{DoneDelayMS: taskSettleDelay(h.cfg.Notify).Milliseconds(),
 		LongTurnMS: h.cfg.Notify.longTurn().Milliseconds(), BackgroundHoldMS: h.cfg.Notify.backgroundHold().Milliseconds()}
 	out.Models = h.hubModels() // the launchers hub.json's machines add (assistant_models.go)
-	return out, nil
+	return out
+}
+
+func (h *Hub) pushGradingForHello(ctx context.Context, id string) (bool, *assistantwire.PushGradingCards) {
+	if h == nil || h.push == nil {
+		return false, nil
+	}
+	cfg, _ := h.push.effectiveGradingFor(ctx, id)
+	if !cfg.Enabled {
+		return false, nil
+	}
+	reasons := slices.Clone(cfg.Cards.EscalateReasons)
+	if reasons == nil {
+		reasons = []string{}
+	}
+	return true, &assistantwire.PushGradingCards{
+		SupervisorHold:  cfg.Cards.SupervisorHold,
+		EscalateReasons: reasons,
+		HoldConclusions: cfg.Cards.HoldConclusions,
+		HoldAcceptance:  cfg.Cards.HoldAcceptance,
+		DecisionLevel:   cfg.Cards.DecisionLevel,
+		ReportLevel:     cfg.Cards.ReportLevel,
+	}
 }
 
 // deviceCallFrom answers device.call from manager from: the machines it lists are its own (the others' are in "others":
@@ -537,10 +569,16 @@ func busCodedError(err error) error {
 	return err
 }
 
+// managerHelloFor builds manager.hello's answer for manager id with its placement and per-manager effective push grading.
+func (h *Hub) managerHelloFor(ctx context.Context, id string) assistantwire.Hello {
+	hello := h.placedFor(assistantLink{h}.helloBase(), id)
+	hello.QuietPush, hello.PushGradingCards = h.pushGradingForHello(ctx, id)
+	return hello
+}
+
 // assistantHelloFor is manager.hello's answer for manager id, kept as what it last got.
 func (h *Hub) assistantHelloFor(ctx context.Context, id string) assistantwire.Hello {
-	hello, _ := assistantLink{h}.Hello(ctx)
-	hello = h.placedFor(hello, id)
+	hello := h.managerHelloFor(ctx, id)
 	hello.Mutes = h.mutesFor(id, assistantwire.FleetMutes{Mutes: hello.Mutes}).Mutes // its own machines' only, as fleet.mutes (fleet_link.go)
 	raw, _ := json.Marshal(updatedHello(hello))
 	a := h.assistantOf(id)
@@ -633,8 +671,7 @@ func (h *Hub) managerUpdated(id string) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		hello, _ := assistantLink{h}.Hello(ctx)
-		hello = updatedHello(h.placedFor(hello, id))
+		hello := updatedHello(h.managerHelloFor(ctx, id))
 		raw, _ := json.Marshal(hello)
 		a.helloMu.Lock()
 		same := a.lastHello == string(raw)
@@ -703,6 +740,12 @@ var errAssistantOffline = i18n.Err("hub-assistant_link.offline")
 
 func (a assistantRemote) call(ctx context.Context, method string, params, out any) error {
 	return assistantOffline(a.h.callBus(ctx, a.to(ctx), method, params, out))
+}
+
+// callAssistant applies the assistant's routing and offline error to a typed call.
+func callAssistant[P, R any](ctx context.Context, a assistantRemote, method buswire.Method[P, R], params P) (R, error) {
+	result, err := buswire.Call(ctx, a.h.managerCaller(a.to(ctx)), method, params)
+	return result, assistantOffline(err)
 }
 
 // callAsIs is call with ctx's own deadline, or none (callBusAsIs): a card is waited for as long as it lives
@@ -809,15 +852,11 @@ func (a assistantRemote) InteractionRaised(_ context.Context, r assistantwire.In
 // The todos' (assistant_todos.go).
 
 func (a assistantRemote) TodoHandoff(ctx context.Context, p assistantwire.TodoHandoff) (assistantwire.TodoHandoffResult, error) {
-	var res assistantwire.TodoHandoffResult
-	err := a.call(ctx, assistantwire.MethodTodoHandoff, p, &res)
-	return res, err
+	return callAssistant(ctx, a, assistantwire.TodoHandoffMethod, p)
 }
 
 func (a assistantRemote) TodoLink(ctx context.Context, p assistantwire.TodoLinkParams) (assistantwire.TodoLinkResult, error) {
-	var res assistantwire.TodoLinkResult
-	err := a.call(ctx, assistantwire.MethodTodoLink, p, &res)
-	return res, err
+	return callAssistant(ctx, a, assistantwire.TodoLinkMethod, p)
 }
 
 func (a assistantRemote) TodoSpaceRenamed(_ context.Context, r assistantwire.TodoSpaceRenamed) {

@@ -106,35 +106,39 @@ func newStore(core recordingwire.Core, state *storeState) *store {
 
 // The types the writers name, under the names they had.
 type (
-	Model                = recordingwire.Model
-	Tagging              = kbwire.Tagging
-	RecordingSegment     = kbwire.RecordingSegment
-	Recording            = recordingwire.Recording
-	RecapTarget          = recordingwire.RecapTarget
-	RecapSpan            = recordingwire.RecapSpan
-	RecapTodo            = recordingwire.RecapTodo
-	DayRecap             = recordingwire.DayRecap
-	DayRecapEntry        = recordingwire.DayRecapEntry
-	Minutes              = recordingwire.Minutes
-	MinutesItem          = recordingwire.MinutesItem
-	MinutesPoint         = recordingwire.MinutesPoint
-	MinutesAction        = recordingwire.MinutesAction
-	Meeting              = recordingwire.Meeting
-	MeetingTranscription = recordingwire.MeetingTranscription
-	MeetingRoom          = recordingwire.MeetingRoom
-	Timeline             = recordingwire.Timeline
-	HubTranscript        = recordingwire.HubTranscript
-	Photo                = recordingwire.Photo
-	PhotoRef             = recordingwire.PhotoRef
-	PhotoText            = recordingwire.PhotoText
-	PhotoUpload          = recordingwire.PhotoUpload
-	MinutesOverview      = recordingwire.MinutesOverview
-	MinutesConclusion    = recordingwire.MinutesConclusion
-	MinutesGroup         = recordingwire.MinutesGroup
-	MinutesTopic         = recordingwire.MinutesTopic
-	MinutesBullet        = recordingwire.MinutesBullet
-	photoBook            = recordingwire.PhotoBook
-	storedPhoto          = recordingwire.StoredPhoto
+	Model                 = recordingwire.Model
+	Tagging               = kbwire.Tagging
+	RecordingSegment      = kbwire.RecordingSegment
+	Recording             = recordingwire.Recording
+	RecapTarget           = recordingwire.RecapTarget
+	RecapSpan             = recordingwire.RecapSpan
+	RecapTodo             = recordingwire.RecapTodo
+	DayRecap              = recordingwire.DayRecap
+	DayRecapEntry         = recordingwire.DayRecapEntry
+	Minutes               = recordingwire.Minutes
+	MinutesItem           = recordingwire.MinutesItem
+	MinutesPoint          = recordingwire.MinutesPoint
+	MinutesAction         = recordingwire.MinutesAction
+	Meeting               = recordingwire.Meeting
+	MeetingTranscription  = recordingwire.MeetingTranscription
+	MeetingRoom           = recordingwire.MeetingRoom
+	Timeline              = recordingwire.Timeline
+	HubTranscript         = recordingwire.HubTranscript
+	Photo                 = recordingwire.Photo
+	PhotoRef              = recordingwire.PhotoRef
+	PhotoText             = recordingwire.PhotoText
+	PhotoUpload           = recordingwire.PhotoUpload
+	MinutesOverview       = recordingwire.MinutesOverview
+	MinutesConclusion     = recordingwire.MinutesConclusion
+	MinutesGroup          = recordingwire.MinutesGroup
+	MinutesTopic          = recordingwire.MinutesTopic
+	MinutesBullet         = recordingwire.MinutesBullet
+	DebateStatus          = recordingwire.DebateStatus
+	MinutesDebate         = recordingwire.MinutesDebate
+	MinutesDebatePosition = recordingwire.MinutesDebatePosition
+	MinutesDebateOutcome  = recordingwire.MinutesDebateOutcome
+	photoBook             = recordingwire.PhotoBook
+	storedPhoto           = recordingwire.StoredPhoto
 )
 
 // calendarEntry is a calendar entry as the writers read it (recordingwire.CalendarItem, its kind and id as the text
@@ -157,6 +161,8 @@ const (
 	MinutesPending   = recordingwire.MinutesPending
 	MinutesReady     = recordingwire.MinutesReady
 	MinutesFailed    = recordingwire.MinutesFailed
+	DebateOpen       = recordingwire.DebateOpen
+	DebateSettled    = recordingwire.DebateSettled
 	PartPhotos       = recordingwire.PartPhotos
 	PartLines        = recordingwire.PartLines
 	PartAsks         = recordingwire.PartAsks
@@ -528,10 +534,14 @@ func (s *store) putSummary(_, id, text string, _ bool) error {
 
 // The engine's members the writers call.
 
-// RecordingDays is the retention in days as it is in effect (the port computes it, default included), so
-// recordingDays, the knowledge base's default rule the upload names around it, has nothing left to do here.
+// RecordingDays is the text's retention in days as it is in effect (the port computes it, default included): 0 means
+// forever.
 func (e *engine) RecordingDays() int { return e.Store.core.RecordingDays() }
-func recordingDays(days int) int     { return days }
+
+// pastRetention: a recording that started at start is past a retention of days at now (never when days is 0).
+func pastRetention(start, now time.Time, days int) bool {
+	return days > 0 && start.Before(now.UTC().AddDate(0, 0, -days))
+}
 
 func (e *engine) now() time.Time                    { return e.Store.core.Now() }
 func (e *engine) logf(f string, a ...any)           { e.Store.core.Logf(f, a...) }

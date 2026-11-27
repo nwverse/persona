@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { createRuntime, interactionId, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import {
@@ -1892,19 +1892,20 @@ export function createPaseoBridge(deps = {}, options = {}) {
   async function check(params) {
     const provider = params.launcher
     if (!launchers.some((l) => l.name === provider)) throw new RpcError(`Paseo has no provider ${provider ?? ''} that can start agents`, 'not_found')
-    if (!params.cwd || !params.prompt || !isDir(params.cwd)) throw new RpcError('A check needs its empty directory and a prompt', 'bad_params')
+    const cwd = expandHome(params.cwd)
+    if (!cwd || !params.prompt || !isDir(cwd)) throw new RpcError('A check needs its empty directory and a prompt', 'bad_params')
     const started = Date.now()
     const before = await projectIds()
     let workspace
     let agentId
     try {
       const ws = await paseo.request('workspace.create.request', {
-        source: { kind: 'directory', path: params.cwd }, background: true, title: 'Persona launcher check', idempotencyKey: randomUUID(),
+        source: { kind: 'directory', path: cwd }, background: true, title: 'Persona launcher check', idempotencyKey: randomUUID(),
       }, { timeoutMs: 30_000 })
       if (!ws?.workspace?.id) throw new RpcError(`Paseo did not make the check's workspace: ${ws?.error ?? 'no reason given'}`, 'paseo')
       workspace = ws.workspace
       agentId = randomUUID()
-      const config = { provider, cwd: params.cwd }
+      const config = { provider, cwd }
       if (holdsPlan(provider)) config.modeId = 'plan'
       const created = await paseo.request('agent.create.request', {
         agentId, config, workspaceId: workspace.id, initialPrompt: params.prompt, labels: { [CHECK_LABEL]: '1' },
@@ -1942,6 +1943,15 @@ export function createPaseoBridge(deps = {}, options = {}) {
       log(`paseo: listing its projects: ${err.message}`)
       return undefined
     }
+  }
+
+  // Match the Go node's proto.ExpandHome for the current user's home directory.
+  function expandHome(p) {
+    if (p === '~') return homedir()
+    if (typeof p === 'string' && p[0] === '~' && (p[1] === '/' || p[1] === sep)) {
+      return join(homedir(), p.slice(2))
+    }
+    return p
   }
 
   function isDir(p) {
@@ -1995,7 +2005,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
    * its project, as in Paseo. Several workspaces at that worktree: the one under its repository's project record, then
    * the latest.
    */
-  function workspaceFor(named, cwd, { strict = false } = {}) {
+  function workspaceFor(named, cwd, { strict = false, projectId } = {}) {
     if (typeof named === 'string' && named) {
       if (workspaces.has(named) || [...agents.values()].some(({ agent }) => agent.workspaceId === named)) return named
       if (strict && workspacesRead && WORKSPACE_ID.test(named)) {
@@ -2009,14 +2019,20 @@ export function createPaseoBridge(deps = {}, options = {}) {
     for (const { agent, project } of agents.values()) {
       const ws = agent.workspaceId
       if (typeof ws !== 'string' || !ws || agent.archivedAt || !linkedWorktree(project)) continue
+      const owner = workspaces.get(ws)?.projectId ?? project?.projectKey ?? project?.projectId
+      if (projectId && owner !== projectId) continue
       const c = project.checkout
       if (!samePath(c.worktreeRoot ?? c.cwd, cwd) && !samePath(agent.cwd, cwd)) continue
       consider(ws, [strayRecord(project) ? 0 : 1, Date.parse(agent.updatedAt) || 0])
     }
     for (const d of workspaces.values()) {
-      // A worktree by its placement; one Paseo just made has none yet, only its kind.
-      if (!linkedWorktree(d.project) && !(d.workspaceKind === 'worktree' && !d.project)) continue
+      if (projectId && d.projectId !== projectId) continue
       const c = d.project?.checkout
+      // Once cwd-only resolution names the project, its exact directory workspace is reusable too; legacy duplicates
+      // under another project are not. Without that resolution, keep the existing worktree-only lookup unchanged.
+      const exactOwned = projectId && samePath(d.workspaceDirectory, cwd)
+      // A worktree by its placement; one Paseo just made has none yet, only its kind.
+      if (!exactOwned && !linkedWorktree(d.project) && !(d.workspaceKind === 'worktree' && !d.project)) continue
       if (!samePath(d.workspaceDirectory, cwd) && !(c && samePath(c.worktreeRoot ?? c.cwd, cwd))) continue
       consider(d.id, [strayRecord(d.project) ? 0 : 1, Date.parse(d.activityAt ?? d.createdAt) || 0])
     }
@@ -2059,10 +2075,16 @@ export function createPaseoBridge(deps = {}, options = {}) {
     return { checkouts: paseoCheckouts(worktreesBase(), root) }
   }
 
+  const physicalPath = (path) => {
+    try { return realpathSync(path) } catch { return resolve(path) }
+  }
+
   /**
    * Resolve creation ownership from a fresh, complete project list. Path aliases are the same directory; a linked
-   * worktree can use its main checkout's project. Names and remotes never identify a project (clones stay separate).
-   * An unavailable list or several matching records is not permission to allocate another project or guess one.
+   * worktree prefers its main checkout's project. Names and remotes never identify a project (clones stay separate).
+   * Duplicate records at one physical root (symlink spellings such as /home/me and /mnt/home/me) resolve to one stable pick:
+   * the record registered at the physical path itself, then the one with more workspaces, then the lowest ID.
+   * Distinct non-main roots stay ambiguous. An unavailable list is never permission to allocate another project.
    */
   async function projectAt(dir) {
     let res
@@ -2077,29 +2099,58 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
     if (!res.projects.length) return undefined
     // Do not use the display cache: a symlink may have moved since the last session list.
-    const physical = (path) => {
-      try { return realpathSync(path) } catch { return resolve(path) }
-    }
-    const roots = new Set([physical(dir)])
+    const roots = new Set([physicalPath(dir)])
+    let checkoutRoot
+    let mainRoot
     try {
       // Older Git versions do not support --path-format. The common directory is relative to this command's cwd.
       const { stdout } = await readGit('git', ['-C', dir, 'rev-parse', '--show-toplevel', '--git-common-dir'],
         { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024, env: { ...process.env, LC_ALL: 'C' } })
       const [top, common] = stdout.trim().split('\n')
       if (!top || !common) throw new Error('Git returned no checkout identity')
-      roots.add(physical(top))
-      const gitDir = physical(resolve(dir, common))
-      roots.add(basename(gitDir) === '.git' ? dirname(gitDir) : gitDir)
+      checkoutRoot = physicalPath(top)
+      roots.add(checkoutRoot)
+      const gitDir = physicalPath(resolve(dir, common))
+      mainRoot = basename(gitDir) === '.git' ? dirname(gitDir) : gitDir
+      roots.add(mainRoot)
     } catch (err) {
       if (err.code !== 128 || !/not a git repository/i.test(err.stderr ?? '')) {
         throw new RpcError('Cannot identify this checkout. Retry before creating anything.', 'project_unavailable')
       }
     }
-    const matches = new Set(res.projects.filter((p) => !p.archivedAt && roots.has(physical(p.projectRootPath))).map((p) => p.projectId))
+    const matches = new Map() // physical registered root -> active projects at that exact root
+    for (const p of res.projects) {
+      if (p.archivedAt) continue
+      const root = physicalPath(p.projectRootPath)
+      if (!roots.has(root)) continue
+      if (!matches.has(root)) matches.set(root, new Map())
+      matches.get(root).set(p.projectId, p)
+    }
+    const workspaceCount = (projectId) => {
+      let count = 0
+      for (const d of workspaces.values()) if (d.projectId === projectId) count++
+      return count
+    }
+    // Several records at one physical root are symlink aliases of the same directory, not a real ambiguity.
+    const pick = (root) => {
+      const found = [...matches.get(root).values()]
+      if (found.length === 1) return found[0].projectId
+      const rank = (p) => [resolve(p.projectRootPath) === root ? 0 : 1, -workspaceCount(p.projectId)]
+      found.sort((a, b) => {
+        const [ra, rb] = [rank(a), rank(b)]
+        return ra[0] - rb[0] || ra[1] - rb[1] || (a.projectId < b.projectId ? -1 : a.projectId > b.projectId ? 1 : 0)
+      })
+      log(`paseo: resolved ${found.length} duplicate projects at ${root} to ${found[0].projectId}`)
+      return found[0].projectId
+    }
+    // Only a linked worktree's legacy project yields to its main checkout's. A distinct project explicitly registered
+    // at a selected subdirectory of the main checkout stays ambiguous.
+    if (mainRoot && checkoutRoot !== mainRoot && matches.has(mainRoot)) return pick(mainRoot)
     if (matches.size > 1) {
       throw new RpcError('More than one Paseo project matches this folder. Choose a workspace in the intended project.', 'project_ambiguous')
     }
-    return matches.values().next().value
+    const [only] = matches.keys()
+    return only === undefined ? undefined : pick(only)
   }
 
   /** Paseo's worktrees root: its config's worktrees.root, else <Paseo home>/worktrees (its config.js resolveWorktreesRoot). */
@@ -2111,8 +2162,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
       root = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))?.worktrees?.root
     } catch {}
     if (typeof root === 'string' && root.trim()) {
-      let r = root.trim()
-      if (r === '~' || r.startsWith('~/')) r = join(homedir(), r.slice(1))
+      const r = expandHome(root.trim())
       return isAbsolute(r) ? resolve(r) : resolve(home, r)
     }
     return join(home, 'worktrees')
@@ -2131,7 +2181,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const named = typeof params.workspace_id === 'string' && params.workspace_id ? params.workspace_id : undefined
     const from = named ? workspaces.get(named) : undefined
     if (named && !from) throw new RpcError(`Paseo no longer has this workspace (${named}): refresh the list and choose again. Nothing was created.`, 'workspace_missing')
-    const cwd = from?.workspaceDirectory || (typeof params.cwd === 'string' ? params.cwd : '')
+    const cwd = expandHome(from?.workspaceDirectory || (typeof params.cwd === 'string' ? params.cwd : ''))
     if (!cwd || !isDir(cwd)) throw new RpcError(`No such folder: ${cwd || '(none)'}`, 'bad_request')
     const branch = typeof params.branch === 'string' ? params.branch.trim() : ''
     const source = { kind: 'worktree', cwd }
@@ -2147,6 +2197,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (from && !from.projectId) throw new RpcError('Paseo did not report this workspace\'s project. Refresh the list.', 'project_unavailable')
     const projectId = from ? from.projectId : await projectAt(cwd)
     if (projectId) source.projectId = projectId
+    else if (!from) source.cwd = physicalPath(cwd)
     const req = { source }
     if (typeof params.key === 'string' && params.key) req.idempotencyKey = params.key.slice(0, 512)
     const res = await paseo.request('workspace.create.request', req, { timeoutMs: Math.max(deadline - Date.now(), 1000) })
@@ -2234,7 +2285,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   async function start(params) {
     if (params.resume) return takeOver(params)
     if (!paseo.connected) throw new RpcError('Paseo 现在没有连上（没在运行，或正在重启），这次没有新建。', 'unavailable')
-    const cwd = typeof params.cwd === 'string' ? params.cwd : ''
+    const cwd = expandHome(typeof params.cwd === 'string' ? params.cwd : '')
     if (!cwd || !isDir(cwd)) throw new RpcError(`没有这个目录：${cwd || '（空）'}`, 'bad_request')
     // Read-only (plan): only a provider holding plan mode starts it, and nothing falls back to a writable one (#3238).
     const readonly = params.permission_mode === 'plan'
@@ -2285,7 +2336,20 @@ export function createPaseoBridge(deps = {}, options = {}) {
       }
     }
     const prompt = typeof params.prompt === 'string' ? params.prompt : ''
-    let workspaceId = workspaceFor(params.workspace_id, cwd, { strict: true })
+    const implicitWorkspace = !(typeof params.workspace_id === 'string' && params.workspace_id)
+    let projectId
+    let projectError
+    if (implicitWorkspace) {
+      try {
+        projectId = await projectAt(cwd)
+      } catch (err) {
+        projectError = err
+      }
+    }
+    // Main-project preference is best effort for an implicit start: an existing worktree workspace remains usable when
+    // project discovery fails. With no such fallback, keep the original creation error instead of allocating blindly.
+    let workspaceId = workspaceFor(params.workspace_id, cwd, { strict: true, projectId })
+    if (!workspaceId && projectError) throw projectError
     // The Persona session is fixed for this start: the id the hub named for it (session_id: the manager names the
     // sessions it starts, to find one whose answer it lost), else paseo-<the first Paseo agent id>. The row handed to
     // the node while Paseo is still creating, the label, the tools' PERSONA_SESSION_ID and the listed session are all
@@ -2318,7 +2382,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     // that cannot preapprove them gets them without, asking as before (allowOwn answers those asks).
     const created = (async () => {
       if (!workspaceId) {
-        const projectId = await projectAt(cwd)
+        if (!implicitWorkspace) projectId = await projectAt(cwd)
         if (projectId) {
           // agent.create has no projectId field. Create the directory workspace with explicit ownership, then start
           // in it. Keep this inside the start's existing wait/late-result flow, with one key across reconnects.
@@ -2335,6 +2399,9 @@ export function createPaseoBridge(deps = {}, options = {}) {
           if (!workspaces.get(d.id)?.project) keepWorkspace(d)
           workspaceId = d.id
           scheduleWorkspaces(0)
+        } else {
+          // No existing Paseo project yet: canonicalize cwd so Paseo registers the physical root, not a symlink alias.
+          config.cwd = physicalPath(cwd)
         }
       }
       return attempt(true, true)
@@ -2486,7 +2553,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
       throw new RpcError('这个会话正在别处的 Claude Code 里开着（Paseo 之外），Paseo 再接着它就会有两个进程写同一个会话。先在那边关掉它。这次没有发送。', 'open_elsewhere')
     }
     const from = kept ?? was
-    const cwd = from?.cwd || (typeof params.cwd === 'string' ? params.cwd : '')
+    const cwd = expandHome(from?.cwd || (typeof params.cwd === 'string' ? params.cwd : ''))
     if (!cwd || !isDir(cwd)) throw new RpcError(`接不上这个会话：它的目录不在了（${cwd || '未知'}）`, 'bad_request')
     // The provider: the archived agent's own (Paseo finds its record by provider and session), else the launcher's
     // when it runs Claude Code, else the one this machine's Claude agents use most lately.

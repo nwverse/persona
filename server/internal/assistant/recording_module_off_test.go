@@ -255,12 +255,39 @@ func TestStoredRecordingsOutliveTheirModule(t *testing.T) {
 			t.Errorf("GET %s: %d, want %d", path, w.Code, want)
 		}
 	}
-	// What the module adds or removes about photos stays its own.
-	if code, _ := moduleOffRequest(t, s, "DELETE", "/api/v1/recordings/"+moduleOffRec+"/photos/1"); code != http.StatusNotFound && code != http.StatusMethodNotAllowed {
-		t.Errorf("deleting a photo through the module's route: %d without the module", code)
+	// The list is a Core read too; the module's writes stay absent, with no method-mismatch 405 in their place.
+	list := "/api/v1/recordings/" + moduleOffRec + "/photos"
+	code, out = moduleOffRequest(t, s, "GET", list)
+	var photos []kb.Photo
+	_ = json.Unmarshal(out["photos"], &photos)
+	if code != http.StatusOK || len(photos) != 1 || photos[0].N != 1 || photos[0].ID != moduleOffPhoto.ID || photos[0].Text != "whiteboard" {
+		t.Errorf("the stored photo list: %d %v", code, photos)
 	}
-	if code, _ := moduleOffRequest(t, s, "GET", "/api/v1/recordings/"+moduleOffRec+"/photos"); code != http.StatusNotFound {
-		t.Errorf("the module's photo list: %d without the module", code)
+	if w := moduleOffGet(s, list, "scoped"); w.Code != http.StatusForbidden {
+		t.Errorf("the photo list without full credentials: %d", w.Code)
+	}
+	if code, out := moduleOffRequest(t, s, "GET", "/api/v1/recordings/77777777-7777-4777-8777-777777777777/photos"); code != http.StatusNotFound || string(out["code"]) != `"recording_not_found"` {
+		t.Errorf("a missing recording's photo list: %d %v", code, out)
+	}
+	f.mu.Lock()
+	f.hello.KB = &KBSettings{ReadOnly: true}
+	f.mu.Unlock()
+	if code, _ := moduleOffRequest(t, s, "HEAD", list); code != http.StatusOK {
+		t.Errorf("HEAD photo list on a read-only knowledge base: %d", code)
+	}
+	f.mu.Lock()
+	f.hello.KB = &KBSettings{Off: true}
+	f.mu.Unlock()
+	if code, out := moduleOffRequest(t, s, "GET", list); code != http.StatusServiceUnavailable || string(out["code"]) != `"kb_disabled"` {
+		t.Errorf("the photo list with the knowledge base off: %d %v", code, out)
+	}
+	f.mu.Lock()
+	f.hello.KB = &KBSettings{}
+	f.mu.Unlock()
+	for _, req := range []struct{ method, path string }{{"POST", list}, {"DELETE", photo}} {
+		if code, _ := moduleOffRequest(t, s, req.method, req.path); code != http.StatusNotFound {
+			t.Errorf("%s %s: %d without the module", req.method, req.path, code)
+		}
 	}
 	// Found by search: a line of the transcript, and the minutes.
 	for _, q := range []string{"zebrafish", "Export review"} {
@@ -337,6 +364,12 @@ func TestStoredRecordingsOutliveTheirModule(t *testing.T) {
 	}
 	if code, out := moduleOffRequest(t, s, "DELETE", "/api/v1/kb/recordings/"+moduleOffPending); code != http.StatusOK || string(out["deleted"]) != "false" {
 		t.Errorf("a second delete: %d %v", code, out)
+	}
+	if code, out := moduleOffRequest(t, s, "DELETE", "/api/v1/kb/recordings/"+moduleOffRec); code != http.StatusOK {
+		t.Fatalf("delete the photo's recording: %d %v", code, out)
+	}
+	if code, out := moduleOffRequest(t, s, "GET", list); code != http.StatusGone || string(out["code"]) != `"recording_deleted"` {
+		t.Errorf("a deleted recording's photo list: %d %v", code, out)
 	}
 }
 
@@ -450,8 +483,19 @@ func TestStoredPhotoWithTheModule(t *testing.T) {
 	if w := moduleOffGet(s, photo, ""); w.Code != http.StatusOK || w.Body.String() != string(moduleOffPhoto.Data) || w.Header().Get("Content-Type") != kb.PhotoJPEG {
 		t.Errorf("the stored photo with the module: %d %q", w.Code, w.Body.String())
 	}
-	if code, _ := moduleOffRequest(t, s, "GET", "/api/v1/recordings/"+moduleOffRec+"/photos"); code != http.StatusOK {
-		t.Errorf("the module's photo list: %d", code)
+	list := "/api/v1/recordings/" + moduleOffRec + "/photos"
+	code, out := moduleOffRequest(t, s, "GET", list)
+	var photos []kb.Photo
+	_ = json.Unmarshal(out["photos"], &photos)
+	if code != http.StatusOK || len(photos) != 1 || photos[0].ID != moduleOffPhoto.ID {
+		t.Errorf("the Core photo list with the module: %d %v", code, photos)
+	}
+	for path, allow := range map[string]string{list: "GET, HEAD, POST", photo: "DELETE, GET, HEAD"} {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest("PUT", path, nil))
+		if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != allow {
+			t.Errorf("PUT %s with the module: %d, Allow %q", path, w.Code, w.Header().Get("Allow"))
+		}
 	}
 	if code, out := moduleOffRequest(t, s, "DELETE", photo); code != http.StatusOK || string(out["deleted"]) != "true" {
 		t.Errorf("the module's photo delete: %d %v", code, out)
@@ -469,5 +513,8 @@ func TestStoredPhotoWithTheModule(t *testing.T) {
 	}
 	if w := moduleOffGet(s, photo, ""); w.Code != http.StatusGone || !strings.Contains(w.Body.String(), "recording_deleted") {
 		t.Errorf("a photo of a deleted recording: %d %s", w.Code, w.Body.String())
+	}
+	if code, out := moduleOffRequest(t, s, "GET", list); code != http.StatusGone || string(out["code"]) != `"recording_deleted"` {
+		t.Errorf("the photo list of a deleted recording: %d %v", code, out)
 	}
 }

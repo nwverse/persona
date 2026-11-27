@@ -86,21 +86,27 @@ func (b *routineCheckApprovalBook) run(key routineCheckApprovalKey, call *routin
 	defer call.cancel()
 	allowed, err := ask(ctx)
 	b.mu.Lock()
-	delete(b.calls, key)
+	if b.calls[key] == call {
+		delete(b.calls, key)
+	}
 	call.allowed, call.err = allowed, err
 	close(call.done)
 	b.mu.Unlock()
 }
 
 func (b *routineCheckApprovalBook) leave(key routineCheckApprovalKey, call *routineCheckApproval) {
+	var cancel context.CancelFunc
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.calls[key] != call {
-		return
+	if b.calls[key] == call {
+		call.waiters--
+		if call.waiters == 0 {
+			delete(b.calls, key)
+			cancel = call.cancel
+		}
 	}
-	call.waiters--
-	if call.waiters == 0 {
-		call.cancel()
+	b.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 

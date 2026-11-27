@@ -6,7 +6,7 @@ import { lineItemIds } from "./chat-search";
 import { splitInlineTrailer } from "./inline-mentions";
 import { isLoopTick, isOwnMessage, parseUserText, type ChatLine, type Segment, type UserMessage } from "./turns";
 import type { Item } from "./types";
-import type { UserInputIndex } from "./user-input-index";
+import { hasInputExcerpt, inputEntry, type UserInputIndex, type UserInputPosition } from "./user-input-index";
 
 /** One of your questions in the loaded conversation: what a tick knows. */
 export interface NavRailTick {
@@ -14,6 +14,8 @@ export interface NavRailTick {
   id: string;
   /** Optional loaded row owner and stable sequence from the independent server index. */
   lineId?: string;
+  /** Owner in the retained live tail when the corresponding row is outside the reading window. */
+  retainedLineId?: string;
   seq?: number;
   /** An unloaded input's ordinal, localized by the component rather than cached in its preview. */
   ordinal?: number;
@@ -23,6 +25,8 @@ export interface NavRailTick {
   attachmentsOnly?: number;
   /** A bounded answer excerpt, or visible follow-up text in this exchange while the answer is not available. */
   answerExcerpt?: string;
+  /** A compact position whose excerpt can be requested on demand. */
+  loadPreview?: boolean;
 }
 
 /** Even a single loaded input is a useful position and selection target. */
@@ -193,18 +197,21 @@ export function navRailMark(index: number, count: number, current: number | null
 export interface NavRailPlan {
   start: number;
   pitch: number;
-  hidden: number;
   count: number;
+  content: number;
+  viewport: number;
 }
 
-/** Bound the DOM, not the navigable history: keep a window around the selected input. Keyboard navigation and
- *  the rail's wheel can move this window in either direction; older inputs are never permanently discarded. */
-export function planNavRailTicks(count: number, height: number, focus = count - 1): NavRailPlan {
-  if (count <= 0 || height <= 0) return { start: 0, pitch: NAV_RAIL_TICK_PITCH, hidden: 0, count: 0 };
-  const capacity = Math.max(1, Math.floor(height / NAV_RAIL_TICK_MIN_PITCH));
-  const shown = Math.min(count, capacity, NAV_RAIL_METRICS.maxTicks);
-  const start = Math.max(0, Math.min(Math.floor(focus) - Math.floor(shown / 2), count - shown));
-  return { start, pitch: Math.min(NAV_RAIL_TICK_PITCH, height / shown), hidden: count - shown, count: shown };
+/** A full-height track with only the marks in and just outside its viewport mounted. */
+export function planNavRailTicks(count: number, height: number, scrollTop = 0): NavRailPlan {
+  if (count <= 0 || height <= 0) return { start: 0, pitch: NAV_RAIL_TICK_PITCH, count: 0, content: 0, viewport: 0 };
+  const pitch = Math.min(NAV_RAIL_TICK_PITCH, Math.max(NAV_RAIL_TICK_MIN_PITCH, Math.floor(height / count)));
+  const content = count * pitch;
+  const viewport = Math.min(height, content);
+  const top = Math.max(0, Math.min(scrollTop, content - viewport));
+  const start = Math.max(0, Math.floor(top / pitch) - NAV_RAIL_METRICS.overscan);
+  const end = Math.min(count, Math.ceil((top + viewport) / pitch) + NAV_RAIL_METRICS.overscan);
+  return { start, pitch, count: end - start, content, viewport };
 }
 
 /** Cached monotone offsets make normal scrolling logarithmic, without per-message DOM reads. */
@@ -220,31 +227,47 @@ export function activeNavRailOffset(offsets: { index: number; top: number }[], t
   return offsets[Math.max(0, lo - 1)].index;
 }
 
-const entryOf = (id: string) => id.split("#")[0];
+export function withInputPreview(tick: NavRailTick, input?: UserInputPosition): NavRailTick {
+  if (!input) return tick;
+  const preview = tick.preview || navRailPreview(splitInlineTrailer(input.preview ?? "").text);
+  return {
+    ...tick, preview,
+    attachmentsOnly: preview ? undefined : tick.attachmentsOnly ?? input.attachments,
+    answerExcerpt: tick.answerExcerpt || navRailExcerpt(input.answer ?? "") || undefined,
+  };
+}
 
-export function indexedNavTicks(index: UserInputIndex, lines: ChatLine[], items: Item[]): NavRailTick[] {
+export function indexedNavTicks(index: UserInputIndex, lines: ChatLine[], items: Item[], retained?: { lines: ChatLine[]; items: Item[] }): NavRailTick[] {
   const owner = new Map<string, string>();
-  for (const line of lines) for (const id of lineItemIds(line)) owner.set(entryOf(id), line.id);
+  for (const line of lines) for (const id of lineItemIds(line)) owner.set(inputEntry(id), line.id);
   const loaded = new Map(navRailTicks(lines).map((tick) => [tick.id, tick]));
+  const retainedOwners = new Map<string, string>();
+  for (const line of retained?.lines ?? []) for (const id of lineItemIds(line)) retainedOwners.set(inputEntry(id), line.id);
+  for (const tick of retained ? navRailTicks(retained.lines) : []) {
+    if (!loaded.has(tick.id)) loaded.set(tick.id, tick);
+  }
   const words = new Map<string, string>();
-  for (const item of items) {
-    if (item.role === "user" && item.kind === "text") {
-      const key = entryOf(item.id);
-      words.set(key, [words.get(key), parseUserText(item.text ?? "").text].filter(Boolean).join("\n"));
+  for (const source of retained ? [retained.items, items] : [items]) {
+    const byEntry = new Map<string, string>();
+    for (const item of source) {
+      if (item.role === "user" && item.kind === "text") {
+        const key = inputEntry(item.id);
+        byEntry.set(key, [byEntry.get(key), parseUserText(item.text ?? "").text].filter(Boolean).join("\n"));
+      }
     }
+    for (const [id, text] of byEntry) words.set(id, text);
   }
   return index.inputs.map((input, i) => {
-    const key = entryOf(input.id);
+    const key = inputEntry(input.id);
     const lineId = owner.get(key);
-    const tick = lineId ? loaded.get(lineId) : undefined;
-    const preview = navRailPreview(words.get(key) ?? "") || tick?.preview || navRailPreview(splitInlineTrailer(input.preview ?? "").text);
-    const attachments = preview ? undefined : tick?.attachmentsOnly ?? input.attachments;
-    const answer = tick?.answerExcerpt || navRailExcerpt(input.answer ?? "");
-    return {
-      id: `seg:${input.id}`, seq: input.seq, lineId, ordinal: index.total - index.inputs.length + i + 1,
-      preview,
-      ...(attachments ? { attachmentsOnly: attachments } : {}),
-      ...(answer ? { answerExcerpt: answer } : {}),
-    };
+    const retainedLineId = lineId ? undefined : retainedOwners.get(key);
+    const local = lineId ?? retainedLineId;
+    const tick = local ? loaded.get(local) : undefined;
+    const preview = navRailPreview(words.get(key) ?? "") || tick?.preview || "";
+    const loadPreview = !local && !words.has(key) && !hasInputExcerpt(input);
+    return withInputPreview({
+      id: `seg:${input.id}`, seq: input.seq, lineId, retainedLineId, ordinal: i + 1, preview, loadPreview,
+      attachmentsOnly: tick?.attachmentsOnly, answerExcerpt: tick?.answerExcerpt,
+    }, hasInputExcerpt(input) ? input : undefined);
   });
 }

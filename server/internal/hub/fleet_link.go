@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -134,9 +135,7 @@ func init() {
 		delete(f.interactions, p.ID)
 		f.mu.Unlock()
 		h.push.withdraw(p.ID) // a suspended app hears it by push (#4349)
-		if todo := assistantwire.TodoOfAskCard(p.ID); todo != "" {
-			h.push.todoPushOver(todo) // the to-do no longer waits on the owner: its next push rings (push_todo_dedup.go)
-		}
+		h.push.resolvedPushOver(p.ID)
 		event := map[string]any{"type": "interaction_resolved", "id": p.ID}
 		if p.AnsweredBy != "" {
 			event["answered_by"] = p.AnsweredBy // the app marks a question the assistant answered (docs/assistant/assistant.md)
@@ -422,6 +421,13 @@ func (h *Hub) fleetLiveOf() (FleetState, FleetStats, string) {
 // write or two clocks a little apart.
 const cardAnswerGrace = 30 * time.Second
 
+// callAssistantAsIs uses the caller's deadline, if any, for a typed assistant call.
+func callAssistantAsIs[P, R any](ctx context.Context, a assistantRemote, method buswire.Method[P, R], params P) (R, error) {
+	caller := managerBusCaller{id: a.to(ctx), call: a.h.callBusAsIs}
+	result, err := buswire.Call(ctx, caller, method, params)
+	return result, assistantOffline(err)
+}
+
 // waitInteraction asks the user on the phone for one of the hub's own features (a mail send, Cua's apps, ego's
 // scripts, persona_settings): the manager shows the card and waits for its answer (fleet.ask). Without the manager
 // nothing can be asked: a dismiss.
@@ -439,8 +445,9 @@ func (h *Hub) waitInteraction(ctx context.Context, ix proto.Interaction) (proto.
 		ctx, cancel = context.WithDeadline(ctx, ix.ExpiresAt.Add(cardAnswerGrace))
 		defer cancel()
 	}
-	var r proto.Resolution
-	if err := h.asstOf(h.machineOwner(ix.MachineID)).callAsIs(ctx, assistantwire.MethodFleetAsk, map[string]any{"interaction": ix}, &r); err != nil {
+	r, err := callAssistantAsIs(ctx, h.asstOf(h.machineOwner(ix.MachineID)), assistantwire.FleetAskMethod,
+		assistantwire.FleetAskParams{Interaction: ix})
+	if err != nil {
 		h.logf("[%s] ask %s: %v", ix.MachineID, ix.ToolName, err)
 		return proto.Resolution{Dismiss: true}, nil
 	}
@@ -908,10 +915,11 @@ func relatedTodoID(key string, allowAsk bool) string {
 // own, or none. What the extensions are told of it (agent.finished, agent.needs_you) goes to from's only, and the
 // devices that muted from (NotifyPrefs.MutedManagers) get none of it.
 //
-// It returns where an assistant's push or a finished turn went (nil for a card, a reply reminder or a decision, whose
-// delivery is not reported): the devices it was handed to, the offline ones that keep it, and the ln-mode reason it was
-// held. The assistant's notify_user tool tells the model from it whether the notice reached a device, the briefing or
-// nothing, and counts it as an interruption only when a device took it.
+// It returns where an assistant's push or a finished turn went (nil for a card, a reply reminder or a decision when it
+// was not held; when held, held carries the intercept reason so notify.request reports held/reason consistently without
+// breaking existing checks for nil devices): the devices it was handed to, the offline ones that keep it, and the
+// ln-mode reason it was held. The assistant's notify_user tool tells the model from it whether the notice reached a
+// device, the briefing or nothing, and counts it as an interruption only when a device took it.
 func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *pushOutcome, err error) {
 	switch n.Kind {
 	case assistantwire.NotifyInput:
@@ -922,7 +930,9 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 		if !ok || cmp.Or(ix.Manager, assistantwire.AssistantID) != from {
 			return nil, &rpc.Error{Code: devicewire.CodeNoDevice, Message: "an input push is for a pending card the manager reported"}
 		}
-		h.notifyInteractionHinted(from, ix, n.Subtitle, n.LinkCovered, n.Level, n.RelatedKey, n.Depth, n.Track)
+		if held := h.notifyInteractionHinted(from, ix, n.Subtitle, n.LinkCovered, n.Level, n.RelatedKey, n.Depth, n.Track); held != "" {
+			return &pushOutcome{held: held}, nil
+		}
 		return nil, nil
 	case assistantwire.NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyReply, assistantwire.NotifyDecide:
 		if !h.ownsRef(from, n.DeviceID, n.SessionID) {
@@ -932,13 +942,12 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 	}
 	switch n.Kind {
 	case assistantwire.NotifyPush: // one with an id shows once, sent again however late (a day recap's push)
-		if !h.push.claimTodoPush(n.RelatedKey) {
-			// The same to-do's push about the same reason rang and the to-do still waits on the owner for it.
+		if !h.push.claimTodoPushCard(n.RelatedKey, n.CardID) {
+			// The same to-do's or concern's push about the same reason/state rang and still waits on the owner.
 			return &pushOutcome{held: interceptReasonDedup}, nil
 		}
 		policy := pushPolicy{kind: assistantwire.NotifyPush, level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, !n.Asked),
-			depth: n.Depth, track: n.Track, cardID: n.CardID}
-		policy.level = h.pushGradingNotifyLevel(from, n, policy.level)
+			depth: n.Depth, track: n.Track, cardID: n.CardID, derivedLevel: n.Level == "", asked: n.Asked, mainConv: h.isMainForManager(from, n.DeviceID, n.SessionID)}
 		o := h.notifyDoneUnder(from, "assistant", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, pushWants{}, managerPushCollapseID(from, n.ID),
 			pushRecordingID(n.RecordingID), policy)
 		out = &o
@@ -949,34 +958,20 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 				done: true, track: n.Track})
 		out = &o
 	case assistantwire.NotifyReply:
-		h.notifyReplyKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, n.RelatedKey)
+		if held := h.notifyReplyKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, n.RelatedKey); held != "" {
+			out = &pushOutcome{held: held}
+		}
 	case assistantwire.NotifyDecide:
 		if n.Todo == nil || n.Todo.ID == "" || n.Todo.AskedAt.IsZero() || n.Todo.Recommend == "" {
 			return nil, errors.New("a decision's push needs its to-do, when it was asked and the option its OK takes")
 		}
-		h.notifyDecideKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, *n.Todo, n.RelatedKey)
+		if held := h.notifyDecideKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, *n.Todo, n.RelatedKey); held != "" {
+			out = &pushOutcome{held: held}
+		}
 	case assistantwire.NotifyHealthWater:
 		return h.notifyHealthWater(from, n)
 	default:
 		return nil, fmt.Errorf("unknown notification kind %q", n.Kind)
 	}
 	return out, nil
-}
-
-// pushGradingNotifyLevel is a notify_user push's effective level while push grading is on. A level the caller named explicitly
-// (P0/P1/P2) always stands. A notice that named none and came from the main conversation still interrupts (P0): the
-// owner talking to Persona directly keeps its alerts. Every other conversation's ordinary notice is P1 — held for the
-// "Needs you" list and the briefing instead of alerting. With the switch off the level the caller named stands, so
-// delivery is exactly as before.
-func (h *Hub) pushGradingNotifyLevel(manager string, n assistantwire.Notification, derived string) string {
-	if h.push == nil || !h.push.filteringFor(manager) { // hub.ln_mode on, attention mode in force, or active extension layer
-		return derived
-	}
-	if n.Level != "" {
-		return derived
-	}
-	if h.isMainOn(n.DeviceID, n.SessionID) {
-		return assistantwire.LevelP0
-	}
-	return assistantwire.LevelP1
 }

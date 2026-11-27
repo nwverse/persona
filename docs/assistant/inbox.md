@@ -5,6 +5,22 @@ The Inbox tab is Persona's information entry point: Lark messages and mail from 
 
 Android's navigation badge counts each unread open item in Needs you once, including separate items from the same source conversation; Web and Apple use the same item-level rule. The current hub `status` decides, with the existing tier fallback; FYI, Noise, In progress, read and completed items do not count. Reading an item never files it: read-but-pending items remain in their hub sections and keep their completion state, and Android has no separate read-pending section. Zero keeps the existing hidden-badge behavior. The roster's `inbox_needs_you` and the home page's pending count retain their separate meaning: open items requiring action, including ones already read. A receipt can precede the next item-list update, so Android's badge also reads the reconciled `InboxConversations` state rather than only the cached item flags.
 
+## Opt-in automatic replies (#9762)
+
+Suggested replies still wait for Send by default. A scoped `send` standing
+authorization can enable plain-text Lark via lark-cli replies for an exact
+group/chat (or explicitly all chats in that channel), scenario `inbox_reply`,
+and one sender identity. Configure and revoke it in Web Settings > Persona;
+see [Scoped outward messages](assistant.md#scoped-outward-messages-9762).
+
+The suggestion must be persisted before the existing version-checked
+confirmation path consumes it. Handbacks, document writes, conclusions, and
+Agent/to-do suggestions remain manual. Each automatic attempt is durably
+audited before transport. Each source message permits only one automatic reply
+attempt per sender, even across rewording, suggestion versions, or a manager restart.
+Failure or uncertain delivery needs inspection and a deliberate manual retry.
+Revocation and identity changes serialize with the final grant check/send.
+
 ## Ownership: the manager owns the Inbox (2026-11-04)
 
 The Inbox belongs to the **manager** (assistant process `personad assistant`; `docs/assistant/assistant.md`, "Boundary with hub"): items and their state (pre-admission triage,
@@ -61,6 +77,37 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
   memory, mail rounds read each account's newest page, settling connectors are asked every round. Triage, admission and translation undo their failed rows the same way.
 - Immediately after restart, before a round lists sources, the manager still knows plugin-provided connectors (`extensions` in `inbox.config`). Their items still have no fallback and must wait for the model;
   unknown sources behave likewise, never defaulting to unimportant.
+
+### Route external updates to work
+
+Inbox source routing is for people who want specific chats, repositories, mail or subscriptions to update their work.
+Forwarding starts after the owner configures a source mode. Persona uses the closest applicable binding and sends
+actionable updates to one owner. FYI updates are kept in the target's activity. When a source serves several topics,
+Persona can sort short summaries against the bound work. New work appears as a to-do confirmation unless the owner
+has enabled automatic to-do creation for its owning direction. An update to work already in progress goes to the
+existing owner. The Inbox can receive the update before it is routed. Digest sources wait for their configured window.
+See [External source bindings](../protocol/protocol.md#external-source-bindings) for configuration and source identities.
+
+### Move existing forwarding rules
+
+Existing Lark topic links and the Inbox option to forward matching GitHub pull-request and issue updates continue
+working. The option is saved as `inbox.todo_forward.enabled` in Assistant settings. Existing repository links
+are available to the new routing rules. Persona also recognizes an already linked Lark topic when you inspect that
+topic. You can continue opening work and replying to it through the Lark bot as before.
+
+1. Ask Persona in the main conversation to inspect a specific source and check whether the destination you expect
+   is already linked. For an older rule that matched a link in message text, add an explicit source link if you want
+   that source to use scoped routing.
+2. Start with one pull request, issue or topic. Set how often updates should arrive and who handles them. Keep
+   **Ask before creating a to-do** if you want to decide about new work. Review the approval card when changing a
+   rule through chat.
+3. Verify where a new update goes before configuring a wider source. Leave the legacy forwarding switch enabled
+   while you still want its behavior for sources you have yet to configure.
+
+To restore the old behavior for new updates, remove the overrides that set a forwarding mode on that path or
+restore the original policy. If a parent still sets a mode, the source inherits it. **Off** and **On request**
+keep automatic routing off for that source. An update already admitted has a receipt, so changing the rule does
+not send it a second time. Items still in Inbox can be handled there. [Routing and compatibility details](../protocol/protocol.md#legacy-routing-compatibility).
 
 ### Send failures (2026-11-16, #9125)
 
@@ -179,6 +226,29 @@ they are not listed. No relational table or connector acknowledgement protocol i
   until turned off and kept with the other connector switches. Off, the mail rounds read no account (`readMail`), so the mail items the
   Inbox has stay as they are (and its accounts' read errors as last read); search, replies and the knowledge base go on. Turned on again, the
   next round is a full one and reads mail at once. `mail` declares no inbox capability: `Manifest.InboxSwitch` gives it the switch.
+
+### Duplicate group mentions from Lark connectors
+
+The Inbox list shows one row when the built-in CLI connector and the Lark
+companion connector report an unambiguous copy of the same latest group mention.
+The connectors can use different message, chat, and sender IDs, so the manager
+compares the chat name, sender name, message minute, and complete message text
+from both sources. It ignores background messages and allows the known
+difference in how the sources render a trailing emoji. Short messages, clipped
+text, multiple matches, and a CLI batch with other new messages stay visible.
+
+The companion row keeps its own reply target and state, including a confirmed
+reply. When the CLI row has the only reply route, separate work, or an open
+request that the companion row would downgrade, both rows stay visible. The
+companion's related items link to the original CLI record and its history.
+Neither connector changes its collection, stored records, or sign-in. The list
+rechecks the match as each source moves. A later distinct message becomes
+visible on its own, and the original is still accessible by its ID.
+
+Different groups or people with identical display names can send identical
+text in the same minute. Without a shared upstream ID, the manager cannot tell
+these cases apart when only one candidate per source is present. The match
+therefore affects list visibility only and keeps each original record.
 
 ## Docs: mentions in sheets, bases, and documents (2026-10-31)
 
@@ -786,16 +856,19 @@ confirmable in new Apps. With reply policy absent or disabled, `/reply`, `/done`
 
 ## Relationships: parents and children (#2128)
 
-An item can have a parent (`parent: {kind, id, by}`), linking an item arriving from a chat, becoming a to-do, and going to several Agents into one thread.
-A parent is another Inbox item (`inbox`), a to-do (`todo`), or Agent session (`session`, ID `<machine>/<session>`). Persona stores, lists, and navigates only; it never guesses parents.
+A parent is another Inbox item (`inbox`), a to-do (`todo`), a coding Agent's session (`session`, ID `<machine>/<session>`), or a
+personal Agent's session (`agent`, ID `<agent source>:<sessionKey>`; the id `GET /api/v1/agents/sessions` lists). The two session
+kinds stay distinct: `session` opens a conversation on a computer, while `agent` opens an entry on the Agents page. The web Inbox
+Trail opens `agent` at `/a/<id>`; the native apps keep their existing pages and may follow with their own Agents routing.
+Persona stores, lists, and navigates only; it never guesses parents.
 To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
 
 - **Origin** (`by`): a new event continuing an earlier one from grouping (`continues`), connector `InboxThing.parent` (`connector`), or user-set (`user`).
   Automatic values never overwrite user values; connector values may overwrite `continues`, not vice versa.
 - **Set**: `PUT /api/v1/inbox/{id}/parent {kind, id}`; `null` or `{}` removes it (no DELETE, avoiding collision with `DELETE /api/v1/inbox/mutes/{id}`).
   Item parents must exist (404 otherwise); no cycles, at most 8 ancestor levels (409 otherwise). IDs up to 256 characters, no control characters (400). Return updated item.
-- **Read a thread**: `GET /api/v1/inbox/tree/{kind}/{id...}` returns `{node, item?, ancestors, children}`. `ancestors` nearest first (last may be a to-do / session without an item,
-  or an item no longer in Inbox, with no `item`); `children` are direct child items, oldest start time first. `kind` may be `todo` / `session` to list items growing from it.
+- **Read a thread**: `GET /api/v1/inbox/tree/{kind}/{id...}` returns `{node, item?, ancestors, children}`. `ancestors` nearest first (last may be a to-do / session / personal Agent without an item,
+  or an item no longer in Inbox, with no `item`); `children` are direct child items, oldest start time first. `kind` may be `todo` / `session` / `agent` to list items growing from it.
 - Extension tokens require `inbox.read` for trees, `inbox.write` for parent changes (`extwire/inbox_scopes.go`); Watch cannot call either API.
 - Client rendering: "Relationships" under "App" below (web `web/src/views/inbox/InboxLine.tsx` offers **Not the same matter** and **Same matter as…**, the latter also in the detail's More menu; they use the existing `PUT /api/v1/inbox/{id}/parent` with `null` and `{kind, id}` respectively).
 - Tests: `inbox_parent_test.go` (`continues`, PUT / removal, depth, precedence, trees).
@@ -1249,3 +1322,28 @@ serves: everyone reading the Inbox on the Assistant side; it adds no setting and
   iPhone's Watch summary carries up to 20 items (`WatchSummary.inbox`); while open, Watch fetches `/api/v1/inbox` directly every 8 seconds. New items vibrate.
 - Open `WatchInboxItemView`: summary, latest message; AI reply drafts first and displays it, then Send (`/reply`); Done.
 - DEBUG: Watch `-openInboxFirst YES` opens the first item.
+
+
+### Chat-created tasks and recent Inbox topics (#15557)
+
+For people turning a chat request or screenshot into a task, `task_plan` also looks for a recent matching group item
+when `inbox_item` is omitted. An explicit validated handoff takes priority; `inbox_item: "none"` disables this lookup.
+Main chat, an explicit supervisor assignment and a direction receiving the owner's verified quote use the same path.
+Only the title, prompt and manager-verified original request are evidence; generated context and image pixels are not.
+
+The manager considers open, visible action group items that arrived within 24 hours (legacy rows fall back to their
+source update time), excluding merged members, mutes and existing task links. The normalized group name must match
+as a complete name, together with a sender, full non-root URL or a distinguishing verbatim passage. Group-only matches,
+short stock phrases and ambiguous topics yield suggestions rather than a link. URL matching never collapses a domain.
+
+Two sources remain separate. A shared source-local message position is usable only in its account and conversation;
+cross-source equivalence needs an individual received message's sender, exact distinguishing text or complete URL,
+and timestamps within two minutes. Mere context overlap or a general Related link is not proof. A unique pairwise
+verified topic uses a deterministic primary item and existing Related navigation; both reply routes and per-source
+processing states survive. Neither planning nor binding files the item or sends a source reply.
+
+The plan stores manager-owned evidence and a content fingerprint. Start checks freshness, visibility, ownership,
+uniqueness and source changes again, including after a restart and card edits. An invalid soft link is removed and a
+localized notice is recorded in the conversation; the task can still start. Admission repeats the ownership check
+under the Inbox lock, so competing automatic links cannot replace a winner. The existing task/Inbox rollback handles
+failed persistence. Explicit handoffs retain their existing admission and legacy-link correction behavior.

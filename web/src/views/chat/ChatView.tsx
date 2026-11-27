@@ -1,11 +1,11 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
 import { useAssistantIdentity } from "../../lib/assistant-identity";
 import { useAssistantTitle, useManagerOffline } from "../ManagerParts";
-import { LinkManager, useShownManager } from "../../lib/manager-choice";
-import { alsoOpenText } from "../../lib/engines";
+import { defaultManager, LinkManager, useShownManager } from "../../lib/manager-choice";
+import { decisionLaterKey } from "../../lib/assistant-entries";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
-import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
+import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, activityOf, stateOf, tabLabel, uuid } from "../../lib/format";
 import { useHerdrTabName } from "../../lib/agents-display";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type Route, type SessionView } from "../../lib/router";
@@ -24,8 +24,9 @@ import { acknowledgeLaunch } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
 import { SessionDetailNotice } from "../../ui/SessionDetailNotice";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
-import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, upsertSession, useStore, viewSession } from "../../lib/store";
-import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
+import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, taskSessionLookup, upsertSession, useStore, viewSession } from "../../lib/store";
+import { useStoreRows } from "../../lib/store-rows";
+import { useCodexThread, waitsForFirstMessage } from "../../lib/codex-waiting";
 import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview-link";
 import { buildTaskIndex, loopCadence, loopNext, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, subagentTitle, terminalCalls, type TaskIndex } from "../../lib/tasks";
@@ -40,23 +41,20 @@ import { apiOp } from "../../lib/ops";
 import { beginMessageSend, observeMessageItems, settleMessageEcho, stopMessageFeedback, useMessageFeedback } from "../../lib/message-send";
 import { conversationKey, pickedLauncher, pickedModel, usePickedLauncher } from "../../lib/assistant-chat";
 import { splitSkillDraft } from "../../lib/skill-mentions";
-import { unlinkAgentFromTodo } from "../../lib/todos";
+import { openAsk, unlinkAgentFromTodo, waitsForOwner } from "../../lib/todos";
 import { t as tr } from "../../i18n";
 import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
 import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
-import { sendDraft } from "../../lib/drafts";
-import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
+import { sendDraft, type CommentImagePicker } from "../../lib/drafts";
+import { chatLines, freshWords, isUserInput, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import { foldsBackgroundRounds, relayNeedsAttention } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
 import { REVIEW_FEATURE } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { BackgroundStallHint } from "../../ui/BackgroundStallHint";
-import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
-import { CodexReadOnlyLine } from "./CodexReadOnlyLine";
 const ArchivedNotice = lazy(() => import("../../ui/ArchivedNotice"));
-const StoppedAgentLine = lazy(() => import("./StoppedAgentLine"));
 const TakeoverAction = lazy(() => import("./TakeoverAction"));
 const ClosedTaskNotice = lazy(() => import("./ClosedTaskNotice"));
 import { scrollBehavior } from "../../ui/stream/motion";
@@ -68,14 +66,14 @@ import { IMAGE_LIMIT_CODE } from "../../lib/api-errors";
 import { COMPACT_FEATURE, compactBody, compactPath } from "../../lib/compaction";
 import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, type OutgoingPayload } from "../../lib/compact-resend";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
-import { PendingCards, TurnCards } from "./Interactions";
+import { PendingCards } from "./Interactions";
 import { splitTurnAsks } from "../../lib/turn-asks";
 import { focusedCard, focusedFirst } from "../../lib/card-focus";
 import { COMPOSER_INPUT, lostWith } from "../../lib/dock-focus";
-import { FailureNote, showsFailureNote } from "./FailureNote";
+import { showsFailureNote } from "./failure-note-state";
 import { LazyCloseoutCard } from "./closeout-chunks";
 import { shownCloseout } from "../../lib/closeout";
-import { AWAIT_MS, awaitingTurn, COMMAND_DOCK_MAX, DOCK_MAX, turnStart } from "./dock";
+import { AWAIT_MS, awaitingTurn, COMMAND_DOCK_MAX, DOCK_MAX, pickupStateForWait, RETRY_IDLE_GRACE_MS, turnStart } from "./dock";
 const ChatEmptyState = lazyPage(() => import("./ChatEmptyState").then((m) => m.ChatEmptyState));
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { AgentModelPill, AssistantModelPill, useAssistantTurnFix } from "./ModelPill";
@@ -99,11 +97,12 @@ import { childCall, childCardKey, childOfCall, childPlaces, childRefOfCall, exch
 import { useChildRow, useChildSessions } from "../../lib/use-child-sessions";
 import { openExpanded } from "./expanded";
 import { seekCall } from "./jump";
-import { containsInput, userInputRevision, windowUserInputs } from "../../lib/user-input-index";
-import { useRevealedInputSeq, useUserInputs } from "./useUserInputs";
+import { containsInput } from "../../lib/user-input-index";
+import type { IndexedJump } from "./ChatNavRail";
 import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
+import { useTranscriptWindow } from "./useTranscriptWindow";
 import type { MessageView } from "./land-message";
 import { publishTranscript, unpublishTranscript } from "./transcript-share";
 import { useEarlierStretches } from "./useEarlierStretches";
@@ -151,9 +150,11 @@ import { splitBackgroundActivity } from "../../lib/quiet-activity";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark, sessionMarkName } from "../../ui/AgentMark";
 import { sessionAgentName } from "../../lib/agent-kind";
-import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
+import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip } from "../assistant/Tasks";
+import { decisionKey, taskDecisionCards, type DecisionCard } from "../../lib/decision-pager";
 import { t } from "../../i18n";
 import { lazyDialog, lazyOverlay } from "../LazyOverlay";
+import { AssistantUpdateSlot } from "./AssistantUpdateSlot";
 
 // The terminal view (TerminalPanel and its stream / cell parsing) loads on demand: most visits only read the chat, so it
 // stays out of the main chunk. A page that can switch to it fetches it in the background (loadTerminal below), so the
@@ -161,6 +162,7 @@ import { lazyDialog, lazyOverlay } from "../LazyOverlay";
 const loadTerminal = () => import("../session/TerminalPanel");
 // Sharing settings load on their first open, outside the first screen (docs/web/web.md "First screen").
 const ChatSearch = lazyDialog(() => import("./ChatSearch").then((m) => m.ChatSearch));
+const DecisionSourceDialog = lazyDialog(() => import("./DecisionSourceDialog").then((m) => m.DecisionSourceDialog));
 const LinkTodoDialog = lazyDialog(() => import("../LinkTodoDialog").then((m) => m.LinkTodoDialog));
 const SharingDialog = lazyOverlay(() => import("../../sharing/SharingDialog").then((m) => m.default));
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
@@ -174,6 +176,7 @@ const InboxBack = lazy(() => import("./InboxBack").then((m) => ({ default: m.Inb
 const PlanPill = lazy(() => import("./PlanCard").then((m) => ({ default: m.PlanPill })));
 // "Wrap up: <item>" over the main conversation's composer (#5932): with the hand-off card's chunk, not the first screen's
 const LazyWrapUpChips = lazy(() => import("../assistant/HandoffCard").then((m) => ({ default: m.WrapUpChips })));
+const TaskDecision = lazy(() => import("../assistant/TaskDecision"));
 // a chat that is nowhere (a stale or mistyped link): rare, so its notice and words are a chunk of their own
 const LazyNotFoundNotice = lazy(() => import("./NotFoundNotice").then((m) => ({ default: m.NotFoundNotice })));
 const ContextRestartNotice = lazyPage(() => import("./ContextRestartNotice").then((m) => m.ContextRestartNotice));
@@ -182,7 +185,11 @@ const CommandWaitingNotice = lazyPage(() => import("./CommandWaitingNotice").the
 const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 // only in a conversation that moved between Claude Code and Codex (#5054): its earlier sessions, read above the live one
 const EarlierStretches = lazy(() => import("./EarlierStretches"));
+const BotmuxComposerNotes = lazy(() => import("./BotmuxMessages").then((m) => ({ default: m.BotmuxComposerNotes })));
+const StoppedAgentLine = lazy(() => import("./StoppedAgentLine").then((m) => ({ default: m.StoppedAgentLine })));
+const CodexReadOnlyLine = lazy(() => import("./CodexReadOnlyLine").then((m) => ({ default: m.CodexReadOnlyLine })));
 const ChatNavRail = lazy(() => import("./ChatNavRail").then((m) => ({ default: m.ChatNavRail })));
+const TranscriptWindowPager = lazy(() => import("./TranscriptWindowPager"));
 // Recovery cards are rare: their rendering and words load only when the session actually carries a fallback record.
 const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => ({ default: m.ModelFallbackCard })));
 // A message the assistant keeps after it could not go in (#10194) is rare: its status line, Retry and Delete load only in
@@ -193,6 +200,7 @@ const BackgroundActivity = lazyDialog(() => import("./BackgroundActivity").then(
 
 const NO_FEED: FeedItem[] = [];
 const NO_DISPLAY_LINES: DisplayLine[] = [];
+const navTargetFailed = () => toast(t("chat-navrail.target_failed"), "error");
 // Below this many exchanges the ordinary immediate mount is cheaper than observing rows. Past it, completed off-screen
 // bodies mount a viewport at a time (SegmentView); their sections, estimates and live / final-two rules stay as they were.
 const CHAT_WINDOW_MIN_SEGMENTS = 40;
@@ -320,10 +328,12 @@ export function ChatView(props: Parameters<typeof ActiveChatView>[0]) {
   return <ActiveChatView {...props} />;
 }
 
-function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt, placeholder: askPlaceholder }: {
+function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt: requestedAt, findSource, placeholder: askPlaceholder }: {
   mid: string;
   sid: string;
   assistant?: boolean;
+  /** The assistant page's routing owner while this conversation's session row is still loading. */
+  assistantManager?: string;
   starting?: boolean;
   onToggleSidebar?: () => void;
   /** On a narrow screen, in the header's middle in place of the title (the shell's "Assistant" | "Agents" switch). */
@@ -350,10 +360,16 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   headerActions?: React.ReactNode;
   /** A message to open the chat at (`?at=`, a search hit's, #6283): landed on once it is in, paging back for it. */
   landAt?: string;
+  /** Locates a drill-down's source as more of this transcript is read. */
+  findSource?: (items: readonly Item[]) => string | undefined;
   /** What an idle Persona chat's box asks, in place of the main chat's: a space's own (Health's, docs/assistant/health.md).
    *  The box's other states (offline, queued, unavailable…) say theirs as before. */
   placeholder?: string;
 }) {
+  const [decisionDrill, setDecisionDrill] = useState<Interaction | null>(null);
+  const [sourceTarget, setSourceTarget] = useState<string | null>();
+  const sourcePages = useRef(0);
+  const landAt = requestedAt || sourceTarget || undefined;
   const embeddedSub = splitSubagentLink(sid);
   const { session: runtimeSession, detail, retry: retryDetail, known: runtimeKnown } = useRuntimeSession(mid, sid, !embeddedSub);
   const heldSubRow = useChildRow(mid, sid);
@@ -382,6 +398,16 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [embeddedSub, embeddedParent, mid, sid]);
   const session = syntheticEmbedded ?? (detail.missing && heldSubRow ? heldSubRow : runtimeSession ?? heldSubRow);
   const known = Boolean(syntheticEmbedded) || runtimeKnown || Boolean(heldSubRow);
+  // Read the same ask as Needs you. The session's current task link wins after a move, including across managers.
+  const decisionTodo = useStore((s) => {
+    if (!inPage || assistant || embedded || !session) return undefined;
+    const manager = session.manager || defaultManager();
+    const todo = s.todos.find((todo) => !todo.done_at &&
+      (session.todo ? todo.id === session.todo.id : (todo.manager || defaultManager()) === manager) &&
+      todo.agents?.some((a) => !a.released_at && !a.dismissed_at && a.machine_id === mid && a.session_id === sid));
+    return todo && openAsk(todo)?.outcome === "decide" && !todo.ask?.questions?.length && waitsForOwner(todo) ? todo : undefined;
+  });
+  const decisionDeferred = useFeed((s) => decisionTodo ? Boolean(s.later[decisionLaterKey(decisionTodo)]) : false);
   // The main conversation is always Persona (#1313): not its first message, the node's title for it.
   const mainConversation = useStore((s) => s.assistant?.main);
   const isMain = Boolean(assistant && (mainCache || sid === mainConversation));
@@ -418,7 +444,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   useEffect(() => {
     if (waitsFirst && session) setWaitingRow(session);
   }, [waitsFirst, session]);
-  const becameThread = useStore((s) => (waitingRow && waitingRow.session_id === sid ? codexThreadOf(s.sessions[mid] ?? [], waitingRow)?.session_id : undefined));
+  const becameThread = useCodexThread(waitingRow?.session_id === sid && waitingRow.machine_id === mid ? waitingRow : undefined);
   useEffect(() => {
     if (becameThread && inPage) navigate({ name: "session", mid, sid: becameThread }, true);
   }, [becameThread, inPage, mid]);
@@ -446,7 +472,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // a side session's own chat (in its parent's panel): its own children fold under that parent, naming it (folded_side)
   const sideParent = session && isSide(session) ? session.folded_under : undefined;
   // the space's other agents, its child sessions folded into their parents (#5120: a child is never one of them)
-  const siblings = useStore((s) => (session?.space_id ? foldRows(s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
+  const siblings = useStore((s) => (session?.space_id ? foldRows(s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && activityOf(x) !== "offline") : []));
   // its own requests and those of the child sessions folded under it (#5120, including cross-machine children via
   // folded_under_machine_id): a child's are answered here, in the order they came, each saying which child asks; a
   // side session's chat (#7944) takes the cards of the rows that belong to it
@@ -457,18 +483,20 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const answered = useStore((s) => Object.values(s.answered).filter((a) => ownCard(a.ix)));
   const delegated = useStore((s) => Object.values(s.delegated).filter((d) => ownCard(d.ix)));
   // the list as pushed: its updated_at and rev are what tell the page it fell behind (useTranscript)
-  const tr = useTranscript(mid, sid, { starting: Boolean(launching), updatedAt: session?.updated_at, rev: session?.rev, cache: mainCache, assistant });
+  const live = useTranscript(mid, sid, { starting: Boolean(launching), updatedAt: session?.updated_at, rev: session?.rev, cache: mainCache, assistant });
+  const { transcript: tr, key: windowKey, open: openWindow, close: closeWindow, hasLater, loadingLater, loadLater } = useTranscriptWindow(mid, sid, live, navTargetFailed);
+  const detached = windowKey !== undefined;
   const transcriptOwner = useRef<object>({});
   useEffect(() => {
-    if (!embedded) publishTranscript(transcriptOwner.current, mid, sid, tr);
-  }, [embedded, mid, sid, tr]);
+    if (!embedded) publishTranscript(transcriptOwner.current, mid, sid, live);
+  }, [embedded, mid, sid, live]);
   useEffect(() => {
     if (embedded) return;
     return () => unpublishTranscript(transcriptOwner.current, mid, sid);
   }, [embedded, mid, sid]);
   // a conversation that moved between Claude Code and Codex (#5054): its earlier sessions read above the live one, as
   // one conversation; without engine_history this is the transcript as it is
-  const earlier = useEarlierStretches(mid, sid, assistant ? undefined : session?.engine_history, tr);
+  const earlier = useEarlierStretches(mid, sid, assistant || detached ? undefined : session?.engine_history, tr);
   // what the rail's jumps and the search page back through: the live stretch, whose start ends it (#5054)
   const trNow = useRef(tr);
   trNow.current = { ...tr, hasMore: earlier.liveHasMore };
@@ -490,13 +518,14 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const out = launch?.outgoing;
     if (!launch || !out || (!out.text && !out.images.length)) return [];
     const id = launch.messageId;
-    return [{ id, raw: out.text, images: out.images, before: [], at: Date.now(), msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } }];
+    const at = launch.handoffAt ?? Date.now();
+    return [{ id, raw: out.text, images: out.images, before: [], at, acceptedAt: at, msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } }];
   });
   const [draftRefusal, setDraftRefusal] = useState<{ id: string; draft: string; clearable?: string } | null>(null);
   // what other pages sent here ("Ask Persona", "Hand to AI"…): shown like this page's own sending bubbles (lib/outbox.ts)
   const outbox = useStore((s) => s.outbox[outboxKey(mid, sid)] ?? []);
   const online = useStore((s) => s.conn === "online");
-  const state = session ? stateOf(session) : "unknown";
+  const state = session ? activityOf(session) : "unknown";
   const canQueueSend = queuesWhileWorking(session);
   useEffect(() => {
     if (canQueueSend) void preloadQueuePanel().catch(() => {});
@@ -532,43 +561,91 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   ], [pending, outbox]);
   // the owner's messages the assistant keeps after they could not go in, from the row: on every device (#10194)
   // (not one this page still draws as sending: the row can come before the send's answer)
-  const keptUndelivered = shownUndelivered(session, tr.items, pending.map((p) => p.id));
+  const keptUndelivered = shownUndelivered(session, live.items, pending.map((p) => p.id));
   const outgoing = shownPending.length + visibleOutbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   // what the chat slots are told (core/ChatSlots.tsx): this page's own id (the same chat may be open twice, a page and a
   // side panel), and who answers here
   const pageId = useId();
   const answerer = assistant ? persona.name : session ? agentLabel(session) : "Claude";
-  const itemsNow = useRef(tr.items);
-  itemsNow.current = tr.items;
+  const itemsNow = useRef(live.items);
+  itemsNow.current = live.items;
   const readItems = useCallback(() => itemsNow.current, []);
   // the message is in, the hub has not said working yet (#3654): the live row covers that wait too
-  const segs = useMemo(() => segments(tr.items), [tr.items]);
+  const segs = useMemo(() => segments(live.items), [live.items]);
   const lastSeg = segs[segs.length - 1];
+  const endedThrough = live.streamEndedThrough;
+  const inputAfterPreview = endedThrough !== undefined && endedThrough > 0 &&
+    live.items.some((item) => item.seq > endedThrough && !item.queued && isUserInput(item));
+  const streamEnded = live.streamEnded && !inputAfterPreview;
+  const replyPreview = inputAfterPreview ? "" : live.streaming;
   const [awaitNow, setAwaitNow] = useState(() => Date.now());
-  const turnFailure = session?.failure_reason || session?.turn_error || lastSeg?.cut ? { since: session?.state_since } : undefined;
   // a message whose wait the hub took a stop for (#2450): it is no longer worked on, so Working… and Interrupt go at
   // once instead of after AWAIT_MS; a turn the hub reports later still shows through `state`
-  const [stoppedTurn, setStoppedTurn] = useState<string>();
-  const awaitedTurn = awaitingTurn(lastSeg, state, awaitNow, turnFailure, session?.state_since) ? lastSeg?.user?.id : undefined;
-  const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn && !tr.streamEnded;
+  const [stoppedInput, setStoppedInput] = useState<{ chat: string; id: string }>();
+  const stoppedTurn = stoppedInput?.chat === chatNow.current ? stoppedInput.id : undefined;
+  // An existing background command can keep the row working before the next foreground turn picks up the echo.
+  // background_working alone is not proof the foreground is idle; pickupStateForWait only demotes it while this turn
+  // has no foreground activity yet, so a live turn keeps the real working state (review P1).
+  const foregroundActive = Boolean(live.streaming || lastSeg?.answer ||
+    lastSeg?.steps.some((step) => step.kind === "thinking" || (step.kind === "tool" && !step.result)));
+  const pickupState = pickupStateForWait(state, session?.background_working, foregroundActive);
+  const inputKey = lastSeg?.user ? `${mid}/${sid}/${lastSeg.user.id}` : undefined;
+  const status = {
+    chat: `${mid}/${sid}`, inputKey, since: session?.state_since, updatedAt: session?.updated_at, seenAt: session?.seen_at,
+    foreground: state === "working" && !session?.background_working, idle: state === "idle" || state === "unread",
+  };
+  const previousStatus = useRef<(typeof status & { priorWorking: boolean; priorExit: boolean; outcomeSince?: string }) | undefined>(undefined);
+  const previous = previousStatus.current?.chat === status.chat ? previousStatus.current : undefined;
+  const newInput = Boolean(inputKey && inputKey !== previous?.inputKey && !lastSeg?.user?.queued);
+  // A new echo while the same foreground run is still working does not take ownership of that run.
+  const priorWorking = Boolean(status.foreground && previous?.foreground && status.since === previous.since &&
+    (newInput || previous.priorWorking));
+  // Marking a finished session seen can advance state_since without changing the underlying outcome.
+  const sameOutcome = status.idle && previous?.idle &&
+    (status.since === previous.since || (state === "idle" && status.seenAt && status.seenAt !== previous.seenAt &&
+      status.updatedAt === previous.updatedAt));
+  const outcomeSince = sameOutcome ? previous.outcomeSince : status.since;
+  // The first exit belongs to the prior run unless this input already has transcript evidence of its own.
+  const priorExit = Boolean(status.idle && previous?.foreground && (newInput || previous.priorWorking) &&
+    !lastSeg?.answer && !lastSeg?.steps.length && !lastSeg?.blankReply) || Boolean(sameOutcome && previous.priorExit);
+  useLayoutEffect(() => {
+    previousStatus.current = { ...status, priorWorking, priorExit, outcomeSince };
+  });
+  const turnFailure = session?.failure_reason || session?.turn_error || lastSeg?.cut ? { since: outcomeSince } : undefined;
+  const hubStateAt = Date.parse(outcomeSince ?? "");
+  const [observedInput, setObservedInput] = useState<{ key: string; hubStateAt: number; seenAt: number }>();
+  const observedKey = observedInput?.key;
+  useLayoutEffect(() => {
+    if (inputKey !== observedKey) {
+      setObservedInput(inputKey ? { key: inputKey, hubStateAt, seenAt: Date.now() } : undefined);
+    }
+  }, [inputKey, hubStateAt, observedKey]);
+  // The hub can deliver its idle update with the echo or just after it. Wait for it to stay idle
+  // through the handoff before offering a retry, since the input and status come from separate streams.
+  const idleAt = observedInput && observedKey === inputKey && !priorExit && !live.streaming && status.idle &&
+    (hubStateAt > observedInput.hubStateAt || hubStateAt > Date.parse(lastSeg?.user?.ts ?? ""))
+    ? observedInput.seenAt + RETRY_IDLE_GRACE_MS : undefined;
+  const settled = idleAt !== undefined && awaitNow >= idleAt;
+  const awaitedTurn = awaitingTurn(lastSeg, pickupState, awaitNow, priorExit && !lastSeg?.cut ? undefined : turnFailure, settled) ? lastSeg?.user?.id : undefined;
+  const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn && !streamEnded;
   const awaitingNow = useRef<string | undefined>(undefined);
   awaitingNow.current = awaiting ? awaitedTurn : undefined;
   const waitStart = awaitedTurn ? lastSeg?.user?.ts : undefined;
+  const waitUntil = Math.min(Date.parse(waitStart ?? "") + AWAIT_MS, idleAt ?? Infinity);
   useEffect(() => {
     // draw again when the wait runs out, so a message nobody picks up stops looking worked on; once something answers
     // it there is nothing to wait for (and no clock to reset on every streamed item)
-    const at = waitStart ? Date.parse(waitStart) : NaN;
-    if (Number.isNaN(at)) return;
+    if (Number.isNaN(waitUntil)) return;
     setAwaitNow(Date.now());
-    const left = at + AWAIT_MS - Date.now();
+    const left = waitUntil - Date.now();
     if (left <= 0) return;
     const timer = window.setTimeout(() => setAwaitNow(Date.now()), left + 10);
     return () => clearTimeout(timer);
-  }, [waitStart]);
+  }, [waitUntil]);
   const stopped = Boolean(stoppedTurn && stoppedTurn === lastSeg?.user?.id);
   const canShowPreview = state !== "offline" && state !== "needs_you" && !stopped && !turnFailure;
-  const streaming = Boolean(tr.streaming) && !tr.streamEnded && (state === "working" || canShowPreview);
+  const streaming = Boolean(replyPreview) && !streamEnded && (state === "working" || canShowPreview);
   const working = state === "working" || streaming || outgoing > 0 || awaiting;
   // The user's time stays in its row until the finished reply can show its own. An item that lands
   // while the turn is still running otherwise removes a line above the live work and moves it up.
@@ -690,7 +767,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   editNow.current = editing;
   const editLastMessage = useCallback(() => {
     if (editLastBusy.current || !canRewind || rewindLive.get() || noRow || tr.loading || tr.error) return;
-    const last = lastEditablePrompt(items.current);
+    const last = lastEditablePrompt(itemsNow.current);
     if (!last) return;
     setEditTarget({ key: draftKey, id: last.id });
     sendDraft(draftKey, { type: "replace", text: last.raw, edit: true });
@@ -700,7 +777,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (!target) return true;
     if (editLastBusy.current) return false;
     // another message came after it: rewinding to before the old one would take that one too
-    if (promptsOf(items.current).at(-1)?.id !== target.id) {
+    if (promptsOf(itemsNow.current).at(-1)?.id !== target.id) {
       setEditTarget(null);
       toast(t("rewind.edit_ended"), "info");
       return false;
@@ -710,7 +787,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       toast(t("rewind.edit_wait", { reason: block }), "error");
       return false;
     }
-    const at = rewindTarget(items.current, target.id);
+    const at = rewindTarget(itemsNow.current, target.id);
     if (!at) {
       setEditTarget(null);
       toast(t("rewind.no_text"), "error");
@@ -734,14 +811,14 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     }
   }, [mid, sid, rewindLive]);
   // The last message changed while editing (one from the phone, a rewind from the menu): the words stay as a new message.
-  const lastPromptId = useMemo(() => promptsOf(tr.items).at(-1)?.id, [tr.items]);
+  const lastPromptId = useMemo(() => promptsOf(live.items).at(-1)?.id, [live.items]);
   useEffect(() => {
-    if (!editing || editingLast || tr.loading || !tr.items.length || lastPromptId === editing.id) return;
+    if (!editing || editingLast || live.loading || !live.items.length || lastPromptId === editing.id) return;
     setEditTarget(null);
     toast(t("rewind.edit_ended"), "info");
-  }, [editing, editingLast, tr.loading, tr.items.length, lastPromptId]);
+  }, [editing, editingLast, live.loading, live.items.length, lastPromptId]);
   const editProp = useMemo(() => (editing ? { commit: commitEdit, cancel: () => setEditTarget(null) } : undefined), [editing, commitEdit]);
-  const editableLast = useMemo(() => lastEditablePrompt(tr.items), [tr.items]);
+  const editableLast = useMemo(() => lastEditablePrompt(live.items), [live.items]);
   const onEditLastMessage = canRewind && !rewindOff && !noRow && !tr.loading && !tr.error && !editingLast && editableLast ? editLastMessage : undefined;
   // the chat a forward comes from, read when Forward is picked (lib/forward.ts): a push does not draw every message again
   const forwardChat = useRef<{ session?: Session; title: string }>({ title });
@@ -768,9 +845,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       images: () => items.current.filter((i) => i.kind === "image"),
       fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space, session?.manager) : undefined,
       assistant: Boolean(assistant),
-      rewind: canRewind ? { block: rewindLive, code: rewindCode, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore, rewindDeclared) } : undefined,
+      // Rewind identifies a prompt by counting from the live end. A detached window cannot supply that count.
+      rewind: canRewind && !detached ? { block: rewindLive, code: rewindCode, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore, rewindDeclared) } : undefined,
     }),
-    [draftKey, title, session?.manager, mainCache?.manager, canCompose, canFork, canRewind, rewindCode, rewindDeclared, rewindLive, mid, sid, assistant, persona.name, forwardFrom, picker],
+    [draftKey, title, session?.manager, mainCache?.manager, canCompose, canFork, canRewind, detached, rewindCode, rewindDeclared, rewindLive, mid, sid, assistant, persona.name, forwardFrom, picker],
   );
   // the assistant works on any computer, so its @ menu offers workspaces too
   const shownManager = useShownManager();
@@ -789,9 +867,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   useEffect(() => {
     // what a reload interrupted, once the hub's first page can tell what went in (a cached page cannot),
     // and not before this chat is known: a restored bubble's Retry posts without passing through deliver
-    if (tr.firstRead && !refusedNoRow) restoreOutbox(mid, sid, pending.map((p) => p.id));
-    observeMessageItems(mid, sid, tr.items);
-    const users = [...segs.slice(-4).flatMap((seg) => (seg.user && !seg.user.injected ? [seg.user] : [])), ...taggedSeen(tr.items)];
+    if (live.firstRead && !refusedNoRow) restoreOutbox(mid, sid, pending.map((p) => p.id));
+    observeMessageItems(mid, sid, live.items);
+    const users = [...segs.slice(-4).flatMap((seg) => (seg.user && !seg.user.injected ? [seg.user] : [])), ...taggedSeen(live.items)];
     users.forEach((user) => acknowledgeLaunch(mid, sid, user));
     settleOutbox(mid, sid, users);
     if (!pending.length) return;
@@ -811,7 +889,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       return ps.filter((p) => !drop.has(p.id) && (p.waits || p.posting || state === "working" || now - (p.acceptedAt ?? p.at) < SENT_GRACE_MS));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segs, tr.firstRead, refusedNoRow]);
+  }, [segs, live.firstRead, refusedNoRow]);
 
   // A quiet transcript must not leave accepted bubbles forever. Reloads use the same stored deadline; local
   // composer bubbles retain their existing grace while the agent works. Never expire a POST still in flight.
@@ -881,6 +959,20 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     landing.current = { row, at, quiet: 0 };
     holdLanding(1200);
   }, [holdLanding]);
+  const lit = useRef<{ el: HTMLElement; timer: number } | null>(null);
+  const unlight = useCallback(() => {
+    if (!lit.current) return;
+    clearTimeout(lit.current.timer);
+    lit.current.el.removeAttribute("data-search-hit");
+    lit.current = null;
+  }, []);
+  const lightRow = useCallback((el: HTMLElement) => {
+    unlight();
+    const ring = (el.matches("[data-user-bubble]") && el.querySelector<HTMLElement>("[data-hit-target]")) || el;
+    void ring.getBoundingClientRect(); // picking the same row restarts the highlight
+    ring.setAttribute("data-search-hit", "");
+    lit.current = { el: ring, timer: window.setTimeout(unlight, HIT_MS) };
+  }, [unlight]);
   // a smooth jump on its way (glide.ts): it reads where to go each frame, and the ResizeObserver leaves the view to it
   const gliding = useRef<(() => void) | null>(null);
   const stopGlide = useCallback(() => {
@@ -890,9 +982,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // A pick owns its landing through every page, fold and animation frame. The page read itself is shared.
   const navigation = useRef(0);
   const pendingTarget = useRef<string>(undefined);
+  const railRead = useRef<AbortController | null>(null);
   const cancelNavigation = useCallback(() => {
     navigation.current++;
     pendingTarget.current = undefined;
+    railRead.current?.abort();
+    railRead.current = null;
     stopGlide();
     clearTimeout(jumping.current);
     jumping.current = 0;
@@ -946,7 +1041,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const firstLiveSeq = earlier.liveItems[0]?.seq ?? Infinity;
   const liveFront = useRef(firstLiveSeq);
   liveFront.current = firstLiveSeq;
-  const historyScope = `${sessionKey}/${tr.history ?? ""}`;
+  const historyScope = `${sessionKey}/${tr.history ?? ""}/${windowKey ?? 0}`;
   const historyScopeNow = useRef(historyScope);
   historyScopeNow.current = historyScope;
   const settledHistory = useRef<{ session: string; history: string; replaceEpoch: number }>({
@@ -1022,7 +1117,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     return () => clearTimeout(late);
   }, [mid, sid, follow]);
 
-  const lastId = tr.items[tr.items.length - 1]?.id;
+  const lastId = live.items.at(-1)?.id;
   useEffect(() => {
     if (lastId && !atEnd.current) setNewSince(true);
   }, [lastId]);
@@ -1286,7 +1381,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
 
   const loadEarlierNearTop = () => {
     const el = scroller.current;
-    if (!el || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current || suppressAutoEarlier.current) return;
+    if (!el || detached || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current || suppressAutoEarlier.current) return;
     void loadWithScrollAnchor(earlier.loadEarlier);
   };
 
@@ -1302,9 +1397,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     holdLanding(600);
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
-    } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
+    } else if (!detached && !anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
     captureReadingAnchor(el);
-    if (!first.current && !atEnd.current && el.scrollTop < 300) revealLoadedInputs();
     loadEarlierNearTop();
   };
 
@@ -1321,6 +1415,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const el = scroller.current;
     if (!el) return;
     follow(true);
+    if (closeWindow()) { suppressAutoEarlier.current = true; return; }
     glideTo(() => el.scrollHeight - el.clientHeight);
   };
 
@@ -1357,7 +1452,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       noteWritten(id, p.at);
       setPending((ps) => [...ps.filter((x) => x.id !== id), p]);
       // Quote replies keep an earlier reader's place; at the end, every own message still follows (#10346).
-      if (!queueing && (!out.quoteReply || atEnd.current)) follow(true);
+      if (closeWindow()) {
+        cancelNavigation();
+        suppressAutoEarlier.current = true;
+        follow(true);
+      } else if (!queueing && (!out.quoteReply || atEnd.current)) follow(true);
       const key = outboxKey(mid, sid);
       const launcher = assistant ? pickedLauncher(conversationKey(mid, sid)) : undefined;
       const model = assistant ? pickedModel(conversationKey(mid, sid)) : undefined;
@@ -1447,7 +1546,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `failed` reads only stable setters and these
-    [mid, sid, session, assistant, follow, inPage],
+    [mid, sid, session, assistant, closeWindow, cancelNavigation, follow, inPage],
   );
 
   /** Keeps a message that did not go as a failed bubble where it was sent, with why, "Retry" and "Delete", the box empty
@@ -1472,7 +1571,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const itemsListeners = useRef(new Set<() => void>());
   useEffect(() => {
     itemsListeners.current.forEach((fn) => fn());
-  }, [tr.items]);
+  }, [live.items]);
   const cancelCompactResend = useCallback(() => {
     if (!compactResendCtl.current) return;
     compactResendCtl.current.abort();
@@ -1513,7 +1612,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         return false;
       }
     }
-    return deliver(out, uuid(), out.edit?.clearDraft, 0, Boolean(out.edit));
+    return deliver(out, uuid(), out.edit?.clearDraft, 0, Boolean(out.edit || out.restoreCommentDraft));
   };
   const sendMessageNow = useRef(sendMessage);
   sendMessageNow.current = sendMessage;
@@ -1590,7 +1689,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       if (r.state === "unknown") throw new Error(t("lib-new-agent.outcome_unknown"));
       toast(t("chat-chatview.interrupted"));
       stopMessageFeedback(mid, sid);
-      if (waited) setStoppedTurn(waited);
+      if (waited) setStoppedInput({ chat: `${mid}/${sid}`, id: waited });
       stopTimer.current = window.setTimeout(stopDone, STOP_SETTLE_MS);
     } catch (e) {
       toast(t("chat-chatview.interrupt_failed", { error: errorText(e) }), "error");
@@ -1667,7 +1766,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // (#7341). A message of yours on its way, streaming, or an answer being written is a turn again.
   const backgroundState = backgroundTurn(session, subagents, { streaming, outgoing: outgoing > 0, awaiting });
   const backgroundOnly = backgroundState !== null;
-  const lastLive = working && !backgroundOnly && (!tr.loading || tr.items.length > 0);
+  const lastLive = !detached && working && !backgroundOnly && (!tr.loading || tr.items.length > 0);
   // the main conversation's readiness: the card for what is missing, and the send button saying it (4.4)
   const gate = useReadinessGate(isMain);
   blockedRef.current = gate.blocked;
@@ -1688,16 +1787,24 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     foldsBackgroundRounds(sid, s.assistant ?? (mainCache ? { main: mainCache.scope } : undefined)));
   const foldRoutineRelayReplies = useStore((s) => assistant && sid === s.assistant?.main && s.assistant.fold_routine_relay_replies);
   const latestReplyNeedsAttention = Boolean(turnFailure || relayNeedsAttention(session));
+  // A reload shows the cached page before the hub's newest page comes (a stalled hub held that read across several
+  // reloads, #16214), or keeps it when the read failed: its unanswered last turn may have a reply the page has not read
+  // yet, and Retry there sent the question again (#16286).
+  const stale = !detached && (!live.firstRead || Boolean(live.error));
   const allLines = useMemo(
-    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention })),
-    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention],
+    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale })),
+    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale],
   );
   lastLines.current = allLines;
   // The timeline split and the assistant display use the same history boundary: one feed walk per items change.
   const historyFrom = useMemo(() => (tr.hasMore ? loadedFrom(tr.items) : undefined), [tr.hasMore, tr.items]);
   // A canonical, completed silent round leaves no empty row or feed card in the main timeline. Its full projection is
   // retained for Background activity; running, legacy quiet and every promoted round keep their existing rendering.
-  const quiet = useMemo(() => splitBackgroundActivity(allLines, feed, historyFrom), [allLines, feed, historyFrom]);
+  const quiet = useMemo(() => {
+    const through = detached && Date.parse(tr.items.at(-1)?.ts ?? "");
+    const scoped = through === false ? feed : Number.isFinite(through) ? feed.filter((item) => Date.parse(item.at) <= through) : NO_FEED;
+    return splitBackgroundActivity(allLines, scoped, historyFrom);
+  }, [allLines, feed, historyFrom, detached, tr.items]);
   const lines = quiet.timeline;
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and
   // midnight arrivals land. Days the earlier stretches already open with a divider are not repeated here.
@@ -1761,20 +1868,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
   // Only lightweight positions are fetched for navigation; older transcript bodies wait for a selection.
-  const { seq: revealedSeq, reveal: revealLoadedInputs } = useRevealedInputSeq(`${mid}/${sid}/${tr.history ?? ""}`, tr.loading ? undefined : tr.items[0]?.seq);
   // Persona's chats mark each question's state on the rail (#13021), which then also works on touch screens
   const questionsOn = Boolean(assistant && !embedded);
   const railOn = fine || questionsOn;
-  const inputRevision = useMemo(() => userInputRevision(tr.items), [tr.items]);
-  const completeInputIndex = useUserInputs(mid, sid, tr.history, inputRevision, railOn && !tr.loading, tr.reload);
-  // the live stretch's inputs only (#5054): an earlier stretch of the live session (A → B → A) is drawn by EarlierStretches,
-  // so the inputs before the live stretch's oldest loaded item are none of the rail's
-  const liveFrom = earlier.liveItems === tr.items ? 0 : (earlier.liveItems[0]?.seq ?? Infinity);
-  const inputIndex = useMemo(() => {
-    if (!completeInputIndex) return null;
-    const inputs = completeInputIndex.inputs.filter((input) => input.seq >= liveFrom);
-    return windowUserInputs({ ...completeInputIndex, inputs, total: inputs.length }, revealedSeq);
-  }, [completeInputIndex, liveFrom, revealedSeq]);
+  const stretchStart = earlier.liveItems === tr.items ? undefined : earlier.liveItems[0]?.seq ?? Infinity;
   /** Brings a row (or a run of words) into view in the chat's own scroller (scrollIntoView would also scroll an opening
    *  group's clipped box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
   const landRow = useCallback(
@@ -1790,44 +1887,84 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     [follow, land, glideTo],
   );
   const railJump = useCallback(
-    async (lineId: string) => {
+    async (lineId: string, indexed?: IndexedJump) => {
       const current = beginNavigation();
-      const deadline = Date.now() + 120_000;
-      const target = inputIndex?.inputs.find((input) => `seg:${input.id}` === lineId);
-      const cancelled = () => !current() || Boolean(inputIndex?.history && trNow.current.history && inputIndex.history !== trNow.current.history);
-      follow(false);
-      if (!target || containsInput(trNow.current.items, target)) {
+      const target = indexed?.input;
+      const epoch = trNow.current.replaceEpoch;
+      const cancelled = () => !current() || epoch !== trNow.current.replaceEpoch ||
+        Boolean(indexed?.history && trNow.current.history && indexed.history !== trNow.current.history);
+      const locate = () => {
         const owner = target ? lineOfItem(linesNow.current, trNow.current.items, target.id) : lineId;
         const row = owner ? scroller.current?.querySelector<HTMLElement>(`[data-line="${CSS.escape(owner)}"]`)?.firstElementChild : null;
-        if (row instanceof HTMLElement) { landRow(row, -12); return; }
-      }
-      if (target && !containsInput(trNow.current.items, target)) {
-        // Reuse ordinary backward pages, keeping history contiguous rather than inserting an isolated window.
-        await loadEarlierForSearch({
-          get: () => trNow.current,
-          load: () => loadWithScrollAnchor(() => trNow.current.loadEarlier({ waitForRetry: true })),
-          frame: nextFrame,
-          stopped: () => cancelled() || Date.now() >= deadline || containsInput(trNow.current.items, target),
-          onPage: () => {},
-          pages: Number.MAX_SAFE_INTEGER,
-          joinEarlier: true,
-        });
-        if (cancelled()) return;
-        if (!containsInput(trNow.current.items, target)) { toast(t("chat-navrail.target_failed"), "error"); return; }
+        return row instanceof HTMLElement ? { y: row.getBoundingClientRect().top, value: row } : null;
+      };
+      const landOn = (row: HTMLElement) => {
+        landRow(row, -12);
+        lightRow(row.querySelector<HTMLElement>("[data-hit-target]") ?? row);
+        return true;
+      };
+      if (cancelled()) return false;
+      const loaded = locate();
+      if (loaded) return landOn(loaded.value);
+      if (indexed && !containsInput(trNow.current.items, indexed.input)) {
+        const switchView = () => {
+          follow(false);
+          before.current = null;
+          readingAnchor.current = null;
+          first.current = false;
+          suppressAutoEarlier.current = true;
+        };
+        if (detached && containsInput(itemsNow.current, indexed.input)) {
+          closeWindow();
+          switchView();
+        } else {
+          const ctl = new AbortController();
+          railRead.current = ctl;
+          let result;
+          try {
+            const { readInputWindow } = await import("./input-navigation");
+            if (cancelled()) return false;
+            result = await readInputWindow(mid, sid, indexed.input, indexed.history, ctl.signal);
+          } catch {
+            if (!cancelled()) navTargetFailed();
+            return false;
+          } finally {
+            if (railRead.current === ctl) railRead.current = null;
+          }
+          if (cancelled()) return false;
+          if (result === "stale") { indexed.historyChanged(); return false; }
+          if (result === "unsupported") {
+            if (detached) {
+              closeWindow();
+              switchView();
+              await nextFrame();
+            } else follow(false);
+            const deadline = Date.now() + 120_000;
+            await loadEarlierForSearch({
+              get: () => trNow.current,
+              load: () => loadWithScrollAnchor(() => trNow.current.loadEarlier({ waitForRetry: true })),
+              frame: nextFrame,
+              stopped: () => cancelled() || Date.now() >= deadline || containsInput(trNow.current.items, indexed.input),
+              onPage: () => {},
+              pages: Number.MAX_SAFE_INTEGER,
+              joinEarlier: true,
+            });
+            if (cancelled()) return false;
+            if (!containsInput(trNow.current.items, indexed.input)) { navTargetFailed(); return false; }
+          } else {
+            switchView();
+            openWindow(result, indexed.historyChanged);
+          }
+        }
       }
       const result = await untilStill<HTMLElement>({
-        frame: nextFrame, now: () => performance.now(), cancelled, giveUpMs: GIVE_UP_MS,
-        locate: () => {
-          const owner = target ? lineOfItem(linesNow.current, trNow.current.items, target.id) : lineId;
-          const row = owner ? scroller.current?.querySelector<HTMLElement>(`[data-line="${CSS.escape(owner)}"]`)?.firstElementChild : null;
-          return row instanceof HTMLElement ? { y: row.getBoundingClientRect().top, value: row } : null;
-        },
+        frame: nextFrame, now: () => performance.now(), cancelled, giveUpMs: GIVE_UP_MS, locate,
       });
-      if (result === "cancelled" || cancelled()) return;
-      if (result === "missing") { toast(t("chat-navrail.target_failed"), "error"); return; }
-      landRow(result.value, -12);
+      if (result === "cancelled" || cancelled()) return false;
+      if (result === "missing") { navTargetFailed(); return false; }
+      return landOn(result.value);
     },
-    [beginNavigation, inputIndex, follow, landRow, loadWithScrollAnchor],
+    [mid, sid, beginNavigation, detached, closeWindow, openWindow, follow, landRow, lightRow, loadWithScrollAnchor],
   );
   // the calls with a terminal result: a subagent call without one is one the agent still waits on (the bar's step)
   const callsAnswered = useMemo(() => terminalCalls(tr.items, tasks), [tr.items, tasks]);
@@ -1995,13 +2132,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const origin = useRef<{ atEnd: boolean; line?: string; offset: number } | null>(null);
   const [picked, setPicked] = useState(false);
   // the ring on the hit gone to: one timer, restarted when another (or the same) row lights
-  const lit = useRef<{ el: HTMLElement; timer: number } | null>(null);
-  const unlight = useCallback(() => {
-    if (!lit.current) return;
-    clearTimeout(lit.current.timer);
-    lit.current.el.removeAttribute("data-search-hit");
-    lit.current = null;
-  }, []);
   useEffect(() => {
     setSearch({ open: false, query: "" });
     setPicked(false);
@@ -2034,14 +2164,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       const tall = el.getBoundingClientRect().height > sc.clientHeight;
       el.scrollIntoView({ block: tall ? "start" : "center", behavior: "auto" });
       land(el, el.getBoundingClientRect().top - sc.getBoundingClientRect().top);
-      unlight();
-      // the ring hugs what it marks: your bubble itself, not its row's padding (#6426)
-      const ring = (el.matches("[data-user-bubble]") && el.querySelector<HTMLElement>("[data-hit-target]")) || el;
-      void ring.getBoundingClientRect(); // the same row picked again lights again
-      ring.setAttribute("data-search-hit", "");
-      lit.current = { el: ring, timer: window.setTimeout(unlight, HIT_MS) };
+      lightRow(el);
     },
-  }), [ctx.scope, follow, unlight, land]);
+  }), [ctx.scope, follow, lightRow, land]);
   // the work the hub folded, fetched for the search while it is open (useFoldSearch, #6281): a hit in it opens its fold
   // into the chat first, as "Jump to the step" does (jump.ts seekCall)
   const folds = useFoldSearch(mid, sid, tr.history, earlier.liveItems, search.open);
@@ -2095,6 +2220,32 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const key = SEARCH_NOTICE[outcome];
     return key ? t(key) : null;
   }, [loadWithScrollAnchor]);
+  useEffect(() => {
+    if (!findSource || sourceTarget !== undefined || !tr.firstRead || tr.loading || tr.loadingEarlier) return;
+    const found = findSource(tr.items);
+    if (found || !tr.hasMore || tr.items.length >= 400 || sourcePages.current >= 8) {
+      setSourceTarget(found ?? null);
+      return;
+    }
+    sourcePages.current++;
+    void loadWithScrollAnchor(async () => {
+      const page = await tr.loadEarlier();
+      if (!page) setSourceTarget(null);
+      return page;
+    });
+  }, [findSource, sourceTarget, tr.firstRead, tr.loading, tr.loadingEarlier, tr.items, tr.hasMore, tr.loadEarlier, loadWithScrollAnchor]);
+  const openDecisionSource = useCallback((card: DecisionCard, target?: string) => {
+    if (card.taskTitle !== undefined) {
+      setDecisionDrill(card.interaction);
+      return;
+    }
+    if (!target) return;
+    const current = beginNavigation();
+    void import("./land-message").then(({ landMessage }) => landMessage({
+      target, mid, sid, view: messageView, fromLink: false, current,
+      loadEarlier: (stop) => loadForSearch(() => {}, stop),
+    }), () => { if (current()) toast(t("chat-chatview.search_not_found")); });
+  }, [beginNavigation, mid, sid, messageView, loadForSearch]);
   // a message to open the chat at: a search hit's (`?at=`, #6283) or a forward card's original (#3899, lib/forward.ts
   // jumpWhenOpen). Brought into view once the transcript is in and holds it; one further up is paged back for, as "Load
   // earlier and keep searching" does (at most SEARCH_PAGES pages, the reader scrolling away or another landing stops
@@ -2124,8 +2275,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   ));
   // After the end marker the last reply can still be waiting for its item. Its text stays visible
   // without keeping the exchange working, even if the host already reported completion.
-  const wordsFor = (line: ChatLine) => (line.kind === "segment" || line.kind === "supervision") &&
-    ((line.live && streaming) || (line === lastLine && tr.streamEnded && canShowPreview)) ? tr.streaming || undefined : undefined;
+  const wordsFor = (line: ChatLine) => !detached && (line.kind === "segment" || line.kind === "supervision") &&
+    ((line.live && streaming) || (line === lastLine && streamEnded && canShowPreview)) ? replyPreview || undefined : undefined;
   // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box. Whether it went:
   // deliver can refuse without leaving a bubble (the setup gate, a row that cannot send, a refused launcher switch)
   const retry = useCallback(() => deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
@@ -2143,6 +2294,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
   const retried = retriedOn?.chat === `${mid}/${sid}` ? retriedOn.reason : undefined;
   const failureNote = Boolean(session && !assistant && showsFailureNote(session, { retried }));
+  const botmuxNotes = Boolean(session && !assistant && (failureNote || attentionReason(session) || session.also_open_in?.length));
   // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model; the
   // main conversation's setup gate would only open its missing step, as it does for every send while it holds (`deliver`)
   const canRetry =
@@ -2162,7 +2314,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const [errorClosed, setErrorClosed] = useState(() => dismissedError(errorChat));
   useEffect(() => setErrorClosed(dismissedError(errorChat)), [errorChat]);
   const [errorRetried, setErrorRetried] = useState<string>();
-  const tailError = lastLine?.kind === "apiError" ? lastLine : undefined;
+  const tailError = !detached && lastLine?.kind === "apiError" ? lastLine : undefined;
   const tailKey = tailError ? `${errorChat}|${errorKey(tailError)}` : "";
   const bannerError =
     tailError && !working && canCompose && !stoppedLine && !failureNote && errorKey(tailError) !== errorClosed && tailKey !== errorRetried ? tailError : undefined;
@@ -2270,8 +2422,18 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return live?.kind === "segment" ? live.seg : undefined;
   }, [lines]);
-  const processing = !sendFeedback && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly &&
+  const waitingPending = shownPending.some((p) => p.waits);
+  const postingPending = shownPending.some((p) => p.posting);
+  const acceptedPending = !postingPending && shownPending.length > 0 && state !== "working" && !liveSeg;
+  const hasFeedback = Boolean(
+    waitingPending ||
+    (sendFeedback !== undefined ? Boolean(sendFeedback) : postingPending || acceptedPending || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0)),
+  );
+  // Keep empty-transcript "Loading chat" and inline "Processing…" mutually exclusive so at most one loader shows.
+  const loadingChat = tr.loading && !tr.items.length && !opening && !hasFeedback;
+  const processing = !hasFeedback && !loadingChat && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly &&
     !liveSeg && (tr.loading || (opening && !tr.streaming));
+  const feedbackProcessing = sendFeedback === "processing" || processing || (sendFeedback === undefined && acceptedPending);
   const runStart = (liveSeg ? turnStart(liveSeg) : undefined) ?? stateSince;
   // what the turn is doing, for the bar's words (cindy's status): kept as it was while it says the same
   const lastStep = useRef<RunStep | undefined>(undefined);
@@ -2286,7 +2448,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
-  const done = turnDone(state, session, lastLine, tr.items);
+  const done = !detached && turnDone(state, session, lastLine, tr.items);
   const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} onStop={sessionCan(session, "interrupt") ? interrupt : undefined} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
@@ -2300,7 +2462,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const pills = planPill ? (
     <div className="flex shrink-0 items-center justify-center gap-2" data-plan-pills>
       {planPill}
-      {away && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} inline />}
+      {(away || detached) && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} inline />}
     </div>
   ) : null;
   // the header and the composer are memoized (a transcript push changes neither): what they get stays the same object
@@ -2312,7 +2474,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   useEffect(() => (assistant || embedded ? undefined : provideBackgroundChat(mid, sid, { stopLoop, jumpToCall: jump, hasCall })), [assistant, embedded, mid, sid, stopLoop, jump, hasCall]);
   // cached content stays up when a read fails: the pill says so, the error page is for an empty chat
   const refreshFailed = tr.items.length > 0 ? tr.error || refreshError : undefined;
-  const lastItem = assistant ? tr.items[tr.items.length - 1] : undefined;
+  const lastItem = assistant ? live.items.at(-1) : undefined;
   const lastRole = lastItem?.role;
   const lastKind = lastItem?.kind;
   const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
@@ -2325,8 +2487,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the permission picker after the + (#5324), where the mode can be switched: a Persona conversation whatever its state
   // (the hub applies it, #2416), an agent with modes while it runs; Plan mode is the + panel's check row. An agent that
   // lists its own modes (#8261) gets the picker with those two, and no Plan mode.
-  const modesOn = Boolean(session) && (Boolean(assistant) || (hasModes(session) && stateOf(session!) !== "offline"));
-  const listedOn = Boolean(session) && !assistant && Boolean(listedModesOf(session)) && stateOf(session!) !== "offline";
+  const modesOn = Boolean(session) && (Boolean(assistant) || (hasModes(session) && activityOf(session!) !== "offline"));
+  const listedOn = Boolean(session) && !assistant && Boolean(listedModesOf(session)) && activityOf(session!) !== "offline";
   const leading = useMemo(() => (session && (modesOn || listedOn) ? <PermissionPicker session={session} assistant={assistant} /> : null), [session, modesOn, listedOn, assistant]);
   const planMode = usePlanMode(modesOn ? session : undefined, assistant);
   // the model pill: an Agent's (#5032), a Persona conversation's (#5033, its pick kept for the conversation)
@@ -2356,24 +2518,34 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const sideControl = useMemo(() => (sideCount > 0 ? { count: sideCount, open: sidesOpen, needs: sideNeeds, onToggle: toggleSide } : undefined), [sideCount, sidesOpen, sideNeeds, toggleSide]);
   const subagentPanel = panel?.kind === "subagent" && (panel.parentMid ?? panel.mid) === mid && (panel.parentSid ?? splitSubagentLink(panel.sid)?.parent) === sid ? panel : undefined;
   const subagentShown = panelDrawn && subagentPanel ? { mid: subagentPanel.mid, sid: subagentPanel.sid } : undefined;
-  const elsewhere = (ix: Interaction) =>
+  const subagentMid = subagentShown?.mid;
+  const subagentSid = subagentShown?.sid;
+  const elsewhere = useCallback((ix: Interaction) =>
     (Boolean(teamShown) && ix.session_id === teamShown) ||
     (Boolean(sideShown) && (ix.session_id === sideShown || ix.folded_side === sideShown)) ||
-    Boolean(subagentShown && ix.machine_id === subagentShown.mid && ix.session_id === subagentShown.sid);
+    Boolean(subagentSid && ix.machine_id === subagentMid && ix.session_id === subagentSid), [teamShown, sideShown, subagentMid, subagentSid]);
   // a worker's or subagent's own cards in its conversation (embedded) are its own there, not "From subagent"
   const docked = useMemo(() => {
-    const mine = teamShown || sideShown || subagentShown ? interactions.filter((ix) => !elsewhere(ix)) : interactions;
+    const mine = interactions.filter((ix) => !elsewhere(ix));
     return embedded ? mine.map((ix) => (ix.machine_id === mid && ix.session_id === sid && ix.folded_under ? asOwnCard(ix) : ix)) : mine;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interactions, teamShown, sideShown, subagentShown, embedded, mid, sid]);
-  // a Persona chat's own requests hold its turn: open above the capsules (TurnCards), out of the stack and of Needs you's
-  // count; the rest (a worker's, a side session's) stay in the stack and the tray as before (lib/turn-asks.ts)
+  }, [interactions, elsewhere, embedded, mid, sid]);
+  // A card belongs to the visible child pane, To Decide, or the stack. A task request must not appear in two places.
   const turnSplit = useMemo(() => (assistant ? splitTurnAsks(docked, mid, sid) : { turn: [], rest: docked }), [assistant, docked, mid, sid]);
+  const decisionPlans = useFeed((s) => assistant ? s.plans : undefined);
+  const decisionSlots = useFeed((s) => assistant ? s.taskCards[sid] : undefined);
+  const allTaskDecisions = useStoreRows((s) => assistant && decisionPlans && s.interactions.length ? taskDecisionCards({
+    conversation: sid, conversationMachine: mid, main: s.assistant?.main, manager: skillManager, todos: s.todos, interactions: s.interactions,
+    lookup: taskSessionLookup(s), feed: taskFeed, plans: decisionPlans, cards: decisionSlots,
+  }) : []);
+  const taskDecisions = useMemo(() => allTaskDecisions.filter(({ interaction }) => !elsewhere(interaction)), [allTaskDecisions, elsewhere]);
+  const taskDecisionKeys = useMemo(() => new Set(taskDecisions.map(({ interaction }) => decisionKey(interaction))), [taskDecisions]);
+  const stacked = useMemo(() => turnSplit.rest.filter((ix) => !taskDecisionKeys.has(decisionKey(ix))), [turnSplit.rest, taskDecisionKeys]);
   const trayAsks = useMemo(() => (assistant ? splitTurnAsks(interactions, mid, sid).rest : interactions), [assistant, interactions, mid, sid]);
-  const commandInSlot = turnSplit.rest.some((request) => request.id === commandReveal?.id);
+  const actionBarAsks = useMemo(() => (isMain ? docked : trayAsks).filter((ix) => !taskDecisionKeys.has(decisionKey(ix))), [isMain, docked, trayAsks, taskDecisionKeys]);
+  const commandInSlot = stacked.some((request) => request.id === commandReveal?.id);
   const pendingCards = (
     <PendingCards
-      interactions={focusedFirst(turnSplit.rest, commandInSlot ? commandReveal?.id : focusedCard())}
+      interactions={focusedFirst(stacked, commandInSlot ? commandReveal?.id : focusedCard())}
       answered={teamShown || sideShown || subagentShown ? answered.filter((a) => !elsewhere(a.ix)) : answered}
       delegated={teamShown || sideShown || subagentShown ? delegated.filter((d) => !elsewhere(d.ix)) : delegated}
       offerNext={inPage && !assistant ? { mid, sid } : undefined}
@@ -2428,6 +2600,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const overviewDetail = panelDrawn && (backgroundPanelOf(panel, mid, sid)?.from === "overview" || subagentPanel?.from === "overview");
   const isAssistant = Boolean(assistant || session?.assistant);
   const composerDisabled = Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"));
+  const commentImagesRef = useRef<CommentImagePicker | null>(null);
+  const addCommentImages = useCallback<CommentImagePicker>(async (target, files, signal) => {
+    await commentImagesRef.current?.(target, files, signal);
+  }, []);
   const composerBlocked = gate.blocked ?? noRowBlock;
   const agentCompactBlocked = Boolean(composerDisabled || composerBlocked || hasTaskRoute);
   // Assistant compaction calls the hub HTTP endpoint directly, so composer send disables (e.g. offlineLine) do not gate it.
@@ -2564,6 +2740,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         takeoverBusy={takeoverPending}
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
+      {isAssistant && !embedded && <AssistantUpdateSlot mid={mid} manager={session?.manager ?? assistantManager} />}
       {!embedded && banner}
       {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
@@ -2583,7 +2760,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       )}
       <div className="relative min-h-0 flex-1">
         {(tr.notLive || refreshFailed) && <NotLivePill error={refreshFailed} onReload={() => { tr.reload(); onRefresh?.(); }} lower={Boolean(picked && !search.open)} />}
-        <div ref={scrollRef} onScroll={onScroll} data-chat-scroll className="relative h-full overflow-y-auto [overflow-anchor:none]">
+        <div ref={scrollRef} onScroll={onScroll} data-chat-scroll data-chat-context-window={detached || undefined} className="relative h-full overflow-y-auto [overflow-anchor:none]">
           <ChatActionsContext.Provider value={actions}>
           <div data-chat-content className="mx-auto flex w-full max-w-[880px] flex-col gap-3.5 px-5 pt-7 pb-10 sm:px-8">
             {session?.start_error && (session.start_error_code ? (
@@ -2597,10 +2774,16 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             {starting && !tr.loading && !outgoing && <Loading label={t("chat-chatview.starting_agent")} />}
             {/* over the content's top padding, in the scroller: starting and ending an older page move nothing on screen,
                 and nothing writes scrollTop for it (that would stop a touch fling) */}
-            {earlier.loadingEarlier && (
+            {!detached && earlier.loadingEarlier && (
               <div data-loading-earlier className="pointer-events-none absolute inset-x-0 top-1 flex justify-center">
                 <Loading label={t("chat-chatview.loading_earlier")} />
               </div>
+            )}
+            {detached && earlier.hasMore && (
+              <Suspense fallback={null}>
+                <TranscriptWindowPager direction="before" loading={earlier.loadingEarlier} disabled={loadingLater}
+                  onClick={() => void loadWithScrollAnchor(earlier.loadEarlier)} />
+              </Suspense>
             )}
             {/* also over a chat whose first page came back empty (#2450): it reads as loaded and empty, not as still loading;
                 not under a notice that the chat's details are missing */}
@@ -2612,7 +2795,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                 {t("chat-chatview.codex_waiting", { computer: machineName })}
               </p>
             )}
-            {tr.loading && !tr.items.length && !opening && (
+            {loadingChat && (
               <div className="flex justify-center py-16">
                 <Loading label={starting ? t("chat-chatview.preparing") : t("chat-chatview.loading_chat")} />
               </div>
@@ -2665,7 +2848,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         offscreen={offscreen(d.line)}
                         latestReplyId={d.line.id === latestReplyLine?.id ? latestReply?.id : undefined}
                         busy={d.line.id === busySegment || undefined}
-                        retryEmpty={d.line.kind === "segment" && d.line.seg.emptyResponse ? emptyAction : undefined}
+                        retryEmpty={!detached && d.line.kind === "segment" && d.line.seg.emptyResponse ? emptyAction : undefined}
                         dockTurnClock={("live" in d.line && d.line.live && dockTurnClock) || undefined}
                       />
                     ),
@@ -2692,7 +2875,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   offscreen={offscreen(row.line)}
                   latestReplyId={row.line.id === latestReplyLine?.id ? latestReply?.id : undefined}
                   busy={row.line.id === busySegment || undefined}
-                  retryEmpty={row.line.kind === "segment" && row.line.seg.emptyResponse ? emptyAction : undefined}
+                  retryEmpty={!detached && row.line.kind === "segment" && row.line.seg.emptyResponse ? emptyAction : undefined}
                   dockTurnClock={("live" in row.line && row.line.live && dockTurnClock) || undefined}
                 />
               )])}
@@ -2701,9 +2884,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             </LatestMessageTime.Provider>
             </LiveClockContext.Provider>
             {/* what is on its way, and failed messages with nothing sent after them, in the order they were written */}
-            {[...shownPending.map((p) => ({ at: p.at, el: (
+            {!detached && [...shownPending.map((p) => ({ at: p.at, el: (
               <div key={p.id} className="flex flex-col gap-3">
-                <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
+                <UserBubble msg={p.msg} mid={mid} sid={sid} pending={Boolean(p.posting)} sendState={p.posting ? "sending" : "sent"} />
               </div>
             ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> })),
               ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: (
@@ -2715,24 +2898,30 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               ) }))]
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
-            {(shownPending.some((p) => p.waits) || processing || (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0))) && (
-              <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (processing ? "processing" : "sending")}>
-                {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : sendFeedback === "processing" || processing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
+            {!detached && !loadingChat && (hasFeedback || processing) && (
+              <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (feedbackProcessing ? "processing" : "sending")}>
+                {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={waitingPending ? t("ultracode.send_waits") : feedbackProcessing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
               </div>
             )}
-            <ChatTail {...slotPage} />
+            {detached ? hasLater && (
+              <Suspense fallback={null}>
+                <TranscriptWindowPager direction="after" loading={loadingLater} disabled={earlier.loadingEarlier} onClick={loadLater} />
+              </Suspense>
+            ) : <ChatTail {...slotPage} />}
           </div>
-          <CommentMarks scroller={scroller} jump={landRow} />
+          <CommentMarks scroller={scroller} jump={landRow} onAddImages={canCompose && !composerDisabled && !editingLast ? addCommentImages : undefined} />
           </ChatActionsContext.Provider>
         </div>
         {/* NavRail uses the natural left gutter beside the centered transcript. */}
-        {railOn && (questionsOn || lines.length > 0 || inputIndex) && (
+        {railOn && (
           <Suspense fallback={null}>
-            <ChatNavRail mid={mid} sid={sid} lines={lines} items={earlier.liveItems} inputIndex={inputIndex} revealedSeq={revealedSeq}
-              scroller={scrollEl} onJump={railJump} questionsOn={questionsOn} loading={tr.loading} busy={busySegment} />
+            <ChatNavRail mid={mid} sid={sid} lines={lines} items={earlier.liveItems} retained={detached ? live.items : undefined}
+              history={live.history} replaceEpoch={live.replaceEpoch} stretchStart={stretchStart} reload={recheckTranscript}
+              scroller={scrollEl} onJump={railJump} questionsOn={questionsOn} loading={live.loading} busy={busySegment}
+              retainedBusy={detached && working && !backgroundOnly} />
           </Suspense>
         )}
-        {away && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
+        {(away || detached) && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
         {picked && !search.open && <ReturnPill onClick={backToOrigin} />}
       </div>
 
@@ -2762,18 +2951,20 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         )}
         {assistant && (
           <>
-            {takeover && <TaskQuestions conversation={sid} />}
-            {/* the cards this chat's own turn waits on, open above the capsules (also while a voice call is live); the cards
-                of the sessions folded under it are in the chat under the bar (#4883, as iOS): Needs you counts them and
-                lists a row for each that closes the tray onto its card. */}
-            <TurnCards asks={turnSplit.turn} />
-            {!takeover && <AssistantActionBar key={sid} conversation={sid} ownAsks={isMain ? docked : trayAsks} />}
+            <AssistantActionBar key={sid} conversation={sid} ownAsks={actionBarAsks} turnAsks={turnSplit.turn} taskDecisions={taskDecisions}
+              focusDecision={commandReveal?.pending ? commandReveal.id : undefined}
+              inCall={takeover} turnItems={turnSplit.turn.length ? tr.items : undefined} openDecisionSource={openDecisionSource} sourceOpen={decisionDrill !== null} />
             {!takeover && <RouteChip conversation={sid} />}
             {/* items handed to this conversation that are still open: "Wrap up" asks it for the final write-back (#5932) */}
             {!takeover && isMain && <Suspense fallback={null}><LazyWrapUpChips conversation={sid} /></Suspense>}
           </>
         )}
         {pendingCards}
+        {decisionTodo && !decisionDeferred && (
+          <Suspense fallback={null}>
+            <TaskDecision key={`${decisionTodo.manager}/${decisionTodo.id}/${decisionTodo.ask?.asked_at}`} decision={decisionTodo} rowKey={`task:${decisionTodo.id}`} />
+          </Suspense>
+        )}
         {!assistant && session?.model_fallback && <Suspense fallback={null}><ModelFallbackCard session={session} headless={false} /></Suspense>}
         {assistant && session && <CompactionStrip session={session} />}
         {session?.context_restart_recommended && !archivedHere && (
@@ -2785,24 +2976,20 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
         {gate.dialog}
-        {session && !assistant && <AttentionNote session={session} />}
-        {session && !assistant && <ConflictNote session={session} />}
-        {/* a resume turned ultracode off (#3428): one line with "Turn back on" */}
-        {session && !assistant && <UltracodeLostNote session={session} />}
-        {session && failureNote && (
-          <FailureNote
-            session={session}
-            onRetry={() => {
+        {session && botmuxNotes && (
+          <Suspense fallback={null}>
+            <BotmuxComposerNotes session={session} retry={failureNote ? () => {
               const chat = `${mid}/${sid}`;
               const reason = failureReason(session);
               setRetried({ chat, reason });
-              // a retry that did not go brings the note back
               void retryError().then((went) => {
-                if (!went) setRetried((r) => (r?.chat === chat && r.reason === reason ? undefined : r));
+                if (!went) setRetried((retry) => retry?.chat === chat && retry.reason === reason ? undefined : retry);
               });
-            }}
-          />
+            } : undefined} />
+          </Suspense>
         )}
+        {/* a resume turned ultracode off (#3428): one line with "Turn back on" */}
+        {session && !assistant && <UltracodeLostNote session={session} />}
         {chatBar.bar("dock")}
         {/* the error the chat stopped on, right over the composer as cindy places it (#5313); keyed by the error, so a new
             one opens with its details folded */}
@@ -2843,19 +3030,21 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           </Suspense>
         )}
         {session && (codexFooterTakeover || takeoverPending) && (
-          <CodexReadOnlyLine
-            session={session}
-            visible={codexFooterTakeover}
-            stopped={codexStoppedTakeover ? { mid, sid, onTerminal: openTerminal } : undefined}
-            takeOverRequested={takeOverRequested}
-            onTakeOverConsumed={consumeTakeOver}
-            continueRequested={continueTakeoverRequested}
-            onContinueConsumed={consumeContinueTakeover}
-            onPendingChange={setTakeoverPending}
-          />
+          <Suspense fallback={null}>
+            <CodexReadOnlyLine
+              session={session}
+              visible={codexFooterTakeover}
+              stopped={codexStoppedTakeover ? { mid, sid, onTerminal: openTerminal } : undefined}
+              takeOverRequested={takeOverRequested}
+              onTakeOverConsumed={consumeTakeOver}
+              continueRequested={continueTakeoverRequested}
+              onContinueConsumed={consumeContinueTakeover}
+              onPendingChange={setTakeoverPending}
+            />
+          </Suspense>
         )}
         {stoppedLine && !codexStoppedTakeover ? (
-          <Suspense><StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} reason={session?.read_only_reason} /></Suspense>
+          <Suspense fallback={null}><StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} reason={session?.read_only_reason} /></Suspense>
         ) : !codexFooterTakeover && !assistant && !offlineLine && !refusedNoRow && session && !canCompose && (embedded || session.is_subagent || Boolean(embeddedSub)) ? (
           <div role="status" data-subagent-readonly-line className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-card bg-inset px-3 py-2 text-xs text-ink-2">
             <span className="min-w-0 flex-1 break-words">{sourceSubtitle(session) || session.read_only_reason || t("chat-chatview.view_only")}</span>
@@ -2863,6 +3052,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         ) : !codexFooterTakeover && (
         <Composer
           draftKey={draftKey}
+          commentImagesRef={commentImagesRef}
           placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           agent={session?.agent}
@@ -2920,6 +3110,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         </ViewLayer>
       )}
       </div>
+      {decisionDrill && (
+        <DecisionSourceDialog key={decisionKey(decisionDrill)} open card={decisionDrill} onClose={() => setDecisionDrill(null)} />
+      )}
       {session && overview?.open && (
         <PageBoundary page={`overview:${mid}/${sid}`}>
           <Suspense fallback={<div className="p-3"><Loading /></div>}>
@@ -3072,44 +3265,12 @@ export function footerRows(session: Session, assistant?: boolean): MenuItem[] {
   return rows.filter(([, , v]) => v).map(([key, what, v]) => ({ key, label: v!, hint: what, wrap: true, onSelect: key === "source" ? () => {} : () => void copyText(key === "folder" ? session.cwd! : v!) }));
 }
 
-/** The session is live in another engine host too (#2576): this one owns it, and messages go here only. */
-function ConflictNote({ session }: { session: Session }) {
-  const text = alsoOpenText(session);
-  if (!text) return null;
-  return (
-    <div role="status" data-testid="chat-also-open" className="flex items-start gap-2 rounded-[12px] bg-orange-tint px-3 py-2 text-[12.5px]" style={{ animation: "fade-up 200ms ease-out both" }}>
-      <span className="flex h-[18px] shrink-0 items-center text-orange"><Icon name="warning" size={13} /></span>
-      <span className="line-clamp-2 min-w-0 flex-1 text-ink-2">{text}</span>
-    </div>
-  );
-}
-
-/** Above the composer while a session needs you and its host says why (a botmux attention, iOS AttentionNote):
- *  the reason and "Open in Lark" its topic. */
-function AttentionNote({ session }: { session: Session }) {
-  const reason = attentionReason(session);
-  if (!reason) return null;
-  const link = externalLink(session);
-  return (
-    <div role="status" data-testid="chat-attention" className="flex items-start gap-2 rounded-[12px] border-l-2 border-attention bg-inset px-3 py-2 text-[12.5px]" style={{ animation: "fade-up 200ms ease-out both" }}>
-      <span className="flex h-[18px] shrink-0 items-center"><StatusMark state="needs_you" /></span>
-      <span className="line-clamp-3 min-w-0 flex-1 text-ink-2">{reason}</span>
-      {link && (
-        <a href={link} target="_blank" rel="noopener noreferrer" className="flex shrink-0 items-center gap-1 whitespace-nowrap font-medium text-accent hover:underline">
-          <Icon name="external" size={12} />
-          {t("chat-chatview.open_in_lark")}
-        </a>
-      )}
-    </div>
-  );
-}
-
 // memo: a chat renders again for each transcript item, and the header shows none of them
 // One line, as cindy's session header (`SessionContentHeader`, #5421): left to right the pin mark, the /loop mark (cindy's
-// schedule badge), the Agent's mark ("Agent runs on {computer}"), the title (double-click renames it in place), ⋯ and the
-// git branch; at the right end the side panels' buttons (Background tasks, Team, Files) and the terminal view, where
-// cindy keeps its right sidebar's. The state is said above the composer (the running status bar) and in the sidebar,
-// the model is the composer's pill, the permission mode the composer's picker; the rest is in ⋯ and Session info.
+// schedule badge), the Agent's mark ("Agent runs on {computer}"), and the title (double-click renames it in place); at the
+// right end the side panels' buttons (Background tasks, Team, Files), the terminal view, and ⋯. The state is said above the
+// composer (the running status bar) and in the sidebar, the git branch in the composer footer, the model is the composer's
+// pill, the permission mode the composer's picker; the rest is in ⋯ and Session info.
 export const Header = memo(function Header({
   session,
   starting = false,
@@ -3236,8 +3397,7 @@ export const Header = memo(function Header({
   const attach = () => session && import("../../lib/attach-live").then((m) => m.attachLive(session));
   // Resume in terminal (#5521): a stopped Agent comes back in a terminal on its computer. The same action as its stopped
   // line's Resume: the terminal shown as that line's Terminal shows it, then the Resume both share.
-  const machine = useStore((s) => s.machines.find((m) => m.id === session?.machine_id));
-  const resumeOffer = onTerminal ? terminalResume(session, machine) : "hidden";
+  const resumeOffer = useStore((s) => onTerminal ? terminalResume(session, s.machines.find((m) => m.id === session?.machine_id)) : "hidden");
   const resumeHere = () => {
     if (session && onTerminal) void resumeInTerminal(session.machine_id, session.session_id, onTerminal);
   };
@@ -3303,7 +3463,7 @@ export const Header = memo(function Header({
     .map((s) => ({
       key: s.session_id,
       label: `${tabLabel(s) || sessionTitle(s)} · ${sessionTitle(s)}`,
-      state: stateOf(s),
+      state: activityOf(s),
       checked: s.session_id === session?.session_id,
       onSelect: () => navigate({ name: "session", mid: s.machine_id, sid: s.session_id }),
     }));
@@ -3362,10 +3522,10 @@ export const Header = memo(function Header({
               ]
             : []),
         ...(allowed.includes("attach") ? [{ key: "attach", label: t("chat-chatview.attach"), icon: "link" as const, onSelect: () => void attach() }] : []),
-        // its Side sessions panel (#7944), as the header's button
-        ...(sides ? [{ key: "sides", label: t("chat-chatview.side_sessions_count", { count: sides.count }), icon: "sideSessions" as const, checked: sides.open, onSelect: sides.onToggle }] : []),
-        ...(showTerminal ? [{ key: "terminal", label: t("lib-terminals.terminal"), icon: "terminal" as const, checked: view === "term", onSelect: flipView }] : []),
-        ...(jumpTerminal ? [{ key: "terminal", label: t("lib-terminals.terminal"), icon: "terminal" as const, onSelect: openTerminalPage }] : []),
+        // Panel entries already visible as right-toolbar buttons on desktop stay in ⋯ only on phone viewports.
+        ...(sides && phone ? [{ key: "sides", label: t("chat-chatview.side_sessions_count", { count: sides.count }), icon: "sideSessions" as const, checked: sides.open, onSelect: sides.onToggle }] : []),
+        ...(showTerminal && phone ? [{ key: "terminal", label: t("lib-terminals.terminal"), icon: "terminal" as const, checked: view === "term", onSelect: flipView }] : []),
+        ...(jumpTerminal && phone ? [{ key: "terminal", label: t("lib-terminals.terminal"), icon: "terminal" as const, onSelect: openTerminalPage }] : []),
         ...(resumeOffer !== "hidden"
           ? [{ key: "resume-terminal", label: t("chat-chatview.resume_in_terminal"), icon: "play" as const, disabled: resumeOffer === "no_engine", detail: resumeOffer === "no_engine" ? t("chat-chatview.resume_no_engine", { computer: machineName }) : undefined, onSelect: resumeHere }]
           : []),
@@ -3375,7 +3535,11 @@ export const Header = memo(function Header({
         ...(onContinueTakeover && takeoverLabels
           ? [{ key: "takeover-continue", label: takeoverLabels.continueNew, icon: "compose" as const, disabled: takeoverBusy, onSelect: onContinueTakeover }]
           : []),
-        ...(showFiles ? [{ key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles }, { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit }, ...(reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : [])] : []),
+        ...(showFiles && phone ? [
+          { key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles },
+          { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit },
+        ] : []),
+        ...(showFiles && reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : []),
         ...tasksItem,
         ...sessionReviewItems,
         // a run of a comparison (#8916): back to its runs' page
@@ -3405,16 +3569,28 @@ export const Header = memo(function Header({
   // a side panel's own rows (Open in new window, Remove task…) at the top of ⋯
   const panelItems = chrome?.items ?? [];
   const items: MenuItem[] = panelItems.length > 0 && own.length > 0 ? [...panelItems, { ...own[0], divider: true }, ...own.slice(1)] : [...panelItems, ...own];
-  // ⋯ follows the title (cindy's "More actions"); on a narrow page whose middle is the shell's switch the title is hidden,
-  // and ⋯ goes to the right end instead
-  const more = (where: "title" | "end") =>
-    items.length > 0 && (
-      <span className={cx("relative flex shrink-0", where === "end" ? "lg:hidden" : Boolean(topCenter) && "max-lg:hidden")}>
-        <IconButton icon="more" label={t("chat-chatview.more_actions")} onClick={menu.open} active={Boolean(menu.anchor)} className="text-ink-3" />
-        {othersNeed && <span aria-hidden className="pointer-events-none absolute top-0.5 right-0.5 size-2 rounded-full bg-attention shadow-[0_0_0_2px_var(--page)]" />}
-      </span>
-    );
-  const branch = !assistant ? session?.branch?.trim() : "";
+  // ⋯ sits at the right end of the header toolbar; on the main assistant page desktop uses the title pill on the left,
+  // so ⋯ only appears on narrow screens when the shell switch hides the title.
+  const assistantTitleMenu = Boolean(assistant && main);
+  const showMore = items.length > 0 && (!assistantTitleMenu || Boolean(topCenter));
+  const moreHiddenOnWide = assistantTitleMenu && Boolean(topCenter);
+  const showTakeoverButton = Boolean(
+    !assistant && !hideTakeoverButtons && session &&
+      (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server"),
+  );
+  const showNewChatButton = Boolean(assistant && !chrome && session?.space !== "health");
+  const hasAlwaysVisibleToolbar = Boolean(
+    overview || team || sides || showTerminal || jumpTerminal || (!chrome && actions) || showTakeoverButton,
+  );
+  const hasSmToolbar = Boolean(showFiles || tasks);
+  const moreDividerClass = hasAlwaysVisibleToolbar || (hasSmToolbar && showNewChatButton)
+    ? moreHiddenOnWide ? "lg:hidden" : undefined
+    : hasSmToolbar
+      ? moreHiddenOnWide ? "hidden sm:block lg:hidden" : "hidden sm:block"
+      : showNewChatButton
+        ? "lg:hidden"
+        : null;
+  const menuAlign = assistantTitleMenu && !(topCenter && mediaMatches(NARROW)) ? "left" : "right";
   const titleClass = "min-w-0 text-[14px] font-medium text-ink";
   const sideLabel = sides ? [t("chat-chatview.side_sessions_count", { count: sides.count }), sides.needs ? t("chat-chatview.side_sessions_needs_you") : ""].filter(Boolean).join(" · ") : "";
 
@@ -3451,13 +3627,6 @@ export const Header = memo(function Header({
           </h1>
         )}
         {!editing && chrome?.beside}
-        {!editing && !(assistant && main) && more("title")}
-        {!editing && branch && (
-          <span title={t("chat-chatview.branch_title", { branch })} data-chat-branch className="ml-1.5 flex min-w-0 max-w-44 shrink items-center gap-1 rounded-full px-1.5 py-0.5 text-[12px] text-ink-3 @max-[800px]:hidden">
-            <Icon name="branch" size={12} className="shrink-0" />
-            <span className="truncate">{branch}</span>
-          </span>
-        )}
         {!editing && session && !assistant && <BackgroundStallHint session={session} className="ml-1.5 max-w-56 shrink rounded-full px-1.5 py-0.5 text-label @max-[800px]:hidden" />}
       </div>
       {topCenter && <div className="flex min-w-0 flex-1 justify-center lg:hidden">{topCenter}</div>}
@@ -3522,21 +3691,29 @@ export const Header = memo(function Header({
         </span>
       )}
       {/* wide screens have New chat at the top of the sidebar; a phone's sidebar is a drawer */}
-      {assistant && !chrome && session?.space !== "health" && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
+      {showNewChatButton && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
       {tasks && <IconButton icon="todo" label={t("sidepanel.conversation_tasks")} active={tasks.open} onClick={tasks.onToggle} className="hidden sm:flex" />}
       {!chrome && actions}
-      {!assistant && !hideTakeoverButtons && session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server") &&
+      {showTakeoverButton && session &&
         <Suspense fallback={null}><TakeoverAction key={`${session.machine_id}:${session.session_id}`} session={session} /></Suspense>}
-      {Boolean(topCenter) && more("end")}
+      {showMore && moreDividerClass !== null && (
+        <span aria-hidden data-header-divider className={cx("mx-0.5 h-3.5 w-px shrink-0 bg-line", moreDividerClass)} />
+      )}
+      {showMore && (
+        <span className={cx("relative flex shrink-0", moreHiddenOnWide && "lg:hidden")}>
+          <IconButton icon="more" label={t("chat-chatview.more_actions")} onClick={menu.open} active={Boolean(menu.anchor)} className="text-ink-3" />
+          {othersNeed && <span aria-hidden className="pointer-events-none absolute top-0.5 right-0.5 size-2 rounded-full bg-attention shadow-[0_0_0_2px_var(--page)]" />}
+        </span>
+      )}
       {chrome?.page && <IconButton icon="chat" label={t("chat-chatview.open_agent_page")} onClick={openAgentPage} />}
       {chrome && <IconButton icon="x" label={t("sidepanel.close")} onClick={chrome.onClose} />}
       </div>
-      {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align={topCenter && mediaMatches(NARROW) ? "right" : "left"} items={items} />}
+      {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align={menuAlign} items={items} />}
       {tabs.anchor && (
         <Menu
           anchor={tabs.anchor}
           onClose={tabs.close}
-          align={topCenter && mediaMatches(NARROW) ? "right" : "left"}
+          align={menuAlign}
           width={360}
           header={session?.space_name ? t("chat-chatview.space_header", { name: session.space_name }) : undefined}
           headerAsWritten

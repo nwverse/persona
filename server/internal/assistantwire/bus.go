@@ -298,6 +298,8 @@ var Routes = []string{
 	"DELETE /api/v1/assistant/conversations/{id}",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",
+	"GET /api/v1/assistant/outbound-messages",
+	"POST /api/v1/assistant/outbound-messages",
 	"GET /api/v1/assistant/north-star",
 	"DELETE /api/v1/assistant/standing-authorizations/{id}",
 	"POST /api/v1/assistant/rule-suggestions/{id}/always",
@@ -378,6 +380,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/followups",
 	"POST /api/v1/assistant/followups/{id}/run",
 	"DELETE /api/v1/assistant/followups/{id}",
+	"GET /api/v1/task-plans",
 	"GET /api/v1/task-plans/{id}",
 	"POST /api/v1/task-plans/{id}/start",
 	"POST /api/v1/task-plans/{id}/workspace-preview",
@@ -522,9 +525,8 @@ var Routes = []string{
 	"POST /api/v1/recordings/{id}/followup",
 	// A meeting handed to an Agent after it (meeting_handoff.go there, #8852).
 	"POST /api/v1/recordings/{id}/handoff",
-	// Its photos (meeting_photos.go there, "Phase 3: photos").
+	// Its photo writes (the read-only GETs are the knowledge base's own, kb_recordings.go).
 	"POST /api/v1/recordings/{id}/photos",
-	"GET /api/v1/recordings/{id}/photos",
 	"DELETE /api/v1/recordings/{id}/photos/{n}",
 	// Hub transcription's gap uploads (meeting_transcribe.go there, "Phase 5: hub transcription"); its audio socket is
 	// one of SocketRoutes.

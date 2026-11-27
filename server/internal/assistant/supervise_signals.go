@@ -29,7 +29,7 @@ const (
 	sigStarted       = "started"        // its agent started after the supervisor's retry (start_remedy.go)
 	sigPRConflict    = "pr_conflict"    // the task's current open PR has merge conflicts at this head
 	sigDraftPR       = "draft_pr"       // an own linked PR is still draft, not waiting for upstream review
-	sigPREvent       = "pr_event"       // a current-head PR CI failure or review fell back from direct Agent routing
+	sigPREvent       = "pr_event"       // a PR CI failure, review, or discussion comment fell back from direct Agent routing
 	sigReport        = "report"         // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated     = "escalated"      // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned      = "orphaned"       // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
@@ -88,6 +88,7 @@ var (
 // superviseSignal is one thing about one task the supervisor should know. Key names the stretch of state it is about:
 // the same signal with the same key is told once.
 type superviseSignal struct {
+	WorkerSet       string `json:"worker_set,omitempty"` // accepted child generation of an orphaned leader
 	Todo, Kind, Key string
 	// Handoff is an idle-shaped report that an owner's decision or review rework did not reach the agent.
 	// It is not a turn-end stop, so a native wakeup must not defer it.
@@ -95,7 +96,8 @@ type superviseSignal struct {
 	// PendingPredecessors: keys of earlier stretches of this id replaced before their delivery or queue acknowledgment.
 	// An ACK removes exactly its own Key; a still-present predecessor's dedup reservation is not delivery proof.
 	PendingPredecessors []string
-	PRURL               string // draft_pr: the current or earlier followed PR, revalidated before delivery
+	PRURL               string // the followed PR, revalidated before delivery
+	PREventID           string `json:"pr_event_id,omitempty"` // names a review or comment, including during owner decisions
 	// Unreachable: this decision exists because its assigned task leader Agent or Assistant supervisor could not be
 	// reached, not because the worker waits for the user. It stays a decision even when the worker is not needs_user.
 	// Recipient distinguishes an unreachable Assistant supervisor from the existing task-leader-Agent escalation.
@@ -219,7 +221,11 @@ func (g superviseSignal) id() string {
 		return g.Todo + "|" + g.Kind + "@" + normalizePRKey(g.PRURL)
 	}
 	if g.Kind == sigPREvent {
-		return g.Todo + "|" + g.Kind + "@" + g.PRURL + ":" + g.Report
+		id := g.Todo + "|" + g.Kind + "@" + g.PRURL + ":" + g.Report
+		if g.PREventID != "" {
+			id += ":" + g.PREventID
+		}
+		return id
 	}
 	if g.Kind == sigReport || g.Kind == sigCheck {
 		return g.Todo + "|" + g.Kind + ":" + g.Report
@@ -237,6 +243,7 @@ func (g superviseSignal) id() string {
 		return g.Todo + "|" + g.Kind + ":unhandled@" + g.Key
 	}
 	if g.Kind == sigNeedsUserExternalInfo {
+		// The key includes the source event ID and the decision round, so feedback can share a digest.
 		return g.Todo + "|" + g.Kind + "@" + g.Key
 	}
 	return g.Todo + "|" + g.Kind
@@ -302,10 +309,12 @@ type superviseBook struct {
 
 	// noMainSince is when digests started leaving signals waiting for a main conversation (zero: the last one left none
 	// waiting), noMainLogged when that was last logged (sendDigest).
-	noMainSince, noMainLogged time.Time
-	holds                     map[string]supervisionHold
-	holdsLoaded, holdsDirty   bool
-	sideLinks                 map[string][]string // side conversation → task/conversation links to attach to its user-level supervision push
+	noMainSince, noMainLogged               time.Time
+	holds                                   map[string]supervisionHold
+	holdsLoaded, holdsDirty                 bool
+	stallsHandled                           map[string]handledStall
+	stallsHandledLoaded, stallsHandledDirty bool
+	sideLinks                               map[string][]string // side conversation → task/conversation links to attach to its user-level supervision push
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
@@ -411,12 +420,12 @@ func (s *Service) restoreSupervisePending(ctx context.Context) {
 // updateSupervisePending changes the durable outbox. Callers may hold supervise.mu: relay code never takes that lock
 // while holding relays.mu. Keeping this per signal, rather than replacing it from pending, preserves in-flight digests.
 // A failed write rolls the in-memory durable state back too; delivery checks supervisePendingDurably before it can ACK.
-func (s *Service) updateSupervisePending(change func(map[string]superviseSignal)) {
+func (s *Service) updateSupervisePending(change func(map[string]superviseSignal)) bool {
 	r := &s.relays
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !s.relayLocked(context.Background()) {
-		return
+		return false
 	}
 	previous := maps.Clone(r.st.SupervisePending)
 	next := maps.Clone(previous)
@@ -430,7 +439,9 @@ func (s *Service) updateSupervisePending(change func(map[string]superviseSignal)
 	r.st.SupervisePending = next
 	if err := s.saveRelayLocked(); err != nil {
 		r.st.SupervisePending = previous
+		return false
 	}
+	return true
 }
 
 // supervisePendingDurably reports whether every signal that is about to be delivered still has its exact durable
@@ -940,17 +951,18 @@ func (s *Service) signal(g superviseSignal) {
 }
 
 // signalReplacing records g and, when old is still pending, atomically replaces that older stretch in the outbox.
-func (s *Service) signalReplacing(old *superviseSignal, g superviseSignal) {
-	if !s.autoSupervisionOn(context.Background()) {
-		return // automatic supervision messages are off: nothing is gathered, scheduled or told (supervise_switch.go)
+// It reports whether the outbox write succeeded.
+func (s *Service) signalReplacing(old *superviseSignal, g superviseSignal) bool {
+	if !s.supervisionAllowed(context.Background(), g) {
+		return false // the mode drops it (off, or a routine check under outcomes): nothing is gathered, scheduled or told (supervise_switch.go)
 	}
 	if g.Todo != "" {
 		if t, ok := s.todoNow(g.Todo); ok && s.reporterStopped(context.Background(), t.Origin) {
-			return // /stop silences the reporting task's notices on every route until the user speaks again (#3308)
+			return false // /stop silences the reporting task's notices on every route until the user speaks again (#3308)
 		}
 	}
 	if g.level() == supervisionInfo && g.Kind != sigParkedSummary {
-		return // Progress is already recorded on the task card; it never wakes the assistant.
+		return false // Progress is already recorded on the task card; it never wakes the assistant.
 	}
 	if g.At.IsZero() {
 		g.At = time.Now()
@@ -963,9 +975,9 @@ func (s *Service) signalReplacing(old *superviseSignal, g superviseSignal) {
 		b.init()
 		b.sent[g.id()] = g.Key
 		b.mu.Unlock()
-		return
+		return false
 	}
-	s.queueSignalReplacing(old, g)
+	return s.queueSignalReplacing(old, g)
 }
 
 // queueSignal only adds a validated signal to the in-memory digest. It does not change the turn ledger.
@@ -1007,12 +1019,18 @@ func (s *Service) releaseReportsLocked(g superviseSignal) []string {
 }
 
 // queueSignalReplacing also removes the older stretch it supersedes from the durable outbox.
-func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) {
-	if !s.autoSupervisionOn(context.Background()) {
-		return // the same for a signal that skipped signal (supervise_switch.go)
+func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) bool {
+	if !s.supervisionAllowed(context.Background(), g) {
+		return false // the same for a signal that skipped signal (supervise_switch.go)
 	}
 	if g.Kind != sigAsk {
 		g = s.currentSupervisorSignal(g)
+	}
+	currentSupervisor := ""
+	if g.Kind == sigReview && g.Recipient == "" {
+		if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil {
+			currentSupervisor = t.Supervision.Supervisor
+		}
 	}
 	if g.At.IsZero() {
 		g.At = time.Now()
@@ -1020,12 +1038,12 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	// This early cache is not an unhandled source's delivery receipt: an owner wait
-	// can discard the entry before dispatch. Its durable fingerprint deduplicates delivery.
-	unhandled := g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
-	if b.sent[g.id()] == g.Key && !unhandled && g.Key != "" {
+	// Source-backed events need a durable receipt. Their fingerprints deduplicate delivery even
+	// after the digest has dequeued the signal and the source retries its cursor write.
+	sourceBacked := g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" || g.PREventID != ""
+	if b.sent[g.id()] == g.Key && !sourceBacked && g.Key != "" {
 		b.mu.Unlock()
-		return
+		return false
 	}
 	var absorbedIDs []string
 	if cur, ok := b.pending[g.id()]; ok {
@@ -1034,7 +1052,7 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 		} else if g.Kind == sigFailed {
 			if cur.Key != g.Key && newerFailedSignal(cur, g) {
 				b.mu.Unlock()
-				return // a restored or delayed old attempt cannot replace the newer pending one
+				return false // a restored or delayed old attempt cannot replace the newer pending one
 			}
 			if cur.Key == g.Key {
 				g.At = cur.At // the same failed attempt keeps its queue position and delivery generation
@@ -1053,6 +1071,12 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 		}
 		if g.Detail == "" && cur.Key == g.Key {
 			g.Detail = cur.Detail // the watch's sight of what an event told already
+		}
+		if g.Recipient == "" && cur.Recipient != "" && cur.Key == g.Key &&
+			(g.To == "" || g.To == cur.Recipient) &&
+			(cur.To == "" || g.To == "" || cur.To == g.To) &&
+			(currentSupervisor == "" || currentSupervisor == cur.Recipient) {
+			g.Recipient = cur.Recipient
 		}
 		g = preserveIdleHandoff(cur, g)
 		if g.Kind == sigReport && cur.Key != g.Key {
@@ -1087,7 +1111,7 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 		g, absorbedIDs = absorbPendingOutageSiblingLocked(b, g)
 	}
 	held := s.releaseReportsLocked(g)
-	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+	persisted := s.updateSupervisePending(func(pending map[string]superviseSignal) {
 		for _, id := range held {
 			if cur, ok := pending[id]; ok {
 				cur.NotBefore = time.Time{}
@@ -1115,6 +1139,7 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 	b.pending[g.id()] = g
 	s.scheduleDigestLocked(time.Now())
 	b.mu.Unlock()
+	return persisted
 }
 
 // scheduleDigestLocked sets the timer for when the pending signals are due; s.supervise.mu is held.
@@ -1254,10 +1279,10 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 		case c.Assistant && c.State != proto.StateWorking:
 			// An assistant conversation (a task leader) waits on its workers, each told of on its own; a message always reaches it.
 		default:
-			moved := c.UpdatedAt
-			if c.ActivityAt != nil && c.ActivityAt.After(moved) {
-				moved = *c.ActivityAt
+			if aliveBackgroundWork(c, now) {
+				continue
 			}
+			moved := stalledSessionMoved(c)
 			// Working: stuck past stallAfter. Any other state (waiting on background work, a wake, stopped or gone)
 			// is told past silentAfter, so a state that should end by itself and never does is still heard of (#5124).
 			after := silentAfter(v.ExpectMinutes)
@@ -1266,13 +1291,17 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 			}
 			if still := v.activeTimeSince(moved, now); !moved.IsZero() && still >= after {
 				g := base
-				g.Kind, g.Key, g.Minutes = sigStalled, c.SessionID+"@"+moved.UTC().Format(time.RFC3339), int(still.Minutes())
+				g.Kind, g.Key, g.Minutes = sigStalled, stalledSignalKey(c.SessionID, moved), int(still.Minutes())
 				g.Detail = strings.TrimSpace(c.Activity)
 				out = append(out, g)
 			}
 		}
 	}
 	return out
+}
+
+func stalledSignalKey(session string, moved time.Time) string {
+	return session + "@" + moved.UTC().Format(time.RFC3339)
 }
 
 // reviewKey names one review a task waits for: when it began to wait. The time is cut to the microsecond the database
@@ -1337,6 +1366,10 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.recoverTaskInboxEvents(ctx)
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
+	openIDs := make(map[string]bool, len(tasks))
+	for _, t := range tasks {
+		openIDs[t.ID] = true
+	}
 	s.recoverOutsideDirectionDigests(ctx)
 	s.pruneAllStoppedDedup(ctx)
 	s.prunePRMergeWakes(ctx)
@@ -1347,6 +1380,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)
 	groups := allStoppedTaskGroups(tasks)
 	todosV2 := s.settings(ctx).todosV2On()
+	if todosV2 {
+		s.maybeRunStartupRestartRecovery(ctx, lists)
+	}
 	backfilled := 0
 	for _, t := range tasks {
 		if t.Supervision == nil && t.DoneAt == nil {
@@ -1383,6 +1419,24 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)
 		t = s.checkTaskHandoff(ctx, t, now)
 		agents := s.taskAgentsIn(ctx, t, lists)
+		for _, c := range agents {
+			if c.State == proto.StateWorking {
+				s.observeProgress(c, now)
+			}
+			if todosV2 && (c.State == proto.StateWorking || strings.EqualFold(strings.TrimSpace(c.Status), proto.StatusWorking)) {
+				if err := s.RecordSupervisedTaskActive(ctx, t.ID, c.MachineID, c.SessionID, s.runtimeBootEpoch()); err != nil {
+					s.logf("todos_v2 restart recovery checkpoint %s: %v", t.ID, err)
+				}
+			}
+		}
+		if todosV2 {
+			s.refreshTodoRuntimeChangedFiles(ctx, t, agents)
+		}
+		if todosV2 && ((t.Check != nil && t.Check.Verdict == verdictDone) || (t.Supervision != nil && t.Supervision.Progress != nil && t.Supervision.Progress.Kind == "done")) {
+			if err := s.ResetSupervisedTaskRecovery(ctx, t.ID); err != nil {
+				s.logf("todos_v2 restart recovery reset %s: %v", t.ID, err)
+			}
+		}
 		s.closeStalledTask(ctx, t, agents, now)
 		if current, ok := s.todoNow(t.ID); ok {
 			t = current
@@ -1400,8 +1454,14 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		allStopped := false
 		stalled := map[string]bool{}
 		for _, g := range watchSignals(t, agents, now, group) {
+			s.projectReviewStall(ctx, g, agents)
 			allStopped = allStopped || g.Kind == sigAllStopped
 			stalled[g.Session] = stalled[g.Session] || g.Kind == sigStalled
+			if g.Kind == sigStalled {
+				if handled, known := s.stalledHandled(ctx, g.Todo, sigStalled, g.Session, g.Key); known && handled {
+					continue
+				}
+			}
 			if g.Kind == sigNeedsYou && routed[[2]string{g.Machine, g.Session}] {
 				continue // its card is with the supervisor as an ask already
 			}
@@ -1410,6 +1470,10 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if !allStopped && t.Supervision.state(t) == "" { // going on: neither parked nor with the owner nor waiting for review
 			for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
 				if g, ok := s.noProgressSignal(t, c, now); ok && !stalled[c.SessionID] {
+					s.projectReviewStall(ctx, g, []proto.Session{c})
+					if handled, known := s.stalledHandled(ctx, g.Todo, sigNoProgress, g.Session, g.Key); known && handled {
+						continue
+					}
 					s.signal(g)
 				}
 			}
@@ -1442,6 +1506,14 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	}
 	if s.expireSupervisionHolds(ctx, now) {
 		s.publish(ctx)
+	}
+	if s.todosLoaded() {
+		s.pruneHandledStalls(ctx, openIDs)
+	}
+	if todosV2 {
+		if _, err := s.ReconcileTodoBlockers(ctx, ""); err != nil {
+			s.logf("todos_v2 blocker reconcile sweep: %v", err)
+		}
 	}
 }
 

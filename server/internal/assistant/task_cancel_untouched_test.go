@@ -94,7 +94,7 @@ func TestUntouchedCancellationRechecksOwnerInputAtCommit(t *testing.T) {
 	waitFor(t, "the cancellation commit boundary", func() bool {
 		for _, stack := range goroutineStacks() {
 			if strings.Contains(stack, "[sync.Mutex.Lock]") &&
-				strings.Contains(stack, "(*Service).updateSupervisionWithClose") &&
+				strings.Contains(stack, "(*Service).updateSupervisionGuardedWithClose") &&
 				strings.Contains(stack, "TestUntouchedCancellationRechecksOwnerInputAtCommit.func") {
 				return true
 			}

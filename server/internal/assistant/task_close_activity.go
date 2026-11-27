@@ -15,15 +15,19 @@ const taskUserIdle = 10 * time.Minute
 
 const taskActivityKey = "assistant.task_activity"
 
+// An explicit read protects retirement, but can also come from a passive viewer.
+const taskReadActivityPrefix = "read:"
+
 // activityUnknown is sessionActivityReason's answer when the owner's recent activity could not be read.
 const activityUnknown = "the user's recent session activity could not be loaded"
 
 type taskActivityBook struct {
-	mu       sync.Mutex
-	writing  sync.Mutex
-	loaded   bool
-	times    map[string]time.Time
-	retiring map[string]map[*taskRetirement]struct{}
+	mu           sync.Mutex
+	writing      sync.Mutex
+	loaded       bool
+	times        map[string]time.Time
+	ownerExcerpt map[string]string
+	retiring     map[string]map[*taskRetirement]struct{}
 }
 
 type taskRetirement struct{ cancel context.CancelFunc }
@@ -104,19 +108,23 @@ func (s *Service) loadTaskActivity(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) rememberSessionActivity(ctx context.Context, machine, session string) time.Time {
+func (s *Service) rememberSessionActivity(ctx context.Context, machine, session string) {
+	s.rememberTaskActivity(ctx, machine, session, runtimeListID(machine, session))
+}
+
+func (s *Service) rememberTaskActivity(ctx context.Context, machine, session, key string) {
 	b := &s.taskActivity
 	b.mu.Lock()
 	if b.times == nil {
 		b.times = map[string]time.Time{}
 	}
 	now := time.Now().UTC()
-	b.times[runtimeListID(machine, session)] = now
+	b.times[key] = now
 	b.mu.Unlock()
 	s.cancelSessionRetirement(machine, session)
 	if err := s.loadTaskActivity(ctx); err != nil {
 		s.logf("task activity: load: %v (kept in memory)", err)
-		return now
+		return
 	}
 	// Publish input before storage can block. A transaction's final guard never waits on persistence.
 	b.writing.Lock()
@@ -134,21 +142,25 @@ func (s *Service) rememberSessionActivity(ctx context.Context, machine, session 
 			s.logf("task activity: save: %v (kept in memory)", err)
 		}
 	}
-	return now
 }
 
-func (s *Service) taskUserActivityAt(machine, session string) (time.Time, bool) {
+func (s *Service) taskUserActivityAt(machine, session string) (activity, read time.Time, loaded bool) {
 	b := &s.taskActivity
+	key := runtimeListID(machine, session)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.times[runtimeListID(machine, session)], b.loaded
+	return b.times[key], b.times[taskReadActivityPrefix+key], b.loaded
 }
 
 type taskCloseHoldError struct {
 	todo, why string
+	work      *taskCloseWork
 }
 
 func (e *taskCloseHoldError) Error() string {
+	if e.work != nil {
+		return fmt.Sprintf("task %s cannot be closed: the user has an unfinished request in Agent %q (%s)", e.todo, e.work.title, e.work.items)
+	}
 	return fmt.Sprintf("task %s cannot be closed: %s. Leave the task open and retry after the user leaves the "+
 		"conversation and has been inactive for 10 minutes; do not stop or archive its Agent", e.todo, e.why)
 }
@@ -157,9 +169,19 @@ func (s *Service) taskCloseActivityError(ctx context.Context, t Todo, now time.T
 	if t.DoneAt != nil {
 		return nil
 	}
-	s.loadSeen(ctx)
 	_ = s.loadTaskActivity(ctx)
-	return s.taskCloseActivitySnapshotError(t, now)
+	return s.taskCloseSnapshotError(t, now)
+}
+
+func (s *Service) taskCloseSnapshotError(t Todo, now time.Time) error {
+	return s.taskCloseSnapshotErrorExcept(t, now, SessionRef{})
+}
+
+func (s *Service) taskCloseSnapshotErrorExcept(t Todo, now time.Time, untouched SessionRef) error {
+	if work := s.taskCloseWorkSnapshot(t, now); work != nil {
+		return &taskCloseHoldError{todo: t.ID, work: work}
+	}
+	return s.taskCloseActivitySnapshotErrorExcept(t, now, untouched)
 }
 
 // taskCloseActivitySnapshotError is safe inside a database transaction: cache reads only, with no storage lock or I/O.
@@ -229,7 +251,6 @@ func (s *Service) deferTaskReview(ctx context.Context, id string, err error) err
 }
 
 func (s *Service) sessionActivityReason(ctx context.Context, machine, session string, now time.Time) string {
-	s.loadSeen(ctx)
 	_ = s.loadTaskActivity(ctx)
 	return s.sessionActivitySnapshotReason(machine, session, now)
 }
@@ -239,26 +260,24 @@ func (s *Service) sessionActivitySnapshotReason(machine, session string, now tim
 }
 
 func (s *Service) sessionActivitySnapshotReasonExcept(machine, session string, now time.Time, untouched bool) string {
-	persistent := s.fleetStore() != nil
-	activity, activityLoaded := s.taskUserActivityAt(machine, session)
+	activity, read, activityLoaded := s.taskUserActivityAt(machine, session)
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	for _, ref := range s.fleet.clients.Viewing {
 		if ref.MachineID == machine && ref.SessionID == session {
-			if untouched && activityLoaded && (!persistent || s.fleet.seenLoaded) && activity.IsZero() {
+			if untouched && activityLoaded && activity.IsZero() {
 				return "" // this is only a passive viewer; actual activity still wins
 			}
 			return fmt.Sprintf("the user is viewing Agent %s", short(session))
 		}
 	}
-	if persistent && !s.fleet.seenLoaded || !activityLoaded {
+	if !activityLoaded {
 		return activityUnknown
 	}
-	at := s.fleet.seen[[2]string{machine, session}]
-	if activity.After(at) {
-		at = activity
+	if !untouched && read.After(activity) {
+		activity = read
 	}
-	if !at.IsZero() && now.Sub(at) < taskUserIdle {
+	if !activity.IsZero() && now.Sub(activity) < taskUserIdle {
 		return fmt.Sprintf("the user viewed or messaged Agent %s within the last 10 minutes", short(session))
 	}
 	return ""
