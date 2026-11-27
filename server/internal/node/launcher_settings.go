@@ -7,13 +7,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-var nativeClaudeModel = regexp.MustCompile(`(?i)(?:^|[/:.@_-])claude(?:[-_]|$)`)
+var nativeClaudeModel = lazyre.New(`(?i)(?:^|[/:.@_-])claude(?:[-_]|$)`)
 
 func nonClaudeDispatchModel(models ...string) string {
 	for _, model := range models {
