@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
+import { MCP_SERVER_NAMES } from '../../runtime-sdk/lib/compat.js'
 import { AgyAcpClient } from '../lib/acp.js'
 import { toPersonaId } from '../lib/map.js'
 import { createAgyRuntime } from '../lib/runtime.js'
@@ -429,7 +430,7 @@ test('permission cards normalize canonical tool names before display titles', as
       { kind: 'other', title: 'Run mcp_persona_19d68ad7_todo_decisions', rawInput: { todo_id: 'todo_1' } },
       'mcp__persona__todo_decisions', { todo_id: 'todo_1' }, 'todo_id: todo_1'],
     ['Run-prefixed proxied persona_call title unwraps target tool',
-      { kind: 'other', title: 'Run mcp_jarvis_19d68ad7_persona_call', rawInput: { name: 'todo_decisions', arguments: { todo_id: 'todo_2' } } },
+      { kind: 'other', title: `Run mcp_${MCP_SERVER_NAMES[1]}_19d68ad7_persona_call`, rawInput: { name: 'todo_decisions', arguments: { todo_id: 'todo_2' } } },
       'mcp__persona__todo_decisions', { todo_id: 'todo_2' }, 'todo_id: todo_2'],
   ]
   for (const [name, toolCall, toolName, toolInput, summary] of cases) {
