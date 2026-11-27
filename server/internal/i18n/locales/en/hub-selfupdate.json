@@ -42,6 +42,7 @@
   "reason_no_start_other": "The new version failed to start {count} times",
   "reason_marker_unsaved": "Couldn’t save the update’s start count, so a crash loop couldn’t be caught",
   "rolled_back": "Updating to {to} didn’t work, so the hub went back to {from}: {reason}",
+  "rollback_failed": "Updating to {to} didn’t work ({reason}), and going back to {from} failed: {error}. The hub keeps running {to} for now",
   "push_failed_title": "Hub update failed",
   "push_failed_body": "{why}. This version won’t be installed automatically again.",
   "reason_no_database": "Couldn’t reach the database",

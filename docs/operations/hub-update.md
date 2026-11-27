@@ -221,8 +221,12 @@ Non-waiting `ask_user` cards alone do not hold it; running turns and blocked ter
 A manual attempt stops waiting after two hours; it does not force a restart at that deadline.
 Choosing **Update now** explicitly bypasses this Hub wait and can interrupt local or connection-owned
 conversations. Independent remote resident-node conversations can survive a Hub reconnection.
-The idle check is not a lock against new turns: a turn starting during the subsequent backup/switch
-can still overlap the restart. This path does not guarantee interruption-free session execution.
+The idle check is not a lock against new turns, but it is repeated at the last moment: with an entry process, the
+edge asks the old hub right before releasing it, once the new version's standby is ready, and a turn that started
+during the backup, the swap or the standby's start keeps it serving; the update waits for idle again, with the files in
+place and within the same limits (#10826). A turn starting in the moment between that answer and the release can still
+overlap the restart, as can any turn on hubs without an entry process (exec) or with an edge started before this check.
+This path does not guarantee interruption-free session execution.
 Link/connector node updates retain their own idle and commit checks; direct SSH deployment instead
 replaces the program and restarts the node, so it can interrupt work. See [node-update.md](node-update.md).
 
@@ -1064,6 +1068,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
    - **With an entry process** (`personad hub run` on Linux and macOS, since 2026-11-06), use blue-green switching ([hub-restart.md](hub-restart.md), "Blue-green switching"):
      - The hub asks the entry process to switch to the new binary and gives it the expected build number;
      - The entry process first starts the new version as standby; only after its version matches and self-check passes does it hold connections, release the old version, activate the new one and switch routing;
+     - Right before releasing the old version the entry process asks it whether it is still idle (unless the person chose **Update now**); if a session became busy meanwhile, the standby is dropped, the old version keeps serving and goes back to step 4 with the new files and pending in place (the dropped standby's start is not counted);
      - If the new version cannot start, the entry process returns `switch_failed`; the old version restores the files, deletes pending and records this attempt as failed (not as a bad version, since the new version never ran);
      - No watchdog is started: the entry process is the watchdog.
    - **Without an entry process** (Windows, `PERSONA_HUB_EDGE=0`): start the watchdog first (below), then `syscall.Exec` the new binary with the same arguments and environment
@@ -1083,6 +1088,8 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      exit with code 75 so the entry process immediately restarts the restored old version at the same path. In the two cases below, the entry process handles rollback: restore the files from pending, write the rollback marker, start the old version:
      - The new version fails to activate;
      - The new version does not report "confirmed" within 3 minutes.
+   - **A rollback whose old version does not start** (its standby fails, e.g. `db.Check`): the files are already back and the rollback marker written, but the new version keeps serving.
+     The update ends as `failed` with both reasons and a push; it no longer counts as under way. The marker is left for the build that runs next (the old one, at the next restart) to record; the build it names does not record it about itself (#10826).
    - **Watchdog** (without an entry process; code from the old binary, `personad update-watch`, started separately before exec and detached from the process group):
      if it does not see the new build number and "confirmed" from the local `/api/v1/health` within 3 minutes, it rolls back itself:
      - Under systemd (with `INVOCATION_ID`) or launchd: restore `.prev`, kill the main process, and let the service manager start the old binary;

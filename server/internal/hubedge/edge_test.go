@@ -22,14 +22,18 @@ import (
 
 // The test binary doubles as the hub: run by the edge under one of these names (a symlink to it), it is a slot.
 //
-//	v1, v2         serve; GET / answers "<name> <slot> <remote> <local>"; /crash exits 1; /switch?to=&expect=&kind= asks
-//	               the edge to switch (the answer says how that went)
+//	v1, v2         serve; GET / answers "<name> <slot> <remote> <local>"; /crash exits 1; /switch?to=&expect=&kind=&idle= asks
+//	               the edge to switch (the answer says how that went; idle yes|no|mute is the slot's SetIdle answer)
 //	bad-standby    exits before it says standby
 //	bad-activate   says standby, then fails when activated
+//	turns-busy     asks for an update switch, then turns busy (idle_release_test.go)
 const envTestPort = "HUBEDGE_TEST_PORT"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(EnvSlot) != "" {
+		if name := filepath.Base(os.Args[0]); name == "turns-busy" {
+			os.Exit(turnsBusySlot(name))
+		}
 		os.Exit(fakeSlot(filepath.Base(os.Args[0])))
 	}
 	os.Exit(m.Run())
@@ -73,8 +77,16 @@ func fakeSlot(name string) int {
 		case "/switch":
 			q := r.URL.Query()
 			expect, _ := strconv.ParseInt(q.Get("expect"), 10, 64)
+			switch q.Get("idle") { // the hub's answer when the edge asks right before the release (SetIdle)
+			case "yes":
+				s.SetIdle(func() (bool, string) { return true, "" })
+			case "no":
+				s.SetIdle(func() (bool, string) { return false, "1 busy: a new turn" })
+			case "mute":
+				s.SetIdle(func() (bool, string) { time.Sleep(time.Hour); return true, "" })
+			}
 			err := s.Switch(context.Background(), q.Get("to"), "", q.Get("kind"), expect)
-			fmt.Fprintf(w, "switch: %v", err)
+			fmt.Fprintf(w, "switch: %v (busy %v)", err, errors.Is(err, ErrBusy))
 			return
 		case "/confirm":
 			s.Confirmed()

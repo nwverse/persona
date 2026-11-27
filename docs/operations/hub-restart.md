@@ -114,6 +114,9 @@ One switch (self-update, `personad hub switch`, deploy.sh), in order:
    Meanwhile the old slot keeps serving; if the version is wrong, it fails to start, or it cannot reach the database, the new one is killed and the old one keeps running with no interruption at all.
    That holds however many switches fail in a row: a new slot takes the name (a or b) the slot that served last is not using, so a standby never shares the serving slot's sockets,
    and when a slot exits the edge removes only socket files that slot left, never one that was already there when it started (#6024).
+   A self-update's switch also asks for **idle** (`idle` on `switch`): with the standby ready, the edge asks the old slot once more (`ask_idle`, answered by `idle` with the same `seq`
+   within 10 s) whether it is still idle. A conversation that started after the update's own idle wait, or no answer, drops the standby and keeps the old slot serving
+   (`switch_failed` with `busy`); the update then waits for idle again (#10826). Other switches (deploy, `hub switch`, rollback) are not asked, nor does an edge that predates the field ask.
 2. The edge starts to **hold**: new connections queue at the edge instead of being refused. Then it tells the old slot to **release**, and it stops through the planned-shutdown flow: `hub_restarting`, hand over machines and the event log, 1001.
 3. It tells the new slot to **activate**: migrate the database, take over machines, start listening, report ready. The edge switches routing over and releases the queued connections to it.
 4. If the new slot fails to take over (migration failure, exit, timeout), it switches back to the previous version: `--prev`, or during self-update the edge swaps back the files recorded in the pending marker.

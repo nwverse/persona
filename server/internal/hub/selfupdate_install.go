@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -280,34 +281,9 @@ func (u *updater) installCandidate(parent context.Context, auto bool, candidate 
 	}
 	// Wait until nothing the restart would interrupt is going on (or the user said "Update now").
 	waitStarted := time.Now()
-	for {
-		if err := ctx.Err(); err != nil {
-			fail(err)
-			return
-		}
-		busy := u.h.updateBusy()
-		u.mu.Lock()
-		u.busy = busy
-		now, autoOn := u.now, u.autoLocked()
-		u.mu.Unlock()
-		if len(busy) == 0 || now {
-			break
-		}
-		if auto && !autoOn {
-			fail(errUpdateAgain)
-			return
-		}
-		if !auto && time.Since(waitStarted) > u.manualIdle {
-			fail(errUpdateBusy)
-			return
-		}
-		u.set("waiting_idle", "", "")
-		select {
-		case <-ctx.Done():
-			fail(ctx.Err())
-			return
-		case <-time.After(u.idleEvery):
-		}
+	if err := u.waitIdle(ctx, auto, waitStarted); err != nil {
+		fail(err)
+		return
 	}
 	target, err := u.target()
 	if err != nil {
@@ -417,16 +393,33 @@ func (u *updater) installCandidate(parent context.Context, auto bool, candidate 
 		// Blue-green (docs/operations/hub-restart.md "Blue-green switching: the hub's edge"): the edge starts the new binary next to this one and hands over
 		// only once it checked itself; this process goes on serving until then, and stops when the edge releases it.
 		// The edge is the watchdog too (it goes back when the new one does not confirm the update in time).
-		u.set("restarting", "", "")
-		u.h.logf("update: handing over to %s", m.Version)
-		if err := u.handover(ctx, p.RunPath(), m.Build); err != nil {
+		// The edge asks this process once more right before it releases it (idleForRelease): a conversation that
+		// started after the wait above keeps it, and the update waits for idle again with the files in place (#10826).
+		for {
+			u.set("restarting", "", "")
+			u.h.logf("update: handing over to %s", m.Version)
+			err := u.handover(ctx, p.RunPath(), m.Build)
+			if err == nil {
+				return
+			}
+			if errors.Is(err, hubedge.ErrBusy) {
+				u.h.logf("update: not handing over to %s yet: %v", m.Version, err)
+				// The standby the edge dropped counted a start of the new build (boot): that was no failed start.
+				if err = update.Save(update.PendingPath(u.dir), p); err == nil {
+					if err = u.waitIdle(ctx, auto, waitStarted); err == nil {
+						continue
+					}
+				}
+			} else {
+				err = i18n.Err("hub-selfupdate.err_no_start", i18n.Args{"error": err.Error()})
+			}
 			restore()
 			if !swapped {
 				_ = os.Remove(update.PendingPath(u.dir))
 			}
-			fail(i18n.Err("hub-selfupdate.err_no_start", i18n.Args{"error": err.Error()}))
+			fail(err)
+			return
 		}
-		return
 	}
 	if err := u.startWatch(prev, update.PendingPath(u.dir)); err != nil {
 		u.h.logf("update: watchdog: %v (the new version still checks itself)", err)
@@ -441,6 +434,51 @@ func (u *updater) installCandidate(parent context.Context, auto bool, candidate 
 		}
 		fail(err)
 	}
+}
+
+// waitIdle waits until nothing the restart would interrupt is going on (Hub.updateBusy), or the user said "Update
+// now". It gives up when automatic updates were turned off meanwhile (an automatic update), past manualIdle since
+// started (one the user asked for), or when ctx ends.
+func (u *updater) waitIdle(ctx context.Context, auto bool, started time.Time) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		busy := u.h.updateBusy()
+		u.mu.Lock()
+		u.busy = busy
+		now, autoOn := u.now, u.autoLocked()
+		u.mu.Unlock()
+		if len(busy) == 0 || now {
+			return nil
+		}
+		if auto && !autoOn {
+			return errUpdateAgain
+		}
+		if !auto && time.Since(started) > u.manualIdle {
+			return errUpdateBusy
+		}
+		u.set("waiting_idle", "", "")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(u.idleEvery):
+		}
+	}
+}
+
+// idleForRelease is this slot's answer when the edge asks, right before it releases it for the update this process
+// handed over (hubedge.Slot.SetIdle): idle, or "Update now"; otherwise how many things are busy (the edge logs it;
+// the app reads which from the update's busy list), and the update waits again.
+func (u *updater) idleForRelease() (bool, string) {
+	busy := u.h.updateBusy()
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if len(busy) == 0 || u.now {
+		return true, ""
+	}
+	u.busy = busy
+	return false, fmt.Sprintf("%d busy", len(busy))
 }
 
 // download fetches f of release m, the one the update installs, into dir: from the release's own address where the

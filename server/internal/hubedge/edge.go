@@ -19,6 +19,7 @@ const (
 	defaultReleaseWait  = 20 * time.Second  // the old slot stops (the hub's own stop budget is 8 s)
 	defaultActivateWait = 120 * time.Second // the new slot migrates its database and listens
 	defaultConfirmWait  = 3 * time.Minute   // an update's new slot confirms it (selfupdate.go: 2 minutes)
+	defaultIdleWait     = 10 * time.Second  // the slot asking for an update says whether it is still idle
 	maxWaiting          = 4096              // connections held at once (the socket unit's backlog)
 	maxFailedStarts     = 5                 // the active slot dying this many times in a row ends the edge (the service manager takes over)
 )
@@ -39,7 +40,7 @@ type Options struct {
 	RestoreUpdate func(build int64, cause error) (binary string, ok bool, err error)
 
 	// Budgets (zero: the defaults), for the tests.
-	HoldMax, StandbyWait, ReleaseWait, ActivateWait, ConfirmWait time.Duration
+	HoldMax, StandbyWait, ReleaseWait, ActivateWait, ConfirmWait, IdleWait time.Duration
 }
 
 type switchReq struct {
@@ -66,6 +67,8 @@ type edge struct {
 	confirmBuild int64
 	confirmBy    *time.Timer
 
+	asks int64 // ask_idle questions so far (their Seq)
+
 	// Nothing serves: start retryBinary again at retry (the edge's loop only).
 	failures    int
 	retry       <-chan time.Time
@@ -84,6 +87,7 @@ func Run(ctx context.Context, o Options) error {
 	orDefault(&o.ReleaseWait, defaultReleaseWait)
 	orDefault(&o.ActivateWait, defaultActivateWait)
 	orDefault(&o.ConfirmWait, defaultConfirmWait)
+	orDefault(&o.IdleWait, defaultIdleWait)
 	if err := os.MkdirAll(o.RunDir, 0o700); err != nil {
 		return err
 	}

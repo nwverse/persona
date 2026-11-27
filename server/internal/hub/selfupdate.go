@@ -193,6 +193,7 @@ func newUpdater(h *Hub) *updater {
 			return h.slot.Switch(ctx, target, "", hubedge.KindUpdate, build)
 		}
 		u.edgeConfirmed = h.slot.Confirmed
+		h.slot.SetIdle(u.idleForRelease)
 	}
 	return u
 }
@@ -461,9 +462,10 @@ func (u *updater) markRolledBack(p update.Pending, reason string) {
 }
 
 // recordRolledBack puts an update that went back into the history and the bad builds, once the database is there.
+// A marker for the build this process is has not gone back yet (rollbackFailed): the build that runs next records it.
 func (u *updater) recordRolledBack(ctx context.Context) {
 	var rb update.RolledBack
-	if ok, err := update.Load(update.RolledBackPath(u.dir), &rb); err != nil || !ok {
+	if ok, err := update.Load(update.RolledBackPath(u.dir), &rb); err != nil || !ok || rb.ToBuild == u.h.build.Number {
 		return
 	}
 	if err := u.record(ctx, updateRecord{FromVersion: rb.FromVersion, ToVersion: rb.ToVersion, ToBuild: rb.ToBuild, Started: rb.Started,
@@ -501,7 +503,9 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 			if dbOK {
 				why = su(l, "reason_machines_missing", i18n.Args{"machines": strings.Join(missing, su(l, "list_sep"))})
 			}
-			u.rollback(p, why)
+			if err := u.rollback(p, why); err != nil {
+				u.rollbackFailed(p, why, err)
+			}
 			return
 		}
 		select {
@@ -556,6 +560,21 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 	if nodeErr == nil {
 		u.removeDownloads(u.stagedDir(p.ToBuild))
 	} // retain failed package preparation for recovery
+}
+
+// rollbackFailed settles an update whose rollback did not get this process replaced (#10826): its files could not
+// be put back, or the edge could not start the build before it. This build goes on serving; the update ends as
+// failed, with why, and the owner is told. No longer under way, it does not turn later update requests into silent
+// no-ops. The rollback marker, if written, stays for the build that runs next (the files on disk are that one's).
+func (u *updater) rollbackFailed(p update.Pending, reason string, err error) {
+	l := u.h.userLang()
+	why := su(l, "rollback_failed", i18n.Args{"from": p.FromVersion, "to": p.ToVersion, "reason": reason, "error": err.Error()})
+	u.mu.Lock()
+	u.confirmed = true // nothing left for this process to confirm
+	u.mu.Unlock()
+	u.set("failed", "", why)
+	u.notify(su(l, "push_failed_title"), why)
+	u.h.logf("update: %s -> %s: going back failed, %s goes on: %v", p.FromVersion, p.ToVersion, p.ToVersion, err)
 }
 
 // offline lists which of ids are not connected.
