@@ -882,6 +882,48 @@ scope includes `:full` to invalidate previously cached compact pages. Parsed fil
 and nanosecond modification/change times, bounded to 16 files and 64 MiB of source data. Files modified within the
 last second bypass the cache because rapid same-size writes can share a filesystem timestamp tick.
 
+#### Compatibility probe and live smoke (#16311)
+
+The companion reads three private agy surfaces with no compatibility promise: the language server's HTTP Connect
+RPC port (the `random port at N for HTTP` line in agy's `--log-file`) and its `GetCascadeTrajectory` /
+`GetCascadeTrajectorySteps` methods, the `conversation_summaries` table in `conversation_summaries.db`, and the step
+fields of `brain/<id>/.system_generated/logs/transcript(_full).jsonl`. Both agy and the runtime package update
+themselves, so `integrations/antigravity/lib/probe.js` checks these surfaces once per agy version reported by ACP
+`initialize`. The production companion turns the probe on (`compatProbe`); library callers and tests leave it off.
+
+- **What runs**: the probe runs once per agy version, after an ACP process initializes. It does one
+  `pragma_table_info` query, reads the first and last 256 KiB of the newest transcript export, and makes two
+  trajectory reads for a nonexistent conversation, which a served method answers with `not_found`. If the port line is
+  missing, it makes the one `session/list` call that starts agy's lazily started language server, as native requests
+  already do, and shares it with them. Later processes of the same version reuse a conclusive verdict, one where every
+  surface is ok or incompatible. If any surface is absent, unverified or unreachable, the probe runs again for the
+  next process and logs only a changed line. Session reads never wait for it.
+- **What it reports**: one log line, either `agy <version> compatibility: native ok, summaries ok, transcripts ok` or
+  `agy <version> is not compatible with this Persona Antigravity runtime: <surface>: <reason>`. An incompatible
+  (missing table, column, field, method or port line) or unreachable surface fails `launchers.check` with code
+  `agy_incompatible` before any prompt, and that check is what the apps show as launcher health. The check waits at
+  most 25 seconds for an unfinished probe. Only a plain 404 or a Connect `unimplemented` answer counts as a missing
+  method; other server errors count as unreachable. A busy database, a database with no tables yet, an
+  empty agy log or a process that ended mid-probe counts as unverified, not as a failure. A native request to a
+  method agy no longer serves fails with the same readable reason, not a JSON parse error.
+- **Versions**: `VERIFIED_AGY` is the newest agy version `scripts/test/agy-live-smoke.mjs` passed. A newer version is
+  only noted in the log line.
+
+After agy updates, run `node scripts/test/agy-live-smoke.mjs` on a machine with agy installed. It starts that agy under
+a disposable `HOME`: `ANTIGRAVITY_CLI_CONFIG_DIR` alone still lets agy 1.5.18 log to and list from `~/.gemini`.
+The script runs signed out, sends no prompt and spends no tokens. It checks:
+
+- the ACP handshake and capabilities;
+- that every ACP method the runtime calls is still routed. A known method answers `Authentication required` and an
+  unknown one -32601;
+- the native service;
+- the real summaries schema;
+- the longest and newest conversations, read-only: the transcript is parsed with the runtime's mapping, the native tail
+  is read from a `VACUUM INTO` copy, and one full trajectory is read.
+
+It prints one `PASS` / `FAIL` / `TIMEOUT` line (exit 0 / 1 / 2) and removes its copies. Raise `VERIFIED_AGY` in
+the same PR as a passing run on a new agy version.
+
 ### Runtime token usage
 
 For an agent without local token records, call `rt.usage({session_id, ts, model, request_id?, input, output, cache_read, cache_write, reasoning?})` once per completed model request. `ts` is an RFC3339 timestamp; counts are nonnegative safe integers. Input excludes cache reads and writes; output already includes reasoning. Reasoning is an optional part of output, never added again. All-zero reports are ignored.

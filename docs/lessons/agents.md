@@ -1803,3 +1803,13 @@ never a model argument or a claimed session's directory. An existing session row
 evidence to its node machine and caller, and use one session snapshot for both a discovery list and its revision;
 otherwise a row arriving between those reads can leave an incomplete list cached as current. Test the order with real
 `Service.Start`, returning the requested prepare directory and delaying only the node reply and session publication.
+
+## Isolating a real agy, and when its language server starts (#16311)
+
+`ANTIGRAVITY_CLI_CONFIG_DIR` does not isolate agy 1.5.18: an agy started with it set to an empty directory still
+wrote `log/cli-*.log` into `~/.gemini/antigravity-cli` and answered `session/list` with the real conversations. To
+run a real agy without touching its data, give it a disposable `HOME` (and `XDG_*`), which also signs it out. Signed out, every
+session method answers `Authentication required` (-32000) while an unknown one answers -32601. That difference shows
+a method is still routed without creating anything. The language server starts lazily: its `random port at N for
+HTTP` line appears only after an ACP call such as `session/list`, which still starts it when the call is refused.
+Waiting for the line after `initialize` alone timed out, so a probe has to make that call, as `nativeRequest` does.
