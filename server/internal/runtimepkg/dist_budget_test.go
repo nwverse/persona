@@ -77,10 +77,10 @@ import (
 // start, settled-turn recovery across transient empty/UNSPECIFIED summary_not_idle and tool-only turns with
 // autonomous-wake cleanup, cached GetCascadeTrajectory idle verification for summary_behind, last_modified_time
 // listed cache invalidation, and sanitized unrecognized-status logging) add 1,066 B (292,362 B).
-// Checking conversation existence before serving Antigravity session.items adds 119 B (292,481 B, #16410).
+// Checking conversation existence before serving Antigravity session.items (fail-closed on stat/metadata read errors) adds 277 B (292,639 B, #16410).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 292_481
+	const budget = 292_639
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
