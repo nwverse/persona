@@ -194,7 +194,12 @@ func (s *Service) logicalSwitchRoutes() {
 			http.NotFound(w, r)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"operation_id": op.OperationID, "phase": op.Phase, "expected_epoch": op.ExpectedEpoch, "error": op.Error, "blocked_input": s.logicalBlockedInput(r.Context(), st, mustLogicalConversation(r.Context(), st, r.URL.Query().Get("machine_id"), r.PathValue("id")))})
+		c, err := st.LogicalConversation(r.Context(), r.URL.Query().Get("machine_id"), r.PathValue("id"))
+		if err != nil {
+			apierr.Call(w, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"operation_id": op.OperationID, "phase": op.Phase, "expected_epoch": op.ExpectedEpoch, "error": op.Error, "blocked_input": s.logicalBlockedInput(r.Context(), st, c)})
 	})
 }
 

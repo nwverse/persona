@@ -18,11 +18,6 @@ type logicalDeliveryStore interface {
 	ResolveConversationInputManually(context.Context, string, string, string, db.ConversationInputResolution) error
 }
 
-func mustLogicalConversation(ctx context.Context, st logicalSwitchStore, machine, session string) *db.LogicalConversation {
-	c, _ := st.LogicalConversation(ctx, machine, session)
-	return c
-}
-
 func (s *Service) logicalBlockedInput(ctx context.Context, st logicalSwitchStore, c *db.LogicalConversation) *db.ConversationInput {
 	if c == nil {
 		return nil
