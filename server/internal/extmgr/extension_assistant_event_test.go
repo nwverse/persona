@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
@@ -98,10 +99,7 @@ func TestExtensionAssistantEventNeedsItsGrant(t *testing.T) {
 
 func TestExtensionAssistantEventForwardsWithTheExtensionsOwnIdentity(t *testing.T) {
 	h := newTestManager(t)
-	asked := recordAssistant(h, func(a eventAsk) (json.RawMessage, error) {
-		if strings.Contains(string(a.params), "no-main") {
-			return nil, &rpc.Error{Code: assistantwire.CodeNoMainConversation, Message: "there is no main conversation"}
-		}
+	asked := recordAssistant(h, func(eventAsk) (json.RawMessage, error) {
 		return json.RawMessage(`{"delivery":"replaced"}`), nil
 	})
 	spec := kbExtensionSpec(t, h, "example-events", extension.Permissions{Hub: []string{extension.ScopeAssistantEvents}})
@@ -110,6 +108,9 @@ func TestExtensionAssistantEventForwardsWithTheExtensionsOwnIdentity(t *testing.
 	out, err := spec.Handle(context.Background(), assistantwire.MethodAssistantEvent, json.RawMessage(params))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if result, ok := out.(assistantwire.AssistantEventResult); !ok || result.Delivery != assistantwire.EventReplaced {
+		t.Fatalf("typed event reply: %#v", out)
 	}
 	if b, _ := json.Marshal(out); string(b) != `{"delivery":"replaced"}` {
 		t.Fatalf("the assistant's answer: %s", b)
@@ -122,15 +123,23 @@ func TestExtensionAssistantEventForwardsWithTheExtensionsOwnIdentity(t *testing.
 	if err := json.Unmarshal(got[0].params, &req); err != nil || req.Extension != "example-events" || req.Name != "Example" || string(req.Params) != params {
 		t.Fatalf("the assistant got %+v (%v)", req, err)
 	}
-	// Its refusals reach the program with their codes.
-	_, err = spec.Handle(context.Background(), assistantwire.MethodAssistantEvent, json.RawMessage(`{"key":"no-main","title":"t"}`))
-	if rpcCode(err) != assistantwire.CodeNoMainConversation {
-		t.Fatalf("no main conversation: %v", err)
+	// The assistant's refusals reach the extension unchanged.
+	for _, refusal := range []*rpc.Error{
+		{Code: bus.CodeInvalidParams, Message: "assistant.event: key is required"},
+		{Code: assistantwire.CodeNoMainConversation, Message: "assistant.event: there is no main conversation to tell"},
+		{Code: assistantwire.CodeQueueFull, Message: "assistant.event: the extension already has events waiting"},
+	} {
+		recordAssistant(h, func(eventAsk) (json.RawMessage, error) { return nil, refusal })
+		if out, err := spec.Handle(t.Context(), assistantwire.MethodAssistantEvent, json.RawMessage(params)); out != nil || err != refusal {
+			t.Errorf("reply %#v, want %s refusal, got %v", out, refusal.Code, err)
+		}
 	}
 	// The assistant away: try again.
 	h.opts.Assistant = nil
-	if _, err := spec.Handle(context.Background(), assistantwire.MethodAssistantEvent, json.RawMessage(params)); rpcCode(err) != assistantwire.CodeAssistantOffline {
-		t.Fatalf("assistant away: %v", err)
+	out, err = spec.Handle(t.Context(), assistantwire.MethodAssistantEvent, json.RawMessage(params))
+	var re *rpc.Error
+	if out != nil || !errors.As(err, &re) || re.Code != assistantwire.CodeAssistantOffline || re.Message != errAssistantOffline.Error() {
+		t.Fatalf("assistant away: reply %#v, err %v", out, err)
 	}
 }
 

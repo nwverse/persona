@@ -207,8 +207,9 @@ func TestExtensionEventWithoutAMainConversationStartsNothing(t *testing.T) {
 	s, f := eventService(t)
 	setSettings(t, s, func(v *Settings) { v.Main = "" })
 	_, err := event(s, "example-monitor", `{"key":"disk","title":"Disk almost full"}`)
-	if convCode(err) != assistantwire.CodeNoMainConversation {
-		t.Fatalf("%v", err)
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != assistantwire.CodeNoMainConversation || re.Message != "assistant.event: there is no main conversation to tell" {
+		t.Fatalf("no main conversation: %v", err)
 	}
 	if f.sent() != 0 || f.startCount() != 0 || len(queueOf(s, "conv1")) != 0 {
 		t.Fatalf("something was started, sent or queued: sends %d, starts %d", f.sent(), f.startCount())
@@ -268,7 +269,10 @@ func TestExtensionEventQueueIsBounded(t *testing.T) {
 			t.Fatalf("event %d: %v", i, err)
 		}
 	}
-	if _, err := event(s, "example-monitor", `{"key":"one-more","title":"t"}`); convCode(err) != assistantwire.CodeQueueFull {
+	_, err := event(s, "example-monitor", `{"key":"one-more","title":"t"}`)
+	want := fmt.Sprintf("assistant.event: example-monitor already has %d events waiting for the main conversation", extEventQueueMost)
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != assistantwire.CodeQueueFull || re.Message != want {
 		t.Fatalf("beyond the most: %v", err)
 	}
 	if _, err := event(s, "example-monitor", `{"key":"k3","title":"newer"}`); err != nil {
@@ -782,6 +786,9 @@ func TestExtensionEventOverTheBus(t *testing.T) {
 	if res, ok := out.(assistantwire.AssistantEventResult); err != nil || !ok || res.Delivery != assistantwire.EventDelivered {
 		t.Fatalf("%#v %v", out, err)
 	}
+	if raw, err := json.Marshal(out); err != nil || string(raw) != `{"delivery":"delivered"}` {
+		t.Fatalf("delivery wire reply: %s (%v)", raw, err)
+	}
 	if f.sent() != 1 {
 		t.Fatalf("%d sends", f.sent())
 	}
@@ -791,8 +798,18 @@ func TestExtensionEventOverTheBus(t *testing.T) {
 			t.Fatalf("extension id %q: %v", id, err)
 		}
 	}
-	if _, err := b.answer(context.Background(), assistantwire.MethodExtensionEvent, json.RawMessage(`{"extension":"x","name":"X","params":{},"as":"user"}`)); convCode(err) != bus.CodeInvalidParams {
-		t.Fatalf("an unknown field: %v", err)
+	for _, tc := range []struct {
+		raw     json.RawMessage
+		message string
+	}{
+		{json.RawMessage(`{"extension":"x","name":"X","params":{"key":"k","title":"t"},"future_field":true}`), `assistant.extension_event: json: unknown field "future_field"`},
+		{json.RawMessage(`{"extension":"x","name":"X","params":{"key":"k","title":"t","future_field":true}}`), `assistant.event: json: unknown field "future_field"`},
+	} {
+		_, err := b.answer(t.Context(), assistantwire.MethodExtensionEvent, tc.raw)
+		var re *rpc.Error
+		if !errors.As(err, &re) || re.Code != bus.CodeInvalidParams || re.Message != tc.message {
+			t.Errorf("invalid params: want %q, got %v", tc.message, err)
+		}
 	}
 }
 

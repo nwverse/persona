@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -90,8 +91,9 @@ func (ps *extensions) extensionAssistantEvent(ctx context.Context, id string, pa
 	if p := ps.reg.SnapshotExact(id); p != nil && p.Full != nil && p.Full.Name != "" {
 		name = p.Full.Name
 	}
-	var out json.RawMessage
-	if err := ps.h.kbAsk(ctx, assistantwire.MethodExtensionEvent, assistantwire.ExtensionEvent{Extension: id, Name: name, Params: assistantwire.UncheckedEventParams(params)}, &out); err != nil {
+	request := assistantwire.ExtensionEvent{Extension: id, Name: name, Params: assistantwire.UncheckedEventParams(params)}
+	out, err := buswire.Call(ctx, ps.h.kbCaller(), assistantwire.ExtensionEventMethod, request)
+	if err != nil {
 		return nil, err
 	}
 	return out, nil

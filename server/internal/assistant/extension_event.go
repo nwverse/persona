@@ -55,12 +55,10 @@ func (s *Service) extensionEventRequest(ctx context.Context, method string, para
 	if method != assistantwire.MethodExtensionEvent {
 		return nil, false, nil
 	}
-	var req assistantwire.ExtensionEvent
-	if err := strictParams(method, params, &req); err != nil {
-		return nil, true, err
+	decode := func(out any) error {
+		return strictParams(method, params, out)
 	}
-	out, err := s.extensionEvent(ctx, req)
-	return out, true, err
+	return handleAssistantRequest(ctx, assistantwire.ExtensionEventMethod, decode, s.extensionEvent)
 }
 
 // checkedEvent is an event whose fields are within their limits, trimmed, with its severity and replace filled in.
