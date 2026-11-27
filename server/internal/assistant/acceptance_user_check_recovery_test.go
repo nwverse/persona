@@ -50,10 +50,10 @@ func TestUserCheckRecoversMissingPassAsk(t *testing.T) {
 			if saved := askOf(again, todo.ID); saved == nil || !saved.AskedAt.Equal(fresh.AskedAt) {
 				t.Fatalf("recovery did not keep the same persisted ask: %+v", saved)
 			}
-			if result, err := again.acceptTryFromBrief(ctx, todo.ID, old.AskedAt.Format(timeKeyLayout)); err != nil || result.taken {
+			if result, err := again.acceptReviewRound(ctx, todo.ID, old.AskedAt.Format(timeKeyLayout)); err != nil || result.taken {
 				t.Fatalf("an older Pass accepted the recovered round: %+v, %v", result, err)
 			}
-			if result, err := again.acceptTryFromBrief(ctx, todo.ID, fresh.AskedAt.Format(timeKeyLayout)); err != nil || !result.taken {
+			if result, err := again.acceptReviewRound(ctx, todo.ID, fresh.AskedAt.Format(timeKeyLayout)); err != nil || !result.taken {
 				t.Fatalf("the recovered Pass could not complete the task: %+v, %v", result, err)
 			}
 		})
@@ -176,7 +176,7 @@ func TestUserCheckPassWaitsForItsOwnRound(t *testing.T) {
 					s.acceptReply(ctx, "om_reply", "Pass", false, old.MessageID)
 					finished <- nil
 				default:
-					_, err := s.acceptTryFromBrief(ctx, todo.ID, old.AskedAt.Format(timeKeyLayout))
+					_, err := s.acceptReviewRound(ctx, todo.ID, old.AskedAt.Format(timeKeyLayout))
 					finished <- err
 				}
 			}()
@@ -207,9 +207,9 @@ func TestUserCheckPassWaitsForItsOwnRound(t *testing.T) {
 	}
 }
 
-func (d *userCheckPassStore) ReviewDoneTodo(ctx context.Context, id, reason string, accepted bool, at time.Time) (*db.TodoRow, bool, error) {
+func (d *userCheckPassStore) ReviewTodo(ctx context.Context, id, reason string, accepted bool, at time.Time, ledger *db.TodoSupervisionRow, guard func() error) (*db.TodoRow, bool, error) {
 	d.closeCalls.Add(1)
-	return d.DB.ReviewDoneTodo(ctx, id, reason, accepted, at)
+	return d.DB.ReviewTodo(ctx, id, reason, accepted, at, ledger, guard)
 }
 
 func (d *userCheckPassStore) PutTodoSupervision(ctx context.Context, row db.TodoSupervisionRow) error {

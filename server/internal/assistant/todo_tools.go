@@ -588,6 +588,9 @@ func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, 
 	}
 	needsConfirm := todoHasWork(t)
 	if complete {
+		if err := s.taskCloseActivityError(ctx, t, now); err != nil {
+			return "", s.taskCloseToolError(ctx, err)
+		}
 		needsConfirm = s.todoCompleteNeedsConfirm(ctx, t, self)
 	}
 	if needsConfirm {
@@ -595,16 +598,16 @@ func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, 
 		if complete {
 			key = "assistant-todos.complete_card"
 		}
-		said, err := s.confirmTodoCard(ctx, machine, self, name, i18n.T(s.lang(ctx), key, i18n.Args{"title": clip(t.Title, 80)}), args)
+		said, err := s.confirmTodoCard(ctx, machine, self, name, i18n.T(s.lang(ctx), key, i18n.Args{"title": clip(t.Title, 80)}), args, t.ID)
 		if err != nil || said != "" {
 			return said, err
 		}
 	} else if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, "", t.Title, args); err != nil || !ok {
 		return todoNotAllowed(outcome, err)
 	}
-	out, err := s.editTodo(ctx, t.ID, db.TodoEdit{Done: &complete})
+	out, err := s.editTodoWithCloseActivity(ctx, t.ID, db.TodoEdit{Done: &complete}, complete)
 	if err != nil {
-		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", err)
+		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", s.taskCloseToolError(ctx, err))
 	}
 	if complete && s.settings(ctx).todosV2On() {
 		if recErr := s.ResetSupervisedTaskRecovery(ctx, t.ID); recErr != nil {
@@ -626,7 +629,7 @@ func (s *Service) toolTodoDelete(ctx context.Context, machine, self string, args
 		return "", err
 	}
 	said, err := s.confirmTodoCard(ctx, machine, self, "todo_delete",
-		i18n.T(s.lang(ctx), "assistant-todos.delete_card", i18n.Args{"title": clip(t.Title, 80)}), args)
+		i18n.T(s.lang(ctx), "assistant-todos.delete_card", i18n.Args{"title": clip(t.Title, 80)}), args, t.ID)
 	if err != nil || said != "" {
 		return said, err
 	}
@@ -641,7 +644,7 @@ func (s *Service) toolTodoDelete(ctx context.Context, machine, self string, args
 
 // confirmTodoCard asks the phone before a todo change worded as summary: "" when the user allows it, else what the
 // model is told (nothing changed).
-func (s *Service) confirmTodoCard(ctx context.Context, machine, self, tool, summary string, args json.RawMessage) (string, error) {
+func (s *Service) confirmTodoCard(ctx context.Context, machine, self, tool, summary string, args json.RawMessage, todoID string) (string, error) {
 	now := time.Now().UTC()
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: machine, SessionID: self, Kind: proto.IxPermission, ToolName: tool,
 		Summary: summary, ToolInput: args, SessionTitle: "Persona", CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
@@ -654,6 +657,18 @@ func (s *Service) confirmTodoCard(ctx context.Context, machine, self, tool, summ
 	}
 	if err != nil {
 		return "", err
+	}
+	if tool == "todo_complete" && r.UserDenied() {
+		id := todoID
+		s.reviewDismissals.actions.acquire(id)
+		defer s.reviewDismissals.actions.release(id)
+		s.tasks.completionMu.Lock()
+		defer s.tasks.completionMu.Unlock()
+		if cur, ok := s.todoNow(id); ok && cur.DoneAt == nil {
+			if err := s.recordTodoCloseDecline(context.WithoutCancel(ctx), id, time.Now().UTC()); err != nil {
+				return "", fmt.Errorf("the user declined and nothing changed, but the decline could not be saved: %w", err)
+			}
+		}
 	}
 	if r.Allow == nil || !*r.Allow {
 		return outboundNotDone(r.Outcome(), "The user declined on the phone: nothing changed.", "nothing changed"), nil

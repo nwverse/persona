@@ -155,8 +155,10 @@ type BodyStream struct {
 // deploy, version, pending_restart?, capabilities}; its answer is Hello (with the hub's name, role and managers besides).
 const (
 	// The assistant calls the hub (Hub).
-	MethodHello        = "manager.hello"
-	MethodDevice       = "device.call"
+	MethodHello  = "manager.hello"
+	MethodDevice = "device.call"
+	// MethodDeviceRetire forwards only session.stop_if_idle, with caller cancellation.
+	MethodDeviceRetire = "device.retire"
 	MethodApp          = "app.call"
 	MethodNotify       = "notify.request"
 	MethodSnapshot     = "manager.snapshot"
@@ -285,8 +287,6 @@ const (
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
 // http.request. The assistant registers exactly these (assistant.TestRoutesAreTheWireOnes).
 var Routes = []string{
-	"GET /api/v1/settings/web-fonts",
-	"PUT /api/v1/settings/web-fonts",
 	"POST /api/v1/skills/import",
 	"POST /api/v1/assistant/health/workouts",
 	"GET /api/v1/sessions/archived",
@@ -380,6 +380,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/followups",
 	"POST /api/v1/assistant/followups/{id}/run",
 	"DELETE /api/v1/assistant/followups/{id}",
+	"GET /api/v1/task-plans",
 	"GET /api/v1/task-plans/{id}",
 	"POST /api/v1/task-plans/{id}/start",
 	"POST /api/v1/task-plans/{id}/workspace-preview",

@@ -26,11 +26,13 @@ import { NATIVE, NativeTabs } from "../../ui/ExtensionNative";
 import { keepLoaded, patchView } from "../../lib/code-review";
 import { KeysHelp, ReviewBar, ReviewKeys, ReviewProvider, ReviewToolbar, reviewing } from "../extensions/DiffReview";
 import { Icon } from "../../ui/icons";
-import { useStore } from "../../lib/store";
+import { getState, useStore } from "../../lib/store";
 import { canTryUIStream } from "../../lib/extension-ui-stream-gate";
 import { lazyPage } from "../../lib/lazy-page";
 import { PageBoundary } from "../PageBoundary";
-import { defaultKnown, defaultManager, otherManager, useKnownDefault, useLinkManager } from "../../lib/manager-choice";
+import { sendDraft } from "../../lib/drafts";
+import { conversationPage } from "../../lib/conversation-page";
+import { chosenManager, defaultKnown, defaultManager, otherManager, useKnownDefault, useLinkManager } from "../../lib/manager-choice";
 import { keepView, NATIVE_UI_VERSION, readKeptView } from "../../lib/extension-view-cache";
 import type { UIRowControl } from "../../lib/extension-ui-v6";
 import { ExtensionSetupNotice } from "./ExtensionSetupNotice";
@@ -629,6 +631,8 @@ export function LegacyExtensionUI({
       if (r.settings) navigate(r.settings);
       // the subscription pages' Set Up with … (persona://ask): the text to the assistant's main conversation, which opens
       if (r.ask) askAssistant(r.ask);
+      // an extension's own quick prompt (persona://compose?prompt=<id>&text=<text>): into the main composer, not sent
+      if (r.compose) composeAssistant(r.compose);
       if (r.push) push(r.push);
       if (r.pop) pop();
       if (r.reload) load();
@@ -1050,4 +1054,18 @@ export function askAssistant(text: string) {
   void import("../../lib/outbox")
     .then((m) => m.askPersona(text))
     .catch((e: unknown) => toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error"));
+}
+
+/** Puts one of an extension's quick prompts in the assistant's main composer, without sending it: the main
+ *  conversation opens (or the new-conversation page when there is none yet), and the owner sends when ready. */
+export function composeAssistant(text: string) {
+  const a = getState().assistant;
+  if (a?.main && a.machine_id) {
+    sendDraft(`${a.machine_id}/${a.main}`, { type: "replace", text });
+    navigate(conversationPage(a.main, a.machine_id, chosenManager() ?? undefined));
+    return;
+  }
+  sendDraft("persona-new", { type: "replace", text });
+  const onStarter = typeof location !== "undefined" && (location.pathname === "/persona/new" || (location.pathname === "/persona" && !a?.main));
+  if (!onStarter) navigate("/persona/new");
 }

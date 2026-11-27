@@ -91,7 +91,8 @@ type agyTranscriptUsage struct {
 	compacted     bool
 	hasUsage      bool
 	contextStats  transcript.ContextStats
-	first         string    // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
+	first         string // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
+	turn          agyTurnEvidence
 	modTime       time.Time // transcript file mtime in UTC, used as fallback UpdatedAt for herdr agy panes
 }
 
@@ -391,8 +392,8 @@ func agyContextEndNames() string {
 // kept as the user's text.
 var (
 	agyContextResourceLabel = lazyre.New(`Content of persona-context://[^\s<>]+:\r?\n`)
-	agyContextResourceOpen  = lazyre.New(`(?i)^<(?:persona|jarvis)-context\b[^>]*>`)
-	agyContextResourceTag   = lazyre.New(`(?i)<(?:persona|jarvis)-context\b[^>]*>|</(?:persona|jarvis)-context\s*>`)
+	agyContextResourceOpen  = lazyre.New(`(?i)^<` + compat.ContextPattern() + `\b[^>]*>`)
+	agyContextResourceTag   = lazyre.New(`(?i)<` + compat.ContextPattern() + `\b[^>]*>|</` + compat.ContextPattern() + `\s*>`)
 	agyViewErrorsTrailing   = lazyre.New(`(?is)(?:^|\n)<persona-view-errors\b[^>]*>.*?</persona-view-errors>` + agySpace + `*$`)
 )
 

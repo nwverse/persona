@@ -251,9 +251,11 @@ type Session struct {
 	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
 	// padding: a Session stays in its allocation size class.
 	OffLauncher bool `json:"off_launcher,omitempty"`
+	// NativeTurnVerified says the AGY terminal's working or done status is backed by its current transcript and lifecycle hook.
+	NativeTurnVerified bool `json:"native_turn_verified,omitempty"`
 	// LogicalPlaceholder is manager-internal provenance: this row stands in for a logical conversation whose active
 	// physical segment is not listed. Its Assistant identity comes from the logical root, not from a physical Cwd.
-	// It occupies the last byte of padding before BackgroundStalledSince, keeping Session in its allocation size class.
+	// Kept with NativeTurnVerified beside BackgroundStalledSince so Session stays in its allocation size class.
 	LogicalPlaceholder bool `json:"-"`
 	// BackgroundStalledSince (#13744, #16418): the time since which this session's background commands have used no CPU
 	// and written no output, set while the turn is over once that lasted the node's grace (ten minutes for a known
@@ -284,8 +286,7 @@ type Session struct {
 	// largest windows are a few million tokens (Tokens32 saturates anything bigger).
 	ContextTokens int32 `json:"context_tokens,omitempty"`
 	ContextWindow int32 `json:"context_window,omitempty"`
-	// OutputTokens is cumulative generated output, not the latest context size or transcript revision.
-	OutputTokens int `json:"output_tokens,omitempty"`
+	// Cumulative generated output lives in SessionHierarchy; see OutputTokensValue / SetOutputTokens.
 	// Efforts are the levels session.modes takes for Effort when they are not Claude Code's (which the apps know): a
 	// Codex thread the phone drives through its app-server (node/codex_effort.go), its model's levels weakest first; a
 	// runtime's row of an agent that is not Claude Code's, as the runtime lists them (Paseo's, #8133; the node drops
@@ -710,8 +711,9 @@ const (
 
 // TodoRef names a session's associated todo; Session.Todo is active, CompletedTodo() is display-only history.
 type TodoRef struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Cancelled bool   `json:"cancelled,omitempty"`
 }
 
 // SourceRuntime is the source_kind of a session an agent runtime lists (docs/integrations/runtimes.md): source_instance_id names

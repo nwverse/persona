@@ -46,6 +46,7 @@ import { Pairing, PairingTarget } from '../platform/Pairing';
 import { scopeKey, sessionCapabilities, projectToolTurn, TranscriptReducer } from '../core/Domain';
 import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptItem, TranscriptSnapshot, ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
 import { extractPublishedModules, isRecordingModuleAllowed, parseStoredHubModules, serializeStoredHubModules } from '../core/XiaoYiActions';
+import { LARK_MODULE_FEATURE, MAIL_MODULE_FEATURE, hasRegisteredPushRoute, isHubModuleAllowed, parseHiddenHubPages } from '../core/HubModules';
 
 
 
@@ -116,6 +117,10 @@ export class ClientModel {
   @Trace notificationTarget: string = '';
   @Trace pendingXiaoYiRoute: string = '';
   @Trace rememberedHubModules: string[] | null = null;
+  @Trace useHerdrTabName: boolean = false;
+  @Trace agentsDisplaySupported: boolean = false;
+  @Trace agentsDisplaySaving: boolean = false;
+  private agentsDisplayRevision: number = 0;
   openXiaoYiRoute(routeJson: string): void {
     if (!routeJson || routeJson.length > 16384) return;
     this.pendingXiaoYiRoute = routeJson;
@@ -123,8 +128,32 @@ export class ClientModel {
   private hubModulesKey(hubId: string): string {
     return 'xiaoyi:' + scopeKey({ groupId: hubId, managerId: '' }) + ':hub-modules';
   }
+  private agentsDisplayKey(hubId: string): string {
+    return 'view:' + scopeKey({ groupId: hubId, managerId: '' }) + ':agents-display';
+  }
   isRecordingModuleAllowed(): boolean {
     return isRecordingModuleAllowed(this.features, this.rememberedHubModules);
+  }
+  mailModuleAllowed(): boolean {
+    return this.demo || isHubModuleAllowed(MAIL_MODULE_FEATURE, this.features, this.rememberedHubModules);
+  }
+  larkModuleAllowed(): boolean {
+    return this.demo || isHubModuleAllowed(LARK_MODULE_FEATURE, this.features, this.rememberedHubModules);
+  }
+  inboxPageVisible(): boolean {
+    return this.demo || !parseHiddenHubPages(this.sidebarConfig).has('inbox');
+  }
+  todosPageVisible(): boolean {
+    const hidden = parseHiddenHubPages(this.sidebarConfig);
+    return this.demo || (!hidden.has('todos') && !hidden.has('todo'));
+  }
+  /**
+   * Whether this device has a registered Hub background push route (#16783, PushHealth).
+   * HarmonyOS currently uses foreground `ws_notify` without Push Kit registration yet,
+   * so non-demo sessions return `false` and end active LiveViews on background instead of leaving them frozen.
+   */
+  hasPushRoute(): boolean {
+    return this.demo || hasRegisteredPushRoute(false);
   }
   @Trace forgottenProfile: string = '';
   @Trace forgottenEpoch: number = 0;
@@ -199,9 +228,17 @@ export class ClientModel {
   @Trace mainMachineId: string = '';
   @Trace sidebarConfig: string = '';
   acceptSidebarConfig(assistant: Record<string,Object>, confirmedEdit: boolean = false): void {
-    const config = JSON.stringify(Wire.payload(['main','main_machine_id','leaders','background_supervisor','recent_task_chats'],
+    const existing = Wire.parse(this.sidebarConfig);
+    const payload = Wire.payload(['main','main_machine_id','leaders','background_supervisor','recent_task_chats'],
       [Wire.text(assistant,'main'),Wire.text(assistant,'main_machine_id',Wire.text(assistant,'machine_id')),
-        Wire.strings(assistant,'leaders'),Wire.text(assistant,'background_supervisor'),Wire.bool(assistant,'recent_task_chats')]));
+        Wire.strings(assistant,'leaders'),Wire.text(assistant,'background_supervisor'),Wire.bool(assistant,'recent_task_chats')]);
+    if (Wire.has(assistant, 'pages')) payload['pages'] = assistant['pages'];
+    else if (Wire.has(existing, 'pages')) payload['pages'] = existing['pages'];
+    if (Wire.has(assistant, 'hidden')) payload['hidden'] = assistant['hidden'];
+    else if (Wire.has(existing, 'hidden')) payload['hidden'] = existing['hidden'];
+    if (Wire.has(assistant, 'hidden_pages')) payload['hidden_pages'] = assistant['hidden_pages'];
+    else if (Wire.has(existing, 'hidden_pages')) payload['hidden_pages'] = existing['hidden_pages'];
+    const config = JSON.stringify(payload);
     if (this.sidebarConfig !== config) this.sidebarConfig = config;
     // A scoped settings page can use a detached model. Publish its confirmed Hub preference to the visible drawer only for the same owner.
     const parent = this.directoryParent;
@@ -210,6 +247,18 @@ export class ClientModel {
       current['recent_task_chats'] = Wire.bool(assistant,'recent_task_chats');
       parent.sidebarConfig = JSON.stringify(current);
     }
+  }
+  applyNavigationConfig(data: Record<string, Object>): void {
+    const existing = Wire.parse(this.sidebarConfig);
+    const current: Record<string, Object> = Wire.payload([], []);
+    Object.keys(existing).filter((key: string) => !['pages', 'hidden', 'hidden_pages'].includes(key)).forEach((key: string) => {
+      current[key] = existing[key];
+    });
+    if (Wire.has(data, 'pages')) current['pages'] = data['pages'];
+    if (Wire.has(data, 'hidden')) current['hidden'] = data['hidden'];
+    if (Wire.has(data, 'hidden_pages')) current['hidden_pages'] = data['hidden_pages'];
+    const next = JSON.stringify(current);
+    if (this.sidebarConfig !== next) this.sidebarConfig = next;
   }
   private preferenceTask: Promise<void> = Promise.resolve();
   private async changePreferences(action: () => Promise<void>): Promise<void> { const task = this.preferenceTask.then(action, action); this.preferenceTask = task.catch(() => {}); await task; }
@@ -696,7 +745,7 @@ export class ClientModel {
     this.sendAttempts.clear(); this.feedbackChanged();
     this.profile = profile; const scope = this.scope(); this.connected = false;
     this.clearPendingDecisions();
-    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.managers = []; this.rosterDefaultId = '';
+    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.managers = []; this.rosterDefaultId = '';
     this.publishedImageLimits = {};
     this.demo = false; this.demoRepository = undefined; this.error = '';
     if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
@@ -704,7 +753,18 @@ export class ClientModel {
     if (!keep) { this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); }
     await saved; if (!this.owns(generation, scope)) return;
     try { this.rememberedHubModules = parseStoredHubModules(await this.local.get(this.hubModulesKey(profile.id))); } catch (_) { this.rememberedHubModules = null; }
+    let cachedDisplay = '';
+    try { cachedDisplay = await this.local.get(this.agentsDisplayKey(profile.id)); } catch (_) {}
     if (!this.owns(generation, scope)) return;
+    if (cachedDisplay) {
+      try {
+        const parsedDisplay = Wire.parse(cachedDisplay);
+        if (typeof parsedDisplay['use_herdr_tab_name'] === 'boolean') {
+          this.useHerdrTabName = parsedDisplay['use_herdr_tab_name'] === true;
+          this.agentsDisplaySupported = true;
+        }
+      } catch (_) {}
+    }
     await this.saveProfiles(); if (!this.owns(generation, scope) || !this.foreground) return;
     let access: HubAccess | undefined;
     const token = await this.vault?.get(profile.id, (value: HubAccess | undefined): void => { access = value; });
@@ -848,7 +908,7 @@ export class ClientModel {
       this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
       this.clearPendingDecisions();
       this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = '';
-      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.error = '';
+      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.error = '';
       this.publishedImageLimits = {};
     }
     this.publishDirectory();
@@ -909,6 +969,10 @@ export class ClientModel {
         this.reconcileWrites().then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.refresh(); }).then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.flushNotification(); }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
       } else if (type === 'notify') { if (!this.detached) nativeNotifications.receive(this, data); }
       else if (type === 'fleet') { if (!this.detached) nativeLiveView.receiveFleetEvent(this, data).catch(() => {}); }
+      else if (type === 'navigation') {
+        if (Wire.has(data, 'pages') || Wire.has(data, 'hidden') || Wire.has(data, 'hidden_pages')) this.applyNavigationConfig(data);
+        else if (this.repository && !this.demo) this.refreshNavigation(this.repository, this.generation, this.scope()).catch(() => {});
+      }
       else if (type === 'items' || type === 'items_replace') { this.transcript?.receive(data); } else if (type === 'terminal') {
         if (Wire.text(data, 'machine_id') === this.selected.machine && Wire.text(data, 'session_id') === this.selected.session)
           this.terminalText = (this.terminalText + Wire.text(data, 'data')).slice(-200000);
@@ -992,8 +1056,79 @@ export class ClientModel {
       this.refreshPhoneList('todo', repo, generation, scope, false).catch(() => {});
       if (this.section === 2) await this.refreshPhoneList('inbox', repo, generation, scope, true);
       else if (!this.detached) this.refreshPhoneList('inbox', repo, generation, scope, false).catch(() => {});
+      this.refreshAgentsDisplay(repo, generation, scope).catch(() => {});
+      this.refreshNavigation(repo, generation, scope).catch(() => {});
     } catch (error) { if (this.owns(generation, scope)) this.failure(error as Error); }
     finally { if (this.owns(generation, scope)) { this.busy = false; this.publishDirectory(); } }
+  }
+  private syncViewsAgentsDisplay(profileId: string, supported: boolean, enabled: boolean): void {
+    for (const view of this.views.values()) {
+      if (view.profile.id === profileId && !view.retired) {
+        view.agentsDisplaySupported = supported;
+        view.useHerdrTabName = enabled;
+      }
+    }
+  }
+  async refreshNavigation(repo: HubRepository, generation: number, scope: string): Promise<void> {
+    if (this.demo) return;
+    try {
+      const result = await repo.call('/api/v1/navigation');
+      if (!this.owns(generation, scope)) return;
+      this.applyNavigationConfig(result);
+    } catch (_) { /* Older hubs omit /api/v1/navigation; leave existing page visibility untouched. */ }
+  }
+  async refreshAgentsDisplay(repo: HubRepository, generation: number, scope: string): Promise<void> {
+    if (this.demo || this.agentsDisplaySaving) return;
+    const rev = this.agentsDisplayRevision;
+    try {
+      const result = await repo.call('/api/v1/agents/display-settings');
+      if (!this.owns(generation, scope) || rev !== this.agentsDisplayRevision || this.agentsDisplaySaving) return;
+      if (typeof result['use_herdr_tab_name'] === 'boolean') {
+        const enabled = result['use_herdr_tab_name'] === true;
+        this.agentsDisplaySupported = true;
+        this.useHerdrTabName = enabled;
+        this.syncViewsAgentsDisplay(this.profile.id, true, enabled);
+        this.local.put(this.agentsDisplayKey(this.profile.id), JSON.stringify(Wire.payload(['use_herdr_tab_name'], [enabled]))).catch(() => {});
+      } else {
+        this.agentsDisplaySupported = false;
+        this.useHerdrTabName = false;
+        this.syncViewsAgentsDisplay(this.profile.id, false, false);
+      }
+    } catch (error) {
+      if (error instanceof HttpFailure && [404, 501].includes(error.status) && this.owns(generation, scope) && rev === this.agentsDisplayRevision) {
+        this.agentsDisplaySupported = false;
+        this.useHerdrTabName = false;
+        this.syncViewsAgentsDisplay(this.profile.id, false, false);
+      }
+    }
+  }
+  async setUseHerdrTabName(enabled: boolean): Promise<boolean> {
+    if (this.demo || !this.connected || !this.repository || this.agentsDisplaySaving) return false;
+    const generation = this.generation, scope = this.scope(), repo = this.repository, profileId = this.profile.id;
+    const previous = this.useHerdrTabName;
+    const rev = ++this.agentsDisplayRevision;
+    this.agentsDisplaySaving = true;
+    this.useHerdrTabName = enabled;
+    this.syncViewsAgentsDisplay(profileId, true, enabled);
+    try {
+      const result = await repo.call('/api/v1/agents/display-settings', 'PUT', Wire.payload(['use_herdr_tab_name'], [enabled]));
+      if (!this.owns(generation, scope) || this.repository !== repo || rev !== this.agentsDisplayRevision) return false;
+      const acknowledged = typeof result['use_herdr_tab_name'] === 'boolean' ? result['use_herdr_tab_name'] === true : enabled;
+      this.agentsDisplaySupported = true;
+      this.useHerdrTabName = acknowledged;
+      this.syncViewsAgentsDisplay(profileId, true, acknowledged);
+      await this.local.put(this.agentsDisplayKey(profileId), JSON.stringify(Wire.payload(['use_herdr_tab_name'], [acknowledged]))).catch(() => {});
+      return true;
+    } catch (error) {
+      if (this.owns(generation, scope) && this.repository === repo && rev === this.agentsDisplayRevision) {
+        this.useHerdrTabName = previous;
+        this.syncViewsAgentsDisplay(profileId, true, previous);
+        this.failure(error as Error);
+      }
+      return false;
+    } finally {
+      if (this.owns(generation, scope) && rev === this.agentsDisplayRevision) this.agentsDisplaySaving = false;
+    }
   }
   private async refreshPhoneList(kind: string, repo: HubRepository, generation: number, scope: string, force: boolean): Promise<void> {
     const state = kind === 'todo' ? this.todoRead : this.inboxRead;
@@ -2080,6 +2215,8 @@ export class ClientModel {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
     this.publishedImageLimits = {};
     this.demo = true; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
+    this.features = []; this.rememberedHubModules = null; this.sidebarConfig = '';
+    this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++;
     this.sendAttempts.clear(); this.feedbackChanged();
     this.demoRepository = new DemoRepository(this.local); this.repository = this.demoRepository;
     this.selected = new ResourceRow(); this.messages = []; this.revisionItems = []; this.clearPendingDecisions(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;
@@ -2088,7 +2225,7 @@ export class ClientModel {
   }
   releaseTerminal(): void { this.workspace?.hide(); this.terminalControl = false; }
   async background(): Promise<void> {
-    this.foreground = false; if (!this.detached) nativeLiveView.setForeground(false); this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.clearPendingDecisions(); this.releaseTerminal();
+    this.foreground = false; if (!this.detached) nativeLiveView.setForeground(false, this.hasPushRoute(), this.demo); this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.clearPendingDecisions(); this.releaseTerminal();
     this.feedbackChanged();
     const repository = this.repository; repository?.close();
     const children = Array.from(this.views.values()).map((view: ClientModel): Promise<void> => view.background());

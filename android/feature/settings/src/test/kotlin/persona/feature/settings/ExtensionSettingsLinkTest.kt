@@ -22,10 +22,10 @@ import persona.core.designsystem.PersonaTheme
 class ExtensionSettingsLinkTest {
     @get:Rule val rule = createComposeRule()
 
-    private class SettingsUi(private val url: String) : ExtensionApiStub() {
+    private class LinkUi(private val title: String, private val url: String) : ExtensionApiStub() {
         override suspend fun renderUi(extension: String, ui: String, context: ExtensionUiContext?, state: String?): ExtensionView =
             ExtensionView(sections = listOf(ExtensionViewSection(items = listOf(
-                ExtensionViewItem("button", title = "Open settings", action = ExtensionViewAction("open")),
+                ExtensionViewItem("button", title = title, action = ExtensionViewAction("open")),
             ))))
 
         override suspend fun uiAction(
@@ -40,7 +40,7 @@ class ExtensionSettingsLinkTest {
 
     @Test fun aPageOpensItsOwnSettingsWithThePagesManager() {
         val opened = mutableListOf<Pair<String, String?>>()
-        val api = SettingsUi("persona://settings/extensions/example")
+        val api = LinkUi("Open settings", "persona://settings/extensions/example")
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
                 ExtensionUiPage(api, "example", "page", "Example", {}, manager = "work",
@@ -50,5 +50,19 @@ class ExtensionSettingsLinkTest {
         rule.waitUntil(5_000) { runCatching { rule.onNodeWithText("Open settings").assertExists() }.isSuccess }
         rule.onNodeWithText("Open settings").performClick()
         rule.runOnIdle { assertEquals(listOf("example" to "work"), opened) }
+    }
+
+    @Test fun aPageHandsItsComposePromptBackWithThePagesManagerAfterClosing() {
+        val events = mutableListOf<String>()
+        val api = LinkUi("Use prompt", "persona://compose?prompt=today&text=What%20happened%3F")
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                ExtensionUiPage(api, "example", "page", "Example", { events += "back" }, manager = "work",
+                    onCompose = { text, manager -> events += "compose:$text:$manager" })
+            }
+        }
+        rule.waitUntil(5_000) { runCatching { rule.onNodeWithText("Use prompt").assertExists() }.isSuccess }
+        rule.onNodeWithText("Use prompt").performClick()
+        rule.runOnIdle { assertEquals(listOf("back", "compose:What happened?:work"), events) }
     }
 }

@@ -71,6 +71,7 @@
 
 - A rendered prompt used as a source-snapshot fingerprint must compare with the call's captured language (#6272). Re-reading the current language while committing a valid model answer makes a preference change look like a concurrent source edit. Freeze the wrapper language, keep the source comparison, and test both a locale-only change and real source changes. Audit natural-language parsers too: a conservative Chinese uncertainty check must recognize uncertainty in newly supported English and Japanese outputs. Shared recording inputs must keep their recording-language contract rather than inheriting a non-recording wrapper accidentally.
 - Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
+
 - A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
 - A parked wait can cite a PR while waiting for a separate deployment or verification (#9775). Enroll the exact PR from an explicit event binding. Keep the source receipt and review transition together and identify the notification by that park. Test both a stage PR with terminal facts and a PR named only in the park.
 
@@ -438,7 +439,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   " | " and with empty ones skipped (a trailing `||` adds no junk), clipped and escaped like any other cell. When
   changing how a table row is laid out, compare its card with its fallback.
 
-- **Text a client draws as Markdown is cut with `clipMarkdown`, not `clip`** (#3818). The briefing card quoted the model's answer through `textfmt.Clip` (exactly n runes plus an ellipsis), so an answer over 1500 runes was cut inside whatever it was in: an unclosed code fence turned the rest of the quote into code, and a cut inside `**`, a code span or a link left half a marker or half a URL. `clipMarkdown` (`assistant/mdtext.go`) cuts on a line break where it can, closes a code block the cut lands in, and moves the cut back out of an unclosed span, emphasis or link; it also flattens a `persona-card` block to its title (`wire.AssistantCardText`), so draw charts first with `feishubot.PersonaCards` and cut after, as `answerCards` does for the bot's answers. Plain fallback text (the push body, a notice's fallback) keeps `clip` / `textfmt.PlainMarkdown`; only the Markdown element takes `clipMarkdown`. Test through the same builder the card uses, not the clippers alone, and assert the shape (`fences % 2 == 0`, no `](https://…` left) rather than an exact string. The same trap caught the task report's item body (#4093): it drew the answer with `CardMarkdown` *after* `clipMarkdown`, which flattens a chart to its title on its own, so the owner read the report with no numbers. Any Markdown a client draws that is clipped first must have `PersonaCards` run before the clip.
+- **Text a client draws as Markdown is cut with `clipMarkdown`, not `clip`** (#3818). The briefing card quoted the model's answer through `textfmt.Clip` (exactly n runes plus an ellipsis), so an answer over 1500 runes was cut inside whatever it was in: an unclosed code fence turned the rest of the quote into code, and a cut inside `**`, a code span or a link left half a marker or half a URL. `textfmt.ClipMarkdown` (`textfmt/mdtext.go`) cuts on a line break where it can, closes a code block the cut lands in, and moves the cut back out of an unclosed span, emphasis or link; it also flattens a `persona-card` block to its title (`wire.AssistantCardText`), so draw charts first with `feishubot.PersonaCards` and cut after, as `answerCards` does for the bot's answers. Plain fallback text (the push body, a notice's fallback) keeps `clip` / `textfmt.PlainMarkdown`; only the Markdown element takes `clipMarkdown`. Test through the same builder the card uses, not the clippers alone, and assert the shape (`fences % 2 == 0`, no `](https://…` left) rather than an exact string. The same trap caught the task report's item body (#4093): it drew the answer with `CardMarkdown` *after* `clipMarkdown`, which flattens a chart to its title on its own, so the owner read the report with no numbers. Any Markdown a client draws that is clipped first must have `PersonaCards` run before the clip.
 
 - **A finished run's last write into the progress card has to wait out a card rate limit** (#3915). The progress tick
   answers 230020 by pausing its updates (`prog.quietUntil`), but the answer's write comes right after a tick's, and a
@@ -582,6 +583,10 @@ Without a background supervisor the main conversation's own card went to itself.
 delegating, check that the conversation it goes to is woken for it, can answer or hand it up, and is not the one
 waiting on it. A new route also keeps the exceptions of the existing ones: `askLadder` already left the supervising
 conversations' cards with the user, and the new route had to share that rule (`supervisorConversation`).
+
+For an Agent's permission without an open to-do (#16093), use the active relay queue and keep the card available
+in the app once its hold ends. Tie the queued message to the card's current route. A queued wake can outlive its card
+or the manager that routed it, so check the route before sending and drop stale wakes even if their target stays offline.
 
 ## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
 
@@ -929,6 +934,28 @@ answer retryable. Tests must check both the in-memory receipt and stored one, pl
 
 Restore the previous `DueAt` on acceptance-save failure, not an empty time: an owner message in the Agent chat uses
 that marker to pause the default. A later rejected answer must preserve both that pause and the dismissal.
+
+## Task-close guards must not wait for activity storage (#6819)
+
+Publish owner input in the activity cache before saving it, and keep the cache mutex out of database I/O. A review's
+transaction can hold the connection that an activity save is waiting for: its final guard must read caches only, not
+wait for that save. Serialize activity snapshots separately so a slower save cannot overwrite newer input.
+
+The judge's unsampled acceptance and a leaderless worker's cancellation need the same atomic ledger-and-closure
+commit as `task_review`. A refused close must leave no accepted/cancelled ledger or checked criteria on an open task.
+Defer the judge's completed turn on late owner activity so it can be judged again after inactivity; return a
+cancellation only when it actually committed. Regress the real owner bus event while storage is blocked, and check
+both the stored ledger and memory at the ledger, closure and final transaction boundaries.
+
+Lifecycle tests wait for the operation they exercise: acknowledge `task_review` before sending the next owner turn,
+and wait for `fleet.clients` notifications until the viewer snapshot matches. A terminal error can arrive before that
+snapshot. Fixed delays hide this ordering and grow the sleep ratchet; keep bounded failure deadlines, not guessed sleeps.
+
+- An opt-in terminal cleanup must not replace a guarded task retirement with an unconditional close (#6819, #10355).
+  Keep cancellation and the final input check through both irreversible boundaries: stopping the Agent and closing
+  the shell it left. Exercise the setting on and off, including input arriving during terminal inspection.
+
+- A terminal task review must commit its closure before publishing review effects (#6819). Activity can arrive after the initial guard, while another writer holds the ledger or task lock, or during a database write. Validate on a private ledger, save the ledger and closure in one transaction, and recheck activity immediately before commit so a refusal rolls both back. Only then record the brief result, review feed, decision changes and supervision signals; apply the same boundary to a task leader's review and tasks without a ledger.
 
 ## Reserve a conversation for replacement in the same step as the check that nothing goes in (#7315)
 

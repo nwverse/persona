@@ -16,7 +16,7 @@ import { extensionsRoute, routeSub } from "../../lib/extension-market";
 import { composing } from "../../lib/send-history";
 import {
   asksFirst, changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, entryID, entryItems, entryKey, fieldLabel, fieldPath, fieldTitle, isDirty, isEntryList, listItems, listExtensionsInfo, listSummary, numberProblems,
-  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setContribution, setExtensionConfig, setExtensionConfigPreservingEntries, setExtensionEnabled,
+  placeholder, extensionDetail, extensionState, extensionTone, pointText, prefillDraft, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setContribution, setExtensionConfig, setExtensionConfigPreservingEntries, setExtensionEnabled,
   channelOf, machineStatus, nodeProgramStatus, pickerChoices, sandboxState, saveFooter, setExtensionAutoUpgrade, setExtensionSecret, sourceText, stateLine, valueAt,
   removeHandoffRule, setExtensionSecretReference, permissionDetail, permissionTitle, type HandoffRule, type SecretUser,
   type HubExtension, type HubExtensionDetail, type Json, type JsonObject, type ExtensionField, type ExtensionNodeState, type ExtensionSandbox, type ExtensionSecret,
@@ -52,7 +52,7 @@ import { isOpenBeside } from "./open-beside";
  * The tab's pages, by its `extension` parameter (lib/extension-market.ts extensionsRoute): the list, an extension, a page an extension
  * draws, and the market (its catalog, one extension of it, the markets).
  */
-export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside, onPageWide }: {
+export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside, onPageWide, prefill }: {
   open: string | null;
   onOpen: (id: string | null) => void;
   /** The page's top bar has the way back (a phone, Settings.tsx itemParent): an extension's page, a page it draws, the
@@ -64,6 +64,8 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
   onChannel?: (id: string, manager?: string) => void;
   onConnector?: (id: string, manager?: string) => void;
   onPageWide?: (wide: boolean) => void;
+  /** Proposed ordinary configuration values from an extension page's settings link. */
+  prefill?: JsonObject;
 }) {
   const r = extensionsRoute(open);
   const go = (to: Parameters<typeof routeSub>[0]) => onOpen(routeSub(to));
@@ -85,6 +87,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
               onUpgrade={(market, id) => go({ kind: "item", market, id, manager })}
               onChannel={onChannel}
               onConnector={onConnector}
+              prefill={prefill}
             />
           )}
         </OwnedExtension>
@@ -450,7 +453,7 @@ function useUnsaved(): ReadonlyMap<string, Unsaved> {
   return unsaved;
 }
 
-function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgrade, onChannel, onConnector }: {
+function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgrade, onChannel, onConnector, prefill }: {
   id: string;
   /** Whose extension it is (several managers); none: the default's. */
   manager?: string;
@@ -461,6 +464,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   onUpgrade: (market: string, id: string) => void;
   onChannel?: (id: string, manager?: string) => void;
   onConnector?: (id: string, manager?: string) => void;
+  prefill?: JsonObject;
 }) {
   usePinnedExtension(id, manager);
   const roster = useRoster();
@@ -564,6 +568,16 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
     setDraft(next.draft);
     setTyped(next.typed);
   }, [config, keptKey]);
+  const prefillKey = prefill ? JSON.stringify(prefill) : "";
+  const prefilled = useRef("");
+  useEffect(() => {
+    if (!detail || !prefill || !prefillKey || prefillKey === "{}" || prefilled.current === prefillKey) return;
+    prefilled.current = prefillKey;
+    setDraft((cur) => prefillDraft(cur, prefill, detail.form?.fields ?? []));
+    setTyped({});
+    setFieldErrors({});
+    setCheckFailed("");
+  }, [detail, prefill, prefillKey]);
   /** Back to the list once the extension is gone (uninstalled here or elsewhere): its edits go with it. */
   const onBack = () => {
     base.current = null;

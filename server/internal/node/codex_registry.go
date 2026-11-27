@@ -44,6 +44,7 @@ type codexRegistry struct {
 	liveEndpoints     map[string]string          // rollout id → resolved shared endpoint when held by a --listen app-server
 	liveCanQuit       map[string]bool            // rollout id → standalone CLI in a safe-quit terminal
 	stdioHomes        map[string]bool            // canonical home → a stdio app-server currently runs there
+	desktopHomes      map[string]bool            // canonical Codex home → desktop App process running
 	remoteDiags       map[string]codexRemoteDiag // resolved endpoint → last connection failure kind
 	byPane            map[string]string
 	byPanePID         map[string]int
@@ -443,6 +444,7 @@ func (n *Node) discoverCodex() {
 	r.liveCanQuit = liveCanQuit
 	r.stdioHomes = stdioHomes
 	r.mu.Unlock()
+	desktopHomes := map[string]bool{}
 	for _, p := range found {
 		if n.herdrSessionBlocked(p.herdrSession) {
 			continue
@@ -450,6 +452,9 @@ func (n *Node) discoverCodex() {
 		home := canonicalCodexHome(firstNonEmpty(p.home, n.codexHome()), n.home)
 		if home == "" {
 			continue
+		}
+		if p.desktop {
+			desktopHomes[home] = true
 		}
 		r.mu.Lock()
 		if !slices.Contains(r.config.Homes, home) {
@@ -466,6 +471,9 @@ func (n *Node) discoverCodex() {
 		}
 		r.mu.Unlock()
 	}
+	r.mu.Lock()
+	r.desktopHomes = desktopHomes
+	r.mu.Unlock()
 	cfg := n.codexInventory()
 	// Existing official control sockets are discoverable without starting a daemon.
 	for _, home := range cfg.Homes {
@@ -649,6 +657,7 @@ type codexListPass struct {
 	real             map[string]string        // directory → realPath
 	stats            map[string]codexStat     // rollout path → os.Stat
 	desktop          map[string]bool          // Codex home → codexDesktopBusAvailable
+	desktopRun       map[string]bool          // Codex home → desktop App process or bus running
 	own              string                   // assistantProject, once ownSet
 	ownSet           bool
 	// runtimes is the runtime session each Codex thread is listed as (thread → session, runtimecodex.go): the list
@@ -696,7 +705,8 @@ type codexStat struct {
 
 func newCodexListPass() *codexListPass {
 	return &codexListPass{real: map[string]string{}, stats: map[string]codexStat{}, desktop: map[string]bool{},
-		paginated: map[string]map[string]codexAppThread{}, apps: map[string]*codexAppState{}, looks: map[string]*missLook{}}
+		desktopRun: map[string]bool{}, paginated: map[string]map[string]codexAppThread{}, apps: map[string]*codexAppState{},
+		looks: map[string]*missLook{}}
 }
 
 func (p *codexListPass) realPath(dir string) string {
@@ -740,6 +750,31 @@ func (p *codexListPass) desktopAvailable(home string) bool {
 		return true
 	}
 	return codexDesktopQueueCLI(home) != ""
+}
+
+// desktopRunning reports whether the Codex App bus is live or discoverCodex saw a desktop App process for home.
+func (p *codexListPass) desktopRunning(n *Node, home string) bool {
+	if p.desktopAvailable(home) {
+		return true
+	}
+	if n == nil || n.codices == nil {
+		return false
+	}
+	if p != nil {
+		if run, ok := p.desktopRun[home]; ok {
+			return run
+		}
+	}
+	n.codices.mu.Lock()
+	run := n.codices.desktopHomes[canonicalCodexHome(home, n.home)]
+	n.codices.mu.Unlock()
+	if p != nil {
+		if p.desktopRun == nil {
+			p.desktopRun = map[string]bool{}
+		}
+		p.desktopRun[home] = run
+	}
+	return run
 }
 
 // appState is loadCodexAppState with each home's state looked up once per pass.
@@ -911,6 +946,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		}
 		elsewhere := false
 		desktopViewOnly := false
+		ownerAmbiguous := false
 		if n.programRun(id, src, pass) {
 			continue
 		}
@@ -1024,6 +1060,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			n.codexSpeedRow(&s)
 			n.codexRewindRow(id, &s)
 		} else if err != errCodexNoOwner {
+			ownerAmbiguous = true
 			s.ReadOnlyReason = err.Error()
 		} else if codexDesktopChatIn(src, pass) {
 			// Retain App identity and grouping when an update removes its bus, including database-only chats.
@@ -1076,19 +1113,42 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				adopted = append(adopted, adoption{len(out), s.ParentThreadID, root})
 			}
 		}
-		if !desktopViewOnly && s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && s.Status == proto.StatusOffline && n.codexResumableIn(context.Background(), id, pass) {
-			// Nothing has it open: a stopped agent, read-only like any (stopped.go, #4754); its terminal page's Resume
-			// brings it back in a new tab (session.start, codex_resume.go).
-			s.Capabilities.Terminal = true
-			s.ReadOnlyReason = stoppedReason
-			s.Capabilities.StopCause = n.stopCause(id)
+		if s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && !n.codexBlocked(id) && !ownerAmbiguous {
+			if codexAppOrigin(src) {
+				liveWriter := liveRollouts[id] != "" || s.Status == proto.StatusWorking || n.codexRemoteConnecting(src.home)
+				if !liveWriter && !pass.desktopAvailable(src.home) {
+					resumable := n.codexResumableIn(context.Background(), id, pass)
+					if resumable {
+						s.Capabilities.Terminal = true
+						s.Capabilities.StopCause = n.codexHistoryStopCause(id, src, m, true)
+					}
+					if takeover := n.codexTakeoverRowIn(id, src, m, false, pass); takeover != nil {
+						s.Capabilities.Takeover = takeover
+						if takeover.CanResume || resumable {
+							s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopRecoverableKey)
+						} else {
+							s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopContinueOnlyKey)
+						}
+					} else if resumable {
+						s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopRecoverableKey)
+					}
+				}
+			} else if !desktopViewOnly {
+				if s.Status == proto.StatusOffline && n.codexResumableIn(context.Background(), id, pass) {
+					// Nothing has it open: a stopped agent, read-only like any (stopped.go, #4754); its terminal page's Resume
+					// brings it back in a new tab (session.start, codex_resume.go).
+					s.Capabilities.Terminal = true
+					s.ReadOnlyReason = stoppedReason
+					s.Capabilities.StopCause = n.stopCause(id)
+				}
+				if !pass.homeUnavailable(src.home) {
+					s.Capabilities.Takeover = n.codexTakeoverRowIn(id, src, m, liveRollouts[id] != "" || s.Status == proto.StatusWorking, pass)
+				}
+			}
 		}
 		if pass.homeUnavailable(src.home) {
 			emitUnavailable(id, src)
 			continue
-		}
-		if s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && !n.codexBlocked(id) {
-			s.Capabilities.Takeover = n.codexTakeoverRowIn(id, src, m, liveRollouts[id] != "" || s.Status == proto.StatusWorking, pass)
 		}
 		if n.codexBlocked(id) {
 			markCodexConflict(&s)
@@ -1159,6 +1219,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		}
 	}
 	n.codices.mu.Lock()
+	n.codices.desktopAsks = desktopAsks
 	if seq > n.codices.savedSeq {
 		n.codices.lastRows, n.codices.desktopAsks, n.codices.savedSeq = saved, desktopAsks, seq
 	}

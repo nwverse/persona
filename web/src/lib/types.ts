@@ -190,6 +190,8 @@ export interface SessionCapabilities {
 /** A session's work state (docs/assistant/agent-work.md): working, blocked on a named precondition, or done. */
 export interface WorkState {
   phase: "working" | "blocked" | "done" | "";
+  /** End of this turn, unlike state_since which changes when a reply is read or the hub restarts. */
+  turn_at?: string;
   /** What a blocked one waits on: user (a decision), agent, external (a deploy, CI, a time), transient (a model error). */
   on?: "user" | "agent" | "external" | "transient";
   /** One line for the lists: what it waits for, or what it concluded. */
@@ -506,7 +508,7 @@ export interface Session {
   channels?: string[];
   todo?: { id: string; title: string };
   /** Display-only completed association; never an active task or a reason to suppress notifications. */
-  completed_todo?: { id: string; title: string };
+  completed_todo?: { id: string; title: string; cancelled?: boolean };
   /** Works (or worked) for a quiet task (#1731): not in the global badge; the main conversation tells about it. */
   quiet?: boolean;
   /** Why it waits for the user, in its host's words (a botmux attention's reason); only while it needs you (docs/integrations/engines.md "botmux"). */

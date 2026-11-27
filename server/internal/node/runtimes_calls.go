@@ -427,15 +427,15 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 					mode = agyShownMode(mode, n.agyRuntimeMode(p.SessionID))
 				}
 				info["permission_mode"], info["effort"] = mode, s.Effort
-				if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); h.agent() == agyAgent && ok {
-					if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
-						info["swarm_workers"] = workers
-					}
-				}
 				if h.agent() == agyAgent {
-					if s.ContextTokens > 0 || s.OutputTokens > 0 {
+					if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); ok {
+						if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
+							info["swarm_workers"] = workers
+						}
+					}
+					if s.ContextTokens > 0 || s.OutputTokensValue() > 0 {
 						info["context_tokens"] = int(s.ContextTokens)
-						info["output_tokens"] = s.OutputTokens
+						info["output_tokens"] = int(s.OutputTokensValue())
 						delete(info, "usage_unknown")
 					}
 					n.resolveAgyContextWindow(&s)

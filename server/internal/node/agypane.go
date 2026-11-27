@@ -111,7 +111,7 @@ func (n *Node) rawAgyConversationLocked(id, pane string) string {
 					return ""
 				}
 				matches++
-			} else if reported == conversation {
+			} else if n.agyPaneClaimsLocked(raw, conversation) {
 				return ""
 			}
 		}
@@ -125,12 +125,19 @@ func (n *Node) rawAgyConversationLocked(id, pane string) string {
 func (n *Node) agyConversationClaimedElsewhereLocked(pane, conversation string) bool {
 	for _, agents := range n.hostAgents {
 		for _, raw := range agents {
-			if raw.PaneID != pane && n.agyReportedLocked(raw) == conversation {
+			if raw.PaneID != pane && n.agyPaneClaimsLocked(raw, conversation) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// A disagreement invalidates the reporting pane's own identity. Both reports still count against other panes so
+// neither conversation is exposed while ownership is contested.
+func (n *Node) agyPaneClaimsLocked(a host.Agent, conversation string) bool {
+	return a.Agent == agyAgent && (reportedAgyConversation(a) == conversation ||
+		n.agyReports[a.PaneID].conversation == conversation)
 }
 
 // isAgySubagentHead reports whether a conversation's opening step indicates a built-in
@@ -999,9 +1006,9 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 			if runtimeRow.Effort != "" {
 				info["effort"] = runtimeRow.Effort
 			}
-			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokens > 0 {
+			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokensValue() > 0 {
 				info["context_tokens"] = int(runtimeRow.ContextTokens)
-				info["output_tokens"] = runtimeRow.OutputTokens
+				info["output_tokens"] = int(runtimeRow.OutputTokensValue())
 				delete(info, "usage_unknown")
 			}
 			n.resolveAgyContext(&runtimeRow, conversation)

@@ -12,6 +12,15 @@
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/persona_widget_info" />
         </receiver>
         <receiver
+            android:name="persona.platform.shortcuts.MainChatWidgetReceiver"
+            android:exported="true"
+            android:label="@string/shortcuts_main_chat_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/main_chat_widget_info" />
+        </receiver>
+        <receiver
             android:name="persona.platform.shortcuts.AskPersonaWidgetReceiver"
             android:exported="true"
             android:label="@string/shortcuts_ask_label">

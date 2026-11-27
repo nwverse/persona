@@ -192,4 +192,15 @@ describe("File Workbench (#14903)", () => {
     expect(host.textContent).toContain("export const beta = true;");
     expect(host.querySelector('[data-testid="file-workbench-tree"]')).toBeNull();
   });
+
+  it("forwards readOnly through FileViewerPanel and disables editing and Show in Files", async () => {
+    await act(async () =>
+      root.render(<FileViewerPanel mid="m1" sid="s1" path="/work/app/src/views/Alpha.tsx" cwd="/work/app" readOnly onClose={() => {}} />),
+    );
+    await flush();
+    expect(host.textContent).toContain("export const target = 2;");
+    expect(button(t("files-editor.edit"))).toBeUndefined();
+    expect(button(t("files-nav.show_in_files"))).toBeUndefined();
+    expect(host.querySelector('[data-testid="file-workbench-tree"]')).toBeNull();
+  });
 });

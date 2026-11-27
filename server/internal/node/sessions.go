@@ -368,8 +368,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.ContextWindow == 0 && runtimeRow.ContextWindow > 0 {
 						s.ContextWindow = runtimeRow.ContextWindow
 					}
-					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
-						s.OutputTokens = runtimeRow.OutputTokens
+					if s.OutputTokensValue() == 0 && runtimeRow.OutputTokensValue() > 0 {
+						s.SetOutputTokens(int(runtimeRow.OutputTokensValue()))
 					}
 					if s.UpdatedAt.IsZero() && !runtimeRow.UpdatedAt.IsZero() {
 						s.UpdatedAt = runtimeRow.UpdatedAt
@@ -388,10 +388,15 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 			}
 			if a.Agent == agyAgent {
+				conversation := agyConversations[id]
+				u, readable := n.agyTranscriptMeta(conversation)
+				if readable {
+					n.applyAgyTurnEvidence(&s, conversation, u.turn)
+				}
 				if hasRuntimeRow {
 					n.resolveAgyContext(&s, agyConversations[id])
 				} else {
-					n.mergeAgyTranscript(&s, agyConversations[id])
+					n.mergeAgyTranscript(&s, conversation)
 				}
 				n.agyPaneControls(&s, id)
 				n.agyPaneTitle(&s, agyConversations[id]) // its conversation's title, not the terminal's (agytitle.go)
@@ -579,6 +584,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	out = out[:j]
 	n.nameAgyAliases(out, agyConversations) // the ids an agy conversation went by, on the row listing it (agyaliases.go)
 	n.markAgyStopped(out, agyRuntimeIDs)    // and one the user closed, stopped by them (agystopped.go)
+	// The desktop app's sessions once each: a transcript one went on from folds into its current row (#14394).
+	if folds := n.offlineFolds(); len(folds.earlier) > 0 {
+		if out = foldDesktopEarlier(out, folds, n.alwaysListed()); len(out) == 0 {
+			return nil // as above
+		}
+	}
 	parents, origins := n.offlineDesktop()
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
 	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them
@@ -898,4 +909,7 @@ func (n *Node) codexPaneControls(s *proto.Session, rollout quickMeta) {
 	n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
 	n.codexTerminalRow(id, s, rollout)                   // on the terminal route: typed /model (codex_terminal_modes.go)
 	n.codexSpeedRow(s)
+	if s.ServiceTier == "" {
+		s.ServiceTier = rollout.speed.Tier
+	}
 }

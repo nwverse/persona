@@ -35,11 +35,13 @@ cache_write = u.cache_write + excluded.cache_write, cache_read = u.cache_read + 
 output = u.output + excluded.output, requests = u.requests + excluded.requests`
 
 // putUsageDirSQL keeps a node's latest resolution of a directory (proto.UsageDir; docs/server/machines.md "Token usage
-// by project").
-const putUsageDirSQL = `INSERT INTO usage_dirs (machine_id, dir, project, name, host, place, worktree)
+// by project"), except that a temporary folder's "temp" never replaces another resolution (#16827: a node says it for
+// a folder that is gone too, and a worktree removed since keeps its repository; devices' replacesResolution).
+const putUsageDirSQL = `INSERT INTO usage_dirs AS d (machine_id, dir, project, name, host, place, worktree)
 	VALUES ($1, $2, $3, $4, $5, $6, $7)
 	ON CONFLICT (machine_id, dir) DO UPDATE SET project = excluded.project, name = excluded.name, host = excluded.host,
-		place = excluded.place, worktree = excluded.worktree, updated_at = now()`
+		place = excluded.place, worktree = excluded.worktree, updated_at = now()
+	WHERE excluded.project <> 'temp' OR d.project = 'temp'`
 
 // AddUsage stores usage that has no local record to reconstruct on reconnect.
 func (d *DB) AddUsage(ctx context.Context, machine string, buckets []proto.UsageBucket) error {

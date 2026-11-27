@@ -21,7 +21,10 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x3a4a9b026ed8443a
+// Derive the merged layout only after proving that it is the union of both incoming
+// schemas. Removing either new field must reproduce the layout from the branch that
+// did not add it. Any subsequent Session change still fails the layout comparison.
+var sessionWireLayout = uint64(0x7e980d2bc6488d38)
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -41,7 +44,7 @@ const (
 
 // hierarchyWireLayout is the layout hash of SessionHierarchy and SessionChildren, whose members appendSession writes
 // on the row: while either differs, appendSession leaves every session to the reflect encoder, as for sessionWireLayout.
-const hierarchyWireLayout = 0x8fa73e1a26348c63
+const hierarchyWireLayout = 0xcf504726652091b2
 
 // hierarchyLayout hashes SessionHierarchy's fields, then SessionChildren's.
 func hierarchyLayout() uint64 {
@@ -138,6 +141,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.boolean(`"effort_change_failed":`, s.EffortChangeFailed, true)
 	w.boolean(`"context_restart_recommended":`, s.ContextRestartRecommended, true)
 	w.boolean(`"off_launcher":`, s.OffLauncher, true)
+	w.boolean(`"native_turn_verified":`, s.NativeTurnVerified, true)
 	if s.BackgroundStalledSince != 0 {
 		w.time(`"background_stalled_since":`, s.BackgroundStalledSince.Time())
 	}
@@ -153,7 +157,6 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	}
 	w.integer(`"context_tokens":`, int64(s.ContextTokens), true)
 	w.integer(`"context_window":`, int64(s.ContextWindow), true)
-	w.integer(`"output_tokens":`, int64(s.OutputTokens), true)
 	w.strs(`"efforts":`, s.Efforts)
 	w.str(`"service_tier":`, s.ServiceTier, true)
 	if len(s.ServiceTiers) > 0 {
@@ -331,6 +334,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 			w.value(`"context_breakdown":`, h.ContextBreakdown)
 		}
 		w.boolean(`"deleted":`, h.Deleted, true)
+		w.integer(`"output_tokens":`, int64(h.OutputTokens), true)
 		if h.View != nil {
 			w.value(`"view":`, h.View)
 		}

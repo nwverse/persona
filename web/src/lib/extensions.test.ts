@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import {
-  checkError, clearedSecrets, clearExtensionSecret, compact, configError, fieldTitle, isDirty, listItems, listExtensions, listSummary, numberProblems, placeholder, extensionDetail,
+  checkError, clearedSecrets, clearExtensionSecret, compact, configError, fieldTitle, isDirty, listItems, listExtensions, listSummary, numberProblems, placeholder, prefillDraft, extensionDetail,
   machineStatus, extensionState, extensionTone, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setExtensionConfig, setExtensionConfigPreservingEntries, setExtensionEnabled, setExtensionSecret, sourceText,
   stateLine, valueAt, morePermissions, extensionUpgrades, setExtensionAutoUpgrade, setExtensionUpgrades, upgradeAction, upgradeDetail, upgradeNote,
   type HubExtension, type ExtensionField, type ExtensionUpgrade, type JsonObject, nodeProgramStatus, exitText, saveFooter, channelOf, sandboxState,
@@ -156,6 +156,22 @@ describe("扩展的文字", () => {
     expect(checkError(new ApiError(409, "设置刚被改过", { code: "settings_moved" }))).toBe("设置刚被改过");
     expect(checkError(new ApiError(400, "bad", { code: "invalid_config" }))).toBeNull();
     expect(checkError(new Error("check_failed"))).toBeNull();
+  });
+});
+
+describe("a proposed settings prefill", () => {
+  it("fills only form fields, keeps groups nested and never enters ordinary entry lists", () => {
+    const fields: ExtensionField[] = [
+      { name: "machine", type: "string" },
+      { name: "repos", type: "array", items: { name: "items", type: "string" } },
+      { name: "limits", type: "object", fields: [{ name: "max", type: "integer" }, { name: "label", type: "string" }] },
+      { name: "accounts", type: "array", secret: { name: "entry_key", title: "Key" }, items: { name: "items", type: "object", fields: [{ name: "name", type: "string" }] } },
+    ];
+    expect(prefillDraft(
+      { machine: "old", limits: { label: "Saved" }, accounts: [{ _id: "one", name: "One" }] },
+      { machine: "new", repos: ["~/code"], limits: { max: 4, unknown: "no" }, accounts: [{ name: "Other" }], secret: "no", unknown: "no" },
+      fields,
+    )).toEqual({ machine: "new", repos: ["~/code"], limits: { label: "Saved", max: 4 }, accounts: [{ _id: "one", name: "One" }] });
   });
 });
 

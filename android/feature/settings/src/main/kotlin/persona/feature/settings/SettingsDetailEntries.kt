@@ -28,7 +28,8 @@ import persona.core.navigation.ExtensionUiRoute
  * of "Channels".
  */
 fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, services: SettingsServices,
-    askPersona: ((Navigator, String) -> Unit)? = null) {
+    askPersona: ((Navigator, String) -> Unit)? = null,
+    composePersona: ((Navigator, String, String?) -> Unit)? = null) {
     val demo = services.demo
     entry<EngineRoute> { route ->
         EngineSelectionScreen(route.machineId, services.sessions, services.machines.takeUnless { demo }, pairing = false,
@@ -66,6 +67,7 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
             notificationActionToken = route.notificationActionToken,
             onSettings = { id, owner -> navigator.navigate(ExtensionRoute(id, manager = owner)) },
             onAsk = if (route.extensionId == persona.core.contracts.api.SUBSCRIPTIONS_UI) askPersona?.let { ask -> { text -> ask(navigator, text) } } else null,
+            onCompose = composePersona?.let { compose -> { text, owner -> compose(navigator, text, owner) } },
             onConversation = { machine, session -> navigator.navigate(persona.core.navigation.ChatRoute(machine, session)) })
     }
     // The market of the current assistant's Extensions (docs/assistant/managers.md "Clients"): what it installs is that one's.

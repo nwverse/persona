@@ -180,7 +180,7 @@ type todoStore interface {
 	ClaimTodoReminder(ctx context.Context, id string, remindAt, now time.Time) (bool, error)
 	RetitleTodo(ctx context.Context, id, from, to string, at time.Time) (*db.TodoRow, bool, error)
 	FailTodo(ctx context.Context, id, startError string, at time.Time) (*db.TodoRow, error)
-	AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time) (*db.TodoRow, bool, error)
+	AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time, guard func() error) (*db.TodoRow, bool, error)
 	RetryTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, bool, error)
 	DeleteTodo(ctx context.Context, id string) error
 	LinkTodoSpace(ctx context.Context, todoID, machineID, space string, linkedAt time.Time, keep db.KeptLinks) (string, error)
@@ -1062,9 +1062,10 @@ func (s *Service) todoRoutes() {
 	s.todoCausalTraceRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
-	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
-	// (todo_scope.go). Without parameters the answer is complete. ?closed_limit= bounds the closed rows for clients that
-	// opt in (todo_pagination.go). With ?limit or ?cursor it answers one page of the whole list and how to read the next.
+	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown,
+	// marked partial when one it cannot be told about yet is left out, 503 when the store cannot tell (todo_scope.go).
+	// Without parameters the answer is complete. ?closed_limit= bounds the closed rows for clients that opt in
+	// (todo_pagination.go). With ?limit or ?cursor it answers one page of the whole list and how to read the next.
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
 		limit, after, paged, err := todoListPageQuery(r.URL.Query())
 		if err != nil {
@@ -1090,9 +1091,13 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
+		partial := false
 		isExtension := r.Header.Get(RoleHeader) == roleExtension
 		if isExtension {
-			list = s.extensionRows(r.Context(), list, p)
+			if list, partial, err = s.extensionRows(r.Context(), list, p); err != nil {
+				apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
+				return
+			}
 		} else if !paged {
 			s.tagTodoRevision(w, writes, p)
 		}
@@ -1125,6 +1130,7 @@ func (s *Service) todoRoutes() {
 			Board:            board,
 			ClosedNextCursor: closedNext,
 			ClosedHasMore:    closedHasMore,
+			Partial:          partial,
 		})
 	})
 	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
@@ -1317,7 +1323,21 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		e.PartOf, e.After = links.PartOf, links.After
-		resTodo, err := s.editTodo(r.Context(), id, e)
+		ctx := r.Context()
+		if e.Done != nil && *e.Done {
+			if work := s.taskCloseWorkSnapshot(cur, time.Now()); work != nil {
+				if !fullRole(r) {
+					apierr.WriteCode(w, http.StatusConflict, "todo_close_active", &taskCloseHoldError{todo: id, work: work})
+					return
+				}
+				ctx, err = s.confirmOwnerTaskClose(ctx, cur, work, false)
+				if err != nil {
+					apierr.WriteCode(w, http.StatusUnprocessableEntity, "todo_close_not_confirmed", err)
+					return
+				}
+			}
+		}
+		resTodo, err := s.editTodo(ctx, id, e)
 		if err != nil {
 			if errors.Is(err, db.ErrTodoNotFound) {
 				apierr.Write(w, http.StatusNotFound, err)
@@ -1325,6 +1345,8 @@ func (s *Service) todoRoutes() {
 				apierr.WriteCode(w, http.StatusConflict, "outside_decision_pending", err)
 			} else if errors.Is(err, db.ErrConcernUnreported) {
 				apierr.Write(w, http.StatusConflict, err) // report its outcome instead: POST …/decisions {source: "reported"}
+			} else if hold := (*taskCloseHoldError)(nil); errors.As(err, &hold) {
+				apierr.WriteCode(w, http.StatusConflict, "todo_close_active", i18n.Err("assistant-todos.close_not_confirmed"))
 			} else if pe := (*pieceError)(nil); errors.As(err, &pe) {
 				apierr.Write(w, http.StatusBadRequest, err) // another write changed the request since it was checked
 			} else {
@@ -1451,17 +1473,27 @@ func (s *Service) todoRoutes() {
 		}
 
 		var title, cwd, agent string
-		c, found := s.session(r.Context(), mid, sid)
+		c, found, getErr := s.sessionNow(r.Context(), mid, sid)
 		if found {
 			title, cwd, agent = c.Title, c.Cwd, c.Agent
 		}
 		// An extension's token takes no run it cannot be shown (todo_scope.go): one in a hidden space or one off a
-		// to-do it is not shown answers 404; one the computer does not list yet, whose space cannot be told, 409
-		// agent_not_listed, to be tried again (a session just started is answered before its computer lists it).
+		// to-do it is not shown answers 404. One whose computer does not list it, whose space cannot be told, answers
+		// by the computer (#12216): 404 machine_not_found for a computer that is not one of the hub's, 503
+		// machine_offline for one that is off now, and only on one that is on 409 agent_not_listed, to be tried again
+		// (a session just started is answered before its computer lists it).
 		if r.Header.Get(RoleHeader) == roleExtension {
 			if !found {
-				w.Header().Set("Retry-After", strconv.Itoa(todoTakeRetrySeconds))
-				apierr.WriteCode(w, http.StatusConflict, "agent_not_listed", i18n.Err("assistant-todos.agent_not_listed"))
+				switch s.takeComputer(r.Context(), mid, getErr) {
+				case standingComputerRemoved:
+					apierr.WriteCode(w, http.StatusNotFound, "machine_not_found", i18n.Err("assistant-todos.machine_not_found"))
+				case standingComputerOffline:
+					w.Header().Set("Retry-After", strconv.Itoa(todoTakeOfflineRetrySeconds))
+					apierr.WriteCode(w, http.StatusServiceUnavailable, "machine_offline", i18n.Err("assistant-todos.machine_offline"))
+				default:
+					w.Header().Set("Retry-After", strconv.Itoa(todoTakeRetrySeconds))
+					apierr.WriteCode(w, http.StatusConflict, "agent_not_listed", i18n.Err("assistant-todos.agent_not_listed"))
+				}
 				return
 			}
 			if s.todoTakeRefused(r.Context(), mid, c) {
@@ -2168,6 +2200,8 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	if t, ok := s.todoNow(id); ok && t.isConcern() {
 		return false, nil
 	}
+	s.loadSeen(ctx)
+	_ = s.loadTaskActivity(ctx)
 	s.todos.writing.Lock() // no other store write lands between the store's close and memory's
 	unlocked := false
 	unlock := func() {
@@ -2177,16 +2211,27 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 		}
 	}
 	defer unlock()
-	if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
-		if err := s.investigationCloseError(ctx, current); err != nil {
-			return false, err
+	guard := func() error {
+		if t, ok := s.todoNow(id); ok {
+			if err := s.taskCloseSnapshotError(t, time.Now()); err != nil {
+				return err
+			}
+			if t.DoneAt == nil {
+				if err := s.investigationCloseError(ctx, t); err != nil {
+					return err
+				}
+			}
 		}
+		return nil
+	}
+	if err := guard(); err != nil {
+		return false, err
 	}
 	now := time.Now().UTC()
 	var row db.TodoRow
 	st := s.todoDB()
 	if st != nil {
-		r, ok, err := st.AutoDoneTodo(ctx, id, reason, now, work)
+		r, ok, err := st.AutoDoneTodo(ctx, id, reason, now, work, guard)
 		if errors.Is(err, db.ErrTodoNotFound) {
 			return false, nil
 		}
@@ -2205,7 +2250,13 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 		t.keepPlan(&row)
 	}
 	var before Todo
+	var activityErr error
 	_, doneKeys, ok := s.setTodoRow(id, row, func(t *Todo) bool {
+		if st == nil {
+			if activityErr = s.taskCloseSnapshotError(*t, time.Now()); activityErr != nil {
+				return false
+			}
+		}
 		// With a store its conditional write decided it (open, not reopened since work began) and, writing held, no
 		// writer that stores a row committed after it (all of them take writing): memory takes the stored row even
 		// when an in-memory bump (an agent's title synced) moved updated_at past it. Memory alone has only its own
@@ -2217,6 +2268,9 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 		return true
 	})
 	unlock() // the notifications run without writing, as for the other writers
+	if activityErr != nil {
+		return false, activityErr
+	}
 	if !ok {
 		return false, nil
 	}

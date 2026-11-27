@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -406,7 +407,7 @@ func (n *Node) resolveAgyContext(s *proto.Session, conversation string) {
 	// The companion may have filtered out a rewound tail that is still on disk. Pair the
 	// local category weights with companion counts only when their observed usage agrees.
 	if u, ok := n.agyTranscriptMeta(conversation); ok && proto.Tokens32(u.contextTokens) == s.ContextTokens &&
-		(s.OutputTokens == 0 || u.outputTokens == s.OutputTokens) {
+		(s.OutputTokensValue() == 0 || int32(u.outputTokens) == s.OutputTokensValue()) {
 		setAgyContextBreakdown(s, u.contextStats)
 	}
 }
@@ -426,7 +427,7 @@ func setAgyContextBreakdown(s *proto.Session, stats transcript.ContextStats) {
 	s.SetContextBreakdown(transcript.BuildContextBreakdown(stats, int(s.ContextTokens), int(s.ContextWindow), 0, fullWindow))
 }
 
-// agyTranscriptMeta reads the cached token usage and background work of an agy conversation on disk.
+// agyTranscriptMeta reads the cached token usage, background work and latest turn of an agy conversation on disk.
 func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
 		return agySessionMeta{}, false
@@ -439,7 +440,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	defer root.Close()
 	rel := agyTranscriptPath
 	info, err := root.Stat(rel)
-	if err != nil || !info.Mode().IsRegular() {
+	if errors.Is(err, os.ErrNotExist) {
 		rel = agyFullTranscriptPath
 		info, err = root.Stat(rel)
 		if err != nil || !info.Mode().IsRegular() {
@@ -463,6 +464,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	raw = raw[:bytes.LastIndexByte(raw, '\n')+1]
 	steps, _ := parseAgySteps(raw, conversation)
 	usage := extractAgyUsage(steps)
+	usage.turn = summarizeAgyTurn(steps)
 	usage.modTime = info.ModTime().UTC()
 	meta := agySessionMeta{agyTranscriptUsage: usage, background: agyBackground(steps, conversation, dir, root)}
 
@@ -486,7 +488,7 @@ func (n *Node) mergeAgyTranscript(s *proto.Session, conversation string) {
 			s.Model = u.model
 		}
 		if u.outputTokens > 0 {
-			s.OutputTokens = u.outputTokens
+			s.SetOutputTokens(int(u.outputTokens))
 		}
 		if s.UpdatedAt.IsZero() && !u.modTime.IsZero() {
 			s.UpdatedAt = u.modTime

@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
@@ -54,6 +55,22 @@ func handleBus(method string, fn busCall) {
 		panic("bus: method registered twice: " + method)
 	}
 	busMethods[method] = fn
+}
+
+// handleTypedBus binds a handler to the method's request and result types. The
+// decoder accepts unknown fields, and invalidPrefix keeps the method's error text.
+func handleTypedBus[P, R any](method buswire.Method[P, R], invalidPrefix string, fn func(*Hub, context.Context, *busConn, P) (R, error)) {
+	handleBus(method.Name, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
+		var p P
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: invalidPrefix + err.Error()}
+		}
+		out, err := fn(h, ctx, c, p)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	})
 }
 
 // handleBusEvent registers what takes event (a one-way message) once a connection said its handshake; unregistered
@@ -302,7 +319,7 @@ func (h *Hub) serveBus(w http.ResponseWriter, r *http.Request) {
 	// the card up and made the change on a later approval, after the assistant had heard the call failed (#5907). A
 	// devices.file_call's long file copy / zip likewise stops when the hub's caller goes away (#6113). Ordinary
 	// devices.call methods run on: their node may not support cancellation, so stopping the manager would be ambiguous.
-	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true, assistantwire.MethodFleetAskPrepared: true, extwire.MethodHubCall: true, devicewire.MethodFileCall: true}
+	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true, assistantwire.MethodFleetAskPrepared: true, extwire.MethodHubCall: true, devicewire.MethodFileCall: true, devicewire.MethodRetireCall: true}
 	c.peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		return h.busRequest(ctx, c, method, params)
 	}

@@ -54,10 +54,11 @@ export function FilesPanel({
   file,
   line,
   to,
+  readOnly,
   highlight: marked,
   onShowInFolder,
-  onClose,
   onBrowse,
+  onClose,
 }: {
   mid: string;
   sid: string;
@@ -66,10 +67,11 @@ export function FilesPanel({
   file?: string;
   line?: number;
   to?: number;
+  readOnly?: boolean;
   highlight?: string;
   onShowInFolder?: (path: string) => void;
-  onClose: () => void;
   onBrowse?: (path: string) => void;
+  onClose: () => void;
 }) {
   // Where it starts: `path` (a folder to open at) or the session's folder; Back / Forward walk what was shown since.
   const startDir = path || cwd;
@@ -105,9 +107,25 @@ export function FilesPanel({
   const [gitTick, setGitTick] = useState(0); // the folder's Git status did
   const [git, setGit] = useState<GitStatus | null>(null);
   const [open, setOpen] = useState<OpenFile[]>(file ? [{ path: file, line, to }] : []); // files opened in the workbench, newest last
-  // Collapsible directory tree in the split workbench: open by default on wide panels, collapsed on narrow viewports.
+  // Collapsible directory tree in the split workbench: open by default on wide panels, collapsed on narrow panels/viewports.
   const [treePref, setTreePref] = useState<boolean | null>(null);
-  const treeOpen = treePref ?? !narrow;
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+  const [panelWidth, setPanelWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = splitContainerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.getBoundingClientRect().width;
+      if (w > 0) setPanelWidth(w);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const compact = narrow || (panelWidth !== null && panelWidth < TREE_PANE_DEFAULT + TREE_PANE_VIEWER_MIN);
+  const treeOpen = treePref ?? !compact;
   // where it is, kept when the page leaves the session so coming back opens it here again (#5150)
   useEffect(() => notePlace({ mid, sid, cwd }, { path: dir === cwd ? undefined : dir, file: open.at(-1)?.path }), [mid, sid, cwd, dir, open]);
   const menu = useMenu();
@@ -158,10 +176,11 @@ export function FilesPanel({
   }, [selecting, endSelect]);
 
   const viewing = open[open.length - 1];
-  const reveal = useMemo(() => revealDirs(dir, viewing?.path), [dir, viewing?.path]);
+  const treeRoot = dir === "~" && home ? home : dir.startsWith("~/") && home ? home + dir.slice(1) : dir;
+  const reveal = useMemo(() => revealDirs(treeRoot, viewing?.path), [treeRoot, viewing?.path]);
 
   useEffect(() => {
-    if (!dir || tree || Boolean(viewing)) return;
+    if (readOnly || !dir || tree) return;
     const ac = new AbortController();
     api<FsListing>(`/machines/${enc(mid)}/fs?path=${enc(dir)}&cwd=${enc(cwd)}`, { signal: ac.signal })
       .then((l) => setListed((m) => ({ ...m, [dir]: { at: dir, listing: l } })))
@@ -169,28 +188,28 @@ export function FilesPanel({
         if (!isAbort(e)) setListed((m) => ({ ...m, [dir]: { at: dir, listing: m[dir]?.listing, error: errorText(e) } }));
       });
     return () => ac.abort();
-  }, [mid, cwd, dir, reloads, dirTick, tree, viewing]);
+  }, [mid, cwd, dir, reloads, dirTick, tree, readOnly]);
 
   useEffect(() => {
-    if (!cwd) return;
+    if (readOnly || !cwd) return;
     const ac = new AbortController();
     api<GitStatus>(`/machines/${enc(mid)}/git/status?cwd=${enc(cwd)}`, { signal: ac.signal })
       .then(setGit)
       .catch(() => {}); // marks are extra: without Git the list is the same
     return () => ac.abort();
-  }, [mid, cwd, reloads, gitTick]);
+  }, [mid, cwd, reloads, gitTick, readOnly]);
 
-  // The drill-in view watches the folder it shows; the tree watches the ones it has open (FilesTree). Both want Git.
-  useFsLive(mid, cwd, tree || Boolean(viewing) || !dir ? [] : [dir], true, (c) => {
+  // The drill-in view watches the folder it shows (kept live even while a file is open); the tree watches the ones it has open (FilesTree). Both want Git.
+  useFsLive(mid, cwd, readOnly || tree || !dir ? [] : [dir], !readOnly, (c) => {
     if (c.git) setGitTick((n) => n + 1);
-    if (!tree && !viewing && dir && c.dirs.includes(dir)) setDirTick((n) => n + 1);
+    if (!readOnly && !tree && dir && c.dirs.includes(dir)) setDirTick((n) => n + 1);
   });
 
   const here = listed[dir];
   // The folder as the computer names it (absolute) once listed; the home for "~" before that.
-  const shown = here?.listing?.path ?? (dir === "~" && home ? home : dir.startsWith("~/") && home ? home + dir.slice(1) : dir);
+  const shown = here?.listing?.path ?? treeRoot;
   const sessionFolder = cwd.startsWith("/") ? cwd.replace(/\/+$/, "") || "/" : null;
-  const writable = writableHere(shown, home);
+  const writable = !readOnly && writableHere(shown, home);
   // permissions (#5831): where the computer takes changes, not on Windows
   const canChmod = writable && hubHas(features, FILE_CHMOD_FEATURE) && machine?.os?.toLowerCase() !== "windows";
   // Open Terminal Here (#5832): a new tab on the computer in that folder, in the session's workspace when it has one
@@ -209,13 +228,13 @@ export function FilesPanel({
   };
   // A broken link says what it says (Info); a folder opens; a file opens in the viewer.
   const enter = (e: FsEntry) => (e.link_broken ? setInfo({ path: joinPath(shown, e.name), entry: e }) : e.dir ? go(joinPath(shown, e.name)) : setOpen([{ path: joinPath(shown, e.name) }]));
-  // Switching files from the workbench tree updates the viewer in place; on narrow screens, collapse the overlay tree.
+  // Switching files from the workbench tree updates the viewer in place; on compact panels, collapse the overlay tree.
   const selectFile = useCallback(
     (p: string) => {
       setOpen([{ path: p }]);
-      if (narrow) setTreePref(false);
+      if (compact) setTreePref(false);
     },
-    [narrow],
+    [compact],
   );
 
   // A path the viewer links to: a folder already listed opens in the list, anything else in the viewer.
@@ -237,10 +256,12 @@ export function FilesPanel({
   const changes = git?.is_repo ? git.files.length : 0;
   const sync = aheadBehind(git);
   const canGoBackInViewer = open.length > 1 || (!file && open.length > 0);
-  const splitWorkbench = Boolean(viewing && tree && !narrow);
-  const splitContainerRef = useRef<HTMLDivElement>(null);
+  const canShowTree = Boolean(dir && !readOnly);
+  const showWorkbenchTree = Boolean(viewing && canShowTree && treeOpen && (tree || compact || treePref === true));
+  const splitWorkbench = Boolean(showWorkbenchTree && !compact);
+  const overlayTree = Boolean(showWorkbenchTree && compact);
+  const showBrowserPane = !viewing || showWorkbenchTree;
   const treePaneId = useId();
-  const workbenchTreeId = useId();
   const treePane = useResizableTreeWidth({
     storageKey: FILES_TREE_WIDTH_KEY,
     defaultWidth: TREE_PANE_DEFAULT,
@@ -255,13 +276,24 @@ export function FilesPanel({
   const finding = query.trim() !== "";
 
   return (
-    <div ref={splitContainerRef} data-files-panel className={cx("flex min-h-0 flex-1", splitWorkbench ? "flex-row" : "flex-col")}>
+    <div
+      ref={splitContainerRef}
+      data-files-panel
+      data-testid={viewing ? "file-workbench" : undefined}
+      className={cx("relative flex min-h-0 flex-1 overflow-hidden", splitWorkbench ? "flex-row" : "flex-col")}
+    >
+      {overlayTree && <div className="absolute inset-0 z-10 bg-black/20" onClick={() => setTreePref(false)} />}
+      {showBrowserPane && (
       <div
         id={treePaneId}
+        data-testid={showWorkbenchTree ? "file-workbench-tree" : undefined}
         className={cx(
           "flex min-h-0 flex-col",
-          splitWorkbench ? "shrink-0 w-(--files-tree-w)" : "flex-1",
-          viewing && "hidden",
+          splitWorkbench
+            ? "shrink-0 w-(--files-tree-w)"
+            : overlayTree
+              ? "absolute inset-y-0 left-0 z-20 w-[236px] shrink-0 border-r border-line bg-page shadow-overlay"
+              : "flex-1",
         )}
         style={splitWorkbench ? ({ "--files-tree-w": `${treePane.width}px` } as React.CSSProperties) : undefined}
       >
@@ -353,23 +385,24 @@ export function FilesPanel({
           }}
         >
         {dropDir && <DropHint dir={dropDir} />}
-        <div className="scrollbar-thin flex min-h-0 flex-1 flex-col overflow-y-auto" key={finding ? "find" : tree ? `tree:${dir}` : dir}>
+        <div className="scrollbar-thin flex min-h-0 flex-1 flex-col overflow-y-auto" key={finding ? "find" : tree || showWorkbenchTree ? `tree:${treeRoot}` : dir}>
           {finding ? (
             <FindResults mid={mid} dir={shown} query={query} onOpen={(hit) => (hit.dir ? go(joinPath(shown, hit.path)) : setOpen([{ path: joinPath(shown, hit.path) }]))} />
-          ) : tree ? (
-            dir ? (
+          ) : tree || showWorkbenchTree ? (
+            treeRoot ? (
               <FilesTree
                 mid={mid}
                 sid={sid}
                 cwd={cwd}
-                root={dir}
+                root={treeRoot}
                 reveal={reveal}
+                activePath={viewing?.path}
                 showHidden={showHidden}
                 git={git}
                 reloads={reloads}
                 onOpenFile={selectFile}
                 onShowHidden={() => setShowHidden(true)}
-                rowOps={rowOps}
+                rowOps={readOnly ? undefined : rowOps}
               />
             ) : (
               <Empty icon="folder" title={t("session-filespanel.no_dir")} />
@@ -400,6 +433,20 @@ export function FilesPanel({
         </div>
         </div>
       </div>
+      )}
+      {splitWorkbench && (
+        <TreePaneSplitter
+          value={treePane.width}
+          min={treePane.min}
+          max={treePane.max}
+          onResize={treePane.setWidth}
+          onCommit={treePane.commitWidth}
+          onReset={treePane.resetWidth}
+          label={t("session-filespanel.resize_label")}
+          title={t("session-filespanel.resize_title")}
+          controls={treePaneId}
+        />
+      )}
       {rowMenu?.scope === ops.scope && (
         <Menu
           items={beforeTrash(ops.rowItems(rowMenu.x, rowMenu.open), [
@@ -442,79 +489,31 @@ export function FilesPanel({
       )}
       {perm && <PermissionsDialog mid={mid} cwd={cwd} path={perm.path} mode={perm.mode} onClose={() => setPerm(null)} onChanged={() => setReloads((n) => n + 1)} />}
       {viewing && (
-        <div className="relative flex min-h-0 flex-1 overflow-hidden" data-testid="file-workbench">
-          {treeOpen && dir && (
-            <div
-              data-testid="file-workbench-tree"
-              id={workbenchTreeId}
-              className={cx(
-                "flex min-h-0 shrink-0 flex-col border-r border-line bg-page",
-                narrow ? "absolute inset-y-0 left-0 z-20 w-[236px] shadow-overlay" : "w-(--files-tree-w)",
-              )}
-              style={splitWorkbench ? ({ "--files-tree-w": `${treePane.width}px` } as React.CSSProperties) : undefined}
-            >
-              <div className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
-                <Icon name="folder" size={14} className="shrink-0 text-ink-2" />
-                <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-ink" title={shown}>
-                  {fileName(shown) || shown}
-                </span>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                <FilesTree
-                  mid={mid}
-                  sid={sid}
-                  cwd={cwd}
-                  root={dir}
-                  reveal={reveal}
-                  activePath={viewing.path}
-                  showHidden={showHidden}
-                  git={git}
-                  reloads={reloads}
-                  onOpenFile={selectFile}
-                  onShowHidden={() => setShowHidden(true)}
-                  rowOps={rowOps}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <FileView
+            key={`${open.length}:${viewing.path}`}
+            mid={mid}
+            sid={sid || undefined}
+            path={viewing.path}
+            cwd={cwd}
+            line={viewing.line}
+            lineTo={viewing.to}
+            readOnly={readOnly}
+            leading={
+              canShowTree ? (
+                <IconButton
+                  icon="sidebar"
+                  label={showWorkbenchTree ? t("files-tree.hideTree") : t("files-tree.showTree")}
+                  onClick={() => setTreePref(!showWorkbenchTree)}
+                  pressed={showWorkbenchTree}
                 />
-              </div>
-            </div>
-          )}
-          {splitWorkbench && treeOpen && dir && (
-            <TreePaneSplitter
-              value={treePane.width}
-              min={treePane.min}
-              max={treePane.max}
-              onResize={treePane.setWidth}
-              onCommit={treePane.commitWidth}
-              onReset={treePane.resetWidth}
-              label={t("session-filespanel.resize_label")}
-              title={t("session-filespanel.resize_title")}
-              controls={workbenchTreeId}
-            />
-          )}
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <FileView
-              key={`${open.length}:${viewing.path}`}
-              mid={mid}
-              sid={sid}
-              path={viewing.path}
-              cwd={cwd}
-              line={viewing.line}
-              lineTo={viewing.to}
-              leading={
-                dir ? (
-                  <IconButton
-                    icon="sidebar"
-                    label={treeOpen ? t("files-tree.hideTree") : t("files-tree.showTree")}
-                    onClick={() => setTreePref(!treeOpen)}
-                    pressed={treeOpen}
-                  />
-                ) : undefined
-              }
-              onBack={canGoBackInViewer ? () => setOpen((o) => o.slice(0, -1)) : undefined}
-              onClose={onClose}
-              onOpenPath={openPath}
-              onShowInFolder={onShowInFolder ?? showInFolder}
-            />
-          </div>
+              ) : undefined
+            }
+            onBack={canGoBackInViewer ? () => setOpen((o) => o.slice(0, -1)) : undefined}
+            onClose={onClose}
+            onOpenPath={openPath}
+            onShowInFolder={readOnly ? undefined : (onShowInFolder ?? showInFolder)}
+          />
         </div>
       )}
     </div>
@@ -542,7 +541,7 @@ function PathBar({ shown, home, session, writable, history, onBack, onForward, g
   const segments = pathSegments(shown, home);
   const up = parentPath(shown);
   useLayoutEffect(() => {
-    bar.current?.scrollTo({ left: bar.current.scrollWidth, behavior: scrollBehavior() });
+    bar.current?.scrollTo?.({ left: bar.current.scrollWidth, behavior: scrollBehavior() });
   }, [shown]);
   return (
     <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-line px-2">
