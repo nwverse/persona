@@ -338,6 +338,9 @@ func TestCardlessClaimLegacyCompletedMarker(t *testing.T) {
 			}
 			again.superviseWatch(context.Background(), time.Now().Add(48*time.Hour))
 			flushCardlessClaim(again)
+			if pending {
+				waitFor(t, "the legacy claim delivery", func() bool { return cardlessNotices(nextHub) > 0 })
+			}
 			want := 0
 			if pending {
 				want = 1

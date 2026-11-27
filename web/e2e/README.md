@@ -241,6 +241,23 @@ graph as a 200-px still preview whose only press is opening Full screen. It wait
 never for a fixed time. Only the mock's own requests leave the browser. Screenshots and `results.json` go to the artifact
 directory; a 180-second watchdog ends the run, and the last line is the verdict.
 
+## An extension's home scene: UI version 11's scene (#12641)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_SCENE=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-scene.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English, light and dark at 1440 × 900. It checks a nonempty Canvas,
+`alt` / floor labels / pins reading order, opaque pin contrast of at least 4.5:1, the default camera, keyboard orbit, zoom buttons,
+Reset, drag, wheel and real Chromium two-finger touch events. A pin opens its device page and Back keeps the touched camera through
+a state redraw. Full screen keeps every pin inside the canvas and hit-testable, closes with Escape and returns focus. The Overview
+card checks its 200 px still preview, absence of nested controls and interactive Full screen. Large text and Reduce Motion add
+light/dark page, compact and full-screen captures, pin hit-testing and immediate camera input without a scene animation. Only the
+loopback origin is allowed; expected mock 404 resources are excluded from console errors, while page errors and other console errors fail the run. Screenshots
+go to the artifact directory, never the repository. A 180-second watchdog ends the run and the last line is the verdict.
+
 ## User-input navigation acceptance
 
 With web dependencies and Chrome already available, point the runner at an **already-running, exclusively owned loopback web server** backed by `scripts/mock/mock_hub.py`. Start the mock on an unused loopback port and configure the web server's `PERSONA_HUB_URL` for that mock; a Vite server proxying a real hub is not acceptable. The runner does not install dependencies, start services, create conversations, or stop the caller's services.

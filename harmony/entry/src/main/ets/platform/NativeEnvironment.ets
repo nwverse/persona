@@ -105,6 +105,8 @@ export class NativeEnvironment {
   }
 
   @Trace nativeHoverAvailable: boolean = false;
+  @Trace creaseTopPx: number = 0;
+  @Trace creaseHeightPx: number = 0;
   private refreshFoldCapability(): void {
     // Some emulator images report foldable but omit the crease region. The native
     // FoldSplitContainer dereferences that region when entering hover mode.
@@ -119,13 +121,24 @@ export class NativeEnvironment {
         this.foldDisplayMode = 0;
       }
       const region = foldable ? display.getCurrentFoldCreaseRegion() : undefined;
-      this.nativeHoverAvailable = !!region && region.creaseRects.length > 0 && region.creaseRects.every((rect: display.Rect): boolean =>
+      const valid = !!region && region.creaseRects.length > 0 && region.creaseRects.every((rect: display.Rect): boolean =>
         Number.isFinite(rect.left) && Number.isFinite(rect.top) && Number.isFinite(rect.width) && Number.isFinite(rect.height) && rect.width > 0 && rect.height > 0);
+      this.nativeHoverAvailable = valid;
+      if (valid && region) {
+        const horizontal = region.creaseRects.find((rect: display.Rect): boolean => rect.width >= rect.height) || region.creaseRects[0];
+        this.creaseTopPx = horizontal.top;
+        this.creaseHeightPx = horizontal.height;
+      } else {
+        this.creaseTopPx = 0;
+        this.creaseHeightPx = 0;
+      }
     } catch (_) {
       this.isFoldable = false;
       this.foldStatus = 0;
       this.foldDisplayMode = 0;
       this.nativeHoverAvailable = false;
+      this.creaseTopPx = 0;
+      this.creaseHeightPx = 0;
     }
     this.syncPosture();
   }

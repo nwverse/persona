@@ -155,6 +155,36 @@ export struct PhoneAppearanceSettings {
       if (glow) Divider().color(Colors.divider).strokeWidth(0.5).margin({left:60})
     }.width('100%')
   }
+  @Builder herdrTabSwitch() {
+    Row({ space: 12 }) {
+      Column({ space: 3 }) {
+        Text(tr('agents_use_herdr_tab_name'))
+          .fontSize(17)
+          .maxFontScale(Tokens.interfaceScaleFor(17))
+          .fontColor(Colors.ink)
+        Text(tr('agents_use_herdr_tab_name_hint'))
+          .fontSize(13)
+          .maxFontScale(Tokens.interfaceScaleFor(13))
+          .fontColor(Colors.secondary)
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+      Toggle({ type: ToggleType.Switch, isOn: this.model.useHerdrTabName })
+        .selectedColor(Colors.positive)
+        .enabled(!this.model.agentsDisplaySaving && this.model.connected && !this.model.demo)
+        .accessibilityText(tr('agents_use_herdr_tab_name'))
+        .accessibilityDescription(tr('agents_use_herdr_tab_name_hint'))
+        .id('settings.appearance.herdr_tab_name')
+        .onChange((value: boolean) => {
+          if (this.active && value !== this.model.useHerdrTabName) {
+            Haptics.selection();
+            this.model.setUseHerdrTabName(value);
+          }
+        })
+    }.width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
+      .backgroundColor(Colors.card(true)).borderRadius(PhoneStyle.cardRadius)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .margin({ top: 16 })
+  }
   @Builder caption(value: string) {
     Text(tr(value)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
       .width('100%').padding({left:16,right:16,top:7,bottom:9})
@@ -379,6 +409,7 @@ export struct PhoneAppearanceSettings {
             Text(tr('phone_look_section')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary)
               .width('100%').height(PhoneStyle.formSize(40.3,47.5,this.environment.fontScale)).padding({left:20}).id('settings.appearance.section')
             this.overview()
+            if (this.model.agentsDisplaySupported) this.herdrTabSwitch()
           }
           else if (page==='phone_look_color') { this.colors(); this.caption('phone_look_color_footer'); }
           else if (page==='phone_look_style') { this.styles(); this.caption('phone_look_style_footer'); this.textSizeChoices(); this.caption('phone_look_text_footer'); }
@@ -386,6 +417,7 @@ export struct PhoneAppearanceSettings {
             if (page==='phone_look_layout') Text(tr('phone_look_layout_header')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15))
               .fontColor(Colors.secondary).width('100%').height(PhoneStyle.formSize(40.3,47.7,this.environment.fontScale)).padding({left:20})
             this.choices(page)
+            if (page==='phone_look_layout' && this.model.agentsDisplaySupported) this.herdrTabSwitch()
             if (page==='phone_look_scheme' || page==='phone_look_navigation') this.caption(page+'_footer')
           }
         }.width('100%').alignItems(HorizontalAlign.Start).padding({left:16,right:16,top:page==='appearance' || page==='phone_look_layout' ? 0 : 35,bottom:28})
