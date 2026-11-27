@@ -3164,10 +3164,12 @@ final class AppModel {
     func replaceInteractions(_ group: String, _ list: [Interaction], askedAt: Date? = nil) {
         var all = interactions.filter { $0.value.group != group }
         for ix in list where !endedInteraction(ix) {
-            if let current = all[ix.uid] {
+            // The current group was filtered out of `all`: compare with the displayed value too, or an older
+            // snapshot would look like a new card and replace the newer occurrence already installed.
+            if let current = all[ix.uid] ?? interactions[ix.uid] {
                 // A reconnect snapshot may carry a newer same-ID occurrence than
                 // the last live card; an older snapshot never replaces a newer one.
-                if laterOccurrence(occurrence(ix), than: occurrence(current)) { all[ix.uid] = ix }
+                all[ix.uid] = laterOccurrence(occurrence(ix), than: occurrence(current)) ? ix : current
             } else {
                 all[ix.uid] = ix
             }

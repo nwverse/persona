@@ -22,6 +22,7 @@ import (
 // plan's own todo_id, the todo a started task became, is the hub's to set, and the shallower field wins in JSON.
 type planTaskIn struct {
 	PlanTask
+	taskContractInput
 	TodoID        string   `json:"todo_id"`
 	WritePrefixes []string `json:"write_prefixes,omitempty"`
 	ForceParallel bool     `json:"force_parallel,omitempty"`
@@ -41,6 +42,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	var a struct{ Tasks []PlanTask }
+	var contracts []taskContract
 	var plannedScopes []plannedWriteScopeInput
 	lead := "" // optional initial leader assignment; omission keeps the planning lead or main
 	if scope != nil {
@@ -62,7 +64,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if lead, err = s.planSupervisor(ctx, sessionID, in.Supervisor); err != nil {
 			return "", err
 		}
-		for _, t := range in.Tasks {
+		for i, t := range in.Tasks {
+			contract, err := t.validatedContract()
+			if err != nil {
+				return "", fmt.Errorf("task %d: %w", i+1, err)
+			}
+			contracts = append(contracts, contract)
 			t.PlanTask.ReuseTodo = strings.TrimSpace(t.TodoID)
 			t.PlanTask.Parent = "" // the hub's, set only for a task leader's workers
 			t.PlanTask.Supervisor = lead
@@ -392,7 +399,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			a.Tasks[i].RequestGate = s.planRequestGate(a.Tasks[i])
 		}
 	}
-	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks); err != nil {
+	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks, contracts...); err != nil {
 		return "", err
 	}
 	for i := range a.Tasks {

@@ -1,18 +1,18 @@
-Split code, repo research and multi-step work; check machines_list, KB, agents_list, preferences. Main/lead, readonly, user_requested and preapproved start now; others/owner_step need 开始. Queued=dispatched. Reuse suggested idle Agents via agent_send (even after closure) if context/permissions fit. Keep reminders/events separate.
+Plan multi-step work. Check machines_list, KB, agents_list and preferences. Main/lead, readonly, user_requested and preapproved tasks start now. Others and owner_step need 开始. Queued means dispatched. Reuse suitable Agents via agent_send. Keep reminders and events separate.
 
-Explicit machine: fixed (default, refuses unavailable launchers) or flexible (health-based moves, explain why); omit for auto placement with placement_constraints. Leads own tasks; main owns its own, receives needs_user, may pick a lead (agent_transfer persists); incompatible leads need supervision_policy. Check supervisor, similar work, active same-dir Agents; pass todo_id for unassigned to-dos. Issue/PR URLs in title/goal/prompt block open duplicates: use continues, todo_id or distinct_from (other hints advisory).
+An explicit machine is fixed by default. Use flexible for portable work or omit machine for automatic placement. Leads own their tasks and escalate needs_user to main. Main can select a lead (agent_transfer persists). Use supervision_policy for incompatible leads. Match open issue or PR work with continues, todo_id or distinct_from. Other duplicate hints are advisory.
 
-Started tasks keep a hub brief (owner request/started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults merged+closed unless PR/draft-only); readonly needs goal. expect_minutes: omit=auto, positive overrides. Use continues+continues_why, task_retry (failed starts), task_scope+scope_revision (approved changes).
+Writable tasks need done_when and read-only tasks need goal. Set completion_mode for draft or review-ready delivery. Use continues and continues_why to carry work on, task_retry for failed starts and task_scope with scope_revision for scope changes.
 
-Edits need readonly=false+write permission; replace readonly Codex for fixes or use agent_send when permissions match. readonly=true adds readonly constraint (Claude/agy: bypassPermissions; Codex: plan unless assistant.readonly_mode=prompt; pi/cursor refuse). role=worker, or leader for direct workers via restricted task_plan/task_review.
+Edits need readonly=false and write permission. With readonly, Claude/agy uses bypassPermissions, Codex uses plan unless assistant.readonly_mode=prompt, and pi/cursor refuse. A leader can plan and review direct workers.
 
-Use repositories_list/repository_get when needed; explicit repository URL or path takes precedence. Bindings never imply machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only owner closes terminals on acceptance.
+Use repositories_list or repository_get when needed. An explicit repository URL or path takes precedence. Set machine and cwd separately from bindings. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.
 
-Saved workspace plan on existing todo: {"backend":{"operation_id":"id"}}. Multi-repo container: {"container":{"selected_repo_ids":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.
+Pass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.
 
-Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default task/{todo id}); reuse needs a clean, unused checkout. {"existing":"<cwd or id>","queue":true} selects it without switching; busy queues FIFO only if requested or owner waits. "none" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.
+Workspace new isolates and can name a branch (default task/<todo id>). Existing needs a clean, unused checkout. Queue waits FIFO if requested or the owner waits. None creates nothing. Omit for none on readonly or the writable default (new if busy). Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.
 
-`wait_seconds` observes <=50s after dispatch, appending `Inline observation` JSON (`completed`+`reply`, `question`+`interaction_id`, `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids). Never answers, accepts, resends or cancels; `task_review` supervision applies. Older nodes may time out. Only one immediately dispatchable task waits; cards/multi-task return immediately.{{template "shared/mcp_language" .}}
+`wait_seconds` observes up to 50 seconds after dispatch. Inline observation includes `completed` with this input's `reply`, `question` with a pending `interaction_id`, or `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`. Observation records known input and session ids. Observation never answers questions, accepts tasks, resends or cancels work. Normal supervision and `task_review` apply. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single task waits.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -136,6 +136,16 @@ Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default
           "readonly": {
             "type": "boolean",
             "description": "true only for read-only tasks; false for authorized edits. Adds「本任务只读：不改项目文件、不提交、不对外写入」when true"
+          },
+          "work_mode": {
+            "type": "string",
+            "enum": ["execute", "research", "coordinate"],
+            "description": "New task only. Defaults to research for readonly and execute otherwise."
+          },
+          "completion_mode": {
+            "type": "string",
+            "enum": ["inherit", "draft", "ready", "landed", "verified"],
+            "description": "New task. Inherit uses assistant settings. Draft is a draft artifact, ready is for review, landed is merged or published, verified is confirmed live."
           },
           "user_requested": {
             "type": "boolean",

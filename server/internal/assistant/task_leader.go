@@ -281,6 +281,7 @@ type leaderTaskIn struct {
 	MachinePolicy    string             `json:"machine_policy"`
 	Cwd              string             `json:"cwd"`
 	Launcher         string             `json:"launcher"`
+	Host             string             `json:"host"`
 	Model            string             `json:"model"`
 	Tier             string             `json:"tier"`
 	Effort           string             `json:"effort"`
@@ -309,7 +310,7 @@ func (l *leaderScope) workerTasks(args json.RawMessage) ([]PlanTask, error) {
 	out := make([]PlanTask, 0, len(in.Tasks))
 	for _, t := range in.Tasks {
 		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Role: t.Role, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
-			Launcher: t.Launcher, Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly, MultiIssueReport: t.MultiIssueReport,
+			Launcher: t.Launcher, Host: strings.TrimSpace(t.Host), Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly, MultiIssueReport: t.MultiIssueReport,
 			DoneWhen: t.DoneWhen, Goal: t.Goal, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project,
 			DistinctFrom: t.DistinctFrom}
 		if strings.TrimSpace(pt.Machine) == "" {

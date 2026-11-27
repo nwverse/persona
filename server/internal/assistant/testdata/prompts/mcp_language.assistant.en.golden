@@ -894,7 +894,7 @@
   },
   {
     "name": "agent_supervise",
-    "description": "Main or a direction’s lead can adopt an Agent on no open task for supervision and task_review. Omit role for a worker. A leader needs done_when and a non-work-trust computer. It gets instructions to plan and review direct workers, who cannot delegate. On your open task, use task_scope for done_when/expect_minutes. Use agent_transfer to move another conversation's task.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Main or a direction lead can adopt an Agent with no open task. A leader needs done_when and a non-work-trust computer. Use task_scope to revise an existing task and agent_transfer to transfer supervision.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -912,12 +912,31 @@
         },
         "title": {
           "type": "string",
-          "description": "the task in a short line (English, under 20 characters); empty: the agent's title"
+          "description": "English title under 20 characters. Defaults to the Agent title."
         },
         "role": {
           "type": "string",
           "enum": [
             "leader"
+          ]
+        },
+        "work_mode": {
+          "type": "string",
+          "enum": [
+            "execute",
+            "research",
+            "coordinate"
+          ],
+          "description": "Default execute."
+        },
+        "completion_mode": {
+          "type": "string",
+          "enum": [
+            "inherit",
+            "draft",
+            "ready",
+            "landed",
+            "verified"
           ]
         },
         "done_when": {
@@ -2590,7 +2609,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Split code, repo research and multi-step work; check machines_list, KB, agents_list, preferences. Main/lead, readonly, user_requested and preapproved start now; others/owner_step need 开始. Queued=dispatched. Reuse suggested idle Agents via agent_send (even after closure) if context/permissions fit. Keep reminders/events separate.\n\nExplicit machine: fixed (default, refuses unavailable launchers) or flexible (health-based moves, explain why); omit for auto placement with placement_constraints. Leads own tasks; main owns its own, receives needs_user, may pick a lead (agent_transfer persists); incompatible leads need supervision_policy. Check supervisor, similar work, active same-dir Agents; pass todo_id for unassigned to-dos. Issue/PR URLs in title/goal/prompt block open duplicates: use continues, todo_id or distinct_from (other hints advisory).\n\nStarted tasks keep a hub brief (owner request/started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults merged+closed unless PR/draft-only); readonly needs goal. expect_minutes: omit=auto, positive overrides. Use continues+continues_why, task_retry (failed starts), task_scope+scope_revision (approved changes).\n\nEdits need readonly=false+write permission; replace readonly Codex for fixes or use agent_send when permissions match. readonly=true adds readonly constraint (Claude/agy: bypassPermissions; Codex: plan unless assistant.readonly_mode=prompt; pi/cursor refuse). role=worker, or leader for direct workers via restricted task_plan/task_review.\n\nUse repositories_list/repository_get when needed; explicit repository URL or path takes precedence. Bindings never imply machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only owner closes terminals on acceptance.\n\nSaved workspace plan on existing todo: {\"backend\":{\"operation_id\":\"id\"}}. Multi-repo container: {\"container\":{\"selected_repo_ids\":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.\n\nWorkspace: \"new\" isolates; {\"new\":{\"branch\":\"task/my-change\"}} names it (default task/{todo id}); reuse needs a clean, unused checkout. {\"existing\":\"\u003ccwd or id\u003e\",\"queue\":true} selects it without switching; busy queues FIFO only if requested or owner waits. \"none\" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.\n\n`wait_seconds` observes \u003c=50s after dispatch, appending `Inline observation` JSON (`completed`+`reply`, `question`+`interaction_id`, `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids). Never answers, accepts, resends or cancels; `task_review` supervision applies. Older nodes may time out. Only one immediately dispatchable task waits; cards/multi-task return immediately.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Plan multi-step work. Check machines_list, KB, agents_list and preferences. Main/lead, readonly, user_requested and preapproved tasks start now. Others and owner_step need 开始. Queued means dispatched. Reuse suitable Agents via agent_send. Keep reminders and events separate.\n\nAn explicit machine is fixed by default. Use flexible for portable work or omit machine for automatic placement. Leads own their tasks and escalate needs_user to main. Main can select a lead (agent_transfer persists). Use supervision_policy for incompatible leads. Match open issue or PR work with continues, todo_id or distinct_from. Other duplicate hints are advisory.\n\nWritable tasks need done_when and read-only tasks need goal. Set completion_mode for draft or review-ready delivery. Use continues and continues_why to carry work on, task_retry for failed starts and task_scope with scope_revision for scope changes.\n\nEdits need readonly=false and write permission. With readonly, Claude/agy uses bypassPermissions, Codex uses plan unless assistant.readonly_mode=prompt, and pi/cursor refuse. A leader can plan and review direct workers.\n\nUse repositories_list or repository_get when needed. An explicit repository URL or path takes precedence. Set machine and cwd separately from bindings. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.\n\nPass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.\n\nWorkspace new isolates and can name a branch (default task/\u003ctodo id\u003e). Existing needs a clean, unused checkout. Queue waits FIFO if requested or the owner waits. None creates nothing. Omit for none on readonly or the writable default (new if busy). Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch. Inline observation includes `completed` with this input's `reply`, `question` with a pending `interaction_id`, or `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`. Observation records known input and session ids. Observation never answers questions, accepts tasks, resends or cancels work. Normal supervision and `task_review` apply. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single task waits.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2885,6 +2904,26 @@
                 "type": "boolean",
                 "description": "true only for read-only tasks; false for authorized edits. Adds「本任务只读：不改项目文件、不提交、不对外写入」when true"
               },
+              "work_mode": {
+                "type": "string",
+                "enum": [
+                  "execute",
+                  "research",
+                  "coordinate"
+                ],
+                "description": "New task only. Defaults to research for readonly and execute otherwise."
+              },
+              "completion_mode": {
+                "type": "string",
+                "enum": [
+                  "inherit",
+                  "draft",
+                  "ready",
+                  "landed",
+                  "verified"
+                ],
+                "description": "New task. Inherit uses assistant settings. Draft is a draft artifact, ready is for review, landed is merged or published, verified is confirmed live."
+              },
               "user_requested": {
                 "type": "boolean",
                 "description": "True only if user's latest message asked for it."
@@ -3054,7 +3093,7 @@
   },
   {
     "name": "task_review",
-    "description": "accepted closes after delivery_gate (default merged: park verified open PRs; linked issues must close). user_check keeps task/Agent open until owner Pass and routes feedback there. If opted in at Start, accepted done cleans the idle tab unless user_check; report closed/skipped/pending, never close tabs yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new: 10 total); accept with a note over low-ROI edge/style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits; needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), list each done_when once in checks (met=true, nonblank evidence), even with user_check; outcome=cannot, cancelled and criteria-free tasks keep prior rules. Other verdicts may omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers/Agent claims; uncovered scope needs needs_user, user_check, or a linked follow-up to-do—never chat text alone.\n\nIf an outcome decision or your review leaves part of the original brief for later, use needs_user to ask, or include deferred_scope with user_check or an open linked follow_up_todo_id. Keep the remaining scope visible even when every done_when check passes.\n\nGive accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "accepted closes after delivery_gate (default merged: park verified open PRs; linked issues must close). user_check keeps task/Agent open until owner Pass and routes feedback there. If opted in at Start, accepted done cleans the idle tab unless user_check; report closed/skipped/pending, never close tabs yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new: 10 total); accept with a note over low-ROI edge/style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits; needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), list each done_when once in checks (met=true, nonblank evidence), even with user_check; outcome=cannot, cancelled and criteria-free tasks keep prior rules. Other verdicts may omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers/Agent claims; uncovered scope needs needs_user, user_check, or a linked follow-up to-do—never chat text alone.\n\nIf an outcome decision or your review leaves part of the original brief for later, use needs_user to ask, or include deferred_scope with user_check or an open linked follow_up_todo_id. Keep the remaining scope visible even when every done_when check passes.\n\nGive accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel duplicates/unwanted tasks. Viewing alone permits untouched cancellation.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3431,7 +3470,7 @@
   },
   {
     "name": "task_scope",
-    "description": "Change a task you supervise or its acceptance criteria after dispatch. Keep the original brief. Log what changed and why, apply done_when and expect_minutes, and show the owner in the next digest. Restart overdue; restart estimate_due only with a new estimate. Only this log changes criteria (including via agent_supervise or agent_send). Give the full done_when list. Omitted criteria are recorded as dropped and shown at completion. Adding deploy, merge, release, external sends/comments, deletion, spending or production changes outside the existing scope requires the owner's message to have started this turn. Otherwise ask_user or task_review needs_user, then retry after approval. Only the supervisor can edit. Tell the Agent with agent_send. For a revised estimate or overdue clock, explain and set expect_minutes. After the settle window, a finished task without an owner card needs task_review before its scope can change. Use needs_user or accepted with user_check when the owner must act.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "The supervisor can change criteria, modes or the estimate. This log preserves the original brief and records changes and reasons for the owner's next digest, including criteria edits via agent_supervise or agent_send. Give the full done_when list. Removed criteria appear at completion. For an owner-only step, ask via ask_user or task_review needs_user and retry in the owner's reply turn. Notify the Agent via agent_send. Scope resets overdue. A new estimate also resets estimate_due. A finished task past the settle window without an owner card needs task_review first. Use needs_user or accepted with user_check when the owner must act.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3455,6 +3494,26 @@
         "why": {
           "type": "string",
           "description": "why, in one sentence (English)"
+        },
+        "work_mode": {
+          "type": "string",
+          "enum": [
+            "execute",
+            "research",
+            "coordinate"
+          ],
+          "description": "New work mode. Omit to keep the current mode."
+        },
+        "completion_mode": {
+          "type": "string",
+          "enum": [
+            "inherit",
+            "draft",
+            "ready",
+            "landed",
+            "verified"
+          ],
+          "description": "Omit to keep it. Inherit uses the assistant's delivery gate."
         },
         "done_when": {
           "type": "array",
