@@ -743,7 +743,8 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 	}
 	// The compact window the provider declares, else its model's window; none when neither is known, and Claude Code
 	// compacts by the model it knows. The same for an assistant conversation as for an agent (#3066); an assistant start
-	// writes its own, which holds the main conversation to assistant.main_compact_window (#7314, perStartEnv).
+	// writes its own, which holds the main conversation and the leader conversations to assistant.main_compact_window
+	// (#7314, #15318, perStartEnv).
 	if c := cmp.Or(l.CompactWindow, w); c > 0 {
 		env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = strconv.Itoa(c)
 	}
@@ -817,6 +818,11 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 	}
 	if gateway {
 		withoutTierAliases(env, ours)
+		for _, key := range tierModelVars {
+			if key != "ANTHROPIC_MODEL" && key != "ANTHROPIC_SMALL_FAST_MODEL" && env[key] == "" && ours[key] != "" {
+				env[key] = ours[key]
+			}
+		}
 	}
 	// The reply limit by the models the process ends up with (the launcher's own environment may name one), unless
 	// that environment sets it itself (empty: Claude Code's own limit).

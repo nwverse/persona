@@ -378,7 +378,7 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now, false)
 		b.settle(w)
 	}
-	last := it.Last
+	last, externalAsked := it.Last, it.ExternalAsked
 	b.mu.Unlock()
 	if !execute || g.Kind == SuggestConclusion {
 		if !enabled && !execute {
@@ -407,7 +407,15 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 		if in.Due != nil {
 			due = strings.TrimSpace(*in.Due)
 		}
-		out, err := s.confirmTodo(ctx, it, text, due)
+		var (
+			out InboxItem
+			err error
+		)
+		if externalAsked != "" && g.SourceOf == externalAsked {
+			out, err = s.confirmTodo(ctx, it, text, due, g.Note)
+		} else {
+			out, err = s.confirmTodo(ctx, it, text, due)
+		}
 		if ownerPromise && err != nil {
 			b.mu.Lock()
 			if b.items[id] == it && it.open() && it.Suggestion == nil && it.SuggestSeq == g.Version {

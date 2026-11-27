@@ -318,8 +318,11 @@ Each received push redraws both the Dynamic Island and the Lock Screen, so the h
   that token replaces, and it ends an activity `fleetRetireBefore` (20 minutes) before `fleetMaxAge`, so the next start never sits
   beside a card iOS ended.
 - **No push route, no card in the background** (#12982): going to the background while the first group's hub has no push route
-  to this phone (`PushRoute.route == "none"`, e.g. the relay refusing its topic), the app ends the activity: nothing could update
-  or end it any more, and it would keep old counts and an old request for hours. It starts again when the app is back in front.
+  to this phone (`PushRoute.route == "none"`, e.g. the relay refusing its topic, or no route at all for this credential, which
+  Settings › Notifications reads as "no push registration for this device", #16756), the app ends the activity: nothing could
+  update or end it any more, and it would keep old counts and an old request for hours. It starts again when the app is back in
+  front. An unknown route (an older hub that reports none, or none read yet) keeps the activity: that hub may well push
+  (`PushHealth.pushReaches`, `LiveActivityController.endsOnLeaving`).
 
 ## Buttons (`apple/LiveActivity/FleetIntents.swift`)
 
@@ -354,6 +357,7 @@ A second, independent activity while the phone records (docs/apple/recording.md,
 
 - `apple/LiveActivity/RecordingActivityAttributes.swift` (app and extension): `recordingID` in the attributes; `ContentState` is `phase` (`recording` / `paused` / `interrupted` by a call; `stopped` is drawn only, below), `runningSince` (Unix seconds, while recording), `elapsed` (where the time stands while paused), `title`, `meeting`, `marks`, `aliveAt` (while recording, the minute the app last confirmed it). A few hundred bytes. The name is the system's identity: never rename it.
 - `RecordingActivity` (`apple/Persona/Recording/`, iOS only) follows `RecordingCapture` and the recording's entry with `withObservationTracking`: one activity per recording, requested when recording starts (`pushType: nil`, local only), updated on pause, a call, a bookmark or a new title, ended at once when it stops; one left over from a killed app is ended. The time is `Text(timerInterval:)` from `runningSince`, so each segment and transcript save recomputes the content, which keeps the earlier `runningSince` and so compares equal.
+- The hub's recording module (#15214, [recording.md](recording.md) "With the hub's recording module off (#15214)"): `ContentState.module` is `off` while the hub has the module off, and then Bookmark and Ask Persona / Talk are not drawn (they would do nothing); End and Stop always are. Absent with the module on and in a state from before; an unknown word reads as allowed.
 - Stale once the app is gone (#9108): a killed app can't end its activity, and iOS ends a recording app in the background without a word (CPU or memory). So while it records, the content carries `aliveAt`, the minute the app last confirmed it (`RecordingActivity.alive`, one update a minute: `aliveEvery`), and the activity's `staleDate` is `staleAfter` (150 s) past it; paused, both are nil. Once stale, the widget draws the state as `drawn(stale:)` gives it: `phase` `stopped` (never sent by the app), the stop sign as its mark, the time standing at `aliveAt`, "Stopped · Open Persona to see the recording" under the name, no answer or role, and End (a meeting's, which asks nothing then) or Stop alone, whose tap opens the app, which ends the activity. Before, the island counted on for as long as the app stayed dead. A state from before has no `aliveAt` and never goes stale. Shots: `-showMeetingSample stopped` sends a recording's activity stale at once (`PERSONA_MEETING_PHASE=stopped`).
 - `relevanceScore` 2 (Fleet's are at most 1): while recording, the Dynamic Island shows the recording, and Fleet stays on the Lock Screen below it.
 - Drawn by `apple/PersonaWidgets/RecordingLiveActivity.swift`, a meeting's as a meeting app's (#8731 V4).

@@ -75,15 +75,25 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	// The effort is checked against the agent this start actually dispatches: an explicit agentType wins over the
 	// launcher's name, so a Claude start refuses ultra even on a launcher named codex.
 	kind := n.startAgentType(launcher, agentType)
+	if kind == traexAgent && effort == "" {
+		effort = execution.Effort
+	}
 	if err := execution.check(kind); err != nil {
 		return nil, err
 	}
 	var argv []string
 	codex := false
-	if proto.FasterSpeed(execution.Speed) {
+	explicitSpeed := proto.FasterSpeed(execution.Speed) || execution.ServiceTier != ""
+	if explicitSpeed {
 		argv, codex = n.codexLauncher(ctx, launcher)
-		if err := execution.applyStartSpeed(launcher, kind, codex); err != nil {
-			return nil, err
+		if execution.ServiceTier != "" {
+			if !codex || kind == traexAgent {
+				return nil, unsupportedStartSpeed(launcher, execution.ServiceTier)
+			}
+		} else {
+			if err := execution.applyStartSpeed(launcher, kind, codex); err != nil {
+				return nil, err
+			}
 		}
 		if execution.ServiceTier != "" {
 			if err := n.checkCodexStartSpeed(ctx, launcher, execution.Model, execution.ServiceTier); err != nil {
@@ -169,8 +179,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			return nil, refusal("not_running", "接着这个 omp 会话后没等到它的会话行，这次没有发送。", nil)
 		}
 	}
-	if !proto.FasterSpeed(execution.Speed) {
+	if !explicitSpeed {
 		argv, codex = n.codexLauncher(ctx, launcher)
+	}
+	if execution.ModelAliases != nil && (resume != "" || kind != "claude" || codex) {
+		return nil, refusal("model_aliases_unsupported", "model_aliases require a new Claude Code terminal session", nil)
 	}
 	var launch host.Launcher
 	if codex && kind == "codex" && resume == "" && mode == "" && stockOrcaCodexArgv(launcher, argv) && n.startKind(ctx) == proto.EngineOrca {
@@ -209,7 +222,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if err != nil {
 			return nil, err
 		}
-		if agent != "claude" && agent != "codex" {
+		if kind == traexAgent {
+			if agent != traexAgent || resume != "" {
+				return nil, errors.New("TRAE CLI model overrides require a new session on a TRAE CLI launcher")
+			}
+		} else if agent != "claude" && agent != "codex" {
 			return nil, errors.New("普通 Agent 的启动只支持 Claude Code 或 Codex 启动器")
 		}
 	}
@@ -292,8 +309,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return n.startWorkAgent(ctx, launch, cwd, launcher, work, execution.Model, effort, mode, prompt, ws, tabName)
 	}
 	if kind != "claude" { // start_agent.go
-		if mode != "" || effort != "" {
+		if mode != "" || (effort != "" && (kind != traexAgent || resume != "")) {
 			return nil, fmt.Errorf("permission mode and effort are only supported for Claude starts")
+		}
+		if kind == traexAgent && resume == "" {
+			execution.Effort = effort
 		}
 		return n.startOtherAgent(ctx, launch, cwd, launcher, kind, prompt, resume, ws, tabName, execution)
 	}
@@ -317,8 +337,25 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if err != nil {
 		return nil, err
 	}
+	modelArg := n.claudeModelArg(launcher, execution.Model)
+	managed, managedHere := n.managedLauncher(launcher)
+	if resume == "" && (execution.ModelAliases != nil || managedHere && !anthropicEndpoint(managedBaseURL(managed))) {
+		var aliases proto.ModelAliases
+		if execution.ModelAliases != nil {
+			aliases = *execution.ModelAliases
+		}
+		requested := execution.Model
+		if nativeClaudeModel.MatchString(proto.TrimModelWindow(requested)) &&
+			!strings.EqualFold(proto.TrimModelWindow(requested), proto.TrimModelWindow(execution.ExplicitModel)) {
+			requested = ""
+		}
+		settings, modelArg, err = n.claudeModelAliasSettings(ctx, launcher, cwd, settings, aliases, requested)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.
-	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: n.claudeModelArg(launcher, execution.Model), Effort: effort,
+	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: modelArg, Effort: effort,
 		Plugins: n.claudeLoadsPlugins(ctx), TaskInstructionFile: instructionFile}
 	if backend := backendLaunchFrom(ctx); backend != nil && mode != "plan" {
 		for _, repo := range backend.executor.journal.Repositories {
@@ -749,6 +786,10 @@ func (n *Node) close(ctx context.Context, id string) error {
 // automatic one (idle, task_completed: #10355), which is recorded only once the close went through, as an automatic
 // stop's is (retire.go).
 func (n *Node) closeWithCause(ctx context.Context, id string, cause proto.StopCause) (err error) {
+	return n.closeWithCauseChecked(ctx, id, cause, nil)
+}
+
+func (n *Node) closeWithCauseChecked(ctx context.Context, id string, cause proto.StopCause, before func() error) (err error) {
 	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 		return err
 	}
@@ -768,7 +809,7 @@ func (n *Node) closeWithCause(ctx context.Context, id string, cause proto.StopCa
 	a, ok := n.agent(id)
 	if !ok {
 		if st, mine := n.state.get(id); mine {
-			return n.closeAfterExit(ctx, id, st)
+			return n.closeAfterExit(ctx, id, st, before)
 		}
 		return fmt.Errorf("这个 Agent 不在这台电脑的终端里运行，没法从手机关闭")
 	}
@@ -776,10 +817,25 @@ func (n *Node) closeWithCause(ctx context.Context, id string, cause proto.StopCa
 	if err != nil {
 		return err
 	}
+	if before != nil {
+		if err := before(); err != nil {
+			return err
+		}
+	}
 	_ = n.sendKeys(ctx, a.PaneID, "ctrl+c")
 	time.Sleep(200 * time.Millisecond)
+	if before != nil {
+		if err := before(); err != nil {
+			return err
+		}
+	}
 	_ = n.sendKeys(ctx, a.PaneID, "ctrl+c")
 	time.Sleep(500 * time.Millisecond)
+	if before != nil {
+		if err := before(); err != nil {
+			return err
+		}
+	}
 	return org.Close(ctx, ref, a.WorkspaceID, a.TabID)
 }
 

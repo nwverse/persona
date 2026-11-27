@@ -322,12 +322,29 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		b.mu.Unlock()
 		return acceptResult{}, nil
 	}
+	if ownerCheck && !decideAsk(a) && !a.Conclusion && t.DoneAt == nil {
+		if err := s.investigationCloseError(ctx, t); err != nil {
+			b.mu.Unlock()
+			return acceptResult{}, err
+		}
+	}
 	completeDismissal := func() {}
 	if a.OutsideID != "" {
 		asked := a.AskedAt.UTC().Format(timeKeyLayout)
 		recommend := a.Recommend
 		b.mu.Unlock()
 		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: recommend}, byDefault)
+	}
+	if ownerCheck && !resumeOwnerPass {
+		if work := s.unconfirmedTaskClose(ctx, t); work != nil {
+			b.mu.Unlock()
+			return acceptResult{}, errCloseNotConfirmed
+		}
+	}
+	if resumeOwnerPass {
+		// The accepted ask already records the owner's approval. Recovery may
+		// finish its partial write without issuing a second confirmation.
+		ctx = context.WithValue(ctx, ownerCloseKey{}, ownerCloseConfirmation{todo: t.ID, reopened: t.ReopenedAt, recovering: true})
 	}
 	if todoOK && !byDefault {
 		var err error
@@ -365,7 +382,7 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			closed := false
 			if t.DoneAt == nil {
 				var err error
-				closed, err = s.reviewDoneTodo(ctx, id, acceptedNote(s.botLang(ctx), &cp), true)
+				closed, err = s.reviewDoneTodoWithSupervision(ctx, id, acceptedNote(s.botLang(ctx), &cp), true, nil, true)
 				if err != nil {
 					b.mu.Lock()
 					if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
@@ -374,6 +391,9 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 					}
 					b.mu.Unlock()
 					s.askChanged(ctx)
+					if isInvestigationGuardError(err) {
+						return acceptResult{}, err
+					}
 					return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
 				}
 			}
@@ -390,6 +410,9 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			}
 			if closed || changed {
 				s.taskReviewed(ctx, v.Supervisor, id, reviewAccepted, v)
+				// The owner's Pass is the acceptance task_review(user_check) deferred: the terminal cleanup the owner
+				// opted into at Start follows it, under the same checks as a direct acceptance (#16948).
+				s.goFinishTaskTerminal(ctx, t)
 			}
 		}
 		completeDismissal()

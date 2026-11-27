@@ -1,6 +1,7 @@
 package assistantwire
 
 import (
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -61,6 +62,14 @@ const InteractionsOwnerAction = "interactions.owner_action"
 // {interaction} → proto.Resolution, when it is answered, expires or the call ends.
 const MethodFleetAsk = "fleet.ask"
 
+// FleetAskMethod waits for the owner to answer the hub's interaction.
+var FleetAskMethod = buswire.Method[FleetAskParams, proto.Resolution]{Name: MethodFleetAsk}
+
+// FleetAskParams carries the interaction to show to the owner.
+type FleetAskParams struct {
+	Interaction proto.Interaction `json:"interaction"`
+}
+
 // MethodFleetAskPrepared is the hub's retained settings operation:
 // {interaction, replacement} → approval.Outcome. The executable handle stays in
 // the hub; only its random interaction ID crosses the bus.
@@ -72,6 +81,11 @@ const MethodFleetApprovalApply = "fleet.approval_apply"
 
 // MethodFleetApprovalDiscard releases a handle without applying it.
 const MethodFleetApprovalDiscard = "fleet.approval_discard"
+
+var (
+	FleetApprovalApplyMethod   = buswire.Method[FleetApprovalApply, FleetApprovalApplyResult]{Name: MethodFleetApprovalApply}
+	FleetApprovalDiscardMethod = buswire.Method[FleetApprovalDiscard, FleetApprovalDiscardResult]{Name: MethodFleetApprovalDiscard}
+)
 
 type FleetApprovalApply struct {
 	InteractionID string           `json:"interaction_id"`
@@ -86,6 +100,9 @@ type FleetApprovalApplyResult struct {
 type FleetApprovalDiscard struct {
 	InteractionID string `json:"interaction_id"`
 	Status        string `json:"status"`
+}
+type FleetApprovalDiscardResult struct {
+	OK bool `json:"ok"`
 }
 
 // ElicitationHeader marks an app's request the hub relays to the manager as coming from an app that takes MCP
@@ -132,6 +149,9 @@ type FleetLive struct {
 
 // Clients is EventClients' params.
 type Clients struct {
+	// Viewing is the deduplicated set of chat and terminal views from apps with full credentials.
+	// An open page remains a view during a quiet turn.
+	Viewing []SessionRef `json:"viewing,omitempty"`
 	// Elicitation: an app that takes MCP elicitations is connected (without one, or ElicitationPush, an elicitation is
 	// handed back to the terminal at once).
 	Elicitation bool `json:"elicitation"`

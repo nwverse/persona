@@ -26,7 +26,7 @@ type memoryBoardStore struct {
 }
 
 func newMemoryBoardStore() *memoryBoardStore {
-	return &memoryBoardStore{state: workspaceboard.Default(), snapshots: map[string]db.WorkspaceSnapshotRow{}}
+	return &memoryBoardStore{Store: &memStore{}, state: workspaceboard.Default(), snapshots: map[string]db.WorkspaceSnapshotRow{}}
 }
 func (s *memoryBoardStore) WorkspaceBoard(context.Context) (workspaceboard.State, error) {
 	s.mu.Lock()
@@ -122,6 +122,7 @@ func (d *boardDevs) Summary(id string) (devices.Summary, bool) {
 func (d *boardDevs) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
 	return nil, nil, nil
 }
+func (d *boardDevs) ConnectedAt(string) time.Time { return time.Time{} }
 
 func (d *boardDevs) AppendSessions(dst []proto.Session, id string) ([]proto.Session, bool) {
 	list, ok := d.Sessions(id)

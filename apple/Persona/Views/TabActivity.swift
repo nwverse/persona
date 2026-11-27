@@ -233,14 +233,9 @@ private struct PageSearchableTokens<Token: Identifiable, TokenLabel: View>: View
     let placement: SearchFieldPlacement
     let prompt: String
     let token: (Token) -> TokenLabel
-    @Environment(\.tabIsActive) private var active
 
     func body(content: Content) -> some View {
-        #if os(macOS)
-        content.background { if active { field(Color.clear) } } // as `PageSearchable`
-        #else
         field(content)
-        #endif
     }
 
     private func field<V: View>(_ v: V) -> some View {

@@ -311,7 +311,7 @@ nonisolated enum Theme {
         static let dash: [CGFloat] = [Theme.Space.xs, Theme.Space.xs]
     }
 
-    /// The avatar sheet's Theme Color and Pictures for Each State (#15449, `AvatarStatesPages`).
+    /// The avatar sheet's Theme Color, Pictures for Each State and image drop highlight (#15449, #15612, `AvatarStatesPages`).
     enum AvatarSheet {
         /// A theme color's swatch, round, beside its name.
         static let swatch = Size.iconS
@@ -319,6 +319,10 @@ nonisolated enum Theme {
         static let swatchEdge = Color.primary.opacity(0.15)
         /// A state's picture in its row, as it will move: the size of the top bar's dot.
         static let preview = Size.avatarL
+        /// The accent border and tint drawn over a picture slot or avatar card while an image is dragged over it (#15612).
+        static var dropStroke: Color { Theme.accent }
+        static let dropStrokeWidth = Size.rule
+        static var dropTint: Color { Theme.accentTint }
     }
     #endif
 
@@ -811,6 +815,8 @@ nonisolated enum Theme {
         /// Today's outline and the picked square's.
         static let todayLine: CGFloat = 1.5
         static let pickedLine: CGFloat = 2
+        /// A chart's columns other than the one its line reads (Token usage by project's days, #16530; the web's 55%).
+        static let unpicked: Double = 0.55
 
         /// A square at step `level`: 0 is no usage, 1 to 4 the theme color's steps.
         static func fill(_ level: Int) -> Color {

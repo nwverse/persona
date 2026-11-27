@@ -105,8 +105,8 @@ type LarkMessageID string
 // OwnerPromiseKind identifies the pilot's private Inbox reminder.
 const OwnerPromiseKind = "owner_promise"
 
-// ThingParent is a thing's parent: kind "inbox" (an item's id), "todo" (a todo's id) or "session"
-// ("<machine>/<session>").
+// ThingParent is a thing's parent: kind "inbox" (an item's id), "todo" (a todo's id), "session" (a coding Agent's
+// "<machine>/<session>") or "agent" (a personal Agent's "<source>:<sessionKey>").
 type ThingParent struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
@@ -218,6 +218,8 @@ const (
 	TagChat   = "chat"
 	TagSender = "sender"
 	TagBranch = "branch"
+	// TagExternalObject is a canonical source object URL when the row opens a related view instead.
+	TagExternalObject = "external_object"
 )
 
 // InboxReply is a reply to one of a connector's inbox items.

@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -56,6 +57,9 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		}
 		clearStandardSpeed(params)
 	} else {
+		if model, _ := params["model"].(string); model != "" {
+			params["explicit_model"] = model
+		}
 		tierCtx, _ := withTierStart(ctx, p.MachineID)
 		own, err := s.resolveStart(tierCtx, params, false)
 		if err != nil {
@@ -70,10 +74,26 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		if m, ok := s.device(ctx, p.MachineID); ok {
 			note, agent, err := s.fitNewLauncher(withPersonStart(ctx), m, own, params)
 			if err != nil {
+				if code, _ := relayErrCode(err); code == proto.CodeLauncherOutOfScope || code == proto.CodeLauncherOwnService {
+					return nil, err
+				}
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}
 			if err := checkStartSpeed(params, agent, ""); err != nil {
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
+			}
+			if params["model_aliases"] != nil {
+				raw, err := json.Marshal(params["model_aliases"])
+				var aliases proto.ModelAliases
+				if err != nil || json.Unmarshal(raw, &aliases) != nil {
+					return nil, badRequest(fmt.Errorf("model_aliases must be an object of model IDs"), s.appLang(ctx, p.Lang))
+				}
+				if err := aliases.Validate(); err != nil {
+					return nil, badRequest(err, s.appLang(ctx, p.Lang))
+				}
+				if err := checkAliasAgent(aliases, agent); err != nil {
+					return nil, badRequest(err, s.appLang(ctx, p.Lang))
+				}
 			}
 			if mode, _ := params["permission_mode"].(string); mode != "" && own.permission == "" && !agent.supportsPermissionMode(mode) {
 				delete(params, "permission_mode")
@@ -139,9 +159,20 @@ func (s *Service) AgentResumeParams(ctx context.Context, p AgentResumeParams) (m
 	return params, nil
 }
 
-// tabName is a short name for the herdr tab of a new agent, from its first message (purpose agent.title, a few
-// seconds at most). "" when there is no message or the model fails: the node names it agent-<n>.
+// tabNameSyncTimeout is the agent.title budget on the paths that still answer a caller: the
+// agents.tab_name bus method and the autonameTabs batch. It stays at the original eight seconds;
+// only the detached start-naming job uses the longer agentTitleAsyncTimeout. A var so tests can
+// compress it.
+var tabNameSyncTimeout = 8 * time.Second
+
+// tabName is tabNameWithTimeout with the short synchronous budget.
 func (s *Service) tabName(ctx context.Context, prompt string) string {
+	return s.tabNameWithTimeout(ctx, prompt, tabNameSyncTimeout)
+}
+
+// tabNameWithTimeout asks agent.title for a short herdr tab name using the given model budget. ""
+// when there is no message or the model fails: the node names it agent-<n>.
+func (s *Service) tabNameWithTimeout(ctx context.Context, prompt string, timeout time.Duration) string {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return ""
@@ -149,7 +180,7 @@ func (s *Service) tabName(ctx context.Context, prompt string) string {
 	if r := []rune(prompt); len(r) > 1500 {
 		prompt = string(r[:1500])
 	}
-	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// Reasoning models think first: 20 tokens came back empty.
 	text, err := s.purposeModel("agent.title").Complete(cctx, prompts.RenderTabName(), prompt, 200)

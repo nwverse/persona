@@ -75,7 +75,7 @@ describe("a tab's menu", () => {
 
   it("a failed rename says why", async () => {
     const d = deps({ renameTab: vi.fn(async () => { throw new Error("busy"); }) });
-    await expect(by(nodeActions(tab, d), "node-rename").rename!.commit("x")).rejects.toThrow("没改成：busy");
+    await expect(by(nodeActions(tab, d), "node-rename").rename!.commit("x")).rejects.toThrow("重命名失败：busy");
   });
 });
 
@@ -96,7 +96,7 @@ describe("splitting and running an agent", () => {
     const agent = by(nodeActions(tab, d), "node-agent");
     expect(typeof agent.children).toBe("function");
     const list = await (agent.children as () => Promise<MenuItem[]>)();
-    expect(list.map((i) => i.label)).toEqual(["claude", "work"]); // a Codex launcher needs a first message
+    expect(list.map((i) => i.label)).toEqual(["Claude Code", "work"]); // a Codex launcher needs a first message
     expect(list[1].hint).toBe("m1");
     await list[1].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "work" });
@@ -117,7 +117,7 @@ describe("splitting and running an agent", () => {
       ]),
     });
     const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
-    expect(list.map((i) => i.label)).toEqual(["claude", "codex"]);
+    expect(list.map((i) => i.label)).toEqual(["Claude Code", "Codex"]);
     await list[1].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "codex" });
     // its waiting row opens, where the first message goes (docs/integrations/codex.md "Starting without a first message")
@@ -133,7 +133,7 @@ describe("splitting and running an agent", () => {
       ]),
     });
     const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
-    expect(list.map((i) => i.label)).toEqual(["claude"]);
+    expect(list.map((i) => i.label)).toEqual(["Claude Code"]);
   });
 
   it("names a provider by its display name, its ID before the model at the row's end; an rc alias by its ID (#5029)", async () => {
@@ -142,7 +142,7 @@ describe("splitting and running an agent", () => {
     expect(list.map((i) => [i.label, i.hint])).toEqual([["我的中转 站", "relay-example-com · glm-5"], ["cc_glm", undefined]]);
     await list[0].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "relay-example-com" });
-    expect(d.notify).toHaveBeenCalledWith("已在窗格里启动 我的中转 站", "ok");
+    expect(d.notify).toHaveBeenCalledWith("已在此终端启动 我的中转 站", "ok");
   });
 
   it("stays where it is when the answer names no session", async () => {
@@ -172,8 +172,8 @@ describe("splitting and running an agent", () => {
     });
     const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
     // usable first (still being retried by the hub counts: offered as before), the blocked one after a line, with why
-    expect(list.map((i) => i.label)).toEqual(["claude", "slow", "work"]);
-    expect(list[2].detail).toBe("这台电脑的终端里用不了");
+    expect(list.map((i) => i.label)).toEqual(["Claude Code", "slow", "work"]);
+    expect(list[2].detail).toBe("无法在该电脑的终端中使用");
     expect(list[2].divider).toBe(true);
     expect(list[0].detail).toBeUndefined();
     expect(list[1].detail).toBeUndefined();
@@ -208,7 +208,7 @@ describe("git", () => {
     const d = deps({ post: vi.fn(async () => ({ outcome: "pushed", message: "Pushed" })) });
     await (by(nodeActions(tab, d), "node-git").children as MenuItem[])[1].onSelect();
     expect(d.notify).toHaveBeenCalledWith("推送：已推送", "ok");
-    expect(gitOutcomeText({ outcome: "nothing_to_push", message: "No commits to push" })).toBe("没有要推送的提交");
+    expect(gitOutcomeText({ outcome: "nothing_to_push", message: "No commits to push" })).toBe("没有可推送的提交");
     expect(gitOutcomeText({ outcome: "a_new_outcome", message: "node words" })).toBe("node words");
     expect(gitOutcomeText(undefined)).toBe("完成");
   });
@@ -217,11 +217,11 @@ describe("git", () => {
     const ops = by(nodeActions(tab, deps()), "node-git").children as MenuItem[];
     const [pull, push, fetch] = ops;
     expect(push.confirm).toBe("确认推送");
-    expect(push.confirmDetail).toBe("main 会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。");
+    expect(push.confirmDetail).toBe("将把 main 推送至其上游分支，不会强制推送。如果远端已有更新的提交，推送会中止并提示原因。");
     expect(pull.confirm).toBeUndefined();
     expect(fetch.confirm).toBeUndefined();
     const noBranch = by(nodeActions({ ...tab, branch: undefined }, deps()), "node-git").children as MenuItem[];
-    expect(noBranch[1].confirmDetail).toBe("当前分支会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。");
+    expect(noBranch[1].confirmDetail).toBe("将把当前分支推送至其上游分支，不会强制推送。如果远端已有更新的提交，推送会中止并提示原因。");
   });
 
   it("a workspace without a pane is named by its id and host", async () => {
@@ -253,7 +253,7 @@ describe("read-only items", () => {
     const d = deps();
     const space: MenuNode = { kind: "workspace", mid: "m1", host: "herdr", label: "proj", workspaceId: "w1", cwd: "/home/me/proj" };
     const labels = (node: MenuNode) => nodeActions(node, d).filter((i) => i.icon === "copy").map((i) => i.label);
-    expect(labels(pane)).toEqual(["复制目录路径", "复制会话 ID", "复制窗格 ID"]);
+    expect(labels(pane)).toEqual(["复制目录路径", "复制会话 ID", "复制终端 ID"]);
     expect(labels(tab)).toEqual(["复制目录路径", "复制标签页 ID"]);
     expect(labels(space)).toEqual(["复制目录路径", "复制空间 ID"]);
     expect(labels({ kind: "machine", mid: "m1" })).toEqual(["复制机器 ID"]);

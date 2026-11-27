@@ -123,9 +123,9 @@ describe("machine and launcher pickers", () => {
     act(() => root.render(<Extensions open="example-chat" onOpen={() => {}} />));
     await flush();
     expect(select("agent_machine")!.value).toBe("old-mac");
-    expect(options(select("agent_machine")!)[1]).toBe("old-mac=old-mac（找不到这台机器）");
+    expect(options(select("agent_machine")!)[1]).toBe("old-mac=old-mac（未找到该机器）");
     expect(select("agent_launcher")!.value).toBe("gone_gw");
-    expect(options(select("agent_launcher")!)[1]).toBe("gone_gw=gone_gw（找不到这个启动器）");
+    expect(options(select("agent_launcher")!)[1]).toBe("gone_gw=gone_gw（未找到该启动器）");
   });
 
   it("loads launchers used only inside entry lists", async () => {

@@ -200,7 +200,8 @@ describe("Mermaid blocks", () => {
   it("code and diagram buttons show without hover on a touch screen, with a finger-sized target (#1996)", async () => {
     const { renderToStaticMarkup } = await import("react-dom/server");
     const { createElement } = await import("react");
-    const { Markdown } = await import("./Markdown");
+    const { Markdown, MermaidDiagram } = await import("./Markdown");
+    await MermaidDiagram.preload(); // the diagram's component is its own chunk (Mermaid.lazy.test.tsx)
     // a code block's Copy is in its title bar, always shown (#2984); a diagram's buttons show on a touch screen
     const code = renderToStaticMarkup(createElement(Markdown, { text: "```js\nlet a = 1\n```" }));
     expect(code).toMatch(/data-code-bar[^]*aria-label="复制代码"[^>]*touch-hit/);
@@ -213,8 +214,8 @@ describe("Mermaid blocks", () => {
   it("errors read in Chinese with the line, Mermaid's text kept", async () => {
     const { mermaidProblem } = await import("../lib/mermaid");
     const raw = "Parse error on line 3:\nflowchart TD A -->\n--------------^\nExpecting 'NODE', got 'EOF'";
-    expect(mermaidProblem(new Error(raw))).toEqual({ summary: "这张图有语法错误（第 3 行）", detail: raw });
-    expect(mermaidProblem(new Error("No diagram type detected")).summary).toBe("这张图画不出来");
+    expect(mermaidProblem(new Error(raw))).toEqual({ summary: "图表存在语法错误（第 3 行）", detail: raw });
+    expect(mermaidProblem(new Error("No diagram type detected")).summary).toBe("无法渲染此图表");
   });
 });
 
@@ -402,7 +403,7 @@ describe("Markdown cache (#2465)", () => {
     const { Markdown } = await import("./Markdown");
     const { markdownCache, forgetMarkdown } = await import("./markdown-cache");
     vi.stubGlobal("localStorage", { getItem: () => "test-token" });
-    const html = (props: { text: string; mid?: string; cwd?: string }, cached = true) => {
+    const html = (props: { text: string; mid?: string; cwd?: string; readOnly?: boolean }, cached = true) => {
       markdownCache.on = cached;
       try {
         return renderToStaticMarkup(createElement(Markdown, props));
@@ -475,6 +476,21 @@ describe("Markdown cache (#2465)", () => {
     expect(variants.map((v) => html(v))).toEqual(drawn);
     expect(new Set([before, ...drawn]).size).toBe(variants.length + 1); // each of them changes what is drawn
     forget();
+  });
+
+  it("caches readOnly and default Markdown blocks separately while reusing each mode's own cached tree", async () => {
+    const { html, forgetMarkdown } = await draw();
+    forgetMarkdown();
+    const text = "[Notes](/home/me/Documents/Health/sleep-diary.md)";
+    const before = parses.n;
+    const writable = html({ text, mid: "mac", cwd: "/repo" });
+    expect(parses.n - before).toBe(1);
+    expect(html({ text, mid: "mac", cwd: "/repo" })).toBe(writable);
+    expect(parses.n - before).toBe(1);
+    const readOnly = html({ text, mid: "mac", cwd: "/repo", readOnly: true });
+    expect(parses.n - before).toBe(2);
+    expect(html({ text, mid: "mac", cwd: "/repo", readOnly: true })).toBe(readOnly);
+    expect(parses.n - before).toBe(2);
   });
 });
 

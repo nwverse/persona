@@ -51,8 +51,8 @@ describe("answerCard", () => {
   it("答上：发到卡片的 resolve，卡片记下答了什么", async () => {
     apiOp.mockResolvedValue({});
     expect(await answerCard(ix, denyBody())).toEqual({ ok: true, already: false });
-    expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: { allow: false, message: "用户拒绝了" } });
-    expect(ended).toEqual([["p1", { ix, resolution: { allow: false, message: "用户拒绝了" }, already: false, handedBack: false }]]);
+    expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: { allow: false, message: "用户已拒绝" } });
+    expect(ended).toEqual([["p1", { ix, resolution: { allow: false, message: "用户已拒绝" }, already: false, handedBack: false }]]);
   });
 
   it("leaves a handed-back receipt for a fresh hand back, as for an answer", async () => {
@@ -77,9 +77,9 @@ describe("answerCard", () => {
 
   it("prompt_changed 和别的错误：不收卡，说原因", async () => {
     apiOp.mockRejectedValue(new ApiError(409, "changed", { code: "prompt_changed" }));
-    expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: "电脑上的对话框变了，已按新的屏幕重新生成" });
+    expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: "电脑上的对话框内容已更新，已根据当前屏幕重新生成卡片。" });
     apiOp.mockRejectedValue(new ApiError(500, "boom", {}));
-    expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: expect.stringMatching(/^没送到：.+（HTTP 500: boom）$/) });
+    expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: expect.stringMatching(/^未能送达：.+（HTTP 500: boom）$/) });
     expect(ended).toEqual([]);
   });
 });
@@ -89,10 +89,10 @@ it("keeps one answer per card on its way: the same one shares it, another is ref
   apiOp.mockReturnValueOnce(new Promise((_, no) => { finish = no; }));
   const first = answerCard(ix, allowBody());
   expect(answerCard(ix, allowBody())).toBe(first);
-  expect(await answerCard(ix, denyBody())).toEqual({ ok: false, error: "这张卡已有一个答案在发送中" });
+  expect(await answerCard(ix, denyBody())).toEqual({ ok: false, error: "此卡片的回复正在发送中" });
   expect(apiOp).toHaveBeenCalledOnce();
   finish(new TypeError("Failed to fetch"));
-  expect(await first).toEqual({ ok: false, error: expect.stringMatching(/^没送到：/) });
+  expect(await first).toEqual({ ok: false, error: expect.stringMatching(/^未能送达：/) });
   apiOp.mockResolvedValueOnce({});
   expect(await answerCard(ix, denyBody())).toEqual({ ok: true, already: false });
   expect(apiOp).toHaveBeenCalledTimes(2);

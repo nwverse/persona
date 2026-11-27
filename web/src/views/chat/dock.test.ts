@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Interaction } from "../../lib/types";
-import { AWAIT_MS, awaitingTurn, cardFold, cardLine, DOCK_MAX, INPUT_MAX, nextWaiting, PLAN_MAX, turnStart, visibleShare, showsAnswered } from "./dock";
+import { AWAIT_MS, awaitingTurn, cardFold, cardLine, DOCK_MAX, INPUT_MAX, nextWaiting, pickupStateForWait, PLAN_MAX, turnStart, visibleShare, showsAnswered } from "./dock";
 
 describe("visibleShare", () => {
   it("is a share of the visible height, capped when asked", () => {
@@ -54,8 +54,8 @@ describe("cardLine", () => {
   it("says what each card asks, else what it waits for", () => {
     expect(cardLine(ix({ questions: [{ question: "用哪个框架？", options: [] }] as Interaction["questions"] }))).toBe("用哪个框架？");
     expect(cardLine(ix({ kind: "permission", tool_name: "Bash", tool_input: { description: "跑测试" } }))).toBe("跑测试");
-    expect(cardLine(ix({ kind: "plan" }))).toBe("计划等你审批");
-    expect(cardLine(ix({ kind: "screen" }))).toBe("终端等你处理");
+    expect(cardLine(ix({ kind: "plan" }))).toBe("计划等待你审批");
+    expect(cardLine(ix({ kind: "screen" }))).toBe("终端等待你处理");
   });
 });
 
@@ -111,8 +111,8 @@ describe("awaitingTurn (#3654)", () => {
   it("holds working across early thought/tool pushes until the hub catches up or the same turn finishes", () => {
     for (const step of [{ kind: "thinking" }, { kind: "tool" }]) {
       const turn = seg({ steps: [step] });
-      expect(awaitingTurn(turn, "idle", at + 500, undefined, "2026-11-05T09:59:00Z")).toBe(true);
-      expect(awaitingTurn(turn, "idle", at + 500, undefined, "2026-11-05T10:00:01Z")).toBe(false);
+      expect(awaitingTurn(turn, "idle", at + 500)).toBe(true);
+      expect(awaitingTurn(turn, "idle", at + 500, undefined, true)).toBe(false);
       expect(awaitingTurn(turn, "offline", at + 500)).toBe(false);
     }
   });
@@ -126,5 +126,27 @@ describe("awaitingTurn (#3654)", () => {
   });
   it("leaves the hub's own states alone", () => {
     for (const st of ["working", "needs_you", "offline"] as const) expect(awaitingTurn(seg(), st, at)).toBe(false);
+  });
+});
+
+describe("pickupStateForWait (#14941 review P1)", () => {
+  it("demotes working to idle only while the work is background-only and the foreground has not started", () => {
+    expect(pickupStateForWait("working", true, false)).toBe("idle");
+  });
+
+  it("keeps working once the echoed turn already shows foreground activity", () => {
+    for (const foregroundActive of [true]) {
+      expect(pickupStateForWait("working", true, foregroundActive)).toBe("working");
+    }
+  });
+
+  it("never invents a background demotion without the explicit flag", () => {
+    expect(pickupStateForWait("working", false, false)).toBe("working");
+    expect(pickupStateForWait("working", undefined, false)).toBe("working");
+  });
+
+  it("passes non-working states through unchanged", () => {
+    expect(pickupStateForWait("idle", true, false)).toBe("idle");
+    expect(pickupStateForWait("unread", true, true)).toBe("unread");
   });
 });

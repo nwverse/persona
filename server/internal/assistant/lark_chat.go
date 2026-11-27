@@ -132,6 +132,7 @@ func (s *Service) nudgeLoop(ctx context.Context) {
 		case <-t.C:
 			cctx, cancel := context.WithTimeout(ctx, time.Minute)
 			s.larkModule().NudgeTick(cctx)
+			s.larkModule().HandoffTick(cctx)
 			cancel()
 		}
 	}
@@ -235,6 +236,10 @@ func (h larkHost) AcceptReply(ctx context.Context, messageID, text string, media
 
 func (h larkHost) ApproveOwnerAction(ctx context.Context, ev botcard.MessageEvent, text, action string) bool {
 	return h.s.botApproveOwnerAction(ctx, ev, text, action)
+}
+
+func (h larkHost) ProjectReviewOwnerInput(ctx context.Context, ref, machine, session string) error {
+	return h.s.projectReviewFeishuInput(ctx, ref, SessionRef{MachineID: machine, SessionID: session})
 }
 
 // ---- the commands ----
@@ -385,7 +390,7 @@ func (h larkHost) AcceptAction(ctx context.Context, a *botcard.CardAction) (stri
 			ask.Chosen = "" // the recommended one: taken as OK takes it
 		}
 	} else if at := a.Str("asked_at"); at != "" { // a button of a briefing card: it accepts the round it was asked in (briefing.go)
-		result, err = s.acceptTryFromBrief(ctx, a.Str("id"), at)
+		result, err = s.acceptReviewRound(ctx, a.Str("id"), at)
 	} else {
 		result, err = s.acceptTry(ctx, a.Str("id"), a.Context.MessageID)
 	}
@@ -594,4 +599,19 @@ func (h larkHost) OpenTodo(ctx context.Context, o assistantwire.ChatOpenTodo) (s
 		s.logf("task %s: feed: %v", todo.ID, err)
 	}
 	return todo.ID, nil
+}
+
+// StartHandoffGuest starts the guest that answers a proxy reply (bot_handoff.go).
+func (h larkHost) StartHandoffGuest(ctx context.Context, handoff, text, launcher string) (string, string, error) {
+	return h.s.StartHandoffGuest(ctx, handoff, text, launcher)
+}
+
+// RaiseHandoffDecision asks the owner to approve one draft before the bot posts it.
+func (h larkHost) RaiseHandoffDecision(ctx context.Context, handoff string, req assistantwire.OutsideDecisionRequest) (string, error) {
+	return h.s.RaiseHandoffDecision(ctx, handoff, req)
+}
+
+// WithdrawHandoffDecision takes back a confirmation nobody answered.
+func (h larkHost) WithdrawHandoffDecision(ctx context.Context, id string) {
+	h.s.WithdrawHandoffDecision(ctx, id)
 }

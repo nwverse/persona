@@ -57,23 +57,8 @@ const photoSendTries = 3
 
 func (s *Recordings) meetingPhotoRoutes() {
 	s.handle("POST /api/v1/recordings/{id}/photos", s.photoAddRoute)
-	s.handle("GET /api/v1/recordings/{id}/photos", func(w http.ResponseWriter, r *http.Request) {
-		if !meetingCaller(w, r) {
-			return
-		}
-		e := s.meetingEngine(w, r) // a read-only knowledge base answers it too
-		if e == nil {
-			return
-		}
-		photos, _, err := writersOf(e).Photos(r.PathValue("id"))
-		if err != nil {
-			writeMeetingError(w, err)
-			return
-		}
-		apierr.WriteJSON(w, map[string]any{"photos": photos})
-	})
-	// GET …/photos/{n}, the stored image, is the knowledge base's own route (assistant/kb_recording_media.go): it answers
-	// with the module off too.
+	// GET …/photos, the list, and GET …/photos/{n}, the stored image, are the knowledge base's own routes
+	// (assistant/kb_recording_media.go): they answer with the module off too.
 	s.handle("DELETE /api/v1/recordings/{id}/photos/{n}", func(w http.ResponseWriter, r *http.Request) {
 		if !meetingCaller(w, r) {
 			return

@@ -1,7 +1,7 @@
 // The inbox list (docs/assistant/inbox.md"App"): the section bar on top (Needs you, In progress, FYI, Done or All;
 // "Section bar", #9053), filters by source and kind, search, then the section chosen; under All every section stacked,
 // Needs you (agents waiting on you first), In progress, FYI, Collapsed and Done, each opening / closing from its title.
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { agentDraft, agentWorking, conversationRoute, interactionAsk, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
 import { lineSummary, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
 import { repeatsSummary, interactionAgentTitle, listInboxMutes, muteLine, muteShortName, muteTitle, policyMenuTitle, unmuteInbox, BULK_CONFIRM_AT, bulkScope, bulkScopeName, mailShort } from "../../lib/inbox-page";
@@ -43,8 +43,9 @@ import { openTodoDialog } from "./InboxTodoDialog";
 import { FolderBar, FolderLine, FolderSettingsDialog, openFolderDialog, useFoldersShown } from "./InboxFolders";
 import { folderCrumbs, UNFILED } from "../../lib/inbox-folders";
 import { AgentWorking, Chip, Count, DraftCard, Glyph, ItemAvatar, Spark, StatusMenu, Tag, type GlyphName } from "./InboxParts";
+import { useItemReadOnly } from "./item-write-gate";
 import { CheckMark } from "../settings/ProviderFields";
-import { InboxBar } from "./InboxBar";
+import { barFade, InboxBar } from "./InboxBar";
 import { groupClear, type GroupClear } from "./group-clear";
 import { OfflineState, useShownOffline } from "../ManagerParts";
 
@@ -55,6 +56,32 @@ function useStored(key: string): [string, (v: string) => void] {
     if (x) localStorage.setItem(key, x);
     else localStorage.removeItem(key);
   }];
+}
+
+/** Whether the Inbox filter chip strip is expanded to wrap onto multiple lines, kept on this device (#16990). */
+const FILTERS_EXPANDED_KEY = "inbox.filters.expanded";
+
+function useStoredFlag(key: string): [boolean, (next: boolean | ((prev: boolean) => boolean)) => void] {
+  const [v, setV] = useState(() => {
+    try {
+      return localStorage.getItem(key) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const set = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    setV((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      try {
+        if (resolved) localStorage.setItem(key, "1");
+        else localStorage.removeItem(key);
+      } catch {
+        // Storage unavailable or blocked; keep the toggle working in memory.
+      }
+      return resolved;
+    });
+  }, [key]);
+  return [v, set];
 }
 
 /** The groups opened or closed by hand, kept on this device (#2059): "<manager group>|<section>|<group>" → open. */
@@ -195,10 +222,38 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
   const chipsOn = Boolean(source || kind || folder);
   // "Clear filters" under a filtered list that shows nothing open: back to the whole Inbox (the chips are kept on this
   // device, so a list left filtered last time opens filtered). The button goes with the empty state, so the keyboard
-  // moves first to All, the chip that now says what the list shows (a button: no phone keyboard comes up for it).
+  // moves to the first filter chip in the toolbar (a button: no phone keyboard comes up for it).
   const filtersBar = useRef<HTMLDivElement>(null);
+  const filtersBarId = useId();
+  const [filtersExpanded, setFiltersExpanded] = useStoredFlag(FILTERS_EXPANDED_KEY);
+  const [filtersOverflow, setFiltersOverflow] = useState(false);
+  const [filtersFade, setFiltersFade] = useState({ left: 0, right: 0 });
+  const filtersKey = `${chips.map((a) => `${a.id}:${a.email}`).join("\0")}|${connectors.map((c) => `${c.id}:${c.name}`).join("\0")}`;
+  const measureFilters = useCallback(() => {
+    if (filtersExpanded) {
+      setFiltersFade((prev) => (prev.left === 0 && prev.right === 0 ? prev : { left: 0, right: 0 }));
+      return;
+    }
+    const el = filtersBar.current;
+    if (!el) return;
+    const left = Math.max(0, Math.round(el.scrollLeft));
+    const right = Math.max(0, Math.round(el.scrollWidth - el.clientWidth - el.scrollLeft));
+    const overflow = el.scrollWidth > el.clientWidth;
+    setFiltersFade((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
+    setFiltersOverflow((prev) => (prev === overflow ? prev : overflow));
+  }, [filtersExpanded]);
+  useLayoutEffect(measureFilters, [measureFilters, filtersKey, source, kind, filtersExpanded]);
+  useEffect(() => {
+    const el = filtersBar.current;
+    if (!el || filtersExpanded || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measureFilters);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measureFilters, filtersExpanded]);
+  const filtersMask = filtersExpanded ? undefined : barFade(filtersFade.left, filtersFade.right);
+  const showExpandFilters = filtersExpanded || filtersOverflow;
   const clearFilters = () => {
-    filtersBar.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    filtersBar.current?.querySelector<HTMLButtonElement>("button[aria-pressed]")?.focus();
     setSource("");
     setKind("");
     setFolder("");
@@ -474,17 +529,56 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
     {/* `overflow-y-auto` alone makes this a scroll container on both axes, so a row or a long chip (a connector's name)
         wider than the 380px column let the whole list scroll sideways and cut off every card (#3262); `overflow-x-clip`
         clips that overflow instead, and is not a scroll container, so `scrollIntoView` above cannot shift it either. */}
-    <div ref={listBox} className="min-h-0 flex-1 overflow-y-auto overflow-x-clip" data-picking={picking || undefined} data-inbox-list-scroll>
+    <div ref={listBox} className="@container/inbox-list min-h-0 flex-1 overflow-y-auto overflow-x-clip" data-picking={picking || undefined} data-inbox-list-scroll>
       <div className="mx-auto max-w-[760px] px-3 pt-2.5 pb-16 sm:px-4">
         <label className="flex h-8 items-center gap-2 rounded-control bg-surface px-2.5 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="shrink-0 text-ink-3" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("inbox-inboxlist.search_placeholder")} aria-label={t("inbox-inboxlist.search_label")} className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3" />
           {query && <IconButton icon="x" label={t("inbox-inboxlist.clear")} size={20} iconSize={11} onClick={() => setQuery("")} />}
         </label>
-        {/* A phone: the chips in one row that scrolls sideways, Clean up all in the ⋯ menu at its end. */}
-        <div className="mt-2.5 flex items-center gap-1.5">
-        <div ref={filtersBar} className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 max-sm:-my-1 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:py-1 max-sm:scrollbar-none max-sm:[&>*]:shrink-0" role="toolbar" aria-label={t("inbox-inboxlist.filters")}>
-          <Chip on={!source && !kind} onClick={() => { setSource(""); setKind(""); }}>{t("inbox-inboxlist.all")}</Chip>
+        {/* One horizontally scrollable row of toggleable source/kind filters by default; expands to wrapped rows on request
+            when chips overflow (#16990). InboxBar above owns the section scope (All), so no second "All" button sits here,
+            and the expand toggle, Clean up all (hidden in narrow split panes, where it remains first in the ⋯ menu) and ⋯
+            stay outside the scrolling strip. */}
+        <div className={cx("mt-2.5 flex gap-1.5", filtersExpanded ? "items-start" : "items-center")}>
+        <div
+          id={filtersBarId}
+          ref={filtersBar}
+          onScroll={filtersExpanded ? undefined : measureFilters}
+          onWheel={(ev) => {
+            if (filtersExpanded) return;
+            const box = filtersBar.current;
+            if (box && box.scrollWidth > box.clientWidth && Math.abs(ev.deltaY) > Math.abs(ev.deltaX)) {
+              box.scrollLeft += ev.deltaY * (ev.deltaMode === 1 ? 16 : 1);
+            }
+          }}
+          style={filtersMask ? { maskImage: filtersMask, WebkitMaskImage: filtersMask } : undefined}
+          className={cx(
+            "flex min-w-0 flex-1 items-center gap-1.5",
+            filtersExpanded
+              ? "flex-wrap"
+              : "-my-1 flex-nowrap overflow-x-auto py-1 scrollbar-none [&>*]:shrink-0",
+          )}
+          role="toolbar"
+          aria-label={t("inbox-inboxlist.filters")}
+        >
+          {(source || kind) && (
+            <button
+              type="button"
+              data-clear-filters
+              aria-label={t("inbox-inboxlist.clear_filters")}
+              title={t("inbox-inboxlist.clear_filters")}
+              onClick={() => {
+                setSource("");
+                setKind("");
+                filtersBar.current?.querySelector<HTMLButtonElement>("button[aria-pressed]")?.focus();
+              }}
+              className="touch-hit inline-flex h-7 items-center gap-1 rounded-control bg-field px-2 text-label whitespace-nowrap text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink"
+            >
+              <Icon name="x" size={11} stroke={2.4} />
+              {t("inbox-inboxlist.clear")}
+            </button>
+          )}
           <Chip on={source === "feishu"} onClick={() => pickSource("feishu")}>{t("inbox-inboxlist.source_lark")}</Chip>
           {chips.map((a) => (
             <Chip key={a.id} on={source === a.id} onClick={() => pickSource(a.id)} title={a.email}>{mailShort(a.email)}</Chip>
@@ -492,23 +586,40 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
           {connectors.map((c) => (
             <Chip key={`c:${c.id}`} on={source === c.id} onClick={() => pickSource(c.id)}>{c.name}</Chip>
           ))}
-          <span aria-hidden className="mx-0.5 h-4 w-px bg-line-strong" />
+          {!filtersExpanded && <span aria-hidden className="mx-0.5 h-4 w-px bg-line-strong" />}
           {KIND_FILTERS.map((k) => (
             <Chip key={k.key} on={kind === k.key} onClick={() => pickKind(k.key)}>{k.label}</Chip>
           ))}
+        </div>
+        {showExpandFilters && (
           <button
             type="button"
-            disabled={!openInView.length || picking}
-            title={scope ? t("inbox-inboxlist.clean_all_scope", { scope }) : undefined}
-            onClick={runBulk}
-            data-clean-all
-            className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-control bg-surface px-2.5 text-label whitespace-nowrap text-ink-2 shadow-btn transition-colors duration-150 hover:bg-hover hover:text-ink disabled:pointer-events-none disabled:opacity-45 max-sm:hidden"
+            data-expand-filters
+            aria-controls={filtersBarId}
+            aria-expanded={filtersExpanded}
+            aria-label={filtersExpanded ? t("inbox-inboxlist.collapse_filters") : t("inbox-inboxlist.expand_filters")}
+            title={filtersExpanded ? t("inbox-inboxlist.collapse_filters") : t("inbox-inboxlist.expand_filters")}
+            onClick={() => setFiltersExpanded((v) => !v)}
+            className={cx(
+              "touch-hit flex size-7 shrink-0 items-center justify-center rounded-[8px] transition-[background-color,color,transform] duration-150 enabled:active:scale-[0.94]",
+              filtersExpanded ? "bg-hover text-ink" : "text-ink-3 enabled:hover:bg-hover enabled:hover:text-ink",
+            )}
           >
-            <Icon name="check" size={12} stroke={2.6} />
-            {t("inbox-inboxlist.clean_all")}
-            {scope && <span className="text-ink-3">{scope}</span>}
+            <Icon name="chevron" size={13} stroke={2.2} className={cx("transition-transform duration-200", filtersExpanded && "rotate-180")} />
           </button>
-        </div>
+        )}
+        <button
+          type="button"
+          disabled={!openInView.length || picking}
+          title={scope ? t("inbox-inboxlist.clean_all_scope", { scope }) : undefined}
+          onClick={runBulk}
+          data-clean-all
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control bg-surface px-2.5 text-label whitespace-nowrap text-ink-2 shadow-btn transition-colors duration-150 hover:bg-hover hover:text-ink disabled:pointer-events-none disabled:opacity-45 max-sm:hidden @max-[520px]/inbox-list:hidden"
+        >
+          <Icon name="check" size={12} stroke={2.6} />
+          {t("inbox-inboxlist.clean_all")}
+          {scope && <span className="text-ink-3">{scope}</span>}
+        </button>
         <IconButton icon="more" label={t("inbox-inboxlist.more")} onClick={more.open} active={Boolean(more.anchor)} />
         </div>
         {more.anchor && (
@@ -861,6 +972,7 @@ export async function markFromRow(it: InboxItem, done: boolean, touch = isNoHove
  * (#2059): with `pick` the row is a checkbox that picks it instead of opening it; `off`: it cannot be picked (a done item).
  */
 const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdit, pick, picked = false, off = false }: { it: InboxItem; selected: boolean; showAccount: boolean; /** the folder picked; undefined: folders are not shown */ folder?: string; onEdit: (it: InboxItem) => void; pick?: (it: InboxItem) => void; picked?: boolean; off?: boolean }) {
+  const readOnly = useItemReadOnly(it);
   const to = itemRoute(it);
   const done = isDone(it);
   const label = kindLabel(it);
@@ -913,8 +1025,8 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
   return (
     // selecting: a click anywhere on the card picks it (its draft and the rest under it are inert, so clicks there land here)
     <div data-item={it.id} data-manager={it.manager} data-picked={picked || undefined} onClick={pick ? () => pick(it) : undefined} {...(picking ? {} : contextMenuProps((at) => setMenu(at)))}
-      className={cx("group relative scroll-my-3 rounded-[14px] transition-[background-color,box-shadow,opacity] duration-150 has-[a:focus-visible]:shadow-[0_0_0_1.5px_var(--accent)]", !off && "hover:bg-inset", off && "opacity-45",
-        picked ? "bg-accent-tint shadow-[0_0_0_1.5px_var(--accent)]" : selected && !picking ? "bg-inset shadow-[0_0_0_1.5px_var(--accent)]" : "bg-surface shadow-card")}>
+      className={cx("group relative scroll-my-3 rounded-[14px] transition-[background-color,box-shadow,opacity] duration-150 has-[a:focus-visible]:shadow-[0_0_0_1.5px_var(--accent)]", off && "opacity-45",
+        picked ? "bg-accent-tint shadow-[0_0_0_1.5px_var(--accent)]" : selected && !picking ? "bg-surface shadow-[0_0_0_1.5px_var(--accent)]" : cx("bg-surface shadow-card", !off && "card-interactive"))}>
       {pick ? (
         <button type="button" role="checkbox" aria-checked={picked} className="flex w-full gap-3 rounded-[14px] p-3 text-left outline-offset-[-2px]">{head}</button>
       ) : off ? (
@@ -932,7 +1044,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
               {rows.length > 1 && <span className="shrink-0 text-ink-3">{t("inbox-inboxlist.more_rows", { count: rows.length - 1 })}</span>}
             </div>
           )}
-          {draft && <DraftCard it={it} onEdit={() => onEdit(it)} onSend={(text, changes) => void sendReply(it, text, changes)} />}
+          {draft && <DraftCard it={it} onEdit={() => onEdit(it)} onSend={(text, changes) => { if (!readOnly) void sendReply(it, text, changes); }} />}
           {working && <AgentWorking it={it} />}
           {mark}
         </div>
@@ -1086,7 +1198,7 @@ const AgentRow = memo(function AgentRow({ ix, off = false }: { ix: Interaction; 
   const ask = interactionAsk(ix);
   const glyph = IX_GLYPH[ix.kind];
   return (
-    <a href={href(to)} onClick={(e) => onLinkClick(e, to)} inert={off} className={cx("flex gap-3 rounded-[14px] bg-surface p-3 shadow-card transition-[background-color,opacity] duration-150 hover:bg-inset", off && "opacity-45")}>
+    <a href={href(to)} onClick={(e) => onLinkClick(e, to)} inert={off} className={cx("flex gap-3 rounded-[14px] bg-surface p-3 shadow-card transition-opacity duration-150", off ? "opacity-45" : "card-interactive")}>
       <span className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-field text-attention">
         {glyph === "list" || glyph === "terminal" ? <Icon name={glyph} size={18} stroke={2} /> : <Glyph name={glyph} size={18} stroke={2} />}
       </span>

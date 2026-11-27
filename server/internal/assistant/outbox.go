@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -332,8 +333,7 @@ func (b *BusHub) deliverOutbox(ctx context.Context, items []assistantwire.Outbox
 		return nil, bus.ErrOffline
 	}
 	if o.legacy.Load() != peer {
-		var res assistantwire.OutboxResult
-		err := peer.Call(ctx, assistantwire.MethodOutbox, assistantwire.Outbox{Items: items}, &res)
+		res, err := buswire.Call(ctx, peer, assistantwire.OutboxMethod, assistantwire.Outbox{Items: items})
 		var re *rpc.Error
 		if !errors.As(err, &re) || re.Code != bus.CodeUnknownMethod {
 			return res.Done, err

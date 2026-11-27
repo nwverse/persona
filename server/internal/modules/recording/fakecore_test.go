@@ -17,6 +17,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -123,6 +124,8 @@ func newServiceOn(t testing.TB, f *fakeHub, st *memStore) *Service {
 	f.mu.Unlock()
 	s.Recordings = New(s)
 	s.Recordings.Routes(s.engineFor)
+	// The production Core owns the read-only list beside these module routes; stand it in for the module's HTTP tests.
+	s.mux.HandleFunc("GET /api/v1/recordings/{id}/photos", s.corePhotoList)
 	t.Cleanup(func() {
 		wctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -132,6 +135,23 @@ func newServiceOn(t testing.TB, f *fakeHub, st *memStore) *Service {
 		stop()
 	})
 	return s
+}
+
+// corePhotoList is the fake Core's photo list, with the production route's authorization, errors and response.
+func (s *Service) corePhotoList(w http.ResponseWriter, r *http.Request) {
+	if !meetingCaller(w, r) {
+		return
+	}
+	e := s.meetingEngine(w, r)
+	if e == nil {
+		return
+	}
+	photos, _, err := e.PhotosRead(r.PathValue("id"))
+	if err != nil {
+		writeMeetingError(w, err)
+		return
+	}
+	apierr.WriteJSON(w, map[string]any{"photos": photos})
 }
 
 // ServeHTTP serves the module's routes, as the assistant's mux does.

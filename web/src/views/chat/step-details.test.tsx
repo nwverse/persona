@@ -90,7 +90,7 @@ describe("a cut output (G002)", () => {
     expect(host.textContent).toContain("开头的输出");
     expect(host.textContent).not.toContain("已截断，点开看全文");
     const more = host.querySelector<HTMLButtonElement>("[data-full-text]")!;
-    expect(more.textContent).toMatch(/^已截断，看全文（\d/);
+    expect(more.textContent).toMatch(/^内容已截断，查看全文（\d/);
     act(() => more.click());
     await flush();
     expect(full.calls).toEqual(["t1-r#0"]);
@@ -106,7 +106,7 @@ describe("a cut output (G002)", () => {
     await flush();
     const more = host.querySelector<HTMLButtonElement>("[data-full-text]")!;
     expect(more.getAttribute("data-full-text")).toBe("failed");
-    expect(more.textContent).toBe("加载失败，点一下重试");
+    expect(more.textContent).toBe("加载失败，点击重试");
     full.fail = false;
     act(() => more.click());
     await flush();
@@ -167,15 +167,53 @@ describe("plans and questions (G017)", () => {
     openRow();
     const picked = [...host.querySelectorAll("[data-step-detail=ask-user] [data-picked]")].map((e) => e.textContent);
     expect(picked).toEqual(["已选：是"]);
-    expect(host.textContent).not.toContain("没有回答");
+    expect(host.textContent).not.toContain("未回答");
   });
 
   it("says so when nobody answered", () => {
     const input = { questions: [{ question: "继续吗？", options: [{ label: "是" }] }] };
     render(step(use("mcp__persona__ask_user", input), result("The user did not answer (dismissed or timed out).")));
     openRow();
-    expect(host.querySelector("[data-step-detail=ask-user]")!.textContent).toContain("没有回答");
+    expect(host.querySelector("[data-step-detail=ask-user]")!.textContent).toContain("未回答");
     expect(host.querySelector("[data-picked]")).toBeNull();
+  });
+
+  it("renders Antigravity mcp_persona_ask_user and scoped hex names with timestamp-wrapped answers", () => {
+    const input = { questions: [{ question: "Which branch?", options: [{ label: "main" }, { label: "dev" }] }] };
+    const wrapped =
+      "Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nOutput:\nThe user answered:\n- Which branch? → main\n";
+
+    render(step(use("mcp_persona_ask_user", input), result("The user answered:\n- Which branch? → dev\n")));
+    openRow();
+    let detail = host.querySelector("[data-step-detail=ask-user]");
+    expect(detail).not.toBeNull();
+    expect([...detail!.querySelectorAll("[data-picked]")].map((e) => e.textContent)).toEqual(["已选：dev"]);
+    expect(host.textContent).not.toContain("The user answered");
+
+    forgetExpanded();
+    render(step(use("mcp_persona_0c671287_ask_user", input), result(wrapped)));
+    openRow();
+    detail = host.querySelector("[data-step-detail=ask-user]");
+    expect(detail).not.toBeNull();
+    expect([...detail!.querySelectorAll("[data-picked]")].map((e) => e.textContent)).toEqual(["已选：main"]);
+    expect(detail!.textContent).not.toContain("未回答");
+    expect(host.textContent).not.toContain("Created At:");
+    expect(host.textContent).not.toContain("The user answered");
+  });
+
+  it("keeps error output visible for Antigravity ask_user failures and ignores unrelated mcp_persona_other_ask_user", () => {
+    const input = { questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] };
+
+    render(step(use("mcp_persona_ask_user", input), result("ask_user timed out", { is_error: true })));
+    openRow();
+    expect(host.querySelector("[data-step-detail=ask-user]")).not.toBeNull();
+    expect(host.textContent).toContain("ask_user timed out");
+
+    forgetExpanded();
+    render(step(use("mcp_persona_other_ask_user", input), result("The user answered:\n- Continue? → Yes\n")));
+    openRow();
+    expect(host.querySelector("[data-step-detail=ask-user]")).toBeNull();
+    expect(host.textContent).toContain("The user answered");
   });
 });
 

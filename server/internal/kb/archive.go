@@ -63,8 +63,12 @@ type Engine struct {
 	// ID joins the chat's receipts, so it is not asked about again) but not written. Called under the ingest lock,
 	// once per message not received before; optional.
 	Align func(src Source, sc SourceChat, m SourceMessage) (dup bool)
-	// RecordingDaysFunc is how many days recordings are kept (the assistant's recording_days; nil or <= 0: 14).
+	// RecordingDaysFunc is how many days a recording's text (transcript, summary, live log) is kept (the assistant's
+	// recording_text_days; <= 0: forever; nil: DefaultRecordingDays).
 	RecordingDaysFunc func() int
+	// AudioDaysFunc is how many days a recording's audio is kept (the assistant's recording_audio_days, formerly
+	// recording_days; <= 0: forever; nil: AudioDays' fallback): the phone's window and the tombstones'.
+	AudioDaysFunc func() int
 	// MinutesDaysFunc is how many days a meeting's minutes are kept once its transcript went (the assistant's
 	// minutes_days; nil or <= 0: forever); finite windows are never fewer than RecordingDaysFunc's (MinutesDays).
 	MinutesDaysFunc func() int
@@ -598,8 +602,10 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 				attributed = true
 			}
 		}
-		if m.SenderName != "" {
+		nameChanged := false
+		if m.SenderName != "" && p.Name != m.SenderName {
 			p.Name = m.SenderName
+			nameChanged = true
 		}
 		before, seen := len(p.Chats), p.LastSeen
 		p.Chats = addUnique(p.Chats, c.ID)
@@ -608,7 +614,7 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 		}
 		e.addHandles(pid, m.SenderHandles)
 		// Only write when something a reader cares about changed (not on every message of a busy group).
-		return !p.Persisted || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
+		return !p.Persisted || attributed || nameChanged || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
 	})
 	if linked {
 		c.People = addUnique(c.People, pid)

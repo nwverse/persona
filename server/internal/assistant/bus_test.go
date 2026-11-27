@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
@@ -28,10 +27,14 @@ func TestRoutesAreTheWireOnes(t *testing.T) {
 	needsLarkLayer(t)
 	s := newTestService(t, newFakeHub())
 	got, want := s.Routes(), slices.Concat(assistantwire.Routes, assistantwire.InboxRoutes)
+	if !s.briefingOn() {
+		want = slices.DeleteFunc(want, func(r string) bool { return r == "POST /api/v1/later/{id}/handled" })
+	}
 	if !s.recordingOn() { // the recording module's routes are served only with it (recording.go)
 		want = slices.DeleteFunc(want, func(r string) bool {
-			// A stored photo's image is the core's own route (kb_recording_media.go): it stays.
-			return strings.Contains(r, " /api/v1/recordings") && r != "GET /api/v1/recordings/{id}/photos/{n}"
+			// Stored photos' list and images are the core's own routes (kb_recording_media.go): they stay.
+			return strings.Contains(r, " /api/v1/recordings") && r != "GET /api/v1/recordings/{id}/photos" &&
+				r != "GET /api/v1/recordings/{id}/photos/{n}"
 		})
 	}
 	if !s.healthOn() { // the Health module's routes likewise (health_layer.go); workouts stay in the core

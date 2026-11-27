@@ -156,8 +156,8 @@ describe("elicitation 的文案", () => {
     // Persona's own server and a plugin's read as on Android (mcpServerLabel)
     expect(elicitationSource({ ...form(), mcp_server_name: "plugin_persona" })).toEqual(["来自 MCP 服务器 Persona"]);
     expect(elicitationSource({ ...form(), mcp_server_name: "plugin_docs" })).toEqual(["来自 MCP 服务器 docs"]);
-    expect(interactionTitle(form())).toBe("MCP 表单等你填写");
-    expect(interactionTitle({ ...form(), elicitation: { mode: "url", url: "https://example.com" } })).toBe("MCP 链接等你确认");
+    expect(interactionTitle(form())).toBe("MCP 表单等待你填写");
+    expect(interactionTitle({ ...form(), elicitation: { mode: "url", url: "https://example.com" } })).toBe("MCP 链接等待你确认");
     expect(interactionAsk(form())).toBe("请填写");
   });
 
@@ -171,7 +171,7 @@ describe("elicitation 的文案", () => {
     ]);
     expect(answerLines(form(), { action: "decline" })[0].answer).toBe("已拒绝");
     expect(answerLines(form(), { action: "cancel" })[0].answer).toBe("已取消");
-    expect(answerLines({ ...form(), elicitation: { mode: "url", url: "https://example.com" } }, { action: "accept" })[0].answer).toBe("已打开链接，继续");
+    expect(answerLines({ ...form(), elicitation: { mode: "url", url: "https://example.com" } }, { action: "accept" })[0].answer).toBe("已打开链接并继续");
   });
 });
 

@@ -63,6 +63,22 @@ class NativeColors {
   readonly ai: ResourceColor = $r('app.color.persona_ai');
   readonly teal: ResourceColor = $r('app.color.persona_teal');
   readonly subtle: ResourceColor = $r('app.color.persona_subtle');
+  readonly glassRim: ResourceColor = $r('app.color.persona_glass_rim');
+  readonly glassSurface: ResourceColor = $r('app.color.persona_glass_surface');
+  readonly heroGlow: ResourceColor = $r('app.color.persona_hero_glow');
+  readonly heroGlowAlt: ResourceColor = $r('app.color.persona_hero_glow_alt');
+  readonly needsWash: ResourceColor = $r('app.color.persona_needs_wash');
+  readonly workingWash: ResourceColor = $r('app.color.persona_working_wash');
+  readonly unreadWash: ResourceColor = $r('app.color.persona_unread_wash');
+  readonly dangerWash: ResourceColor = $r('app.color.persona_danger_wash');
+  readonly aiWash: ResourceColor = $r('app.color.persona_ai_wash');
+  readonly tealWash: ResourceColor = $r('app.color.persona_teal_wash');
+  readonly pressOverlay: ResourceColor = $r('app.color.persona_press_overlay');
+  readonly elevatedGlass: ResourceColor = $r('app.color.persona_elevated_glass');
+  readonly hairlineGlass: ResourceColor = $r('app.color.persona_hairline_glass');
+  readonly toastSurface: ResourceColor = $r('app.color.persona_toast_surface');
+  readonly codeSurface: ResourceColor = $r('app.color.persona_code_surface');
+  readonly subtleScrim: ResourceColor = $r('app.color.persona_subtle_scrim');
 }
 
 export const Colors: NativeColors = new NativeColors();
