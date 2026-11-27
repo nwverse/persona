@@ -1366,6 +1366,19 @@ Persona has no Universal Links (no associated domains), so web isn't kept; no in
   Slimming failure runs `simslim off` to restore stock, then continues (`failed→stock`); tests still run. Usage errors (missing profile/udid, duplicate names) exit 2 without changes.
 - Actual slimming: `scripts/app/slim-sim.sh <udid> [profile JSON]` (one boot for shut-down devices; running mismatched devices reboot), usually not called directly.
 - Creation, `simctl erase`, runtime changes lose per-device slimming; rerun sim-boot.sh. Afterwards `xcrun simctl shutdown <udid>`, task end `xcrun simctl delete <udid>`.
+- **At most 3 simulators booted per Mac, reuse first, shut down when done (#17089)**: every simulator costs roughly 1-2 GB slim and
+  4-6 GB stock, and Agents share the Mac. `sim-boot.sh` counts the Booted and Booting simulators; a boot (or create plus boot) that would
+  exceed `SIM_MAX_BOOTED` (default 3) waits up to `SIM_SLOT_WAIT` seconds (default 1200) for a slot, then exits 75 and lists the booted
+  ones, so shut down one you own (`xcrun simctl shutdown <udid>`) or wait. Using an already booted simulator is never blocked.
+  Boots take a machine-wide lock (`SIM_BOOT_LOCK_DIR`, default `$TMPDIR/persona-sim-boot.lock`; a dead holder's lock is taken over), so two
+  Agents cannot both pass the check.
+  - **Reuse before creating**: a new name adopts a shut-down `Persona …` simulator with the same device type and runtime (it is renamed;
+    `SIM_REUSE=0` creates a new one instead). So don't keep a udid across tasks: once shut down, a simulator may become someone else's.
+    Keep one name per task (`Persona Shots <issue>`) and rerun `sim-boot.sh` with it; it finds the same device.
+  - **Clean up**: `simctl shutdown` as soon as the run or screenshots are done, not at the end of the day; `simctl delete <udid>` when the
+    task ends, with a udid you checked is not empty (`docs/lessons/testing.md`).
+  - `--create-only` and `--start-only` (hosted CI, which owns its deadline) skip the limit, the lock and the adoption.
+  - `scripts/test/test_sim_boot.py` covers the limit, the wait, the lock and the adoption.
 - If a test fails only slimmed, rerun on a new `--profile stock` device (or `simslim off <udid>` on yours) before blaming code.
 - Temporarily enable services: `simslim enable <udid> <category or launchd name>` on running device, no reboot, lasts until next `on` or reboot.
   Permanent: add to profile (`simslim enable … --save apple/simslim/<name>.json`), then `--reslim`. `on --no-reboot` only disables more, never reenables. Categories: `simslim profiles`; features: `simslim doctor --list`.
