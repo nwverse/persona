@@ -286,8 +286,7 @@ type Session struct {
 	// largest windows are a few million tokens (Tokens32 saturates anything bigger).
 	ContextTokens int32 `json:"context_tokens,omitempty"`
 	ContextWindow int32 `json:"context_window,omitempty"`
-	// OutputTokens is cumulative generated output, not the latest context size or transcript revision.
-	OutputTokens int `json:"output_tokens,omitempty"`
+	// Cumulative generated output lives in SessionHierarchy; see OutputTokensValue / SetOutputTokens.
 	// Efforts are the levels session.modes takes for Effort when they are not Claude Code's (which the apps know): a
 	// Codex thread the phone drives through its app-server (node/codex_effort.go), its model's levels weakest first; a
 	// runtime's row of an agent that is not Claude Code's, as the runtime lists them (Paseo's, #8133; the node drops
