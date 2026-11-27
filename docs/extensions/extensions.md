@@ -852,6 +852,58 @@ a command-line tool on the computer, `offload.run` answers `needs_install` with 
 apps ask the user a second time and only then send `install: true`. The routes, errors and the install confirmation
 are in `docs/server/machine-usage-map.md` "Extension point `disk_offload`".
 
+### Facts and report sections for scheduled routines
+
+A library extension can add upcoming book returns to a morning briefing. The extension supplies the words and
+the routine decides when to run, how to display the section, and where to deliver the report.
+
+Declare a titled source and request the **routine facts** permission. The owner sees the request when installing
+the extension or upgrading a version that adds this permission.
+
+```json
+{
+  "permissions": { "routine_facts": true },
+  "contributes": {
+    "routine_facts": [{ "id": "loans", "title": "Library" }]
+  }
+}
+```
+
+Use an RPC runtime. A host that supports this contract advertises `routine_facts: 1` in
+`initialize.hub.extension_points`. On a run with facts or reporting enabled, the host calls
+`routine_facts.collect` with the manifest contribution ID, the local date (`YYYY-MM-DD`) and the report
+language (`en`, `zh-Hans` or `ja`). The grant permits contributing to the report. Access to a Persona
+data source still requires that source's own permission.
+
+The TypeScript SDK dispatches the call by contribution ID. A Go extension can register the same collector in
+`ext.Program.RoutineFacts` and return a `wire.RoutineFactsResult`.
+
+```ts
+import { main } from "@persona/extension";
+
+main({
+  id: "example-library",
+  version: "1.0.0",
+  routineFacts: {
+    async loans({ date, language }) {
+      const loans = await localLibrary.dueOn(date, language);
+      if (!loans.length) return {};
+      return {
+        facts: [localLibrary.dueCount(loans.length, language)],
+        sections: [{ title: localLibrary.dueHeading(language), body: loans[0].title }],
+      };
+    },
+  },
+});
+```
+
+Here `localLibrary` is the extension's own collection and translation code. Each response can contain up to
+four single-line facts of 280 characters each and two report sections. A section has a single-line title of
+up to 80 characters and a plain-text body of up to 1,600 characters. An empty object contributes nothing.
+Collect from a local snapshot when possible. The host calls up to eight sources in extension ID and contribution
+ID order, concurrently, with a shared two-second deadline and a 32 KiB limit on each response.
+Late or invalid responses are omitted from that run. Rendering an existing briefing uses its saved content.
+
 ### Memory sources
 
 A memory extension keeps entries about the user in its own state. The hub, not the extension, decides which of them
@@ -1510,6 +1562,25 @@ Owner-facing API/CLI requests resolve only historical names of that committed in
 
 Before any renamed node upload/start/sync, the manager probes authenticated `plugin.node.identity` capability. Incompatible or unavailable nodes cannot receive a sync that would mistake the absent old ID for uninstall.
 Before the rename commits (`checkRenameNodeCapabilities`), every computer picked in an enabled extension's `node.machines` setting must be online with an identity-aware node. The refusal names the computers: `extension-identity.node_unreachable` for one that is offline or did not answer the probe, `extension-identity.node_outdated` for one whose node is too old. A picked ID that is not one of the hub's computers (removed, or left from before the hub moved) is skipped and logged rather than refused (#2510): the fleet lists offline computers too, so no node with that ID can connect, and one added again under it gets the guarded sync above. The settings form keeps showing it as "(no such machine)" for the owner to remove; removing a computer does not rewrite extensions' settings. Identity-aware nodes persist slot/revision bindings, preserve disabled/offline data and rollback packages, and reject late starts, uploads and events. The assistant's authenticated `extensions.identity` probe similarly guards stable model/knowledge ownership across manager versions. Do not manually move data or secret rows, or use uninstall/reinstall as a migration.
+
+### Moving a built-in provider to the official marketplace
+
+A host release can opt a built-in provider into a same-ID marketplace upgrade. Volcengine speech
+uses this path. When an eligible package is available, the owner can preview it in the official
+catalog, inspect the requested permissions, and confirm the upgrade. The first marketplace version
+can have a lower version number than the installed hub because the package has its own release cycle.
+
+The host checks the registered built-in ID, the official catalog and its pinned signing key, and
+the downloaded package digest. The owner confirms the preview's permission digest even for a package
+with the same permissions. The replacement uses the same installation slot, so existing settings,
+sealed credentials, stored data and contribution switches stay with their owner. The database
+transaction records the change of source and checks the saved row before committing. A change to the
+owner's choices during the transaction requires a fresh attempt.
+
+After the first upgrade, **Roll back** restores the built-in provider supplied by the running host.
+The host reads the saved installation record after a restart to find that predecessor. On a hub
+that has never had the built-in provider, installing the package follows the ordinary installation
+flow. The existing marketplace rename rules apply to packages with a declared former ID.
 
 ### Command-line programs (tools)
 
