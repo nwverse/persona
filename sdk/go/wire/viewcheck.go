@@ -265,10 +265,9 @@ func checkDiff(e Component) (int, error) {
 	return size, nil
 }
 
-// checkLineURL holds a code's line link to https.
+// checkLineURL holds a code's line link to https without credentials.
 func checkLineURL(raw string) error {
-	u, err := url.Parse(strings.NewReplacer("{start}", "1", "{end}", "1").Replace(raw))
-	if err != nil || u.Scheme != "https" || u.Host == "" {
+	if err := CheckHTTPS(strings.NewReplacer("{start}", "1", "{end}", "1").Replace(raw), "line_url"); err != nil {
 		return errors.New("line_url: an https link")
 	}
 	return nil
