@@ -542,25 +542,20 @@ func deliveredOf(e *rpc.Error) string {
 	return d.Delivered
 }
 
-// Herdr resumes offline sessions in a new pane, and so does Orca for a Claude session (#5548) once nothing has it
-// open: its last pane runs no agent (suspended, in the background) and start's openElsewhereRefusal finds no live
-// claude on it.
+// Herdr resumes offline sessions in a new pane, and so does Orca (all but Claude Code since #17044) once nothing has
+// the session open: a Claude session once its last pane runs no agent (suspended, in the background) and start's openElsewhereRefusal finds
+// no live claude on it; a Codex thread once no process holds its rollout (codex_resume.go); a TRAE CLI session once no
+// pane runs it.
 const (
-	notRunning    = "not_running"
-	notInFront    = "agent_not_in_front"
-	inFrontReason = "Claude 不在前台（可能被挂起），没有发送：在电脑上把它切回前台再发。"
+	notRunning = "not_running"
+	notInFront = "agent_not_in_front"
 )
 
 // notRunningRefusal refuses, with nothing typed, a send to a session that is not live when the machine's engine
 // cannot start sessions (no host.Launcher) or is Orca, instead of trying to resume it there: when the pane it was last
 // seen in is still there, its agent is not in front (suspended, in the background); otherwise it is gone. nil when the
-// engine can resume it: herdr, and Orca for a Claude session (its own <id>.jsonl; Codex, TRAE CLI and pi sessions are
-// not resumed in Orca).
-// orcaContinues: Orca can continue session id once its agent is gone — a Claude session (its own <id>.jsonl, not a
-// Codex or TRAE CLI rollout); Codex, TRAE CLI and pi sessions are not resumed in Orca (#5548). Send (notRunningRefusal) and
-// retire share it, so the task closer never closes an agent a message cannot bring back.
-func (n *Node) orcaContinues(id string) bool { return n.claudeTranscript(id, true) != "" }
-
+// engine can resume it: herdr, and Orca for a session it continues (orcaContinues). A resume (resumeOtherWith) checks
+// the engine with resumeEngineRefusal instead: it does not stop at the pane a stopped agent left its shell in.
 func (n *Node) notRunningRefusal(ctx context.Context, id string) error {
 	h := n.hosts.Get(n.startKind(ctx))
 	if h == nil {
@@ -576,7 +571,7 @@ func (n *Node) notRunningRefusal(ctx context.Context, id string) error {
 		if ph, ref := n.hosts.Pane(pane); ph != nil {
 			if _, err := ph.Agent(ctx, ref); err == nil {
 				log.Printf("send %s: not on the live list; its last pane %s is still open: refused as not in front", id, pane)
-				return refusal(notInFront, inFrontReason, nil)
+				return refusal(notInFront, i18n.T(i18n.From(ctx), "rpc-errors.agent_not_in_front"), nil)
 			}
 		}
 	}
@@ -585,6 +580,32 @@ func (n *Node) notRunningRefusal(ctx context.Context, id string) error {
 		return nil
 	}
 	log.Printf("send %s: not on the live list (last pane %q): refused as not running", id, pane)
-	name := proto.EngineNames[h.Kind()]
-	return refusal(notRunning, fmt.Sprintf("这个会话现在没有在运行（可能被挂起或已退出），%s 里的会话要在电脑上重新打开，这次没有发送。", name), nil)
+	return notRunningOn(ctx, proto.EngineNames[h.Kind()])
+}
+
+// orcaContinues: Orca can continue session id once its agent is gone, in a new terminal as herdr does: a Claude
+// session (its own <id>.jsonl), and since #17044 a Codex thread (its rollout) or a TRAE CLI session. A pi session is its
+// runtime's, resumed through the runtime's resume_argv (pi.go); an omp session is not resumed in Orca (ompresume.go).
+func (n *Node) orcaContinues(id string) bool {
+	return n.claudeTranscript(id, true) != "" || n.codexPath(id) != "" || n.traexPath(id) != ""
+}
+
+// notRunningOn is the refusal of a message to a session that is not live in engine (its name), which cannot bring it
+// back from here. The hub words it in the request's language by its reason (apierr, rpc-errors.not_running_engine).
+func notRunningOn(ctx context.Context, engine string) error {
+	return refusal(notRunning, i18n.T(i18n.From(ctx), "rpc-errors.not_running_engine", i18n.Args{"engine": engine}),
+		map[string]any{"reason": proto.NotRunningEngine, "engine": engine})
+}
+
+// resumeEngineRefusal is a resume's check of the start's engine (resumeOtherWith): one that opens terminals (herdr,
+// Orca, Tern) brings the session back in a new one, or in the shell its agent left (stopped.go). The pane the agent was
+// last seen in does not stop it as it stops a message on Orca (notRunningRefusal): a stopped agent leaves its shell
+// there (stopped.go), and a writer still holding the conversation (a Codex suspended there, holding its rollout) is kept out
+// by the conversation's own check before this one (codexHeldNow). An engine that cannot start sessions refuses as
+// notRunningRefusal does.
+func (n *Node) resumeEngineRefusal(ctx context.Context, id string) error {
+	if _, ok := n.hosts.Get(n.startKind(ctx)).(host.Launcher); ok {
+		return nil
+	}
+	return n.notRunningRefusal(ctx, id)
 }

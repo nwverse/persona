@@ -3,6 +3,7 @@ package assistantwire
 import (
 	"encoding/json"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/wireids"
@@ -38,6 +39,9 @@ var (
 	KBSearchMethod          = buswire.Method[KBSearchParams, KBSearchResult]{Name: MethodKBSearch}
 	KBUpdateMethod          = buswire.Method[KBUpdateParams, KBUpdateResult]{Name: MethodKBUpdate}
 	KBExtensionUpdateMethod = buswire.Method[KBExtensionUpdate, KBUpdateResult]{Name: MethodKBExtensionUpdate}
+
+	KBProviderCheckpointMethod  = buswire.Method[KBProviderRequest, wire.KBImportCheckpointResult]{Name: MethodKBProviderCheckpoint}
+	KBProviderSentMarkersMethod = buswire.Method[KBProviderRequest, wire.KBSentMarkersResult]{Name: MethodKBProviderSentMarkers}
 )
 
 // KBProviderRequest is the manager's authenticated installation and its bounded query.

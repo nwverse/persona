@@ -404,6 +404,8 @@ struct ChatView: View {
         base
             .background { DismissReader(holder: dismissChat) }
             .environment(\.rowMemoScope, RowMemo.scope(shownKey))
+            // A tap on a word of a message looks it up while a text_lookup extension answers (#10977).
+            .textLookupSurface(style == .assistant ? "chat" : "agent")
             .environment(\.assistantCardConversation, style == .assistant ? shownKey : nil)
             // Only this chat hands its lifted message to the page (a chat shown in a sheet from it draws its own).
             .environment(\.messageLiftHost, nil)

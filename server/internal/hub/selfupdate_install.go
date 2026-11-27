@@ -557,10 +557,11 @@ func (h *Hub) updateBusy() []busyItem {
 		for _, rows := range [2][]proto.Session{list, archived} {
 			for i := range rows {
 				s := &rows[i]
-				// Terminal-host sessions outlive the node transport. Unknown hosts and
-				// direct assistant processes still wait: an ephemeral SSH node may own them.
+				// Terminal-host sessions outlive the node transport: herdr's and the Herdr App's panes, and Orca's
+				// terminals and chats, belong to that app's own process. Unknown hosts and direct assistant
+				// processes still wait: an ephemeral SSH node may own them.
 				if h.slot != nil && !h.upd.nodesEnabled() && m.cfg.Kind != "local" &&
-					(resident || s.Host == proto.EngineHerdr || s.Host == proto.EngineHerdrCore) {
+					(resident || s.Host == proto.EngineHerdr || s.Host == proto.EngineHerdrCore || s.Host == proto.EngineOrca) {
 					continue
 				}
 				// On a turn, not working on in the background (#2228): a server an agent left running would hold the
@@ -574,11 +575,15 @@ func (h *Hub) updateBusy() []busyItem {
 	return out
 }
 
-// unwaitedCards counts each session's pending cards (by machine and session): all of them, and those that are the
-// assistant's ask_user asked without waiting (proto.Interaction.AskedWithoutWaiting).
+// unwaitedCards counts each session's authoritative pending cards (by machine and session): all of them, and those that
+// are the assistant's ask_user asked without waiting (proto.Interaction.AskedWithoutWaiting). Display copies never
+// make a destination conversation block a restart on their own.
 func (h *Hub) unwaitedCards() map[[2]string][2]int {
 	out := map[[2]string][2]int{}
 	for _, ix := range h.pendingInteractions() {
+		if ix.MirrorOf != "" {
+			continue // restart interruption is counted from authoritative operations only
+		}
 		k := [2]string{ix.MachineID, ix.SessionID}
 		n := out[k]
 		n[0]++

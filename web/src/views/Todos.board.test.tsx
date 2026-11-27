@@ -423,7 +423,12 @@ describe("the read-only To-dos board (#12713)", () => {
       "board_no_progress",
       "board_stale",
       "board_stale_hours",
+      "direction_uncategorized",
+      "done_direction_filter_label",
+      "direction_done_count",
+      "detail_subtasks_done_toggle",
     ]) expect(strings[key], `${lang} todos.${key}`).toBeTruthy();
+    expect(strings.direction_review_done_label_other ?? strings.direction_review_done_label, `${lang} todos.direction_review_done_label`).toBeTruthy();
     for (const key of ["board_open_count", "board_waiting_count", "board_stale_count"]) {
       expect(strings[`${key}_other`] ?? strings[key], `${lang} todos.${key}`).toBeTruthy();
       expect(t(`todos.${key}`, { count: 2, ...(key === "board_waiting_count" ? { state: waitName("owner") } : {}) })).not.toBe(`todos.${key}`);
@@ -718,7 +723,8 @@ describe("To-dos v2 board direction, hierarchy, and grouping (#16939)", () => {
     expect(directionGroup("dir-platform")?.textContent).toContain("Platform Stream");
     expect(directionGroup("dir-platform")?.getAttribute("data-waiting-count")).toBe("1");
     expect(directionGroup("dir-platform")?.getAttribute("data-stale-count")).toBe("1");
-    expect(directionGroup("")?.textContent).toContain(t("lib-todo-tree.secretary"));
+    expect(directionGroup("")?.querySelector("header")?.textContent).toContain(t("todos.direction_uncategorized"));
+    expect(directionGroup("")?.querySelector("header")?.textContent).not.toContain(t("lib-todo-tree.secretary"));
 
     // Redundant direction chips matching the current direction group are omitted.
     expect(row("plat-a")?.querySelector("[data-testid=board-direction-tag]")).toBeNull();

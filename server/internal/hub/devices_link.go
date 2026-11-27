@@ -9,7 +9,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -131,11 +130,7 @@ func init() {
 		}
 		m.onEvent(ev.Event, ev.Params)
 	})
-	handleBus(devicewire.MethodRequest, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p devicewire.NodeCall
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: devicewire.MethodRequest + ": " + err.Error()}
-		}
+	handleTypedBus(devicewire.RequestMethod, devicewire.MethodRequest+": ", func(h *Hub, ctx context.Context, c *busConn, p devicewire.NodeCall) (json.RawMessage, error) {
 		if err := h.ownsMachine(c, p.MachineID); err != nil {
 			return nil, err
 		}
@@ -149,7 +144,7 @@ func init() {
 		}
 		ctx, done := h.requestScope(ctx, requestKey(c, p.Request))
 		defer done()
-		return m.onRequest(ctx, p.Method, args)
+		return deviceRequestReply(m.onRequest(ctx, p.Method, args))
 	})
 	handleBusEvent(devicewire.EventRequestEnd, func(h *Hub, c *busConn, params json.RawMessage) {
 		var p devicewire.RequestEnd
@@ -185,6 +180,18 @@ func init() {
 }
 
 // ---- the nodes' requests ----
+
+func deviceRequestReply(result any, err error) (json.RawMessage, error) {
+	if err != nil {
+		return nil, err
+	}
+	// Use the same encoder as the RPC peer, including its HTML escaping policy.
+	raw, err := rpc.Marshal(result)
+	if err != nil {
+		return nil, &rpc.Error{Message: err.Error()}
+	}
+	return raw, nil
+}
 
 // requestScope is a node's request's context: the bus connection's, ended too when the manager says the node's
 // connection is gone (devices.request_end), as a node's own connection ending ends what the hub does for it.

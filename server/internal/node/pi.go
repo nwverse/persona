@@ -18,8 +18,8 @@ import (
 // terminal and the keys are herdr's. Its conversation and its control (send, interrupt, cards, live text) come from
 // the Persona extension in that same pi process, a runtime (runtimes.go) that lists the session with the pane it runs
 // in; the node joins the two into one row. pi run elsewhere — pi-web, a terminal outside herdr — is only the runtime's.
-// A pi session that ran in herdr and has stopped is resumed in herdr (`pi --session`, the runtime's resume_argv),
-// never in pi-web.
+// A pi session that ran in a terminal and has stopped is resumed in the machine's engine, herdr or Orca (`pi --session`,
+// the runtime's resume_argv), never in pi-web.
 
 // piResumeWait is how long a resume in the engine waits for the pi it started to list the session (its extension).
 var piResumeWait = 30 * time.Second
@@ -90,11 +90,10 @@ func (n *Node) resumeInEngine(ctx context.Context, h *runtimeConn, id string, ar
 
 // resumeInTerminal resumes a stopped session in a new tab of the engine, running argv there, waits until a runtime
 // other than isNewOwner's owns the session, and sends the phone's message there. The pi family (pi.go, ompdisk.go)
-// uses it: a pi from its runtime's resume_argv, an omp from the session file on disk.
+// uses it: a pi from its runtime's resume_argv, an omp from the session file on disk. The default engine's tab: herdr's,
+// or Orca's for a pi (#17044), a new terminal in the Orca worktree holding the directory that `cd`s there and runs argv
+// (Orca's Run); an omp is not resumed in Orca (resumeOmp).
 func (n *Node) resumeInTerminal(ctx context.Context, cwd string, argv []string, id string, params json.RawMessage, isNewOwner func(*runtimeConn) bool) (any, error) {
-	if n.defaultKind() == proto.EngineOrca { // it would start in the default host: Orca cannot reopen one
-		return nil, refusal("orca_resume", "Orca 会话请在电脑上恢复：这次没有启动，也没有发送。", nil)
-	}
 	if st, err := os.Stat(cwd); cwd == "" || err != nil || !st.IsDir() {
 		return nil, refusal("not_running", "这个会话的目录不在了，没法在终端里接着它，这次没有发送。", nil)
 	}

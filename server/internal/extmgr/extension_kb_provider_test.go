@@ -15,11 +15,14 @@ import (
 func TestKBProviderProcessPermissionsAndWire(t *testing.T) {
 	h, _ := extensionTestHub(t)
 	a := withAssistant(h)
+	const checkpointReply = `{"written":2,"read":3,"approval":"plan","state":"running"}`
+	const markerReply = `{"next_after":4,"markers":[{"sent_by":"assistant","n":4}]}`
+	const markerParams = `{"approval":"plan","day":"2026-03-14","after":2}`
 	a.on(assistantwire.MethodKBProviderCheckpoint, func(json.RawMessage) (any, error) {
-		return json.RawMessage(`{"state":"running","approval":"plan","read":3,"written":2}`), nil
+		return json.RawMessage(checkpointReply), nil
 	})
 	a.on(assistantwire.MethodKBProviderSentMarkers, func(json.RawMessage) (any, error) {
-		return json.RawMessage(`{"markers":[{"n":2,"sent_by":"assistant"}]}`), nil
+		return json.RawMessage(markerReply), nil
 	})
 	for _, tc := range []struct {
 		id, scopes        string
@@ -32,11 +35,13 @@ func TestKBProviderProcessPermissionsAndWire(t *testing.T) {
 		startKBProcess(t, h, tc.id, tc.scopes)
 		p := h.extensions.get(tc.id)
 		for _, read := range []struct {
-			call, params, internal string
-			ok                     bool
+			call, params, internal, reply string
+			query                         assistantwire.KBImportQuery
+			ok                            bool
 		}{
-			{"checkpoint", "{}", assistantwire.MethodKBProviderCheckpoint, tc.progress},
-			{"markers", `{"approval":"plan","day":"2026-03-14"}`, assistantwire.MethodKBProviderSentMarkers, tc.markers},
+			{"checkpoint", "{}", assistantwire.MethodKBProviderCheckpoint, checkpointReply, assistantwire.KBImportQuery{}, tc.progress},
+			{"markers", markerParams, assistantwire.MethodKBProviderSentMarkers, markerReply,
+				assistantwire.KBImportQuery{Day: "2026-03-14", Approval: "plan", After: 2}, tc.markers},
 		} {
 			var out json.RawMessage
 			before := len(a.got(read.internal))
@@ -44,6 +49,9 @@ func TestKBProviderProcessPermissionsAndWire(t *testing.T) {
 			if read.ok {
 				if err != nil {
 					t.Fatal(err)
+				}
+				if string(out) != read.reply {
+					t.Fatalf("%s reply = %s, want %s", read.call, out, read.reply)
 				}
 				calls := a.got(read.internal)
 				if len(calls) != before+1 {
@@ -56,6 +64,9 @@ func TestKBProviderProcessPermissionsAndWire(t *testing.T) {
 				born := h.extensions.reg.SnapshotExact(tc.id).Record.InstalledAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 				if who.Extension.String() != tc.id || who.StorageID.String() != tc.id || who.InstalledAt != born {
 					t.Fatalf("installation attribution %+v", who)
+				}
+				if who.Params != read.query {
+					t.Fatalf("%s query = %+v, want %+v", read.call, who.Params, read.query)
 				}
 			} else {
 				var re *rpc.Error
@@ -79,13 +90,21 @@ func TestKBProviderProcessPermissionsAndWire(t *testing.T) {
 			t.Fatalf("foreign fields reached assistant: %v", err)
 		}
 	}
-	a.on(assistantwire.MethodKBProviderSentMarkers, func(json.RawMessage) (any, error) {
-		return json.RawMessage(`{"markers":[{"n":1,"sent_by":"assistant","text":"archived private data"}]}`), nil
-	})
-	var raw json.RawMessage
-	err := p.proc.Call(t.Context(), "kbtest.markers", json.RawMessage(`{"approval":"plan","day":"2026-03-14"}`), &raw)
-	if err == nil || strings.Contains(err.Error(), "archived private data") || len(raw) > 0 {
-		t.Fatalf("upstream returned an unapproved field: %s %v", raw, err)
+	for _, tc := range []struct {
+		call, method, params, reply string
+	}{
+		{"checkpoint", assistantwire.MethodKBProviderCheckpoint, "{}", `{"state":"running","approval":"plan","read":3,"written":2,"source":"example"}`},
+		{"markers", assistantwire.MethodKBProviderSentMarkers, markerParams, `{"markers":[{"n":4,"sent_by":"assistant","text":"archived private data"}]}`},
+	} {
+		t.Run(tc.call+" rejects extra reply fields", func(t *testing.T) {
+			a.on(tc.method, func(json.RawMessage) (any, error) { return json.RawMessage(tc.reply), nil })
+			var raw json.RawMessage
+			err := p.proc.Call(t.Context(), "kbtest."+tc.call, json.RawMessage(tc.params), &raw)
+			var re *rpc.Error
+			if !errors.As(err, &re) || re.Code != assistantwire.CodeKBUnavailable || re.Message != "invalid import status response" || len(re.Data) > 0 || len(raw) > 0 {
+				t.Fatalf("upstream returned an unapproved field: %s %v", raw, err)
+			}
+		})
 	}
 }
 

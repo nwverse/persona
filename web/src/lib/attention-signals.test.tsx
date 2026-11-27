@@ -348,21 +348,21 @@ describe("已在需要你时又来一张卡（#4058）", () => {
   });
 
   describe("授权卡的通知带「允许 / 拒绝」（#4464）", () => {
-    let shown: { title: string; ix?: string }[];
+    let shown: { title: string; ix?: string; created_at?: string }[];
     beforeEach(() => {
       shown = [];
       (FakeNotification as unknown as { maxActions: number }).maxActions = 2;
       vi.stubGlobal("matchMedia", () => ({ matches: true }));
-      const reg = { showNotification: async (title: string, o: { data?: { ix?: string } }) => void shown.push({ title, ix: o.data?.ix }), getNotifications: async () => [] };
+      const reg = { showNotification: async (title: string, o: { data?: { ix?: string; created_at?: string } }) => void shown.push({ title, ix: o.data?.ix, created_at: o.data?.created_at }), getNotifications: async () => [] };
       vi.stubGlobal("navigator", { ...navigator, serviceWorker: { controller: {}, ready: Promise.resolve(reg), getRegistration: async () => reg, addEventListener() {}, removeEventListener() {} } });
     });
     afterEach(() => delete (FakeNotification as unknown as { maxActions?: number }).maxActions);
 
-    it("能批的会话：经 service worker 弹，带卡片 id", async () => {
+    it("能批的会话：经 service worker 弹，带卡片 occurrence", async () => {
       await show([session("a", "working")]);
       await show([session("a", "needs_you")], [perm]);
       await act(async () => {});
-      expect(shown).toEqual([{ title: "a 需要你的授权", ix: "p1" }]);
+      expect(shown).toEqual([{ title: "a 需要你的授权", ix: "p1", created_at: perm.created_at }]);
       expect(posted).toEqual([]);
     });
 
@@ -448,6 +448,13 @@ describe("the hub's notify events: the assistant's conversations (#8145)", () =>
     closed.length = 0; // the click closed it
     await show([], []);
     expect(closed).toEqual(["Persona is asking you"]);
+  });
+
+  it("drops a retained notification whose occurrence was replaced", async () => {
+    const replacement: Interaction = { ...askCard, kind: "permission", created_at: "2026-01-02T03:04:05.000000002Z" };
+    await open([], [replacement]);
+    await notify({ ...askNotify, title: "Old request", body: "Answer the old request", interaction_created_at: "2026-01-02T03:04:05.000000001Z" });
+    expect(posted).toEqual([]);
   });
 
   it("a leader's card and the assistant's notify_user post too, each once for every tab", async () => {

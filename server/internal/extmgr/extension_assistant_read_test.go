@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -26,12 +27,13 @@ func TestExtensionAssistantReadNeedsItsGrant(t *testing.T) {
 	var mu sync.Mutex
 	var asked []string
 	var got []string
+	const reply = `{"messages":[],"future_field": {"count":9007199254740993}}`
 	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		asked = append(asked, method)
 		got = append(got, string(params))
-		return json.RawMessage(`{"messages":[]}`), nil
+		return json.RawMessage(reply), nil
 	}
 	params := json.RawMessage(`{"id":"c1","limit":5}`)
 	for name, spec := range map[string]func(context.Context, string, json.RawMessage) (any, error){"kb.read": kbOnly.Handle, "assistant.ask": askOnly.Handle} {
@@ -47,8 +49,9 @@ func TestExtensionAssistantReadNeedsItsGrant(t *testing.T) {
 		t.Fatalf("a denied call reached the manager: %v", asked)
 	}
 	for _, spec := range []func(context.Context, string, json.RawMessage) (any, error){granted.Handle, full.Handle} {
-		if _, err := spec(context.Background(), assistantwire.MethodAssistantMessages, params); err != nil {
-			t.Fatal(err)
+		out, err := spec(context.Background(), assistantwire.MethodAssistantMessages, params)
+		if raw, ok := out.(json.RawMessage); err != nil || !ok || string(raw) != reply {
+			t.Fatalf("extension received %T %s (%v), want %s", out, raw, err, reply)
 		}
 	}
 	// The manager is told which extension reads (#13246): what it is shown follows that extension's trust and grants.
@@ -104,7 +107,7 @@ func TestExtensionAssistantReadFallsBackForAnOlderAssistant(t *testing.T) {
 	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 		asked = append(asked, method+" "+string(params))
 		if method == assistantwire.MethodAssistantExtensionRead {
-			return nil, &rpc.Error{Code: extension.CodeUnknownMethod, Message: "unknown method " + method}
+			return nil, fmt.Errorf("assistant bridge: %w", &rpc.Error{Code: extension.CodeUnknownMethod, Message: "unknown method " + method})
 		}
 		return json.RawMessage(reply), nil
 	}
@@ -119,6 +122,21 @@ func TestExtensionAssistantReadFallsBackForAnOlderAssistant(t *testing.T) {
 	wantFirst := `assistant.extension_read {"extension":"example-reader","method":"assistant.conversations","params":` + string(params) + `}`
 	if len(asked) != 2 || asked[0] != wantFirst || asked[1] != "assistant.conversations "+string(params) {
 		t.Fatalf("the manager got %v", asked)
+	}
+}
+
+func TestExtensionAssistantReadReturnsAssistantDenial(t *testing.T) {
+	h := newTestManager(t)
+	granted := kbExtensionSpec(t, h, "example-reader", extension.Permissions{Hub: []string{extension.ScopeAssistantRead}})
+	denied := &rpc.Error{Code: extension.CodePermissionDenied, Message: "read denied"}
+	h.opts.Assistant = func(_ context.Context, method string, _ json.RawMessage) (json.RawMessage, error) {
+		if method != assistantwire.MethodAssistantExtensionRead {
+			t.Fatalf("assistant denial led to a call to %q", method)
+		}
+		return nil, denied
+	}
+	if _, err := granted.Handle(context.Background(), assistantwire.MethodAssistantMessages, json.RawMessage(`{"id":"c1"}`)); err != denied {
+		t.Fatalf("assistant denial = %v, want %v", err, denied)
 	}
 }
 

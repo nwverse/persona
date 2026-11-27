@@ -387,9 +387,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	var reviewedAt time.Time
 	withdrawGone := false // withdraw_needs_user, but the task stopped waiting for the user meanwhile: nothing is written
 	var cancelCheckedAgents []TodoAgent
-	cancelStaleAllowed := false
+	cancelWorkersGone := false
 	if ledger && verdict == reviewCancelled {
-		cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, t)
+		cancelCheckedAgents, cancelWorkersGone = s.checkStaleInvestigationCancelWorkers(ctx, t)
 	}
 	if ledger {
 		var followUpInvalid bool
@@ -418,7 +418,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				if cur.DoneAt != nil {
 					return true
 				}
-				if !(verdict == reviewCancelled && cancelStaleAllowed && staleInvestigationCancelAllowed(cur, cancelCheckedAgents)) {
+				if !(verdict == reviewCancelled && staleInvestigationCancelAllowed(cur, cancelCheckedAgents, cancelWorkersGone)) {
 					findingErr = s.investigationTransitionError(ctx, cur, cur.Supervision, park.Evidence)
 				}
 				if findingErr == nil && verdict != reviewParked {
@@ -990,15 +990,15 @@ func (s *Service) reviewDoneTodoWithSupervision(ctx context.Context, id, reason 
 	}
 	s.todos.writing.Lock()
 	var cancelCheckedAgents []TodoAgent
-	cancelStaleAllowed := false
+	cancelWorkersGone := false
 	if ledger == nil && !accepted {
 		if cur, ok := s.todoNow(id); ok {
-			cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, cur)
+			cancelCheckedAgents, cancelWorkersGone = s.checkStaleInvestigationCancelWorkers(ctx, cur)
 		}
 	}
 	if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
 		var err error
-		if !accepted && cancelStaleAllowed && staleInvestigationCancelAllowed(current, cancelCheckedAgents) {
+		if ledger == nil && !accepted && staleInvestigationCancelAllowed(current, cancelCheckedAgents, cancelWorkersGone) {
 			err = s.receivedFindingsCloseError(current, nil)
 		} else {
 			err = s.investigationCloseError(ctx, current)

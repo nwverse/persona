@@ -80,19 +80,24 @@ public struct ScreenUDPReceiver: Sendable {
         var b = m.blocks[Int(h.block)] ?? Block(data: Int(h.data))
         b.parity = max(b.parity, Int(h.parity))
         if b.whole == nil, b.shards[Int(h.index)] == nil {
-            b.shards[Int(h.index)] = [UInt8](fragment)
+            let shard = [UInt8](fragment)
+            b.shards[Int(h.index)] = shard
             // A keyframe is never given up (giving one up asks for another as large): its first shard says so, even
-            // from a node that marks every frame droppable.
-            if h.block == 0, h.index == 0, fragment.count > 17 {
-                let f = [UInt8](fragment.prefix(18))
-                if f[4] == 3, f[17] & 1 != 0 { m.droppable = false }
+            // from a node that marks every frame droppable, whether shard 0 arrived directly or was rebuilt by parity.
+            if h.block == 0, h.index == 0, Self.isKeyframeHeader(shard) { m.droppable = false }
+            if b.shards.count >= b.data {
+                complete(&b, layout[Int(h.block)])
+                if h.block == 0, let first = b.whole?.first, Self.isKeyframeHeader(first) { m.droppable = false }
             }
-            if b.shards.count >= b.data { complete(&b, layout[Int(h.block)]) }
         }
         m.blocks[Int(h.block)] = b
         messages[h.offset] = m
         if h.offset > expected, blockedSince == nil { blockedSince = now }
         return deliver(at: now)
+    }
+
+    private static func isKeyframeHeader(_ bytes: [UInt8]) -> Bool {
+        bytes.count > 17 && bytes[4] == 3 && bytes[17] & 1 != 0
     }
 
     /// Rebuilds a block that has enough shards.
@@ -144,7 +149,7 @@ public struct ScreenUDPReceiver: Sendable {
         expected = offset
         messages = messages.filter { $0.key >= offset }
         skipped = nil
-        blockedSince = messages.isEmpty ? nil : now
+        blockedSince = messages.keys.contains { $0 > expected } ? now : nil
         var d = deliver(at: now)
         d.ack = true
         return d
