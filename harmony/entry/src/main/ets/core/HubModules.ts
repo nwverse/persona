@@ -87,6 +87,13 @@ export function parseHiddenHubPages(sidebarConfig: string): Set<string> {
   }
 }
 
+export function isHubPageHidden(page: string, sidebarConfig: string, isDemo: boolean = false): boolean {
+  if (isDemo) return false;
+  const normalized = normalizeHiddenPageId(page);
+  if (!normalized) return false;
+  return parseHiddenHubPages(sidebarConfig).has(normalized);
+}
+
 /**
  * Whether this client has a confirmed registered Hub background push route (matching iOS #16783 `PushHealth`).
  * HarmonyOS currently uses foreground `ws_notify` without Push Kit registration, so `hasPushRegistration` is false.

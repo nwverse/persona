@@ -89,7 +89,7 @@ const openHandover = async () => {
   await act(async () => root.render(<TodosView selectedId="t1" />));
   await flush();
   await click(button("交给 Agent"));
-  await click(button("交给已有的 Agent"));
+  await click(button("已有 Agent"));
 };
 
 describe("交给 Agent 对话框开着时", () => {
@@ -218,7 +218,7 @@ describe("交给 Agent 对话框开着时", () => {
 
     await click(button("取消"));
     await click(button("交给 Agent"));
-    await click(button("交给已有的 Agent"));
+    await click(button("已有 Agent"));
     expect(box().value).toBe("");
   });
 
@@ -228,7 +228,7 @@ describe("交给 Agent 对话框开着时", () => {
     await typeInto(box(), "这句不发了");
     await click(button("取消"));
     await click(button("交给 Agent"));
-    await click(button("交给已有的 Agent"));
+    await click(button("已有 Agent"));
     expect(box().value).toBe("");
     expect(picked()).toContain("第一个 Agent");
   });

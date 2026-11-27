@@ -111,7 +111,7 @@ describe("主题色's options", () => {
     const radios = await draw();
     expect(radios).toHaveLength(7);
     expect(radios[1]!.getAttribute("aria-checked")).toBe("true");
-    expect(radios[1]!.getAttribute("aria-label")).toBe("跟随形象，这个形象没带");
+    expect(radios[1]!.getAttribute("aria-label")).toBe("跟随形象，该形象未设置");
   });
 
   it("offers and applies 跟随形象 for an uploaded avatar with colors", async () => {
@@ -216,7 +216,7 @@ describe("Window style & glass translucency controls", () => {
   beforeEach(async () => {
     localStorage.clear();
     setSurfaceStyle("default");
-    setGlassTranslucency(68);
+    setGlassTranslucency(75);
     applyLook();
     host = document.createElement("div");
     document.body.appendChild(host);
@@ -238,7 +238,8 @@ describe("Window style & glass translucency controls", () => {
 
     const slider = host.querySelector<HTMLInputElement>('input[type="range"]');
     expect(slider).not.toBeNull();
-    expect(slider!.value).toBe("68");
+    expect(slider!.value).toBe("75");
+    expect(slider!.step).toBe("5");
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(slider!, "90");
       slider!.dispatchEvent(new Event("change", { bubbles: true }));

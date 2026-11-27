@@ -21,16 +21,32 @@ const personaTabToken = "persona_tab"
 // every other pane of its workspace is a finished Agent terminal (finished_close.go).
 const personaWorktreeToken = "persona_worktree"
 
-// markPersonaTab marks pane as one Persona opened for session id (empty when not known yet).
-func markPersonaTab(ctx context.Context, launch host.Launcher, pane host.PaneRef, id string) {
-	r, ok := launch.(host.MetadataReporter)
-	if !ok || pane.ID == "" {
+// markPersonaTab marks pane as one Persona opened for session id (empty when not known yet): herdr's persona_tab
+// token, or, on an engine that keeps no marks (Orca), the node's own record (agentTerminalOpened).
+func (n *Node) markPersonaTab(ctx context.Context, launch host.Launcher, pane host.PaneRef, id string) {
+	if pane.ID == "" {
 		return
 	}
 	if id == "" {
 		id = "agent"
 	}
+	r, ok := launch.(host.MetadataReporter)
+	if !ok {
+		n.agentTerminalOpened(launch, pane, id)
+		return
+	}
 	_ = r.ReportMetadata(ctx, pane, "persona", map[string]*string{personaTabToken: &id})
+}
+
+// personaTabLocked is the mark of a pane Persona opened for an Agent: the session id it was opened for, "agent" when
+// the start did not know it yet, "" for a pane the user opened. herdr's persona_tab token, else the node's own record
+// on an engine that keeps no marks (agentTerms; only for those, so a pane id herdr reuses never inherits one). n.mu
+// held.
+func (n *Node) personaTabLocked(p host.Agent) string {
+	if id := p.Tokens[personaTabToken]; id != "" {
+		return id
+	}
+	return n.agentTerms[p.PaneID]
 }
 
 // namePersonaTab gives a pane Persona marked before its session was known ("agent": a Codex start, whose thread id
@@ -41,6 +57,11 @@ func (n *Node) namePersonaTab(ctx context.Context, pane, id string) {
 	if pane == "" || !validID(id) {
 		return
 	}
+	n.mu.Lock()
+	if n.agentTerms[pane] == "agent" { // an engine without marks: the node's own record
+		n.agentTerms[pane] = id
+	}
+	n.mu.Unlock()
 	r, ref, err := paneCap[host.MetadataReporter](n, pane)
 	if err != nil {
 		return

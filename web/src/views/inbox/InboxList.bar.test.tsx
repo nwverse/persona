@@ -121,7 +121,7 @@ describe("the Inbox's section bar (#9053)", () => {
     expect(sections()).toEqual(["fyi"]);
     const fyi = host.querySelector('[data-section="fyi"]')!;
     expect(fyi.querySelector("h3")?.textContent).toContain("知悉即可");
-    expect([...fyi.querySelectorAll("button")].some((b) => b.textContent === "全部看过")).toBe(true);
+    expect([...fyi.querySelectorAll("button")].some((b) => b.textContent === "全部设为已看")).toBe(true);
     expect([...fyi.querySelectorAll("[data-item]")].map((r) => r.getAttribute("data-item"))).toEqual(["f1", "f2"]);
 
     pick("done");
@@ -174,10 +174,10 @@ describe("the Inbox's section bar (#9053)", () => {
     const empty = host.querySelector<HTMLElement>("[data-inbox-section-empty]")!;
     expect(empty.dataset.inboxSectionEmpty).toBe("action");
     // its own words, and under them where the rest are, as the other empty states draw their line
-    expect(empty.querySelector("p")?.textContent).toBe("没有需要你处理的");
-    expect(empty.querySelector("[data-inbox-empty-hint]")?.textContent).toBe("其余的在上面的其他分区里。");
+    expect(empty.querySelector("p")?.textContent).toBe("暂无需要你处理的事项");
+    expect(empty.querySelector("[data-inbox-empty-hint]")?.textContent).toBe("其余内容可在上方的其他分区中查看。");
     expect(empty.querySelector("[data-inbox-empty-hint]")?.className).toContain("text-ink-3");
-    expect(host.textContent).not.toContain("都处理完了");
+    expect(host.textContent).not.toContain("已全部处理完毕");
     expect(host.querySelector(".bg-green-tint")).toBeNull();
     // no count at zero, and the rows elsewhere are counted right above
     expect(choices().map((b) => b.textContent)).toEqual(["需要你", "知悉即可1", "全部"]);
@@ -191,8 +191,8 @@ describe("the Inbox's section bar (#9053)", () => {
     await flush();
     expect(chosen()).toBe("working");
     expect(choice("working").textContent).toBe("进行中");
-    expect(host.querySelector("[data-inbox-section-empty] p")?.textContent).toBe("没有进行中的");
-    expect(host.querySelector("[data-inbox-section-empty] [data-inbox-empty-hint]")?.textContent).toBe("其余的在上面的其他分区里。");
+    expect(host.querySelector("[data-inbox-section-empty] p")?.textContent).toBe("暂无进行中的事项");
+    expect(host.querySelector("[data-inbox-section-empty] [data-inbox-empty-hint]")?.textContent).toBe("其余内容可在上方的其他分区中查看。");
     // left, it goes: no row and not chosen
     pick("action");
     expect(choice("working")).toBeNull();
@@ -208,20 +208,20 @@ describe("the Inbox's section bar (#9053)", () => {
     expect(chosen()).toBe("done");
     const empty = host.querySelector<HTMLElement>("[data-inbox-section-empty]")!;
     expect(empty.dataset.inboxSectionEmpty).toBe("done");
-    expect(empty.querySelector("p")?.textContent).toBe("还没有已处理的");
-    expect(empty.querySelector("[data-inbox-empty-hint]")?.textContent).toBe("标为已处理的会出现在这里。");
+    expect(empty.querySelector("p")?.textContent).toBe("暂无已处理的事项");
+    expect(empty.querySelector("[data-inbox-empty-hint]")?.textContent).toBe("标为已处理的事项会显示在这里。");
   });
 
   it("says 都处理完了 only when nothing is open anywhere, with 已处理 still a choice", async () => {
     hub.items = [item("d1", { done_at: "2026-11-09T05:00:00Z", done_by: "user" })];
     hub.waiting = false;
     await show();
-    expect(host.textContent).toContain("都处理完了");
+    expect(host.textContent).toContain("已全部处理完毕");
     expect(host.querySelector("[data-inbox-section-empty]")).toBeNull();
     expect(choices().map((b) => b.dataset.barChoice)).toEqual(["action", "done", "all"]);
     // 全部: the same, with 已处理 under it
     pick("all");
-    expect(host.textContent).toContain("都处理完了");
+    expect(host.textContent).toContain("已全部处理完毕");
     expect(sections()).toEqual(["done"]);
   });
 
@@ -267,7 +267,7 @@ describe("the Inbox's section bar (#9053)", () => {
     await typeSearch("   ");
     expect(chosen()).toBe("action");
     expect(host.querySelector("[data-inbox-filtered-empty]")).toBeNull();
-    expect(host.textContent).toContain("都处理完了");
+    expect(host.textContent).toContain("已全部处理完毕");
   });
 
   // a row a few px too long keeps what is in sight legible; a pill half out still reads as going on
