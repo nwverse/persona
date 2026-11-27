@@ -91,9 +91,10 @@ import (
 // Checking conversation existence before serving Antigravity session.items (fail-closed on stat/metadata read errors) adds 272 B (301,651 B, #16410).
 // Antigravity session model persistence and reload restoration after idle ACP recycle or companion restart (#16393) adds 313 B over main (301,651 B -> 301,964 B).
 // Making runtime-sdk light() idempotent and avoiding double light() in dsh-files adds 58 B (302,022 B).
+// Registering integer and number A2A tool parameters with numeric TypeBox schemas in pi adds 172 B (302,194 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 302_022
+	const budget = 302_194
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
