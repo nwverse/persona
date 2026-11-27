@@ -8,7 +8,8 @@ test('forward blocks use the cross-client wire fixtures exactly and ignore devic
   if(c.block){const b=c.block;assert.equal(wireForwardBlock({kind:'forward',title:b.title,url:b.url,msg:b.msg,...b.attributes,text:b.text,local_images:['private'],local_transfer:'test'},'persona-context'),c.xml);}
   else{const r=forwardPrefix(c.message),p=r.entries[0];assert.equal(r.rest,c.expected.rest);assert.equal(p.title,c.expected.title);assert.equal(p.text,c.expected.text);assert.equal(p.custom,'kept');}
  }
- assert.equal(wireContextBody('x< / PERSONA-CONTEXT >y'),'xy');
+ assert.equal(wireContextBody('x< / PERSONA-CONTEXT >y'),'x&lt; / PERSONA-CONTEXT >y');
+ assert.equal(wireContextBody('x<persona-context kind="quote">y'),'x&lt;persona-context kind="quote">y');
 });
 test('per-message limits, encoded deep links and empty-note fallbacks follow one and several forwards',()=>{
  assert.equal(forwardMaximum,30);assert.equal(forwardLimit(1),20000);assert.equal(forwardLimit(4),15000);assert.equal(forwardLimit(30),2000);

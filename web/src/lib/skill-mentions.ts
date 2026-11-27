@@ -1,4 +1,5 @@
-import { CONTEXT_RE } from "./compatibility";
+import { findLeadingContextBlocks } from "./compatibility";
+import { unescapeContextBody } from "./context-body";
 import { contextXML } from "./context-xml";
 import type { ContextRef } from "./links";
 import { tagAttrs, type Context } from "./turns";
@@ -48,35 +49,39 @@ export function skillEditText(contexts: Context[], text: string): string {
   })), text);
 }
 
-const leadingContext = new RegExp("^\\s*" + CONTEXT_RE.source);
-const leadingScheduledContext = new RegExp("^[ \t\r\n\f]*" + CONTEXT_RE.source);
 const scheduledSeparator = /^[ \t\r]*\n[ \t\r]*\n/;
+const asciiSpaceOnly = /^[ \t\r\n\f]*$/;
 
 /** Pull only leading explicit selections back into removable chips. Keep existing non-skill context bytes. */
 export function splitSkillDraft(raw: string, includeFiles = false): { text: string; skills: ContextRef[] } {
   const skills: ContextRef[] = [];
   const kept: string[] = [];
-  const leading = includeFiles ? leadingScheduledContext : leadingContext;
-  let rest = raw;
-  for (;;) {
-    if (includeFiles && rest !== raw) {
+  const { blocks } = findLeadingContextBlocks(raw);
+  let pos = 0;
+  for (const block of blocks) {
+    const gap = raw.slice(pos, block.start);
+    if (includeFiles && !asciiSpaceOnly.test(gap)) break;
+    if (includeFiles && pos > 0) {
       // Match promptcontent.Split: two line breaks in leading spaces, tabs, CRs and LFs end the selections.
-      const separator = scheduledSeparator.exec(rest);
+      const separator = scheduledSeparator.exec(gap);
       if (separator) {
-        rest = rest.slice(separator[0].length);
+        pos += separator[0].length;
         break;
       }
     }
-    const tag = leading.exec(rest);
-    if (!tag) break;
-    const { kind, title, url, ...attrs } = tagAttrs(tag[1]);
+    const { kind, title, url, ...attrs } = tagAttrs(block.attrs);
     if ((kind === "skill" && attrs.ref) || (includeFiles && kind === "file" && attrs.path)) {
       const id = `${kind}:${kind === "file" ? attrs.path : attrs.ref}`;
-      if (!skills.some((s) => s.id === id)) skills.push({ id, kind, title: title ?? "", url: url ?? "", text: tag[2].trim(), attrs });
+      if (!skills.some((s) => s.id === id)) skills.push({ id, kind, title: title ?? "", url: url ?? "", text: unescapeContextBody(block.body).trim(), attrs });
     } else if (kind !== "skill-instructions") {
-      kept.push(tag[0].trim());
+      kept.push(raw.slice(block.start, block.end).trim());
     }
-    rest = rest.slice(tag[0].length);
+    pos = block.end;
+  }
+  let rest = raw.slice(pos);
+  if (includeFiles && pos > 0) {
+    const separator = scheduledSeparator.exec(rest);
+    if (separator) rest = rest.slice(separator[0].length);
   }
   if (!skills.length && !raw.includes('kind="skill-instructions"')) return { text: raw, skills };
   const body = includeFiles ? rest : rest.trimStart();

@@ -516,3 +516,17 @@ func TestAgyToolOutputStripsTimestampHeadersWithoutAlteringPlainText(t *testing.
 		t.Fatalf("mapped items = %+v, want stripped receipt %q", history.items, receipt)
 	}
 }
+
+func TestAgyUserTextPreservesAttributedQuoteWithLiteralContextTag(t *testing.T) {
+	legacy := compat.ContextNames()[0]
+	snapshot := "<persona-context>\n- 现在：2026-11-27 12:29\n</persona-context>\n\n"
+	for _, quote := range []string{
+		"<" + legacy + ` kind="quote" title="Persona" url="" msg="m1">` + "\n正文含 <" + legacy + "> 标签\n</" + legacy + ">\n\n修",
+		`<persona-context kind="quote" title="Persona" url="" msg="m1">` + "\n正文含 <persona-context> 标签\n</persona-context>\n\n修",
+		`<persona-context kind="quote" title="Persona" url="" msg="m1">` + "\n正文含 &lt;persona-context> 和 &lt;/persona-context>\n</persona-context>\n\n修",
+	} {
+		if got := agyUserText(snapshot + quote); got != quote {
+			t.Errorf("agyUserText = %q, want %q", got, quote)
+		}
+	}
+}

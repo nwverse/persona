@@ -93,9 +93,14 @@ func TestBotStepAndStripContext(t *testing.T) {
 		t.Fatalf("strip %q", got)
 	}
 	for in, want := range map[string]string{
-		"<persona-context kind=\"context\" title=\"x\" url=\"\">\n快照\n</persona-context>\n真正的问题":            "真正的问题",
-		"<persona-context>\n快照\n</persona-context>\n<persona-context kind=\"doc\">文档</persona-context>\n问题": "问题",
-		"问题\n<persona-context kind=\"context\">\n被截断":                                                       "问题",
+		"<persona-context kind=\"context\" title=\"x\" url=\"\">\n快照\n</persona-context>\n真正的问题":                                      "真正的问题",
+		"<persona-context>\n快照\n</persona-context>\n<persona-context kind=\"doc\">文档</persona-context>\n问题":                           "问题",
+		"问题\n<persona-context kind=\"context\">\n被截断":                                                                                 "问题",
+		"<persona-context kind=\"quote\" title=\"Persona\">\n含 <persona-context> 标签\n</persona-context>\n\n修":                         "修",
+		"<persona-context kind=\"quote\" title=\"Persona\">\n含 <persona-context>x</persona-context>\n</persona-context>\n\n修":         "修",
+		"<persona-context kind=\"quote\" title=\"Persona\">\n含 &lt;persona-context> 和 &lt;/persona-context>\n</persona-context>\n\n修": "修",
+		"请修 <persona-context> 标签问题": "请修 <persona-context> 标签问题",
+		"<persona-context> 标签裸露，修":  "<persona-context> 标签裸露，修",
 	} {
 		if got := stripContext(in); got != want {
 			t.Fatalf("strip %q = %q, want %q", in, got, want)

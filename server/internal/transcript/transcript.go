@@ -479,6 +479,12 @@ var pastedRe = lazyre.New(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also
 // <persona-context> (#3182).
 var ContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
 
+// StripSnapshot removes only top-level attribute-free snapshot blocks (<persona-context>...</persona-context> and
+// legacy equivalents) without touching bare literal tags inside attributed context blocks such as quotes or forwards.
+func StripSnapshot(s string) string {
+	return compat.StripSnapshotBlocks(s)
+}
+
 // ViewErrorsRe matches the <persona-view-errors> feedback the node puts after the snapshot when the assistant's last
 // replies drew rich views that failed their check (node/assistant_context.go turnContext): for the model, like the
 // snapshot. Left in, it became a user item of its own before the message, its raw tags in the user's bubble.

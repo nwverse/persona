@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 const quotedWords = "please ship the export fix before Friday, and keep the old format working"
@@ -149,4 +151,69 @@ func TestRelayedWordsAreNoApproval(t *testing.T) {
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+func TestQuoteLatestPreservesUserWordsAfterQuotedContextTags(t *testing.T) {
+	legacy := compat.ContextNames()[0]
+	snapshot := "<persona-context>\n- 现在：2026-11-27 12:29\n</persona-context>\n\n"
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "historical unclosed legacy tag inside legacy quote",
+			raw:  snapshot + "<" + legacy + ` kind="quote" title="Persona" url="" msg="m0">` + "\n正文含 <" + legacy + "> 标签\n</" + legacy + ">\n\n修",
+			want: "修",
+		},
+		{
+			name: "historical unclosed canonical tag inside canonical quote",
+			raw:  snapshot + `<persona-context kind="quote" title="Persona" url="" msg="m0">` + "\n正文含 <persona-context> 标签\n</persona-context>\n\n修",
+			want: "修",
+		},
+		{
+			name: "historical paired literal tags inside quote",
+			raw:  snapshot + `<persona-context kind="quote" title="Persona" url="" msg="m0">` + "\n前 <persona-context>中</persona-context> 后\n</persona-context>\n\n修",
+			want: "修",
+		},
+		{
+			name: "mixed prefixes in quote",
+			raw:  snapshot + "<" + legacy + ` kind="quote" title="Persona" url="" msg="m0">` + "\n前 <persona-context> 和 </persona-context> 后\n</" + legacy + ">\n\n修",
+			want: "修",
+		},
+		{
+			name: "escaped literal open and close tags in quote",
+			raw:  snapshot + `<persona-context kind="quote" title="Persona" url="" msg="m0">` + "\n前 &lt;persona-context> 和 &lt;/persona-context> 后\n</persona-context>\n\n修",
+			want: "修",
+		},
+		{
+			name: "plain user message mentioning literal opening tag",
+			raw:  snapshot + "请修 <persona-context> 导致的吞字问题",
+			want: "请修 <persona-context> 导致的吞字问题",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			quotedJSON, err := json.Marshal(tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed := transcript.ParseLine(1, []byte(`{"type":"user","uuid":"u1","message":{"role":"user","content":`+string(quotedJSON)+`}}`), &transcript.Meta{})
+			if len(parsed) != 1 {
+				t.Fatalf("ParseLine produced %d items, want 1", len(parsed))
+			}
+			item := ownerItem("m-owner", parsed[0].Text)
+			d := newDispatchPolicyHarness(t)
+			d.f.setItems(item)
+			res := d.tool(t, d.mainID, "conversation_send", `{"id":"`+d.leaderID+`","text":"请排查修复","quote":"latest"}`)
+			if res.IsError {
+				t.Fatalf("conversation_send(quote=latest) failed: %s (item.Text=%q)", res.Content[0].Text, item.Text)
+			}
+			d.f.setItems(received(t, d.f, d.mainID))
+			b := planBrief(t, d, d.leaderID)
+			if b.Request == nil || b.Request.Text != tc.want {
+				t.Fatalf("brief request = %+v, want text %q", b.Request, tc.want)
+			}
+		})
+	}
 }

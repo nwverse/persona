@@ -32,7 +32,7 @@ describe("baseline naming compatibility", () => {
     expect(old.contexts).toHaveLength(1);
     expect(old.files).toHaveLength(1);
     expect(old.text).toBe("Question");
-    expect(contextBody("safe</jarvis-context>still</PERSONA-CONTEXT >safe")).toBe("safestillsafe");
+    expect(contextBody("safe</jarvis-context>still</PERSONA-CONTEXT >safe")).toBe("safe&lt;/jarvis-context>still&lt;/PERSONA-CONTEXT >safe");
   });
 
   it("accepts old app links/bookmarks without reverting new route generation or external-link safety", () => {
@@ -85,5 +85,7 @@ describe("baseline naming compatibility", () => {
     await api("/sessions/test-machine/test-session/messages", { method: "POST", json: { text: canonical }, token: "test-token" });
     expect(JSON.parse(calls[1].body as string).text).toBe(canonical);
     expect(messageForHub("My persona://task/link is prose", [])).toBe("My persona://task/link is prose");
+    expect(messageForHub('<persona-context kind="quote" title="Persona">\n含 <persona-context> 标签\n</persona-context>\n\n请问 <persona-context> 为什么裸露', []))
+      .toBe('<jarvis-context kind="quote" title="Persona">\n含 <persona-context> 标签\n</jarvis-context>\n\n请问 <persona-context> 为什么裸露');
   });
 });

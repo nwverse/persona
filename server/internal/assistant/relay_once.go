@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -89,13 +88,9 @@ func relayInDoubt(err error) bool {
 // clock against the manager's.
 const relayClockSlack = 30 * time.Second
 
-// relayContextRe is any context block a line can carry before or around a relay's words: the live snapshot, the
-// message source the manager puts in front (prompts.MessageSourceText), the note on a message that came mid-turn.
-var relayContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `(?:\s[^>]*)?>.*?</` + compat.ContextPattern() + `>\s*`)
-
 // relayWords is a line's or a relay's own words: its context blocks left out.
 func relayWords(s string) string {
-	return strings.TrimSpace(relayContextRe.ReplaceAllString(s, ""))
+	return strings.TrimSpace(compat.StripContextBlocks(s, "", true))
 }
 
 // relayArrived checks the latest turns for the relay's text and source since the first try that may have gone in.

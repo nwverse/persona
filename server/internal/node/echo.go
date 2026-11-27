@@ -403,8 +403,7 @@ func echoLines(items []proto.Item) []echoLine {
 }
 
 var echoDropped = []*lazyre.Regexp{
-	transcript.ContextRe,
-	transcript.ViewErrorsRe, // the assistant's view feedback before the message
+	transcript.ViewErrorsRe,                                  // the assistant's view feedback before the message
 	lazyre.New(`(?s)<system-reminder>.*?</system-reminder>`), // a hook's context on the user's line
 	lazyre.New(`(?s)<attached_images>.*?</attached_images>`),
 	lazyre.New(`<[\\/]*pasted_content[^>]*>`),
@@ -421,7 +420,7 @@ func echoCap(s string) string {
 
 // echoClip is what a record keeps of a text: without the notes (a cut must not leave half of one), its start.
 func echoClip(s string) string {
-	s = transcript.StripInterject(s)
+	s = transcript.StripSnapshot(transcript.StripInterject(s))
 	for _, re := range echoDropped {
 		s = re.ReplaceAllString(s, "")
 	}
@@ -431,7 +430,7 @@ func echoClip(s string) string {
 // echoWords is the comparable form of a text: the notes Persona and the agents add removed, no whitespace, without
 // the line the page adds where it cut a long one.
 func echoWords(s string) []rune {
-	s = transcript.StripInterject(s)
+	s = transcript.StripSnapshot(transcript.StripInterject(s))
 	if i := strings.LastIndex(s, "\n…（已截断"); i >= 0 {
 		s = s[:i]
 	}

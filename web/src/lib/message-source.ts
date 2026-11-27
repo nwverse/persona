@@ -1,15 +1,13 @@
 import { t } from "../i18n";
+import { findLeadingContextBlocks } from "./compatibility";
 import type { Injected, Item, MessageSource } from "./types";
 
-const LEADING_CONTEXT = /^\s*<persona-context\b([^>]*)>([\s\S]*?)<\/persona-context>\s*/;
 const RELAY_TITLE = /\btitle="来自对话「(.*?)」"/u; // i18n-ignore: canonical relay template
 const RELAY_BODY = /^这条消息不是用户本人发的，是 Persona 的另一段对话（([^\s（）]+)）用 (conversation_send|conversation_new) 发来的，第 ([0-9]+) 跳（最多 ([0-9]+) 跳）。\n按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 ([^\s；]+)；只是确认收到就不要回，免得两段对话来回发。$/u; // i18n-ignore: canonical relay template
 
 function* leadingContexts(raw: string): Generator<{ attrs: string; text: string }> {
-  let text = raw;
-  for (let match = LEADING_CONTEXT.exec(text); match; match = LEADING_CONTEXT.exec(text)) {
-    yield { attrs: match[1], text: match[2].trim() };
-    text = text.slice(match[0].length);
+  for (const block of findLeadingContextBlocks(raw).blocks) {
+    yield { attrs: block.attrs, text: block.body.trim() };
   }
 }
 

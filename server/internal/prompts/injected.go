@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -25,7 +26,6 @@ var (
 	superviseRe    = lazyre.New(`^📋 督办：你派出去的任务有 (\d+) 个要你处理$`)
 	inboxHeadRe    = lazyre.New(`^📥 收件箱事件「(.+)」有了下文$`)
 	askLaterHeadRe = lazyre.New(`^🔔 你 .+ 用 ask_user 问过用户（wait: false，当时没有等回答）：$`)
-	leadContextRe  = lazyre.New(`^(?s)\s*<persona-context\b[^>]*>.*?</persona-context>`)
 )
 
 // noticeMarker is in every task notice (assistant/task_notice): a first line alone could be the user's.
@@ -92,12 +92,8 @@ func ParseInjected(text string) *proto.Injected {
 	if UserAuthoredContext(text) {
 		return nil
 	}
-	for {
-		loc := leadContextRe.FindStringIndex(text)
-		if loc == nil {
-			break
-		}
-		text = text[loc[1]:]
+	if _, end := compat.FindLeadingContextBlocks(text); end > 0 {
+		text = text[end:]
 	}
 	text = strings.TrimSpace(text)
 	head, rest, _ := strings.Cut(text, "\n")

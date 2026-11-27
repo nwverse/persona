@@ -1,6 +1,7 @@
 package persona.core.domain
 
 import persona.core.contracts.Item
+import persona.core.contracts.ProtocolCompatibility
 import persona.core.contracts.MessageSource
 import persona.core.contracts.Injected
 import persona.core.contracts.JsonCodec
@@ -34,18 +35,16 @@ private fun sourceFromInjected(injected: Injected?): MessageSource? {
 }
 
 internal data class SourceMetadata(val found: Boolean, val source: MessageSource? = null)
-private val leadingContext = Regex("""^\s*<persona-context\b([^>]*)>([\s\S]*?)</persona-context>\s*""")
 private val sourceKind = Regex("\\bkind=\"message-source\"")
 private val relayTitle = Regex("\\btitle=\"来自对话「(.*?)」\"") // i18n-ignore: canonical relay attribute
 private val relayBody = Regex("""^这条消息不是用户本人发的，是 Persona 的另一段对话（([^\s（）]+)）用 (conversation_send|conversation_new) 发来的，第 ([0-9]+) 跳（最多 ([0-9]+) 跳）。\n按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 ([^\s；]+)；只是确认收到就不要回，免得两段对话来回发。$""") // i18n-ignore: canonical relay template
 
 /** The first persisted metadata block is authoritative; malformed metadata also fences text inference. */
 internal fun sourceMetadata(raw: String): SourceMetadata {
-    var text = raw
-    while (true) {
-        val block = leadingContext.find(text) ?: return SourceMetadata(false)
-        if (sourceKind.containsMatchIn(block.groupValues[1])) {
-            val meta = runCatching { JsonCodec.parseToJsonElement(block.groupValues[2].trim()) as? JsonObject }.getOrNull()
+    val (blocks, _) = ProtocolCompatibility.findLeadingContextBlocks(raw)
+    for (block in blocks) {
+        if (sourceKind.containsMatchIn(block.attributes)) {
+            val meta = runCatching { JsonCodec.parseToJsonElement(block.body.trim()) as? JsonObject }.getOrNull()
                 ?: return SourceMetadata(true)
             val authorField = meta["author"]
             val author = (authorField as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
@@ -54,21 +53,20 @@ internal fun sourceMetadata(raw: String): SourceMetadata {
             if (author == "user" || kind.isNullOrBlank()) return SourceMetadata(true)
             return SourceMetadata(true, runCatching { JsonCodec.decodeFromJsonElement(MessageSource.serializer(), meta) }.getOrNull())
         }
-        text = text.substring(block.range.last + 1)
     }
+    return SourceMetadata(false)
 }
 
 /** Only complete leading canonical relay blocks establish provenance, never titles alone. */
 internal fun relaySource(raw: String): MessageSource? {
-    var text = raw
-    while (true) {
-        val block = leadingContext.find(text) ?: return null
-        val title = relayTitle.find(block.groupValues[1])
-        if (title != null && block.groupValues[1].contains("kind=\"context\"")) {
-            canonicalRelaySource(decodeXmlEntities(title.groupValues[1]), block.groupValues[2].trim())?.let { return it }
+    val (blocks, _) = ProtocolCompatibility.findLeadingContextBlocks(raw)
+    for (block in blocks) {
+        val title = relayTitle.find(block.attributes)
+        if (title != null && block.attributes.contains("kind=\"context\"")) {
+            canonicalRelaySource(decodeXmlEntities(title.groupValues[1]), block.body.trim())?.let { return it }
         }
-        text = text.substring(block.range.last + 1)
     }
+    return null
 }
 
 private fun canonicalRelaySource(title: String, body: String): MessageSource? {

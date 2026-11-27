@@ -33,10 +33,16 @@ func StripInterject(s string) string {
 	if !strings.Contains(s, "-context") || (!strings.Contains(s, interjectTitle) && !strings.Contains(s, "&#")) {
 		return s
 	}
-	return contextBlockRe.ReplaceAllStringFunc(s, func(block string) string {
+	blocks := compat.FindContextBlocks(s)
+	if len(blocks) == 0 {
+		return s
+	}
+	var out strings.Builder
+	prev := 0
+	changed := false
+	for _, b := range blocks {
 		kind, title := "context", ""
-		head := block[:strings.IndexByte(block, '>')]
-		for _, attr := range contextAttrRe.FindAllStringSubmatch(head, -1) {
+		for _, attr := range contextAttrRe.FindAllStringSubmatch(b.Attrs, -1) {
 			switch attr[1] {
 			case "kind":
 				kind = html.UnescapeString(attr[2])
@@ -45,10 +51,19 @@ func StripInterject(s string) string {
 			}
 		}
 		if kind == "context" && title == interjectTitle {
-			return ""
+			if !changed {
+				out.Grow(len(s))
+				changed = true
+			}
+			out.WriteString(s[prev:b.Start])
+			prev = b.End
 		}
-		return block
-	})
+	}
+	if !changed {
+		return s
+	}
+	out.WriteString(s[prev:])
+	return out.String()
 }
 
 // legacyLarkAgentRe is a Feishu /agent prompt as hub wrote it before the instructions moved into a block: an intro line,
@@ -68,8 +83,12 @@ func legacyLarkAgent(s string) string {
 		return s
 	}
 	intro, task, ctx, rules := m[1], strings.TrimSpace(m[2]), m[3], m[4]
-	blocks := contextBlockRe.FindAllString(ctx, -1)
-	loose := strings.TrimSpace(contextBlockRe.ReplaceAllString(ctx, ""))
+	found := compat.FindContextBlocks(ctx)
+	blocks := make([]string, 0, len(found))
+	for _, b := range found {
+		blocks = append(blocks, ctx[b.Start:b.End])
+	}
+	loose := strings.TrimSpace(compat.StripContextBlocks(ctx, "", false))
 	var b strings.Builder
 	// Still the old name until the apps that read <persona-context> are out (#3182).
 	b.WriteString(`<persona-context kind="instructions" title="给 Agent 的说明">` + "\n" + intro + "\n")
@@ -97,11 +116,11 @@ var messageSourceKindRe = lazyre.New(`\bkind\s*=\s*["']message-source["']`)
 // so what the user wrote and every block's title stay whole (a plain cut could end inside a block). ok is false when
 // even that does not fit, or there is nothing to cut.
 func lightContexts(s string, limit int) (string, bool) {
-	all := contextBlockRe.FindAllStringSubmatchIndex(s, -1)
+	all := compat.FindContextBlocks(s)
 	locs := all[:0]
-	for _, loc := range all {
-		if !messageSourceKindRe.MatchString(s[loc[2]:loc[3]]) {
-			locs = append(locs, loc)
+	for _, blk := range all {
+		if !messageSourceKindRe.MatchString(blk.Attrs) {
+			locs = append(locs, blk)
 		}
 	}
 	if len(locs) == 0 {
@@ -110,7 +129,7 @@ func lightContexts(s string, limit int) (string, bool) {
 	fixed := len(s)
 	bodies := make([]int, len(locs)) // body lengths
 	for i, l := range locs {
-		bodies[i] = l[5] - l[4]
+		bodies[i] = l.CloseAt - l.OpenEnd
 		fixed -= bodies[i]
 	}
 	const note = "\n…（已截断，共 %d 字节）"
@@ -134,8 +153,8 @@ func lightContexts(s string, limit int) (string, bool) {
 	var b strings.Builder
 	prev := 0
 	for i, l := range locs {
-		b.WriteString(s[prev:l[4]])
-		body := s[l[4]:l[5]]
+		b.WriteString(s[prev:l.OpenEnd])
+		body := s[l.OpenEnd:l.CloseAt]
 		if keep[i] < len(body) {
 			end := keep[i]
 			for end > 0 && (body[end]&0xC0) == 0x80 {
@@ -147,7 +166,7 @@ func lightContexts(s string, limit int) (string, bool) {
 			body = body[:end] + fmt.Sprintf(note, len(body)) + "\n"
 		}
 		b.WriteString(body)
-		prev = l[5]
+		prev = l.CloseAt
 	}
 	b.WriteString(s[prev:])
 	if b.Len() > limit {
@@ -156,16 +175,20 @@ func lightContexts(s string, limit int) (string, bool) {
 	return b.String(), true
 }
 
-// injectedBlockRes are the blocks Persona and Claude Code put into a user message around what the user wrote: the
-// <persona-context> snapshot and attributed blocks, the <persona-view-errors> feedback, <system-reminder>s.
+// injectedBlockRes are the non-context blocks Persona and Claude Code put into a user message around what the user
+// wrote: <persona-view-errors> feedback and <system-reminder>s. Context blocks are stripped with compat.StripContextBlocks.
 var injectedBlockRes = []*lazyre.Regexp{
-	lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`),
 	lazyre.New(`(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>`),
 	lazyre.New(`(?s)<system-reminder\b[^>]*>.*?</system-reminder>`),
 }
 
-// injectedOpenRe is one of those blocks left open: a message clipped inside it (Meta.FirstUser is) ends there.
-var injectedOpenRe = lazyre.New(`<(?:` + compat.ContextPattern() + `|persona-view-errors|system-reminder)\b`)
+// clippedContextOpenRe matches an unclosed context block that was cut off by clipping: at the start of a line
+// followed by a newline after '>' or truncated before its closing '>'. Ordinary inline prose mentioning
+// <persona-context> is left intact.
+var clippedContextOpenRe = lazyre.New(`(?:^|\n)<` + compat.ContextPattern() + `(?:\b[^<>]*(?:>\r?\n|$)|$)`)
+
+// injectedOpenRe is one of the non-context injected blocks left open by a clip.
+var injectedOpenRe = lazyre.New(`<(?:persona-view-errors|system-reminder)\b`)
 
 // StripInjected is what the user wrote in a message, for a line that shows it (a title, a notification): without the
 // injected blocks, a block cut off by a clip, and the paste wrappers (what was pasted stays). "" when nothing is left.
@@ -173,8 +196,12 @@ func StripInjected(s string) string {
 	if !strings.Contains(s, "<") {
 		return strings.TrimSpace(s)
 	}
+	s = compat.StripContextBlocks(s, " ", false)
 	for _, re := range injectedBlockRes {
 		s = re.ReplaceAllString(s, " ")
+	}
+	if loc := clippedContextOpenRe.FindStringIndex(s); loc != nil {
+		s = s[:loc[0]]
 	}
 	if loc := injectedOpenRe.FindStringIndex(s); loc != nil {
 		s = s[:loc[0]]

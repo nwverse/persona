@@ -872,7 +872,7 @@ func codexUserPart(s string) (string, []proto.QuestionReply) {
 	s = StripInterject(s)
 	s = codexAmbientRe.ReplaceAllString(s, "")
 	s = dropTagged(ViewErrorsRe, "<persona-view-errors", s)
-	s = strings.TrimSpace(legacyLarkAgent(strings.TrimSpace(ContextRe.ReplaceAllString(s, ""))))
+	s = strings.TrimSpace(legacyLarkAgent(strings.TrimSpace(StripSnapshot(s))))
 	var quotes []proto.QuestionReply
 	text := CodexReplyRe.ReplaceAllStringFunc(s, func(block string) string {
 		replies := codexReplies(CodexReplyRe.FindStringSubmatch(block)[1])

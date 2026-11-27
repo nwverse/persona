@@ -9,8 +9,7 @@ nonisolated enum WatchText {
     /// The hub's mid-turn interject note title (server/internal/prompts/assistant/interject.md, pinned by
     /// assistant_interject_test.go): model instructions, never a context mark on the watch (#6595).
     private static let interjectTitle = "插话" // i18n-ignore: canonical hub prompt title
-    private static let context = try! NSRegularExpression(
-        pattern: "<" + HubNaming.contextPattern + #"\b(?:[^>]*?title="([^"]*)")?[^>]*>[\s\S]*?</"# + HubNaming.contextPattern + #">\s*"#)
+    private static let titleAttr = try! NSRegularExpression(pattern: #"\btitle="([^"]*)""#)
     /// The marks a phone shows for what the watch cannot draw, in the interface language.
     private static var rules: [(String, String)] {
         let image = String(localized: "[Photo]", comment: "Watch: stands in for an image in a message")
@@ -45,17 +44,21 @@ nonisolated enum WatchText {
     static func shown(_ raw: String) -> String {
         // The assistant's cards first: their words, not their JSON (the fence rule below would leave the JSON).
         let text = AssistantCardText.replacingCards(AssistantActionSource.stripping(MessageSource.strippingMetadata(raw)))
-        let ns = text as NSString
-        let blocks = context.matches(in: text, range: NSRange(location: 0, length: ns.length))
-        var t = context.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "")
+        let blocks = HubNaming.findContextBlocks(text)
+        var t = HubNaming.stripContextBlocks(text, replacement: "", trimTrailingWhitespace: true)
         // The hub's interject note (prompts/assistant/interject.md) is model instructions, not a context the owner
         // picked: it is stripped above like every context block but never becomes a mark (#6595).
-        let shownBlocks = blocks.filter { match in
-            guard match.range(at: 1).location != NSNotFound else { return true }
-            return ns.substring(with: match.range(at: 1)) != interjectTitle
+        let shownBlocks: [String] = blocks.compactMap { block in
+            let attrNS = block.attributes as NSString
+            let title: String
+            if let m = titleAttr.firstMatch(in: block.attributes, range: NSRange(location: 0, length: attrNS.length)) {
+                title = attrNS.substring(with: m.range(at: 1))
+            } else {
+                title = ""
+            }
+            return title == interjectTitle ? nil : title
         }
-        if let first = shownBlocks.first {
-            let title = first.range(at: 1).location == NSNotFound ? "" : ns.substring(with: first.range(at: 1))
+        if let title = shownBlocks.first {
             t = (shownBlocks.count == 1 && !title.isEmpty ? "〔\(title)〕\n" : String(localized: "[\(shownBlocks.count) context items]") + "\n") + t
         }
         for (pattern, with) in rules {

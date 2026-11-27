@@ -1050,18 +1050,16 @@ func (s *Service) taskOfConversation(ctx context.Context, machine, session strin
 	return ""
 }
 
-// stripContext leaves out the context blocks of a message (what the user wrote is after them); a block left open
-// ends it.
+// stripContext leaves out the context blocks of a message (what the user wrote is after them); a clipped block left
+// open at the start of a line ends it, while inline literal tag mentions in the user's own words stay intact.
 func stripContext(s string) string {
-	s = contextBlockRe.ReplaceAllString(s, "")
-	if loc := contextOpenRe.FindStringIndex(s); loc != nil {
+	s = compat.StripContextBlocks(s, "", false)
+	if loc := clippedContextOpenRe.FindStringIndex(s); loc != nil {
 		s = s[:loc[0]]
 	}
 	return strings.TrimSpace(s)
 }
 
-// contextBlockRe and contextOpenRe are a <persona-context> block.
-var (
-	contextBlockRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`)
-	contextOpenRe  = lazyre.New(`<` + compat.ContextPattern() + `\b`)
-)
+// clippedContextOpenRe matches an unclosed context block truncated at line start (either followed immediately by
+// a newline after '>' or cut off before '>'), never inline user prose like "请修 <persona-context> 问题".
+var clippedContextOpenRe = lazyre.New(`(?:^|\n)<` + compat.ContextPattern() + `(?:\b[^<>]*(?:>\r?\n|$)|$)`)

@@ -125,9 +125,90 @@ export const PERSONA_SERVERS = new Set(["persona", "jarvis"]);
 export const CLIENT_HEADERS = ["X-Persona-Client", "X-Jarvis-Client"] as const;
 export const OP_HEADERS = ["X-Persona-Op-Id", "X-Jarvis-Op-Id"] as const;
 export const CSRF_HEADERS = ["X-Persona-CSRF", "X-Jarvis-CSRF"] as const;
-export const CONTEXT_RE = /<(?:persona|jarvis)-context\b([^>]*)>([\s\S]*?)<\/(?:persona|jarvis)-context>/g;
-export const LEAD_CONTEXT_RE = /^\s*<(?:persona|jarvis)-context\b[^>]*>[\s\S]*?<\/(?:persona|jarvis)-context>/;
-export const CONTEXT_CLOSE_RE = /<\s*\/\s*(?:persona|jarvis)-context\s*>/gi;
+export const CONTEXT_TAG_RE = /<(\s*\/?\s*(?:persona|jarvis)-context\b)/gi;
+export const ESCAPED_CONTEXT_TAG_RE = /&lt;(\s*\/?\s*(?:persona|jarvis)-context\b)/gi;
+
+export interface ContextBlockSpan {
+  start: number;
+  openEnd: number;
+  closeAt: number;
+  end: number;
+  attrs: string;
+  body: string;
+}
+
+const CONTEXT_TOKEN_RE = /<(?:persona|jarvis)-context(?:\s+[^<>]*)?>|<\/(?:persona|jarvis)-context\s*>/g;
+
+/** Depth-aware linear O(n) scanner for top-level context blocks; recovers 2-opens-1-close historical blocks too. */
+export function findContextBlocks(text: string): ContextBlockSpan[] {
+  if (!text.includes("-context")) return [];
+  const tokens: [number, number, boolean, string][] = [];
+  let hasClose = false;
+  CONTEXT_TOKEN_RE.lastIndex = 0;
+  for (let m = CONTEXT_TOKEN_RE.exec(text); m; m = CONTEXT_TOKEN_RE.exec(text)) {
+    const tok = m[0], start = m.index, end = start + tok.length;
+    if (tok[1] === "/") {
+      tokens.push([start, end, true, ""]);
+      hasClose = true;
+    } else if (!tok.endsWith("/>")) {
+      tokens.push([start, end, false, tok.slice(tok.search(/[\s>]/), -1)]);
+    }
+  }
+  const n = tokens.length;
+  if (!hasClose || n < 2) return [];
+  const bal = new Int32Array(n + 1);
+  for (let i = 0; i < n; i++) bal[i + 1] = bal[i] + (tokens[i][2] ? -1 : 1);
+  const match = new Int32Array(n).fill(-1);
+  const next = new Map<number, number>();
+  let minVal = n + 1, minIdx = -1;
+  for (let i = n - 1; i >= 0; i--) {
+    if (tokens[i][2]) {
+      const v = bal[i + 1];
+      next.set(v, i);
+      if (v <= minVal) { minVal = v; minIdx = i; }
+    } else {
+      match[i] = next.get(bal[i]) ?? minIdx;
+    }
+  }
+  const blocks: ContextBlockSpan[] = [];
+  for (let i = 0; i < n;) {
+    const j = tokens[i][2] ? -1 : match[i];
+    if (j < 0) { i++; continue; }
+    blocks.push({ start: tokens[i][0], openEnd: tokens[i][1], closeAt: tokens[j][0], end: tokens[j][1], attrs: tokens[i][3], body: text.slice(tokens[i][1], tokens[j][0]) });
+    i = j + 1;
+  }
+  return blocks;
+}
+
+export function findLeadingContextBlocks(text: string): { blocks: ContextBlockSpan[]; end: number } {
+  const blocks = findContextBlocks(text);
+  let pos = 0, count = 0;
+  for (const b of blocks) {
+    if (text.slice(pos, b.start).trim()) break;
+    count++;
+    pos = b.end;
+  }
+  return { blocks: blocks.slice(0, count), end: pos };
+}
+
+export const stripLeadingContextBlocks = (text: string): string => text.slice(findLeadingContextBlocks(text).end);
+
+export function replaceContextBlocks(
+  text: string,
+  fn: (block: ContextBlockSpan, whole: string) => string,
+  opts?: { trimTrailingSpace?: boolean },
+): string {
+  const blocks = findContextBlocks(text);
+  if (!blocks.length) return text;
+  let out = "", prev = 0;
+  for (const b of blocks) {
+    out += text.slice(prev, b.start) + fn(b, text.slice(b.start, b.end));
+    let end = b.end;
+    if (opts?.trimTrailingSpace) while (end < text.length && /\s/.test(text[end])) end++;
+    prev = end;
+  }
+  return out + text.slice(prev);
+}
 export const FILE_RE = /<(?:persona|jarvis)-file\b([^>]*?)\/?>(?:\s*<\/(?:persona|jarvis)-file>)?/g;
 /** A source whose legacy context or file marker could be rewritten by an older hub. */
 export const LEGACY_CONTEXT_OR_FILE_RE = /<\s*\/?\s*(?:persona|jarvis)-(?:context|file)\b/i;
@@ -164,12 +245,24 @@ export function compatibleEnvelope<T>(value: T): T {
   return value;
 }
 
-/** Old-default wire spelling, until the target explicitly advertises the new identifiers. */
+const rewriteFileTags = (s: string) => s.replace(/<\s*\/?\s*(?:persona|jarvis)-file\b[^>]*>/gi, tag =>
+  tag.replace(/(^<\s*\/?\s*)persona-(file)/i, "$1jarvis-$2").replace(/(\burl=["'])persona:\/\//g, "$1jarvis://"));
+
+/** Old-default wire spelling, until the target explicitly advertises the new identifiers.
+ *  Rewrites only outer matched protocol context block tags and standalone file tags, never literal tags inside bodies or prose. */
 export function messageForHub(text: string, features: readonly string[] = hubFeatures): string {
-  if (features.includes("persona_contracts_v1")) return text;
-  return text.replace(/<\s*\/?\s*(?:persona|jarvis)-(?:context|file)\b[^>]*>/gi, tag =>
-    tag.replace(/(^<\s*\/?\s*)persona-(context|file)/i, "$1jarvis-$2")
-      .replace(/(\burl=["'])persona:\/\//g, "$1jarvis://"));
+  if (features.includes("persona_contracts_v1") || !text.includes("persona-")) return text;
+  const blocks = findContextBlocks(text);
+  if (!blocks.length) return rewriteFileTags(text);
+  let out = "", prev = 0;
+  for (const b of blocks) {
+    if (b.start > prev) out += rewriteFileTags(text.slice(prev, b.start));
+    out += text.slice(b.start, b.openEnd).replace(/^<persona-context(?=[\s>])/, `<${LEGACY_SCHEME}-context`).replace(/(\burl=["'])persona:\/\//g, "$1jarvis://")
+      + b.body
+      + text.slice(b.closeAt, b.end).replace(/^<\/persona-context(?=[\s>])/, `</${LEGACY_SCHEME}-context`);
+    prev = b.end;
+  }
+  return out + (prev < text.length ? rewriteFileTags(text.slice(prev)) : "");
 }
 
 /** Only message submission endpoints contain generated attachment/context markup. */

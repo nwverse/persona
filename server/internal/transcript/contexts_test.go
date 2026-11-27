@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -176,5 +177,21 @@ func BenchmarkLegacyLarkAgentOrdinary(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func TestStripInjectedPreservesUserWordsWithLiteralContextTags(t *testing.T) {
+	legacy := compat.ContextNames()[0]
+	for _, c := range []struct{ in, want string }{
+		{"<" + legacy + ` kind="quote" title="Persona" url="" msg="m1">` + "\n引用含 <" + legacy + "> 标签\n</" + legacy + ">\n\n修", "修"},
+		{`<persona-context kind="quote" title="Persona">` + "\n前 <persona-context>中</persona-context> 后\n</persona-context>\n\n修", "修"},
+		{"<" + legacy + ` kind="quote" title="Persona">` + "\n前 <persona-context> 标签\n</" + legacy + ">\n\n修", "修"},
+		{`<persona-context kind="quote" title="Persona">` + "\n前 &lt;persona-context> 和 &lt;/persona-context> 后\n</persona-context>\n\n修", "修"},
+		{"请修 <persona-context> 导致的气泡问题", "请修 <persona-context> 导致的气泡问题"},
+		{"<persona-context> 导致气泡裸露，修", "<persona-context> 导致气泡裸露，修"},
+	} {
+		if got := StripInjected(c.in); got != c.want {
+			t.Errorf("StripInjected(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

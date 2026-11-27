@@ -321,7 +321,7 @@ type humanSend struct {
 // transcript drops from every user line, and the workspace mentions, which the app wrote one way and the manager sent
 // filled in (a vouched message holds no other block, workspace_mention.go fillWorkspaces).
 func withoutContext(text string) string {
-	return transcript.ViewErrorsRe.ReplaceAllString(contextBlockRe.ReplaceAllString(text, ""), "")
+	return transcript.ViewErrorsRe.ReplaceAllString(compat.StripContextBlocks(text, "", false), "")
 }
 
 // handoffLine is the transcript line an item belongs to: its id before the last "#", as the node ties a send to a line

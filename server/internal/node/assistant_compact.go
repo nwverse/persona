@@ -12,7 +12,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -327,9 +326,6 @@ func lastCompactSummary(r io.Reader) (summary string, at int) {
 	return summary, at
 }
 
-// anyContextRe is every block Persona put before a message (the snapshot, an earlier handoff, a relay's note).
-var anyContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `[^>]*>.*?</` + compat.ContextPattern() + `>\s*`)
-
 // recentTurns are the text of the user's and the assistant's messages after line `after`, the newest last, within
 // handoffTurns messages and handoffRecentMax characters.
 func recentTurns(items []proto.Item, after int) []HandoffTurn {
@@ -338,7 +334,7 @@ func recentTurns(items []proto.Item, after int) []HandoffTurn {
 		if it.Seq <= after || it.Kind != proto.KindText || (it.Role != "user" && it.Role != "assistant") {
 			continue
 		}
-		text := strings.TrimSpace(anyContextRe.ReplaceAllString(it.Text, ""))
+		text := strings.TrimSpace(compat.StripContextBlocks(it.Text, "", true))
 		if text == "" {
 			continue
 		}

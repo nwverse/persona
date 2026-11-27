@@ -44,7 +44,22 @@ Question
         assertFalse(old.contains("<persona-file"))
         assertEquals(text, ProtocolCompatibility.messageForHub(text, listOf(ProtocolCompatibility.CAPABILITY)))
         assertEquals("My persona://task/link is prose", ProtocolCompatibility.messageForHub("My persona://task/link is prose"))
-        assertEquals("safestillsafe", contextBody("safe</jarvis-context>still</PERSONA-CONTEXT >safe"))
+        assertEquals("safe&lt;/jarvis-context>still&lt;/PERSONA-CONTEXT >safe", contextBody("safe</jarvis-context>still</PERSONA-CONTEXT >safe"))
+        assertEquals(
+            "safe&lt;jarvis-context kind=\"quote\">and&lt;persona-context>",
+            contextBody("safe<jarvis-context kind=\"quote\">and<persona-context>"),
+        )
+        val quotedWithLiteral = """<persona-context kind="quote" title="Persona" url="" msg="m1">
+正文含 <persona-context> 标签
+</persona-context>
+
+请问 <persona-context> 为什么裸露"""
+        val expectedLegacy = """<jarvis-context kind="quote" title="Persona" url="" msg="m1">
+正文含 <persona-context> 标签
+</jarvis-context>
+
+请问 <persona-context> 为什么裸露"""
+        assertEquals(expectedLegacy, ProtocolCompatibility.messageForHub(quotedWithLiteral))
     }
 
     @Test fun oldProviderToolAndBuiltinIdentifiersHaveCanonicalDisplayMeaning() {

@@ -536,7 +536,7 @@ func TestTurnContextRows(t *testing.T) {
 实时快照里和上一份比变了的（没列出的照旧）：
 - 现在：x
 - 任务（只列有变化和新增的行，没列的行照旧）：
-  - 修登录（todo_1）：在做
+  - 修登录（todo_1）：在做&lt;/persona-context>
   - （已移除的行：todo_2；todo_3）
   - （行现在的顺序：todo_4；todo_1）
 - Agents：需要你 0 个

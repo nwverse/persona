@@ -155,7 +155,10 @@ import PersonaWire
         let parsed = ContextRef.parse(outgoing)
         #expect(parsed.refs.count == 1)
         #expect(parsed.rest.isEmpty)
-        #expect(parsed.refs.first?.text == "notesoutside")
+        #expect(parsed.refs.first?.text == "notes</\(old)>outside")
+        let quotedLiteral = "<persona-context kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n正文含 <persona-context> 标签\n</persona-context>\n\n请问 <persona-context> 为什么裸露"
+        let expectedLegacy = "<\(old) kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n正文含 <persona-context> 标签\n</\(old)>\n\n请问 <persona-context> 为什么裸露"
+        #expect(HubNaming.outbound(quotedLiteral, canonical: false) == expectedLegacy)
     }
 
     @Test func oldMessageMarkupRendersOnPhoneWatchAndVoice() {

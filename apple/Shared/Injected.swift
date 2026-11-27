@@ -167,7 +167,6 @@ nonisolated struct Injected: Codable, Hashable, Sendable {
     private static let noticeHead = try! NSRegularExpression(pattern: #"^🔔 任务「(.+)」(做完了|在等用户|被模型服务出错打断了|没开起来)(?:（(.+)）)?$"#) // i18n-ignore: matches the hub's text
     private static let followupHead = try! NSRegularExpression(pattern: #"^⏰ (.+)（(你之前安排的跟进|定时任务(?:，每 [^）]+)?)）$"#) // i18n-ignore: matches the hub's text
     private static let wakeHead = try! NSRegularExpression(pattern: #"^⏰（Persona 叫醒你，第 \d+ 次）你上一轮停下时说在等「(.*?)」"#) // i18n-ignore: matches the hub's text
-    private static let leadContext = try! NSRegularExpression(pattern: #"^\s*<"# + HubNaming.contextPattern + #"\b[^>]*>[\s\S]*?</"# + HubNaming.contextPattern + ">") // i18n-ignore: matches the hub's text
     private static let supervisionHead = try! NSRegularExpression(pattern: #"^📋 督办：你派出去的任务有 (\d+) 个要你处理$"#) // i18n-ignore: matches the hub's text
     private static let supervisionMarker = "这是 Persona 的督办消息" // i18n-ignore: matches the hub's text
     private static let supervisionLevel = try! NSRegularExpression(pattern: #"(?m)^\s*<persona-supervision level="(triage|user)"\s*/>\s*$"#)
@@ -188,12 +187,7 @@ nonisolated struct Injected: Codable, Hashable, Sendable {
 
     private static func compute(_ raw: String) -> Injected? {
         guard !MessageSource.protectsUser(raw) else { return nil }
-        var text = raw
-        while let m = leadContext.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let r = Range(m.range, in: text) {
-            text = String(text[r.upperBound...])
-        }
-        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = HubNaming.stripLeadingContextBlocks(raw).trimmingCharacters(in: .whitespacesAndNewlines)
         // The way Go's strings.Cut and the regexes see it: lines split at \n only (a \r\n stays in the line).
         let head: String, rest: String
         if let nl = text.firstIndex(of: "\n") {

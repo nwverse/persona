@@ -57,9 +57,6 @@ nonisolated extension VoiceLine {
     /// How many of the call's captions a reconnect hands back (`history`).
     static let historyLines = 40
 
-    private static let contextBlock = try! NSRegularExpression(
-        pattern: "<" + HubNaming.contextPattern + #"\b[^>]*>[\s\S]*?</"# + HubNaming.contextPattern + ">")
-
     /// The conversation's last three turns as `start.recent`: what the user and the agent wrote, nothing else (tool calls,
     /// thinking and notices stay out; the extension says 「用了 Bash」 itself when it reads them), context blocks taken out,
     /// each line cut to 300 characters. The extension fetches them itself when this is empty.
@@ -77,8 +74,7 @@ nonisolated extension VoiceLine {
 
     /// Text without the app's context blocks, its runs of blank space made one.
     static func clean(_ raw: String) -> String {
-        let ns = raw as NSString
-        let bare = contextBlock.stringByReplacingMatches(in: raw, range: NSRange(location: 0, length: ns.length), withTemplate: " ")
+        let bare = HubNaming.stripContextBlocks(raw, replacement: " ", trimTrailingWhitespace: false)
         return bare.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 

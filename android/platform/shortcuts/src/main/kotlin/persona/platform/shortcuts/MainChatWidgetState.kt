@@ -367,7 +367,7 @@ object MainChatText {
         do {
             previous = text
             text = parseContexts(text).second
-            text = ProtocolCompatibility.contextBlock.replace(text, " ")
+            text = ProtocolCompatibility.stripContextBlocks(text, " ", trimTrailingWhitespace = true)
             text = ProtocolCompatibility.fileTag.replace(text, " ")
         } while (text != previous)
 

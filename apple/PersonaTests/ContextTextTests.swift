@@ -16,8 +16,8 @@ struct ContextTextTests {
         ContextText.closingTag.numberOfMatches(in: text, range: NSRange(text.startIndex..., in: text))
     }
 
-    @Test func plainTextIsLeftAsItIs() {
-        #expect(ContextText.inBlock("a <b> & c\n<persona-context kind=\"x\">") == "a <b> & c\n<persona-context kind=\"x\">")
+    @Test func plainTextIsLeftAsItIsAndOpeningContextTagsAreEscaped() {
+        #expect(ContextText.inBlock("a <b> & c\n<persona-context kind=\"x\">") == "a <b> & c\n&lt;persona-context kind=\"x\">")
     }
 
     @Test func onlyPersonaContextBlocksAreParsed() {
@@ -29,24 +29,62 @@ struct ContextTextTests {
         #expect(!ContextText.closes("</other-context>"))
     }
 
-    @Test func closingTagsAreRemovedWhateverTheirCaseAndSpaces() {
+    @Test func openingAndClosingTagsAreEscapedWhateverTheirCaseAndSpaces() {
         for tag in ["</persona-context>", "</PERSONA-CONTEXT>", "</Persona-Context>",
-                    "</persona-context >", "< / persona-context\t>", "</persona-context\n>"] {
-            #expect(ContextText.inBlock("a\(tag)b") == "ab", "\(tag)")
+                    "</persona-context >", "< / persona-context\t>", "</persona-context\n>",
+                    "<persona-context>", "<PERSONA-CONTEXT kind=\"quote\">", "< persona-context>"] {
+            let encoded = ContextText.inBlock("a\(tag)b")
+            #expect(encoded == "a&lt;\(tag.dropFirst())b", "\(tag)")
+            #expect(!ContextText.containsTag(encoded), "\(tag)")
+            #expect(ContextText.fromBlock(encoded) == "a\(tag)b", "\(tag)")
         }
+        #expect(ContextText.inBlock("a <b> & c <persona-contextual>") == "a <b> & c <persona-contextual>")
+        #expect(ContextText.inBlock("未闭合 <persona-context") == "未闭合 &lt;persona-context")
     }
 
-    @Test func aTagTheRemovalPutsTogetherIsEscaped() {
-        #expect(ContextText.inBlock("a</per</persona-context>sona-context>b") == "a&lt;/persona-context>b")
-        #expect(ContextText.inBlock("a</PERSONA-</persona-context >Context >b") == "a&lt;/PERSONA-Context >b")
+    @Test func nestedTagsCannotFormANewTag() {
+        #expect(ContextText.inBlock("a</per</persona-context>sona-context>b") == "a</per&lt;/persona-context>sona-context>b")
+        #expect(ContextText.inBlock("a</PERSONA-</persona-context >Context >b") == "a</PERSONA-&lt;/persona-context >Context >b")
         // Template metacharacters in the text are written as they are.
-        #expect(ContextText.inBlock("$1 \\ </per</persona-context>sona-context>") == "$1 \\ &lt;/persona-context>")
+        #expect(ContextText.inBlock("$1 \\ </per</persona-context>sona-context>") == "$1 \\ </per&lt;/persona-context>sona-context>")
     }
 
-    @Test func nothingLeftCloses() {
-        for input in Self.attacks + ["</persona-</persona-</persona-context>context>context>", "<</persona-context>/persona-context>"] {
-            #expect(!ContextText.closes(ContextText.inBlock(input)), "\(input)")
+    @Test func nothingLeftOpensOrCloses() {
+        for input in Self.attacks + ["</persona-</persona-</persona-context>context>context>", "<</persona-context>/persona-context>", "<persona-context<persona-context>>"] {
+            let encoded = ContextText.inBlock(input)
+            #expect(!ContextText.closes(encoded), "\(input)")
+            #expect(!ContextText.containsTag(encoded), "\(input)")
+            #expect(ContextText.fromBlock(encoded) == input, "\(input)")
         }
+    }
+
+    @Test func literalContextTagsInsideQuotesRoundTripAndHistoricalBlocksRecoverCleanly() {
+        let legacy = LegacyNames.contextTag
+        let original = "正文含 <persona-context>、</persona-context>、<\(legacy) kind=\"quote\"> 和 </\(legacy)>"
+        let wire = ContextRef.quote(original, from: "Persona", msg: "m1").xml + "\n\n修"
+        let parsed = ContextRef.parse(wire)
+        #expect(parsed.rest == "修")
+        #expect(parsed.refs.count == 1)
+        #expect(parsed.refs.first?.text == original)
+
+        let twoOpensOneClose = "<\(legacy) kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n正文含 <\(legacy)> 标签\n</\(legacy)>\n\n修"
+        let parsed2o1c = ContextRef.parse(twoOpensOneClose)
+        #expect(parsed2o1c.rest == "修")
+        #expect(parsed2o1c.refs.count == 1)
+        #expect(parsed2o1c.refs.first?.text == "正文含 <\(legacy)> 标签")
+
+        let paired = "<\(legacy) kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n前 <persona-context>中</persona-context> 后\n</\(legacy)>\n\n修"
+        let parsedPaired = ContextRef.parse(paired)
+        #expect(parsedPaired.rest == "修")
+        #expect(parsedPaired.refs.count == 1)
+        #expect(parsedPaired.refs.first?.text == "前 <persona-context>中</persona-context> 后")
+
+        let twoBlocks = "<persona-context kind=\"quote\" title=\"A\" url=\"\">\n含 <persona-context> 标签\n</persona-context>\n<persona-context kind=\"context\" title=\"B\" url=\"\">\n第二块\n</persona-context>\n\n修"
+        let parsedTwo = ContextRef.parse(twoBlocks)
+        #expect(parsedTwo.rest == "修")
+        #expect(parsedTwo.refs.count == 2)
+        #expect(parsedTwo.refs[0].text == "含 <persona-context> 标签")
+        #expect(parsedTwo.refs[1].text == "第二块")
     }
 
     @Test func deepNestingStaysLinear() {

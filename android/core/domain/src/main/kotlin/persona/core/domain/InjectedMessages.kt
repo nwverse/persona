@@ -13,7 +13,6 @@ import persona.core.contracts.Item
 private val noticeHead = Regex("^🔔 任务「(.+)」(做完了|在等用户|被模型服务出错打断了|没开起来)(?:（(.+)）)?$") // i18n-ignore: the injected text it reads (prompts.ParseInjected)
 private val followupHead = Regex("^⏰ (.+)（(你之前安排的跟进|定时任务(?:，每 [^）]+)?)）$") // i18n-ignore: the injected text it reads (prompts.ParseInjected)
 private val wakeHead = Regex("^⏰（Persona 叫醒你，第 \\d+ 次）你上一轮停下时说在等「(.*?)」") // i18n-ignore: the injected text it reads (prompts.ParseInjected)
-private val leadContext = ProtocolCompatibility.leadContext
 private const val NOTICE_MARKER = "这是 Persona 的任务通知" // i18n-ignore: the injected text it reads (prompts.ParseInjected)
 private const val LOST_TASKS_HEAD = "⚠️ 运行你的 node 刚重启过" // i18n-ignore: the injected text it reads (prompts.ParseInjected)
 private const val KB_HINT_HEAD = "（知识库" // i18n-ignore: the injected text it reads (prompts.ParseInjected)
@@ -22,9 +21,7 @@ private val noticeLines = mapOf("done" to "做完了", "needs" to "在等你", "
 
 /** What [raw] is when it is one of Persona's messages for the model; null for anything else. */
 fun parseInjected(raw: String): Injected? {
-    var text = raw
-    while (true) text = leadContext.find(text)?.let { text.substring(it.range.last + 1) } ?: break
-    text = text.trim()
+    val text = ProtocolCompatibility.stripLeadingContextBlocks(raw).trim()
     val head = text.substringBefore('\n')
     val rest = if ('\n' in text) text.substringAfter('\n') else ""
     return when {

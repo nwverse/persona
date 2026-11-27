@@ -1,18 +1,38 @@
 package prompts
 
-import "github.com/nwverse/persona/server/internal/lazyre"
+import (
+	"strings"
 
-// closingTag is anything a reader of a message could take for the end of a <persona-context>
-// block: either name (#3182), any case, spaces around the slash and before `>` (the apps match it as loosely, web
-// lib/context-body.ts).
-var closingTag = lazyre.New(`(?i)<\s*/\s*persona-context\s*>`)
+	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
+)
 
-// ContextBody is a text to go inside a context block with nothing left in it that closes the block, so what follows
-// cannot sit outside it as the user's own words (a quoted or forwarded message, a mail handed to the AI twin, comes
-// from someone else; #3754). Closing tags are removed, and one the removal itself puts together
-// ("</persona-</persona-context>context>") has its `<` written as `&lt;`, which joins nothing: two passes, linear in
-// the text. Templates call it as `ctx`.
+// closingTag is anything a reader of a message could take for the end of a context block: either generation,
+// any case, spaces around the slash and before '>'.
+var closingTag = lazyre.New(`(?i)<\s*/\s*` + compat.ContextPattern() + `\s*>`)
+
+// contextTag matches any literal opening or closing context tag prefix (either generation, any case, optional
+// spaces around the slash), even without a closing '>'.
+var contextTag = lazyre.New(`(?i)<(\s*/?\s*` + compat.ContextPattern() + `\b)`)
+
+// escapedContextTag matches the entity-escaped form written by ContextBody.
+var escapedContextTag = lazyre.New(`(?i)&lt;(\s*/?\s*` + compat.ContextPattern() + `\b)`)
+
+// ContextBody makes text safe to go inside a context block: every literal opening or closing context tag has its
+// '<' written as '&lt;' so nothing inside the body can close the block, trigger snapshot stripping, or be rewritten
+// by compatibility adapters, while readers can restore the original text losslessly. Replacing '<' with '&lt;'
+// never joins surrounding fragments into a new tag, so one linear pass suffices. Templates call it as 'ctx'.
 func ContextBody(s string) string {
-	s = closingTag.ReplaceAllString(s, "")
-	return closingTag.ReplaceAllStringFunc(s, func(tag string) string { return "&lt;" + tag[1:] })
+	if !strings.ContainsRune(s, '<') {
+		return s
+	}
+	return contextTag.ReplaceAllString(s, "&lt;$1")
+}
+
+// UnescapeContextBody restores literal context tags escaped by ContextBody.
+func UnescapeContextBody(s string) string {
+	if !strings.ContainsRune(s, '&') {
+		return s
+	}
+	return escapedContextTag.ReplaceAllString(s, "<$1")
 }

@@ -671,6 +671,14 @@ mod apple_source_regressions {
                 3,
             ),
             (
+                "<persona-context kind=\"quote\">正文含未闭合 <persona-context> 标签</persona-context>\n",
+                3,
+            ),
+            (
+                "<persona-context kind=\"quote\">前 <persona-context>中</persona-context> 后</persona-context>\n",
+                3,
+            ),
+            (
                 "<persona-context kind=\"message-source\">{\"kind\":\"patrol\"}</persona-context>\n",
                 3,
             ),

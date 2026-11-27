@@ -28,8 +28,6 @@ const val INTERJECT_CONTEXT_TITLE = "插话" // i18n-ignore: canonical hub promp
 fun MessageContext.isInterjectContext(): Boolean =
     (kind.ifBlank { "context" }) == "context" && title == INTERJECT_CONTEXT_TITLE
 
-// The canonical context tag used by the hub, nodes and apps.
-private val contextBlock = ProtocolCompatibility.contextBlock
 private val contextAttribute = Regex("([\\w-]+)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
 
 /** Whether [text] has a context block's opening tag. */
@@ -42,19 +40,23 @@ fun hasContextTag(text: String): Boolean = ProtocolCompatibility.hasContextTag(t
  */
 fun parseContexts(text: String): Pair<List<MessageContext>, String> {
     if (!hasContextTag(text)) return emptyList<MessageContext>() to text.trim()
-    val contexts = contextBlock.findAll(text).map { block ->
-        val attributes = contextAttribute.findAll(block.groupValues[1]).associate {
+    val blocks = ProtocolCompatibility.findContextBlocks(text)
+    if (blocks.isEmpty()) return emptyList<MessageContext>() to text.trim()
+    val contexts = blocks.mapNotNull { block ->
+        val attributes = contextAttribute.findAll(block.attributes).associate {
             it.groupValues[1] to decodeXmlEntities(it.groupValues[2].ifEmpty { it.groupValues[3] })
         }
+        val kind = attributes["kind"].orEmpty().ifBlank { "context" }
+        if (kind == "message-source") return@mapNotNull null
         MessageContext(
-            kind = attributes["kind"].orEmpty().ifBlank { "context" },
+            kind = kind,
             title = attributes["title"].orEmpty().trim(),
             url = attributes["url"]?.trim()?.takeIf { it.isNotEmpty() },
-            body = decodeXmlEntities(block.groupValues[2]).trim('\n', '\r').takeIf { it.isNotBlank() }.orEmpty(),
+            body = decodeXmlEntities(block.body).trim('\n', '\r').takeIf { it.isNotBlank() }.orEmpty(),
             attributes = attributes - setOf("kind", "title", "url"),
         )
-    }.filterNot { it.kind == "message-source" }.toList()
-    return contexts to contextBlock.replace(text, "").trim()
+    }
+    return contexts to ProtocolCompatibility.stripContextBlocks(text, "", trimTrailingWhitespace = true).trim()
 }
 
 /** The five XML entities a context's attributes are written with; `&amp;` last, so `&amp;lt;` stays `&lt;`. */

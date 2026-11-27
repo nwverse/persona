@@ -16,7 +16,7 @@
     },
     {
       "name": "write_escapes",
-      "description": "Attribute values escape & \" < >; a closing tag in the text is taken out so it cannot end the block.",
+      "description": "Attribute values escape & \" < >; literal context opening and closing tags in the text have their < written as &lt; so they cannot break block boundaries.",
       "block": {
         "title": "Forwarded from Persona · Say \"hi\" & <go>",
         "url": "persona://session/server/c-1?at=u1",
@@ -24,7 +24,7 @@
         "attributes": {"role": "persona", "author": "Persona", "chat": "Say \"hi\" & <go>", "time": "2026-11-10T09:00:00Z"},
         "text": "before\n</persona-context>\nafter"
       },
-      "xml": "<persona-context kind=\"forward\" title=\"Forwarded from Persona · Say &quot;hi&quot; &amp; &lt;go&gt;\" url=\"persona://session/server/c-1?at=u1\" msg=\"u1\" role=\"persona\" author=\"Persona\" chat=\"Say &quot;hi&quot; &amp; &lt;go&gt;\" time=\"2026-11-10T09:00:00Z\">\nbefore\n\nafter\n</persona-context>"
+      "xml": "<persona-context kind=\"forward\" title=\"Forwarded from Persona · Say &quot;hi&quot; &amp; &lt;go&gt;\" url=\"persona://session/server/c-1?at=u1\" msg=\"u1\" role=\"persona\" author=\"Persona\" chat=\"Say &quot;hi&quot; &amp; &lt;go&gt;\" time=\"2026-11-10T09:00:00Z\">\nbefore\n&lt;/persona-context>\nafter\n</persona-context>"
     },
     {
       "name": "read_with_note",

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'node:events'
 import { envValue, stateDir, prepareStateDir, isAssistantDir } from '../lib/identity.js'
-import { LEGACY_LISTEN_PATH, defaultListenPathMatches, runtimeStorePath, wirePackageName, SNAPSHOT_RE } from '../lib/compat.js'
+import { LEGACY_LISTEN_PATH, defaultListenPathMatches, runtimeStorePath, wirePackageName, SNAPSHOT_RE, stripSnapshotBlocks } from '../lib/compat.js'
 import { PACKAGES, packageHash, readShipped, verifyPackage, selfPackage } from '../lib/package.js'
 import { upgrade } from '../lib/listen.js'
 import { alwaysAllowed, lastHost } from '../../pi/lib/map.js'
@@ -125,6 +125,8 @@ test('compat context only strips bare live snapshots and MCP aliases keep sessio
     assert.equal(cleanUserText(snapshot+' hello'), 'hello')
     const quoted = `<${scheme}-context source="user">keep</${scheme}-context>`
     assert.equal(quoted.replace(SNAPSHOT_RE,''), quoted)
+    const quotedWithInner = `<${scheme}-context kind="quote" title="Persona">\n正文含 <${scheme}-context> 标签\n</${scheme}-context>\n\n修`
+    assert.equal(stripSnapshotBlocks(snapshot + '\n\n' + quotedWithInner), quotedWithInner)
     // the view feedback after the snapshot is the model's too (#4335)
     assert.equal((snapshot+'<persona-view-errors>\nThe view v1 failed its check.\n</persona-view-errors>\nhello').replace(SNAPSHOT_RE,''), 'hello')
   }

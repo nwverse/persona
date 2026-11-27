@@ -76,8 +76,6 @@ nonisolated struct MessageSource: Hashable, Sendable {
 
     private static let memo = TextMemo<MessageSource?>(limit: 1024)
     private static let bodyMemo = TextMemo<String>(limit: 1024)
-    private static let context = try! NSRegularExpression(
-        pattern: #"^\s*<"# + HubNaming.contextPattern + #"\b([^>]*)>([\s\S]*?)</"# + HubNaming.contextPattern + #">\s*"#)
     private static let titleAttribute = try! NSRegularExpression(pattern: #"\btitle="([^"]*)""#)
     private static let relayLine = try! NSRegularExpression(
         pattern: #"^这条消息不是用户本人发的，是 Persona 的另一段对话（([A-Za-z0-9._-]{1,128})）用 conversation_(?:send|new) 发来的，第 \d+ 跳（最多 \d+ 跳）。\n按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 ([A-Za-z0-9._-]{1,128})；只是确认收到就不要回，免得两段对话来回发。$"#) // i18n-ignore: complete canonical relay envelope, including matching sender/reply ids
@@ -90,8 +88,6 @@ nonisolated struct MessageSource: Hashable, Sendable {
     }
     private static let metadataMemo = TextMemo<Metadata>(limit: 1024)
     private static let strippedMemo = TextMemo<String>(limit: 1024)
-    private static let allContexts = try! NSRegularExpression(
-        pattern: #"<"# + HubNaming.contextPattern + #"\b([^>]*)>[\s\S]*?</"# + HubNaming.contextPattern + #">\s*"#)
 
     /// The first persisted block is authoritative even when malformed. The user sentinel must prevent every
     /// downstream legacy classifier from interpreting a pasted relay or scheduled template as automation.
@@ -102,31 +98,41 @@ nonisolated struct MessageSource: Hashable, Sendable {
 
     static func strippingMetadata(_ text: String) -> String {
         strippedMemo(text) { raw in
-            var result = raw
-            for match in allContexts.matches(in: raw, range: NSRange(raw.startIndex..., in: raw)).reversed() {
-                guard let attrs = Range(match.range(at: 1), in: raw), String(raw[attrs]).contains(#"kind="message-source""#),
-                      let range = Range(match.range, in: result) else { continue }
-                result.removeSubrange(range)
+            let blocks = HubNaming.findContextBlocks(raw)
+            guard !blocks.isEmpty else { return raw }
+            let ns = raw as NSString
+            var out = ""
+            var prev = 0
+            var changed = false
+            for block in blocks {
+                guard block.attributes.contains(#"kind="message-source""#) else { continue }
+                out += ns.substring(with: NSRange(location: prev, length: block.start - prev))
+                var end = block.end
+                while end < ns.length {
+                    let c = ns.character(at: end)
+                    if c != 0x20 && c != 0x09 && c != 0x0A && c != 0x0D { break }
+                    end += 1
+                }
+                prev = end
+                changed = true
             }
-            return result
+            guard changed else { return raw }
+            out += ns.substring(from: prev)
+            return out
         }
     }
 
     private static func metadata(_ text: String) -> Metadata {
         metadataMemo(text) { raw in
-            var rest = raw
-            while let match = context.firstMatch(in: rest, range: NSRange(rest.startIndex..., in: rest)),
-                  let whole = Range(match.range, in: rest), let attrs = Range(match.range(at: 1), in: rest),
-                  let inner = Range(match.range(at: 2), in: rest) {
-                if String(rest[attrs]).contains(#"kind="message-source""#) {
-                    let value = try? JSONDecoder().decode(JSONValue.self, from: Data(String(rest[inner]).utf8))
+            for block in HubNaming.findLeadingContextBlocks(raw).blocks {
+                if block.attributes.contains(#"kind="message-source""#) {
+                    let value = try? JSONDecoder().decode(JSONValue.self, from: Data(block.body.utf8))
                     guard string(value?["author"]) != "user", let kind = clean(string(value?["kind"])) else {
                         return Metadata(found: true, source: nil)
                     }
                     return Metadata(found: true, source: MessageSource(kind: kind,
                         conversationID: clean(string(value?["conversation_id"])), title: clean(string(value?["title"]))))
                 }
-                rest = String(rest[whole.upperBound...])
             }
             return Metadata(found: false, source: nil)
         }
@@ -136,14 +142,14 @@ nonisolated struct MessageSource: Hashable, Sendable {
     private static func legacyBody(_ text: String) -> String { bodyMemo(text) { envelope(strippingMetadata($0)).body } }
 
     private static func envelope(_ raw: String) -> (source: MessageSource?, body: String) {
-        var rest = raw
+        let ns = raw as NSString
+        let (blocks, endUTF16) = HubNaming.findLeadingContextBlocks(raw)
         var relay: MessageSource?
         var kept = ""
-        while let match = context.firstMatch(in: rest, range: NSRange(rest.startIndex..., in: rest)),
-              let whole = Range(match.range, in: rest), let attrs = Range(match.range(at: 1), in: rest),
-              let inner = Range(match.range(at: 2), in: rest) {
-            let attributes = String(rest[attrs])
-            let content = String(rest[inner]).trimmingCharacters(in: .whitespacesAndNewlines)
+        var prev = 0
+        for block in blocks {
+            let attributes = block.attributes
+            let content = block.body.trimmingCharacters(in: .whitespacesAndNewlines)
             var isRelay = false
             if attributes.contains(#"kind="context""#),
                let t = titleAttribute.firstMatch(in: attributes, range: NSRange(attributes.startIndex..., in: attributes)),
@@ -158,9 +164,12 @@ nonisolated struct MessageSource: Hashable, Sendable {
                     isRelay = true
                 }
             }
-            if !isRelay { kept += String(rest[whole]) }
-            rest = String(rest[whole.upperBound...])
+            if !isRelay {
+                kept += ns.substring(with: NSRange(location: prev, length: block.end - prev))
+            }
+            prev = block.end
         }
+        let rest = endUTF16 > 0 ? ns.substring(from: endUTF16) : raw
         if let relay { return (relay, (kept + rest).trimmingCharacters(in: .whitespacesAndNewlines)) }
         let trimmed = rest.trimmingCharacters(in: .whitespacesAndNewlines)
         if let match = supervisionHead.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),

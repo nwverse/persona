@@ -1,10 +1,10 @@
 import { appToolName } from '../../runtime-sdk/index.js'
 import { assistantPreview } from '../../runtime-sdk/lib/assistant-preview.js'
-import { SNAPSHOT_RE } from '../../runtime-sdk/lib/compat.js'
+import { stripSnapshotBlocks } from '../../runtime-sdk/lib/compat.js'
 
 const NAMES = { run_terminal_command: 'Bash', read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_directory: 'LS', search_files: 'Grep', web_search: 'WebSearch', web_fetch: 'WebFetch' }
 export const toolName = (name) => appToolName(name, NAMES)
-export const visibleText = (text) => String(text || '').replace(SNAPSHOT_RE, '').trim()
+export const visibleText = (text) => stripSnapshotBlocks(String(text || '')).trim()
 export const contentText = (content) => (content || []).map((b) => b.type === 'content' ? b.content?.text || '' : b.text || '').filter(Boolean).join('\n')
 
 export function addItem(state, item) {

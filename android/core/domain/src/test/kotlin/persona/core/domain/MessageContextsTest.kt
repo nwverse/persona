@@ -122,4 +122,35 @@ class MessageContextsTest {
         assertEquals(1, similar.size)
         assertTrue(similar.none { it.isInterjectContext() })
     }
+
+    @Test fun escapedAndHistoricalLiteralContextTagsInsideQuotesParseCleanly() {
+        val escapedQuote = "<persona-context kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n" +
+            "正文含 &lt;persona-context> 和 &lt;/persona-context>\n</persona-context>\n\n修"
+        val (escapedContexts, escapedRest) = parseContexts(escapedQuote)
+        assertEquals("修", escapedRest)
+        assertEquals(1, escapedContexts.size)
+        assertEquals("正文含 <persona-context> 和 </persona-context>", escapedContexts.single().body)
+
+        val twoOpensOneClose = "<persona-context kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n" +
+            "引用正文含未闭合 <persona-context> 标签\n</persona-context>\n\n修"
+        val (c2, r2) = parseContexts(twoOpensOneClose)
+        assertEquals("修", r2)
+        assertEquals(1, c2.size)
+        assertEquals("引用正文含未闭合 <persona-context> 标签", c2.single().body)
+
+        val paired = "<persona-context kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n" +
+            "前 <persona-context>中</persona-context> 后\n</persona-context>\n\n修"
+        val (c3, r3) = parseContexts(paired)
+        assertEquals("修", r3)
+        assertEquals(1, c3.size)
+        assertEquals("前 <persona-context>中</persona-context> 后", c3.single().body)
+
+        val twoBlocks = "<persona-context kind=\"quote\" title=\"A\" url=\"\">\n含 <persona-context> 标签\n</persona-context>\n" +
+            "<persona-context kind=\"context\" title=\"B\" url=\"\">\n第二块\n</persona-context>\n\n修"
+        val (c4, r4) = parseContexts(twoBlocks)
+        assertEquals("修", r4)
+        assertEquals(2, c4.size)
+        assertEquals("含 <persona-context> 标签", c4[0].body)
+        assertEquals("第二块", c4[1].body)
+    }
 }

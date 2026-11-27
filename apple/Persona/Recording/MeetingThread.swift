@@ -437,11 +437,7 @@ nonisolated enum MeetingThread {
     private static func raws(_ text: String) -> Raw { rawMemo(text, scanRaw) }
     private static func analyzed(_ text: String) -> Block { blockMemo(text, scanBlock) }
 
-    /// A message's first block, either generation's tag name (`HubNaming`); its attributes and its body.
-    private static let leadingBlock = try! NSRegularExpression(
-        pattern: #"^\s*<"# + HubNaming.contextPattern + #"\b([^>]*)>([\s\S]*?)</"# + HubNaming.contextPattern + ">")
     private static let sourceAttribute = try! NSRegularExpression(pattern: #"\bkind="message-source""#)
-    private static let blockEnd = try! NSRegularExpression(pattern: "</" + HubNaming.contextPattern + ">")
     private static let liveLine = try! NSRegularExpression(pattern: #"^\[([0-9]{1,2}(?::[0-9]{2}){1,2})\]\s?(.*)$"#)
     private static let askMessage = try! NSRegularExpression(pattern: #"^ask-([0-9a-f-]{36})-[0-9]+$"#)
     private static let photoMessage = try! NSRegularExpression(pattern: #"^photo-([0-9a-f-]{36})$"#)
@@ -455,18 +451,18 @@ nonisolated enum MeetingThread {
 
     private static func scanRaw(_ text: String) -> Raw {
         let ns = text as NSString
-        let whole = NSRange(location: 0, length: ns.length)
+        let blocks = HubNaming.findContextBlocks(text)
         var meeting = false
-        if let lead = leadingBlock.firstMatch(in: text, range: whole),
-           matches(sourceAttribute, ns.substring(with: lead.range(at: 1))) {
-            let json = ns.substring(with: lead.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let lead = HubNaming.findLeadingContextBlocks(text).blocks.first,
+           matches(sourceAttribute, lead.attributes) {
+            let json = lead.body.trimmingCharacters(in: .whitespacesAndNewlines)
             if case .string("meeting")? = (try? JSONDecoder().decode(JSONValue.self, from: Data(json.utf8)))?["kind"] {
                 meeting = true
             }
         }
         var endBatch = true
-        if let last = blockEnd.matches(in: text, range: whole).last {
-            let after = ns.substring(from: NSMaxRange(last.range))
+        if let last = blocks.last {
+            let after = ns.substring(from: last.end)
             endBatch = !after.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         return Raw(meeting: meeting, endBatch: endBatch)

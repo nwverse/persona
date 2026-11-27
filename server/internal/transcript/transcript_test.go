@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -1335,5 +1336,38 @@ func TestQueuedSystemNoticeIsNotAUserMessage(t *testing.T) {
 	parse(queue("popAll", "A"))
 	if len(m.Queue) != 0 {
 		t.Fatalf("queue = %q, want it empty", m.Queue)
+	}
+}
+
+func TestSnapshotStripPreservesQuotedLiteralContextTags(t *testing.T) {
+	legacy := compat.ContextNames()[0]
+	snapshot := "<persona-context>\n- 现在：2026-11-27 12:29\n</persona-context>\n\n"
+	cases := []struct {
+		name  string
+		quote string
+	}{
+		{"unclosed legacy tag in legacy quote", "<" + legacy + ` kind="quote" title="Persona" url="" msg="m1">` + "\n正文含 <" + legacy + "> 标签\n</" + legacy + ">\n\n修"},
+		{"unclosed canonical tag in canonical quote", `<persona-context kind="quote" title="Persona" url="" msg="m1">` + "\n正文含 <persona-context> 标签\n</persona-context>\n\n修"},
+		{"paired tags in quote", `<persona-context kind="quote" title="Persona" url="" msg="m1">` + "\n前 <persona-context>中</persona-context> 后\n</persona-context>\n\n修"},
+		{"mixed prefixes in quote", "<" + legacy + ` kind="quote" title="Persona" url="" msg="m1">` + "\n前 <persona-context> 和 </persona-context> 后\n</" + legacy + ">\n\n修"},
+		{"escaped tags in quote", `<persona-context kind="quote" title="Persona" url="" msg="m1">` + "\n前 &lt;persona-context> 和 &lt;/persona-context> 后\n</persona-context>\n\n修"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := snapshot + tc.quote
+			quoted, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			it := only(t, ParseLine(1, []byte(`{"type":"user","uuid":"u1","message":{"role":"user","content":`+string(quoted)+`}}`), &Meta{}))
+			if it.Text != tc.quote {
+				t.Fatalf("claude text = %q, want %q", it.Text, tc.quote)
+			}
+			codex := `{"timestamp":"2026-11-27T04:29:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":` + string(quoted) + `}]}}}`
+			cit := only(t, ParseLine(1, []byte(codex), &Meta{Codex: true}))
+			if cit.Text != tc.quote {
+				t.Fatalf("codex text = %q, want %q", cit.Text, tc.quote)
+			}
+		})
 	}
 }

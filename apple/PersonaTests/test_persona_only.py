@@ -462,25 +462,37 @@ class PersonaOnlyTests(unittest.TestCase):
         self.assertIn('NSRegularExpression.escapedPattern(for: LegacyNames.product)', naming)
         self.assertIn('static var contextPattern: String { productPattern + "-context" }', naming)
         self.assertIn('static var filePattern: String { productPattern + "-file" }', naming)
-        for path in ["Shared/ContextText.swift", "Shared/Injected.swift", "Shared/WatchText.swift",
-                     "Persona/Voice/VoiceWire.swift", "Persona/Views/Link/LinkSheet.swift"]:
+        self.assertIn('pattern: "<" + contextPattern', naming)
+        for path, marker in [
+            ("Shared/ContextText.swift", "HubNaming.contextPattern"),
+            ("Shared/Injected.swift", "HubNaming.stripLeadingContextBlocks"),
+            ("Shared/WatchText.swift", "HubNaming.findContextBlocks"),
+            ("Persona/Voice/VoiceWire.swift", "HubNaming.stripContextBlocks"),
+            ("Persona/Views/Link/LinkSheet.swift", "HubNaming.findContextBlocks"),
+        ]:
             with self.subTest(path=path):
                 text = source(path)
-                self.assertIn("HubNaming.contextPattern", text)
+                self.assertIn(marker, text)
                 self.assertNotIn("persona|", text)
                 self.assertNotIn("|persona", text)
         closing_source = source("Shared/ContextText.swift")
-        pieces = re.search(r'pattern: #"([^"\n]+)"# \+ HubNaming.contextPattern \+ #"([^"\n]+)"#', closing_source)
-        self.assertIsNotNone(pieces, "the sanitizer must use the shared context pattern")
+        matches = list(re.finditer(r'pattern: #"([^"\n]+)"# \+ HubNaming.contextPattern \+ #"([^"\n]+)"#', closing_source))
+        self.assertGreaterEqual(len(matches), 2, "the sanitizer must use the shared context pattern for closing and general context tags")
         previous = re.search(r'static let product = "([^"\n]+)"', source("Shared/NativeStateMigration.swift")).group(1)
-        closing = pieces.group(1) + "(?:persona|" + re.escape(previous) + ")-context" + pieces.group(2)
+        closing = matches[0].group(1) + "(?:persona|" + re.escape(previous) + ")-context" + matches[0].group(2)
         regex = re.compile(closing, re.IGNORECASE)
         for product in ["persona", previous]:
             for tag in [f"</{product}-context>", f"</{product.upper()}-CONTEXT>", f"< / {product}-context\t>"]:
                 self.assertEqual(regex.sub("", f"a{tag}b"), "ab")
         self.assertIsNone(regex.search("</other-context>"))
-        self.assertIn('let removed = replace(text, with: "")', closing_source)
-        self.assertIn('return replace(removed, with: "&lt;$1")', closing_source)
+        general = matches[1].group(1) + "(?:persona|" + re.escape(previous) + ")-context" + matches[1].group(2)
+        general_re = re.compile(general, re.IGNORECASE)
+        for product in ["persona", previous]:
+            for tag in [f"<{product}-context>", f"<{product}-context kind=\"quote\">", f"</{product}-context>", f"< / {product.upper()}-CONTEXT>"]:
+                self.assertEqual(general_re.sub(r"&lt;\1", f"a{tag}b"), f"a&lt;{tag[1:]}b")
+        self.assertIsNone(general_re.search("<other-context>"))
+        self.assertIn('withTemplate: "&lt;$1"', closing_source)
+        self.assertIn('withTemplate: "<$1"', closing_source)
         for path in ["Shared/WatchText.swift", "Persona/Views/Chat/VideoAttach.swift"]:
             self.assertIn("HubNaming.filePattern", source(path))
 

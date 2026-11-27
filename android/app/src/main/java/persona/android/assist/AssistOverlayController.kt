@@ -1295,8 +1295,7 @@ private val ATTACHED_IMAGES_REGEX = Regex("<attached_images>[\\s\\S]*?</attached
 
 internal fun stripOverlayWireTags(raw: String): StrippedWireMessage {
     val hasImage = ATTACHED_IMAGES_REGEX.containsMatchIn(raw)
-    val cleaned = raw
-        .replace(ProtocolCompatibility.contextBlock, "")
+    val cleaned = ProtocolCompatibility.stripContextBlocks(raw, "", trimTrailingWhitespace = true)
         .replace(ProtocolCompatibility.fileTag, "\n")
         .replace(ATTACHED_IMAGES_REGEX, "")
         .trim()

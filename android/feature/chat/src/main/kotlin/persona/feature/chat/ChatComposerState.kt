@@ -270,7 +270,6 @@ fun rememberChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()):
 
 internal fun quoteComposerPath(path: String): String = ComposerMessage.quotePath(path)
 
-private val composerContextTags = ProtocolCompatibility.contextTag
 
 private data class MaskedContexts(val text: String, val blocks: List<Pair<String, String>>) {
     fun unmask(value: String): String {
@@ -283,15 +282,23 @@ private data class MaskedContexts(val text: String, val blocks: List<Pair<String
 /** Mask canonical and legacy context blocks so nested file or image tags stay inside their context, byte for byte. */
 private fun maskComposerContexts(text: String): MaskedContexts {
     if (!hasContextTag(text)) return MaskedContexts(text, emptyList())
+    val found = ProtocolCompatibility.findContextBlocks(text)
+    if (found.isEmpty()) return MaskedContexts(text, emptyList())
     val blocks = mutableListOf<Pair<String, String>>()
     var nonce = 0
-    val masked = composerContextTags.replace(text) { match ->
+    val out = StringBuilder(text.length)
+    var prev = 0
+    for (block in found) {
+        if (block.start < prev) continue
+        out.append(text, prev, block.start)
         var marker: String
         do { marker = "\u0000${nonce++}\u0000" } while (marker in text)
-        blocks += marker to match.value
-        marker
+        blocks += marker to text.substring(block.start, block.end)
+        out.append(marker)
+        prev = block.end
     }
-    return MaskedContexts(masked, blocks)
+    out.append(text, prev, text.length)
+    return MaskedContexts(out.toString(), blocks)
 }
 
 /** Parse user-visible context blocks (both canonical and legacy) while dropping internal hub metadata blocks. */

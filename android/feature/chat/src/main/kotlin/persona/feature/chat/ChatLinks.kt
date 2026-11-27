@@ -250,8 +250,6 @@ data class ChatLinkContext(
         /** The order [extra] is written in (iOS `ContextRef.extraOrder`): a forward's metadata, then any other attribute by name. */
         val EXTRA_ORDER = listOf("role", "author", "chat", "project", "machine", "time")
 
-        private val tags = ProtocolCompatibility.contextBlock
-
         private val attributes = Regex("([\\w-]+)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
         private fun escape(s: String) = s.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -260,16 +258,29 @@ data class ChatLinkContext(
          * again in the new-agent form): the other blocks and what was typed stay.
          */
         internal fun withoutForwards(text: String): String {
+            val blocks = ProtocolCompatibility.findContextBlocks(text)
+            if (blocks.isEmpty()) return text
             var removed = false
-            val out = tags.replace(text) { tag ->
-                if (attributes.findAll(tag.groupValues[1]).any {
-                        it.groupValues[1] == "kind" && it.groupValues[2].ifEmpty { it.groupValues[3] } == FORWARD
-                    }) {
+            val out = StringBuilder(text.length)
+            var prev = 0
+            for (block in blocks) {
+                if (block.start < prev) continue
+                out.append(text, prev, block.start)
+                val isForward = attributes.findAll(block.attributes).any {
+                    it.groupValues[1] == "kind" && it.groupValues[2].ifEmpty { it.groupValues[3] } == FORWARD
+                }
+                if (isForward) {
                     removed = true
-                    ""
-                } else tag.value
+                    var end = block.end
+                    while (end < text.length && text[end].isWhitespace()) end++
+                    prev = end
+                } else {
+                    out.append(text, block.start, block.end)
+                    prev = block.end
+                }
             }
-            return if (removed) out.trim('\n') else out
+            out.append(text, prev, text.length)
+            return if (removed) out.toString().trim('\n') else text
         }
 
         internal fun parse(text: String): Pair<List<ChatLinkContext>, String> {

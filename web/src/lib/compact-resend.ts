@@ -9,7 +9,7 @@
 // - Sessions that do not support compaction (non-Claude terminals, runtimes, botmux, offline, read-only, or hubs
 //   without `assistant_compact`) are not offered a broken action.
 import { IMAGE_LIMIT_CODE, isRetryText } from "./api-errors";
-import { CONTEXT_RE } from "./compatibility";
+import { replaceContextBlocks } from "./compatibility";
 import { sessionCan, activityOf } from "./format";
 import { isInterjectContext, tagAttrs, withoutViewErrors, type ChatLine, type UserMessage } from "./turns";
 import type { Item, Session } from "./types";
@@ -95,9 +95,9 @@ export function compactResendSupport(session: Session | undefined, opts: Compact
  * forwards, `<persona-file>`, `<pasted_content>`, `<attached_images>`, slash commands, and plain text) verbatim.
  */
 export function cleanRawUserText(raw: string, stripImagePlaceholders: boolean): string {
-  let out = withoutViewErrors(raw).replace(CONTEXT_RE, (whole, attrs: string) => {
-    if (!attrs.trim()) return ""; // hub's realtime snapshot, re-prepended on send
-    const { kind, title } = tagAttrs(attrs);
+  let out = replaceContextBlocks(withoutViewErrors(raw), (block, whole) => {
+    if (!block.attrs.trim()) return ""; // hub's realtime snapshot, re-prepended on send
+    const { kind, title } = tagAttrs(block.attrs);
     if (kind === "skill-instructions" || kind === "message-source" || isInterjectContext({ kind, title })) return "";
     return whole;
   });

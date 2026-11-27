@@ -27,10 +27,6 @@ import (
 // sessionMentionURL starts a quoted session's address.
 const sessionMentionURL = "persona://session/"
 
-// leadingContextBlock is one context block at the start of what is left of a message: its attributes and body. The
-// clients put picked contexts in front, so a block further on (quoted inside the user's words) is never a mention.
-var leadingContextBlock = lazyre.New(`(?s)^\s*<` + compat.ContextPattern() + `\b([^>]*)>(.*?)</` + compat.ContextPattern() + `>`)
-
 // contextBlockAttr is one name="value" on a context tag, after a space (so data-kind="…" is not kind="…").
 var contextBlockAttr = lazyre.New(`(?:^|\s)([a-z_]+)="([^"]*)"`)
 
@@ -69,28 +65,28 @@ func (n *Node) withSessionMentions(ctx context.Context, id, text string) string 
 // apply is text with the body of each leading session quote ending in its note. A quote that has its note already
 // (sent again: an edited or compacted resend) keeps it alone, in whichever language it was written.
 func (s sessionNotes) apply(text string) string {
+	blocks, _ := compat.FindLeadingContextBlocks(text)
+	if len(blocks) == 0 {
+		return text
+	}
 	var b strings.Builder
-	rest, changed := text, false
-	for {
-		m := leadingContextBlock.FindStringSubmatchIndex(rest)
-		if m == nil {
-			break
-		}
-		block := rest[:m[1]]
-		if machine, session, ok := mentionedSession(rest[m[2]:m[3]]); ok {
-			body := rest[m[4]:m[5]]
+	prev, changed := 0, false
+	for _, blk := range blocks {
+		block := text[prev:blk.End]
+		if machine, session, ok := mentionedSession(blk.Attrs); ok {
+			body := text[blk.OpenEnd:blk.CloseAt]
 			if !s.noted(body, machine, session) {
-				block = rest[:m[4]] + strings.TrimRight(body, "\r\n") + "\n\n" + s.note(s.language, machine, session) + "\n" + rest[m[5]:m[1]]
+				block = text[prev:blk.OpenEnd] + strings.TrimRight(body, "\r\n") + "\n\n" + s.note(s.language, machine, session) + "\n" + text[blk.CloseAt:blk.End]
 				changed = true
 			}
 		}
 		b.WriteString(block)
-		rest = rest[m[1]:]
+		prev = blk.End
 	}
 	if !changed {
 		return text
 	}
-	b.WriteString(rest)
+	b.WriteString(text[prev:])
 	return b.String()
 }
 

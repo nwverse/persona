@@ -10,7 +10,7 @@ writes and reads these blocks and checks them against these cases; the web app a
 - The opening tag is `kind`, `title`, `url`, `msg`, then the metadata in this order: `role`, `author`, `chat`,
   `project`, `machine`, `time`; any other attribute follows, by name. `write_agent_reply`
 - The text sits on its own lines between the tags. `write_agent_reply`
-- Attribute values escape `&`, `"`, `<` and `>`; a closing tag inside the text is taken out. `write_escapes`
+- Attribute values escape `&`, `"`, `<` and `>`; literal context opening and closing tags inside the text have their `<` escaped as `&lt;`. `write_escapes`
 - `url` is `persona://session/<machine id>/<session id>?at=<item id>`, the item id percent-encoded (`#` as `%23`).
   `write_agent_reply`, `read_with_note`
 - Reading back gives the block's fields, unknown attributes included, and the note after it; the origin is the

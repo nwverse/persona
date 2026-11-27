@@ -1,4 +1,5 @@
-import { CONTEXT_RE, FILE_RE, PERSONA_SERVERS, canonicalTool } from "./compatibility";
+import { FILE_RE, PERSONA_SERVERS, canonicalTool, replaceContextBlocks } from "./compatibility";
+import { unescapeContextBody } from "./context-body";
 import { splitInlineTrailer } from "./inline-mentions";
 // Items → what the chat shows (docs/apple/ios.md "Information architecture"): every user message opens a segment; the segment shows
 // the message, one work row folding the tools / thoughts / notices / intermediate replies, and the agent's last
@@ -245,10 +246,10 @@ export function parseUserText(raw: string): { text: string; inlineTrailer?: stri
   const contexts: Context[] = [];
   const files: AttachedFile[] = [];
   const photos: string[] = [];
-  let text = withoutViewErrors(raw).replace(CONTEXT_RE, (_, attrs: string, body: string) => {
-    const { kind, title, url, ...rest } = tagAttrs(attrs);
+  let text = replaceContextBlocks(withoutViewErrors(raw), (block) => {
+    const { kind, title, url, ...rest } = tagAttrs(block.attrs);
     if (kind === "skill-instructions" || isInterjectContext({ kind, title })) return "";
-    const words = body.trim();
+    const words = unescapeContextBody(block.body).trim();
     contexts.push({ kind: kind ?? "context", title, url, text: kind === "forward" ? splitInlineTrailer(words).text : words, ...(Object.keys(rest).length ? { attrs: rest } : {}) });
     return "";
   });

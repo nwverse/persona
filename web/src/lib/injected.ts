@@ -1,4 +1,4 @@
-import { LEAD_CONTEXT_RE as LEAD_CONTEXT } from "./compatibility";
+import { stripLeadingContextBlocks } from "./compatibility";
 import { t } from "../i18n";
 import type { Todo } from "./todos";
 import type { Injected, Item } from "./types";
@@ -27,9 +27,7 @@ const NOTICE_LINES: Record<string, string> = { done: "lib-injected.task_done", n
 
 /** What text is when it is one of Persona's messages for the model; null for anything else. */
 export function parseInjected(raw: string): Injected | null {
-  let text = raw;
-  for (let m = LEAD_CONTEXT.exec(text); m; m = LEAD_CONTEXT.exec(text)) text = text.slice(m[0].length);
-  text = text.trim();
+  const text = stripLeadingContextBlocks(raw).trim();
   const nl = text.indexOf("\n");
   const head = nl < 0 ? text : text.slice(0, nl);
   const rest = nl < 0 ? "" : text.slice(nl + 1);

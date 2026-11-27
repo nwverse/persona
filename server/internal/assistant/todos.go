@@ -2462,7 +2462,9 @@ var (
 // context block (<persona-context>, as older ones were, #3182).
 func cleanPromptTitle(prompt string) string {
 	s := strings.TrimSpace(prompt)
-	if contextLeadRe.MatchString(s) {
+	if _, end := compat.FindLeadingContextBlocks(s); end > 0 {
+		s = s[end:]
+	} else if contextLeadRe.MatchString(s) {
 		if loc := contextCloseRe.FindStringIndex(s); loc != nil {
 			s = s[loc[1]:]
 		} else if endTagIdx := strings.Index(s, ">"); endTagIdx != -1 {
@@ -2473,7 +2475,7 @@ func cleanPromptTitle(prompt string) string {
 	}
 	for _, line := range strings.Split(s, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !contextOpenRe.MatchString(trimmed) {
+		if trimmed != "" && !contextLeadRe.MatchString(trimmed) {
 			return trimmed
 		}
 	}

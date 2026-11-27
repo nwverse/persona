@@ -19,10 +19,6 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// leadingContextRe is one attributed context block at the start of what is left of a message: the clients put the
-// picked contexts in front, so a block further on (one quoted inside another's text) is never taken for a mention.
-var leadingContextRe = lazyre.New(`(?s)^\s*<` + compat.ContextPattern() + `\b([^>]*)>(.*?)</` + compat.ContextPattern() + `>`)
-
 // contextAttrRe is one name="value" on a context tag.
 var contextAttrRe = lazyre.New(`([a-z_]+)="([^"]*)"`)
 
@@ -51,27 +47,23 @@ func (s *Service) fillWorkspaces(ctx context.Context, text string) (filled strin
 		return text, !contextTagRe.MatchString(text)
 	}
 	own = true
+	blocks, end := compat.FindLeadingContextBlocks(text)
 	var b strings.Builder
-	rest := text
-	for {
-		m := leadingContextRe.FindStringSubmatchIndex(rest)
-		if m == nil {
-			break
-		}
-		block := rest[:m[1]]
-		tag := rest[m[2]:m[3]]
-		attrs := contextAttrs(tag)
+	prev := 0
+	for _, blk := range blocks {
+		block := text[prev:blk.End]
+		attrs := contextAttrs(blk.Attrs)
 		replaced := false
 		if attrs["kind"] == "workspace" {
 			if filled, ok := s.workspaceBlock(ctx, attrs); ok {
-				lead := block[:len(block)-len(strings.TrimLeft(block, " \t\r\n"))]
-				block, replaced = lead+filled, true
+				block, replaced = text[prev:blk.Start]+filled, true
 			}
 		}
-		own = own && replaced && onlyWorkspaceKind(tag)
+		own = own && replaced && onlyWorkspaceKind(blk.Attrs)
 		b.WriteString(block)
-		rest = rest[m[1]:]
+		prev = blk.End
 	}
+	rest := text[end:]
 	b.WriteString(rest)
 	return b.String(), own && !contextTagRe.MatchString(rest)
 }

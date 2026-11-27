@@ -14,8 +14,9 @@ export interface ForwardBlock {
 }
 export function wireContextAttribute(value:string):string {return value.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 export function wireContextBody(value:string):string {
- const closer=new RegExp('<(\\s*\\/\\s*(?:persona|' + legacyProduct + ')-context\\s*>)','gi');
- return value.replace(closer,'').replace(closer,'&lt;$1');
+ if(!value.includes('<'))return value;
+ const tag=new RegExp('<(\\s*\\/?\\s*(?:persona|' + legacyProduct + ')-context\\b)','gi');
+ return value.replace(tag,'&lt;$1');
 }
 export function forwardUnescape(value:string):string {return value.replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');}
 export function forwardURL(machine:string,session:string,item:string):string {
@@ -34,13 +35,34 @@ export function wireForwardBlock(source:ForwardFields,tag:string):string {
  return '<'+tag+' '+attrs+'>\n'+wireContextBody(value('text'))+'\n</'+tag+'>';
 }
 export interface ParsedForwardPrefix { entries:ForwardFields[]; rest:string }
+function unescapeWireContextBody(value:string):string {
+ if(!value.includes('&'))return value;
+ const esc=new RegExp('&lt;(\\s*\\/?\\s*(?:persona|' + legacyProduct + ')-context\\b)','gi');
+ return value.replace(esc,'<$1');
+}
 export function forwardPrefix(input:string):ParsedForwardPrefix {
  const entries:ForwardFields[]=[];let rest=input;
+ const tokRe=new RegExp('<(?:persona|' + legacyProduct + ')-context(?:\\s+[^<>]*)?>|<\\/(?:persona|' + legacyProduct + ')-context\\s*>','g');
  while(entries.length<60){
-  const mt=new RegExp('^<(persona-context|' + legacyContextTag + ')\\b((?:[^">]|"[^"]*")*)>([\\s\\S]*?)<\\/\\1>\\s*').exec(rest);
-  if(!mt)break;
-  const fields:ForwardFields={};for(const a of mt[2].matchAll(/([\w-]+)="([^"]*)"/g))fields[a[1]]=forwardUnescape(a[2]);
-  fields.text=mt[3].replace(/^\n|\n$/g,'');entries.push(fields);rest=rest.slice(mt[0].length);
+  const open=new RegExp('^<(?:persona|' + legacyProduct + ')-context((?:\\s+[^<>]*)?)>').exec(rest);
+  if(!open||open[0].endsWith('/>'))break;
+  const toks:{start:number;end:number;close:boolean}[]=[];let hasClose=false;tokRe.lastIndex=0;
+  for(let m=tokRe.exec(rest);m;m=tokRe.exec(rest)){
+   if(m[0].startsWith('</')){toks.push({start:m.index,end:m.index+m[0].length,close:true});hasClose=true;}
+   else if(!m[0].endsWith('/>'))toks.push({start:m.index,end:m.index+m[0].length,close:false});
+  }
+  if(!hasClose||toks.length<2||toks[0].start!==0||toks[0].close)break;
+  let depth=1,bestDepth=toks.length+1,closeIdx=-1;
+  for(let i=1;i<toks.length;i++){
+   if(toks[i].close){depth--;if(depth===0){closeIdx=i;break;}if(depth<bestDepth){bestDepth=depth;closeIdx=i;}}
+   else depth++;
+  }
+  if(closeIdx<0)break;
+  const fields:ForwardFields={};for(const a of open[1].matchAll(/([\w-]+)="([^"]*)"/g))fields[a[1]]=forwardUnescape(a[2]);
+  fields.text=unescapeWireContextBody(rest.slice(open[0].length,toks[closeIdx].start)).replace(/^\n|\n$/g,'');
+  entries.push(fields);
+  let end=toks[closeIdx].end;while(end<rest.length&&/\s/.test(rest[end]))end++;
+  rest=rest.slice(end);
  }
  return {entries,rest};
 }

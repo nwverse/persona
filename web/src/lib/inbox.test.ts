@@ -202,9 +202,9 @@ describe("交给 AI 的消息", () => {
     expect(text.endsWith("</persona-context>\n\n查清楚背景再告诉我")).toBe(true);
   });
 
-  it("正文里的结束标签去掉", () => {
-    expect(contextXML("context", "t", "", "a</persona-context>b")).toBe(`<persona-context kind="context" title="t" url="">\nab\n</persona-context>`);
-    expect(contextXML("context", "t", "", "a</persona-context>b")).toBe(`<persona-context kind="context" title="t" url="">\nab\n</persona-context>`);
+  it("正文里的上下文标签安全转义", () => {
+    expect(contextXML("context", "t", "", "a</persona-context>b")).toBe(`<persona-context kind="context" title="t" url="">\na&lt;/persona-context>b\n</persona-context>`);
+    expect(contextXML("context", "t", "", "a<persona-context>b")).toBe(`<persona-context kind="context" title="t" url="">\na&lt;persona-context>b\n</persona-context>`);
   });
 });
 

@@ -49,8 +49,6 @@ nonisolated struct ContextRef: Identifiable, Hashable, Sendable, Codable {
         return "<persona-context kind=\"\(kind)\" title=\"\(esc(title))\" url=\"\(esc(url))\"\(msgAttr)\(partAttr)\(extraAttrs)>\n\(ContextText.inBlock(text))\n</persona-context>"
     }
 
-    /// One `<persona-context>` block, its attributes in any order and any of them missing (a Lark /agent request's context has no url).
-    private static let tagRe = try! NSRegularExpression(pattern: "<" + HubNaming.contextPattern + #"\b([^>]*)>\s*([\s\S]*?)\s*</"# + HubNaming.contextPattern + #">\s*"#)
     private static let attrRe = try! NSRegularExpression(pattern: #"(\w+)="([^"]*)""#)
 
     /// The attributes that have fields of their own; the rest go to `extra`.
@@ -71,12 +69,13 @@ nonisolated struct ContextRef: Identifiable, Hashable, Sendable, Codable {
     }
 
     private static func scan(_ text: String) -> (refs: [ContextRef], rest: String) {
-        let ns = text as NSString
+        let blocks = HubNaming.findContextBlocks(text)
+        guard !blocks.isEmpty else { return ([], text.trimmingCharacters(in: .whitespacesAndNewlines)) }
         var refs: [ContextRef] = []
-        for m in tagRe.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-            let attrs = ns.substring(with: m.range(at: 1)) as NSString
+        for block in blocks {
+            let attrs = block.attributes as NSString
             var a: [String: String] = [:]
-            for am in attrRe.matches(in: attrs as String, range: NSRange(location: 0, length: attrs.length)) {
+            for am in attrRe.matches(in: block.attributes, range: NSRange(location: 0, length: attrs.length)) {
                 a[attrs.substring(with: am.range(at: 1))] = unescape(attrs.substring(with: am.range(at: 2)))
             }
             // Provenance and protected-user sentinels are transport metadata, never selectable context cards.
@@ -84,11 +83,12 @@ nonisolated struct ContextRef: Identifiable, Hashable, Sendable, Codable {
             // The hub's interject note is instructions for the model, not an owner-bubble quote (#6595).
             guard (a["kind"] ?? "context") != "context" || a["title"] != interjectTitle else { continue }
             let extra = a.filter { !Self.ownAttributes.contains($0.key) }
+            let decodedBody = ContextText.fromBlock(block.body).trimmingCharacters(in: .whitespacesAndNewlines)
             refs.append(ContextRef(kind: a["kind"] ?? "context", title: a["title"] ?? "", url: a["url"] ?? "",
-                                   text: ns.substring(with: m.range(at: 2)), msg: a["msg"] ?? "", part: a["part"],
+                                   text: decodedBody, msg: a["msg"] ?? "", part: a["part"],
                                    extra: extra.isEmpty ? nil : extra))
         }
-        let rest = tagRe.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "")
+        let rest = HubNaming.stripContextBlocks(text, replacement: "", trimTrailingWhitespace: true)
         return (refs, rest.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 

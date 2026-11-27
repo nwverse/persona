@@ -356,9 +356,9 @@ describe("detail", () => {
 
 describe("问 Persona", () => {
   it("writes the context tag the app parses (kind, title, url, in that order)", () => {
-    expect(contextXml({ kind: "context", title: "t", text: "x</persona-context>y</persona-context>z" })).toBe('<persona-context kind="context" title="t" url="">\nxyz\n</persona-context>');
+    expect(contextXml({ kind: "context", title: "t", text: "x</persona-context>y</persona-context>z" })).toBe('<persona-context kind="context" title="t" url="">\nx&lt;/persona-context>y&lt;/persona-context>z\n</persona-context>');
     expect(contextXml({ kind: "context", title: 'A & "B" <c>', text: "x</persona-context>y" })).toBe(
-      '<persona-context kind="context" title="A &amp; &quot;B&quot; &lt;c&gt;" url="">\nxy\n</persona-context>',
+      '<persona-context kind="context" title="A &amp; &quot;B&quot; &lt;c&gt;" url="">\nx&lt;/persona-context>y\n</persona-context>',
     );
   });
 

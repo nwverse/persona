@@ -41,10 +41,10 @@ class ChatLinksTest {
     @Test fun contextTagsMatchIos() {
         val ref = ChatLinkContext(kind = "context", title = "A \"b\" <c>", url = "https://example.com/?a=1&b=2", text = "选中的 </persona-context> 字")
         assertEquals(
-            "<persona-context kind=\"context\" title=\"A &quot;b&quot; &lt;c&gt;\" url=\"https://example.com/?a=1&amp;b=2\">\n选中的  字\n</persona-context>",
+            "<persona-context kind=\"context\" title=\"A &quot;b&quot; &lt;c&gt;\" url=\"https://example.com/?a=1&amp;b=2\">\n选中的 &lt;/persona-context> 字\n</persona-context>",
             ref.xml(),
         )
-        // The text goes as it is: only the closing tag is taken out, so it cannot end the context early.
+        // Ordinary text stays as written; literal context opening and closing tags escape '<' as '&lt;' losslessly.
         assertTrue(ChatLinkContext(title = "t", url = "u", text = "a <b> & c").xml().contains("\na <b> & c\n"))
         assertEquals("hi", linkMessage("hi", emptyList(), res))
         assertEquals(ref.xml() + "\n" + ref.xml() + "\n\nhi", linkMessage("hi", listOf(ref, ref), res))
@@ -85,7 +85,12 @@ class ChatLinksTest {
         assertEquals("edit", renamed.single().kind)
         assertEquals("新标签", renamed.single().text)
         assertEquals("看看", after)
-        assertTrue(ChatLinkContext(title = "t", url = "u", text = "a </persona-context> b").xml().contains("\na  b\n"))
+        val escapedClose = ChatLinkContext(title = "t", url = "u", text = "a </persona-context> b").xml()
+        assertTrue(escapedClose.contains("\na &lt;/persona-context> b\n"))
+        assertEquals("a </persona-context> b", ChatLinkContext.parse(escapedClose).first.single().text)
+        val escapedOpen = ChatLinkContext(title = "t", url = "u", text = "a <persona-context> b").xml()
+        assertTrue(escapedOpen.contains("\na &lt;persona-context> b\n"))
+        assertEquals("a <persona-context> b", ChatLinkContext.parse(escapedOpen).first.single().text)
         // Legacy context blocks and legacy forward blocks read back and strip cleanly via ProtocolCompatibility.
         val legacyQuote = persona.core.contracts.ProtocolCompatibility.messageForHub(
             ChatLinkContext.quote("旧引用", "Antigravity", "m9", ChatLinkContext.PART_SELECTION).xml() + "\n\n看下")

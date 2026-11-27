@@ -21,8 +21,6 @@ import (
 // thought, a tool or a message Persona wrote for the model. The web reads the same rule in lib/chat-search-match.ts.
 
 var (
-	// A quoted context with its attributes (web lib/compatibility.ts CONTEXT_RE); transcript.ContextRe is the snapshot's bare tag.
-	searchContextRe  = lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>\s*`)
 	searchFileRe     = lazyre.New(`<` + compat.FilePattern() + `\b[^>]*?/?>(?:\s*</` + compat.FilePattern() + `>)?`)
 	searchPastedRe   = lazyre.New(`(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>`)
 	searchImagesRe   = lazyre.New(`(?s)<attached_images>.*?</attached_images>`)
@@ -70,7 +68,7 @@ func searchInjected(it proto.Item) bool {
 // photos and the card answer's tag they travel with; pasted text as itself.
 func searchUserText(s string) string {
 	s = transcript.ViewErrorsRe.Regexp().ReplaceAllString(s, "")
-	s = searchContextRe.Regexp().ReplaceAllString(s, "")
+	s = compat.StripContextBlocks(s, "", true)
 	s = searchFileRe.Regexp().ReplaceAllString(s, "")
 	s = searchPastedRe.Regexp().ReplaceAllString(s, "$1")
 	s = searchImagesRe.Regexp().ReplaceAllString(s, "")

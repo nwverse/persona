@@ -5,11 +5,11 @@ import (
 	"html"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-var messageContextRe = lazyre.New(`(?s)^\s*<persona-context\b([^>]*)>(.*?)</persona-context>\s*`)
 var sourceKindRe = lazyre.New(`\bkind="message-source"`)
 var sideConversationContextRe = lazyre.New(`<persona-context\b[^>]*\bkind\s*=\s*["']side-conversation["'][^>]*>`)
 var sideConversationMarkerRe = lazyre.New(`<persona-side-conversation\s*/>`)
@@ -72,20 +72,17 @@ func sourceMetadata(text string) (source *proto.MessageSource, found bool) {
 }
 
 func readSourceMetadata(text string) (messageSourceMetadata, bool) {
-	for {
-		m := messageContextRe.FindStringSubmatch(text)
-		if m == nil {
-			return messageSourceMetadata{}, false
-		}
-		if sourceKindRe.MatchString(m[1]) {
+	blocks, _ := compat.FindLeadingContextBlocks(text)
+	for _, b := range blocks {
+		if sourceKindRe.MatchString(b.Attrs) {
 			var meta messageSourceMetadata
-			if json.Unmarshal([]byte(strings.TrimSpace(m[2])), &meta) != nil {
+			if json.Unmarshal([]byte(strings.TrimSpace(text[b.OpenEnd:b.CloseAt])), &meta) != nil {
 				return messageSourceMetadata{}, true // malformed explicit metadata must not become a guessed source
 			}
 			return meta, true
 		}
-		text = text[len(m[0]):]
 	}
+	return messageSourceMetadata{}, false
 }
 
 // ProtectUserMessage retains the user's words verbatim but marks suspicious pasted
@@ -115,18 +112,15 @@ func IsSideConversation(text string) bool {
 // ParseRelaySource recognizes only the complete canonical relay context. A title,
 // an emoji, or ordinary words alone never establish conversation provenance.
 func ParseRelaySource(text string) *proto.MessageSource {
-	for {
-		m := messageContextRe.FindStringSubmatch(text)
-		if m == nil {
-			return nil
-		}
-		title := relayTitleRe.FindStringSubmatch(m[1])
-		body := relayBodyRe.FindStringSubmatch(strings.TrimSpace(m[2]))
-		if title != nil && strings.Contains(m[1], `kind="context"`) && body != nil && body[1] == body[5] {
+	blocks, _ := compat.FindLeadingContextBlocks(text)
+	for _, b := range blocks {
+		title := relayTitleRe.FindStringSubmatch(b.Attrs)
+		body := relayBodyRe.FindStringSubmatch(strings.TrimSpace(text[b.OpenEnd:b.CloseAt]))
+		if title != nil && strings.Contains(b.Attrs, `kind="context"`) && body != nil && body[1] == body[5] {
 			return &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: body[1], Title: html.UnescapeString(title[1])}
 		}
-		text = text[len(m[0]):]
 	}
+	return nil
 }
 
 var relayQuoteRe = lazyre.New(`^\s*kind="owner-request"\s+message_id="([^"]*)"\s*$`)
@@ -135,21 +129,18 @@ var relayQuoteRe = lazyre.New(`^\s*kind="owner-request"\s+message_id="([^"]*)"\s
 // block that directly follows the canonical relay context counts, so words the sending model wrote into its text
 // can't pass for one. "" when there is none.
 func ParseRelayQuoteID(text string) string {
+	blocks, _ := compat.FindLeadingContextBlocks(text)
 	relay := false
-	for {
-		m := messageContextRe.FindStringSubmatch(text)
-		if m == nil {
-			return ""
-		}
+	for _, b := range blocks {
 		if relay {
-			if q := relayQuoteRe.FindStringSubmatch(m[1]); q != nil {
+			if q := relayQuoteRe.FindStringSubmatch(b.Attrs); q != nil {
 				return html.UnescapeString(q[1])
 			}
 			return ""
 		}
-		relay = ParseRelaySource(m[0]) != nil
-		text = text[len(m[0]):]
+		relay = ParseRelaySource(text[b.Start:b.End]) != nil
 	}
+	return ""
 }
 
 // ItemSource prefers explicit fields, then persisted provenance, then existing

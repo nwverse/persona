@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -136,5 +137,62 @@ func TestMCPRegistrationPolicy(t *testing.T) {
 				t.Fatalf("historical tool recognition narrowed: %v", got)
 			}
 		})
+	}
+}
+
+func TestLegacyContextTagsPreservesBodiesAndProse(t *testing.T) {
+	in := "<persona-context kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n正文含 <persona-context> 标签\n</persona-context>\n\n请问 <persona-context> 为什么裸露"
+	want := "<jarvis-context kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n正文含 <persona-context> 标签\n</jarvis-context>\n\n请问 <persona-context> 为什么裸露"
+	if got := LegacyContextTags(in); got != want {
+		t.Fatalf("LegacyContextTags = %q, want %q", got, want)
+	}
+	escaped := "<persona-context kind=\"quote\" title=\"Persona\">\n正文含 &lt;persona-context> 和 &lt;/persona-context>\n</persona-context>\n\n修"
+	wantEscaped := "<jarvis-context kind=\"quote\" title=\"Persona\">\n正文含 &lt;persona-context> 和 &lt;/persona-context>\n</jarvis-context>\n\n修"
+	if got := LegacyContextTags(escaped); got != wantEscaped {
+		t.Fatalf("LegacyContextTags(escaped) = %q, want %q", got, wantEscaped)
+	}
+}
+
+func TestFindAndStripContextBlocksEdgeCases(t *testing.T) {
+	twoOpensOneClose := "<persona-context>\n- 现在：2026-11-27 12:29\n</persona-context>\n\n" +
+		"<jarvis-context kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n引用含 <jarvis-context> 标签\n</jarvis-context>\n\n修"
+	wantAfterSnapshot := "<jarvis-context kind=\"quote\" title=\"Persona\" url=\"\" msg=\"m1\">\n引用含 <jarvis-context> 标签\n</jarvis-context>\n\n修"
+	if got := StripSnapshotBlocks(twoOpensOneClose); got != wantAfterSnapshot {
+		t.Fatalf("StripSnapshotBlocks(2o1c) = %q, want %q", got, wantAfterSnapshot)
+	}
+	if got := strings.TrimSpace(StripContextBlocks(wantAfterSnapshot, "", false)); got != "修" {
+		t.Fatalf("StripContextBlocks(2o1c) = %q, want %q", got, "修")
+	}
+
+	paired := "<jarvis-context kind=\"quote\" title=\"Persona\">\n解释 <persona-context>示例</persona-context> 后半段\n</jarvis-context>\n\n修"
+	if got := StripSnapshotBlocks(paired); got != paired {
+		t.Fatalf("StripSnapshotBlocks(paired) corrupted quote: %q", got)
+	}
+	blocks := FindContextBlocks(paired)
+	if len(blocks) != 1 || strings.TrimSpace(paired[blocks[0].OpenEnd:blocks[0].CloseAt]) != "解释 <persona-context>示例</persona-context> 后半段" {
+		t.Fatalf("FindContextBlocks(paired) = %+v", blocks)
+	}
+	if got := strings.TrimSpace(StripContextBlocks(paired, "", false)); got != "修" {
+		t.Fatalf("StripContextBlocks(paired) = %q, want %q", got, "修")
+	}
+
+	twoBlocks := "<persona-context kind=\"quote\" title=\"A\">\n含 <persona-context> 标签\n</persona-context>\n" +
+		"<persona-context kind=\"context\" title=\"B\">\n正常块\n</persona-context>\n\n修"
+	blocks = FindContextBlocks(twoBlocks)
+	if len(blocks) != 2 {
+		t.Fatalf("FindContextBlocks(twoBlocks) count = %d, want 2: %+v", len(blocks), blocks)
+	}
+	if strings.TrimSpace(twoBlocks[blocks[0].OpenEnd:blocks[0].CloseAt]) != "含 <persona-context> 标签" {
+		t.Fatalf("block 0 body = %q", twoBlocks[blocks[0].OpenEnd:blocks[0].CloseAt])
+	}
+	if strings.TrimSpace(twoBlocks[blocks[1].OpenEnd:blocks[1].CloseAt]) != "正常块" {
+		t.Fatalf("block 1 body = %q", twoBlocks[blocks[1].OpenEnd:blocks[1].CloseAt])
+	}
+	if got := strings.TrimSpace(StripContextBlocks(twoBlocks, "", false)); got != "修" {
+		t.Fatalf("StripContextBlocks(twoBlocks) = %q, want %q", got, "修")
+	}
+
+	if got := FindContextBlocks("请修 <persona-context> 的问题"); len(got) != 0 {
+		t.Fatalf("expected 0 blocks, got %+v", got)
 	}
 }

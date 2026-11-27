@@ -7,10 +7,13 @@ package persona.core.contracts
 val contextClosingTag = ProtocolCompatibility.contextClosingTag
 
 /**
- * [text] made safe to go inside a context block: nothing left in it closes the block, so what follows cannot sit
- * outside it as the user's own words (an inbox item handed to the AI comes from someone else, #3831). Closing tags are
- * removed, and one that the removal itself puts together (`</persona-</persona-context>context>`) has its `<` written as
- * `&lt;`, which joins nothing. Two passes, linear in the text; the same output as the hub and the web.
+ * [text] made safe to go inside a context block: every literal opening or closing context tag has its `<` written as
+ * `&lt;` so nothing inside the body can close the block, trigger snapshot stripping, or be rewritten by compatibility
+ * adapters, while readers can restore the original text losslessly. One linear pass; matches the hub, web, and Apple.
  */
 fun contextBody(text: String): String =
-    text.replace(contextClosingTag, "").replace(contextClosingTag) { "&lt;" + it.groupValues[1] }
+    if ('<' !in text) text else text.replace(ProtocolCompatibility.contextTagPrefix) { "&lt;" + it.groupValues[1] }
+
+/** Restores literal context tags escaped by [contextBody]. */
+fun unescapeContextBody(text: String): String =
+    if ('&' !in text) text else text.replace(ProtocolCompatibility.escapedContextTagPrefix) { "<" + it.groupValues[1] }

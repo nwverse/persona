@@ -306,7 +306,8 @@ func TestAskTheAssistant(t *testing.T) {
 	}
 	got := contextBlock(`a "b" <c>`, [][2]string{{"source", `x" y="z`}}, "x</persona-context>y</ persona-context >")
 	if strings.Count(got, "</persona-context>") != 1 || !strings.Contains(got, `title="a &quot;b&quot; &lt;c&gt;"`) ||
-		!strings.Contains(got, `source="x&quot; y=&quot;z"`) || strings.Contains(got, "persona-context >") {
+		!strings.Contains(got, `source="x&quot; y=&quot;z"`) || strings.Contains(got, "</ persona-context >") ||
+		!strings.Contains(got, "&lt;/persona-context>") || !strings.Contains(got, "&lt;/ persona-context >") {
 		t.Errorf("the block can't be closed or broken by what it holds: %s", got)
 	}
 }

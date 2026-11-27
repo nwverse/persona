@@ -2,7 +2,8 @@
 // Claude and re-queues the others, in order (POST …/queue {keep}, node editQueue; iOS QueueStrip / editQueued).
 import { t } from "../i18n";
 import { quotePath } from "./attachments";
-import { CONTEXT_RE } from "./compatibility";
+import { replaceContextBlocks } from "./compatibility";
+import { unescapeContextBody } from "./context-body";
 import { parseUserText, tagAttrs, type AttachedFile } from "./turns";
 
 /** The order to re-queue in when message `index` moves `by` places (−1 up, +1 down; #6088): every message, that one moved.
@@ -88,10 +89,10 @@ const IMAGES_BLOCK = /<attached_images>([\s\S]*?)<\/attached_images>/g;
  */
 export function parseQueued(raw: string, photosBeside = 0): QueuedParts {
   const contexts: QueuedContext[] = [];
-  let rest = raw.replace(CONTEXT_RE, (_, attrs: string, body: string) => {
-    const { kind = "context", title = "", url = "", ...extra } = tagAttrs(attrs);
+  let rest = replaceContextBlocks(raw, (block) => {
+    const { kind = "context", title = "", url = "", ...extra } = tagAttrs(block.attrs);
     if (kind === "skill-instructions") return "";
-    contexts.push({ kind, title, url, text: body.trim(), ...(Object.keys(extra).length ? { attrs: extra } : {}) });
+    contexts.push({ kind, title, url, text: unescapeContextBody(block.body).trim(), ...(Object.keys(extra).length ? { attrs: extra } : {}) });
     return "";
   });
   rest = rest.replace(IMAGES_BLOCK, (_, body: string) => `<attached_images>${body.replace(/^\s*path: ?/gm, "")}</attached_images>`);

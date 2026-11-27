@@ -7,28 +7,19 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/compat"
-	"github.com/nwverse/persona/server/internal/lazyre"
 )
-
-var leading = lazyre.New(`(?s)^\s*<` + compat.ContextPattern() + `\b([^>]*)>.*?</` + compat.ContextPattern() + `>`)
 
 // Split returns the scheduled picker envelope. A blank line ends the selections and begins literal prose.
 func Split(text string) (prefix, body string) {
-	rest := text
-	for {
-		if rest != text {
-			space := rest[:len(rest)-len(strings.TrimLeft(rest, " \t\r\n"))]
-			if strings.Count(space, "\n") >= 2 {
-				break
-			}
-		}
-		m := leading.FindStringIndex(rest)
-		if m == nil {
+	blocks, _ := compat.FindLeadingContextBlocks(text)
+	pos := 0
+	for _, blk := range blocks {
+		if pos > 0 && strings.Count(text[pos:blk.Start], "\n") >= 2 {
 			break
 		}
-		rest = rest[m[1]:]
+		pos = blk.End
 	}
-	return text[:len(text)-len(rest)], rest
+	return text[:pos], text[pos:]
 }
 
 type File struct{ Path, Machine, Cwd, Launcher, Runtime string }
@@ -38,13 +29,9 @@ var ErrFile = errors.New("selected file is unavailable or its execution environm
 // Files recognizes explicit file selections only. Display text never supplies executable paths.
 func Files(text string) ([]File, error) {
 	var out []File
-	for {
-		m := leading.FindStringSubmatchIndex(text)
-		if m == nil {
-			return out, nil
-		}
-		tag := text[m[2]:m[3]]
-		text = text[m[1]:]
+	blocks, _ := compat.FindLeadingContextBlocks(text)
+	for _, blk := range blocks {
+		tag := blk.Attrs
 		token, err := xml.NewDecoder(strings.NewReader("<context" + tag + "/>")).Token()
 		if err != nil {
 			if strings.Contains(tag, `"file"`) {
@@ -83,4 +70,5 @@ func Files(text string) ([]File, error) {
 		}
 		out = append(out, File{attrs["path"], attrs["machine"], attrs["cwd"], attrs["launcher"], attrs["runtime"]})
 	}
+	return out, nil
 }

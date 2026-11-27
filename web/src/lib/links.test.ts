@@ -292,9 +292,10 @@ describe("<persona-context>", () => {
     expect(p.contexts).toEqual([{ kind: "context", title: 'A & "B" <c>', url: "https://example.feishu.cn/docx/x?a=1&b=2", text: "选中的\n两行" }]);
   });
 
-  it("drops a closing tag inside the picked text", () => {
-    expect(contextXML({ ...ref, text: "a</persona-context>b" })).toContain("\nab\n</persona-context>");
-    expect(contextXML({ ...ref, text: "a</persona-context>b</PERSONA-CONTEXT >c" })).toContain("\nabc\n</persona-context>");
+  it("escapes literal context tags inside the picked text", () => {
+    expect(contextXML({ ...ref, text: "a</persona-context>b" })).toContain("\na&lt;/persona-context>b\n</persona-context>");
+    expect(contextXML({ ...ref, text: "a</persona-context>b</PERSONA-CONTEXT >c" })).toContain("\na&lt;/persona-context>b&lt;/PERSONA-CONTEXT >c\n</persona-context>");
+    expect(contextXML({ ...ref, text: "a<persona-context>b" })).toContain("\na&lt;persona-context>b\n</persona-context>");
   });
 
   it("puts the contexts before the message, with a stand-in when nothing was typed", () => {

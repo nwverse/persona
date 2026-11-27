@@ -144,15 +144,76 @@ fn context_prefix(text: &str) -> Option<(&'static str, &str)> {
     None
 }
 
+fn find_balanced_context_end(text: &str) -> Option<(usize, usize)> {
+    let mut depth: isize = 1;
+    let mut best_depth: isize = isize::MAX;
+    let mut best_close: Option<(usize, usize)> = None;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let slice = &text[i..];
+        let mut matched_close: Option<usize> = None;
+        for tag in CONTEXT_TAGS {
+            if let Some(after_slash) = slice.strip_prefix("</") {
+                if let Some(after_tag) = after_slash.strip_prefix(tag) {
+                    let trimmed = after_tag.trim_start_matches(|c: char| c.is_ascii_whitespace());
+                    if trimmed.starts_with('>') {
+                        let consumed = 2 + tag.len() + (after_tag.len() - trimmed.len()) + 1;
+                        matched_close = Some(consumed);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(consumed) = matched_close {
+            depth -= 1;
+            let close_start = i;
+            let close_end = i + consumed;
+            if depth == 0 {
+                return Some((close_start, close_end));
+            }
+            if depth < best_depth {
+                best_depth = depth;
+                best_close = Some((close_start, close_end));
+            }
+            i = close_end;
+            continue;
+        }
+        if let Some((tag, after_open)) = context_prefix(slice) {
+            if let Some(gt) = after_open.find('>') {
+                if !after_open[..gt].contains('<') {
+                    let tag_end = i + 1 + tag.len() + gt + 1;
+                    if !after_open[..gt].ends_with('/') {
+                        depth += 1;
+                    }
+                    i = tag_end;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    best_close
+}
+
 fn protects_user(text: &str) -> bool {
     let mut rest = text.trim_start();
-    while let Some((tag, _)) = context_prefix(rest) {
-        let Some((attributes, after_attributes)) = rest.split_once('>') else {
+    while let Some((_, after_open)) = context_prefix(rest) {
+        let Some((attributes, after_attributes)) = after_open.split_once('>') else {
             break;
         };
-        let Some((body, after_body)) = after_attributes.split_once(&format!("</{tag}>")) else {
+        if attributes.contains('<') || attributes.ends_with('/') {
+            break;
+        }
+        let Some((close_start, close_end)) = find_balanced_context_end(after_attributes) else {
             break;
         };
+        let body = &after_attributes[..close_start];
+        let after_body = &after_attributes[close_end..];
         if attributes.contains("kind=\"message-source\"") {
             let Ok(metadata) = serde_json::from_str::<Value>(body) else {
                 return true;
@@ -182,14 +243,17 @@ fn protects_user(text: &str) -> bool {
 
 fn leading_context_stripped(text: &str) -> &str {
     let mut rest = text.trim();
-    while let Some((tag, after_open)) = context_prefix(rest) {
-        let Some((_, after_attributes)) = after_open.split_once('>') else {
+    while let Some((_, after_open)) = context_prefix(rest) {
+        let Some((attributes, after_attributes)) = after_open.split_once('>') else {
             break;
         };
-        let Some((_, after_body)) = after_attributes.split_once(&format!("</{tag}>")) else {
+        if attributes.contains('<') || attributes.ends_with('/') {
+            break;
+        }
+        let Some((_, close_end)) = find_balanced_context_end(after_attributes) else {
             break;
         };
-        rest = after_body.trim();
+        rest = after_attributes[close_end..].trim();
     }
     rest
 }

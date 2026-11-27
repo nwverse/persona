@@ -350,21 +350,12 @@ const agySpace = `[` + agyJSWhitespace + `]`
 
 var agyUserRequest = lazyre.New(`(?s)<USER_REQUEST>` + agySpace + `*(.*?)` + agySpace + `*</USER_REQUEST>`)
 
-// Go regexp has no backreferences. Use one alternative per context tag (compat.ContextNames: the current and older
-// names, as the companion's SNAPSHOT_RE).
-var agySnapshot = lazyre.New(`(?s)(?:` + agyContextBlocks() + `|<persona-view-errors\b[^>]*>.*?</persona-view-errors>)` + agySpace + `*`)
+// agyViewErrors matches <persona-view-errors> blocks (bare context snapshots are stripped via compat.StripSnapshotBlocksUnicode
+// so bare literal tags inside attributed quote/forward blocks never steal the outer closing tag).
+var agyViewErrors = lazyre.New(`(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>` + agySpace + `*`)
 
 // Keep s/S ASCII-only as in the companion's case-insensitive regexp (Go's (?i) would also match ſ).
 var agyContextEnd = lazyre.New(`^` + agySpace + `*(?i:</)(?:` + agyContextEndNames() + `)(?i:>)` + agySpace + `*`)
-
-func agyContextBlocks() string {
-	var alt []string
-	for _, n := range compat.ContextNames() {
-		q := regexp.QuoteMeta(n)
-		alt = append(alt, `<`+q+`>.*?</`+q+`>`)
-	}
-	return strings.Join(alt, "|")
-}
 
 func agyContextEndNames() string {
 	var alt []string
@@ -425,7 +416,8 @@ func agyUserText(text string) string {
 	for {
 		clean := agyStripContextResources(text)
 		clean = agyViewErrorsTrailing.ReplaceAllString(clean, "")
-		clean = agySnapshot.ReplaceAllString(clean, "")
+		clean = compat.StripSnapshotBlocksUnicode(clean)
+		clean = agyViewErrors.ReplaceAllString(clean, "")
 		clean = agyContextEnd.ReplaceAllString(clean, "")
 		if clean == text {
 			return agyTrimSpace.ReplaceAllString(text, "")

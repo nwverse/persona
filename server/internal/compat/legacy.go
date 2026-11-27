@@ -158,15 +158,40 @@ func IsAppScheme(scheme string) bool {
 
 // compat is also built on its own, copied without the rest of the server (scripts/test/test_persona_migration_edges.py),
 // so it uses the standard library only: its patterns compile on first use with sync.OnceValue, not internal/lazyre.
-var currentContextTags = lazy(`(</?)persona-(context|file)([[:space:]/>])`)
 
 // lazy is regexp.MustCompile(src) on first use.
 func lazy(src string) func() *regexp.Regexp {
 	return sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(src) })
 }
 
+// LegacyContextTags rewrites only outer matched protocol context block tags and standalone file tags to their
+// pre-cutover names, leaving literal context tags inside encapsulated bodies and ordinary user prose intact.
 func LegacyContextTags(s string) string {
-	return currentContextTags().ReplaceAllString(s, `${1}jarvis-${2}${3}`)
+	if !strings.Contains(s, "persona-") {
+		return s
+	}
+	blocks := FindContextBlocks(s)
+	if len(blocks) == 0 {
+		return legacyFileTagRe().ReplaceAllString(s, `${1}jarvis-${2}${3}`)
+	}
+	var out strings.Builder
+	out.Grow(len(s))
+	prev := 0
+	for _, b := range blocks {
+		if b.Start > prev {
+			out.WriteString(legacyFileTagRe().ReplaceAllString(s[prev:b.Start], `${1}jarvis-${2}${3}`))
+		}
+		openTag := legacyOpenTagRe().ReplaceAllString(s[b.Start:b.OpenEnd], `<jarvis-context${1}`)
+		closeTag := legacyCloseTagRe().ReplaceAllString(s[b.CloseAt:b.End], `</jarvis-context${1}`)
+		out.WriteString(openTag)
+		out.WriteString(s[b.OpenEnd:b.CloseAt])
+		out.WriteString(closeTag)
+		prev = b.End
+	}
+	if prev < len(s) {
+		out.WriteString(legacyFileTagRe().ReplaceAllString(s[prev:], `${1}jarvis-${2}${3}`))
+	}
+	return out.String()
 }
 func AssistantSuffixes() []string {
 	return []string{"--persona-assistant", "--jarvis-assistant", "--persona-health", "--jarvis-health"}

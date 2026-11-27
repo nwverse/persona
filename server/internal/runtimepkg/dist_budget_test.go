@@ -105,9 +105,10 @@ import (
 // Isolating managed Antigravity channel model catalogs, stripping ambient/extension provider env across channels, preserving Assistant channel and extension env snapshots across respawns, and rotating warm idle Assistant channels add 181 B (307,434 B -> 307,615 B).
 // Routing dsh assistant shell gates through runtime-sdk shell-gates with fail-closed hubReady/disconnect/phoneTools=false guards adds 794 B (307,615 B -> 308,409 B).
 // Guarding Antigravity ACP stdout/nativeRequest against JSON null/non-object payloads and rejecting stale _start() after stop/process replacement add 107 B (308,409 B -> 308,516 B).
+// Depth-aware top-level stripSnapshotBlocks in runtime-sdk (keeping literal context tags inside attributed quote/forward blocks intact) adds 547 B (308,516 B -> 309,063 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 308_516
+	const budget = 309_063
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
