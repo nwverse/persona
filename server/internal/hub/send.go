@@ -385,7 +385,7 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 					return
 				}
 			}
-			writeAssistantErr(w, err)
+			writeSendAssistantErr(w, err)
 			return
 		}
 		if target, _ := p["owner_approval_handled"].(string); target != "" {
@@ -599,6 +599,11 @@ func (h *Hub) deliverOnce(ctx context.Context, m *Machine, p map[string]any) (in
 		if sid != "" && outcome == "" {
 			h.ttft.disarm(m.cfg.ID, sid, sentAt)
 		}
+		if outcome == "" && errors.Is(err, errManagerOffline) {
+			rec := &bufferedResponse{header: http.Header{}, lang: h.contextLang(ctx)}
+			writeSendAssistantErr(rec, &rpc.Error{Code: assistantwire.CodeAssistantOffline, Message: errAssistantOffline.Error()})
+			return rec.status, rec.body.Bytes(), outcome
+		}
 		status, body := callErrBytes(h.contextLang(ctx), apierr.OnMachine(err, m.name())) // claude_missing on "<name>'s MacBook"
 		return status, body, outcome
 	}
@@ -728,9 +733,6 @@ func keepableMessage(p map[string]any) map[string]any {
 func (h *Hub) keepUndelivered(ctx context.Context, m *Machine, sid string, msg map[string]any, code, why string) (int, []byte, bool) {
 	kctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var res struct {
-		Undelivered *proto.UndeliveredMessage `json:"undelivered"`
-	}
 	tried := time.Time{}
 	if code == assistantwire.CodeDeliveryUnknown {
 		tried = sendTimingOf(ctx).start
@@ -740,10 +742,10 @@ func (h *Hub) keepUndelivered(ctx context.Context, m *Machine, sid string, msg m
 	if p.Role == roleFull || p.Role == roleAnswer {
 		credential = p.ID
 	}
-	err := h.asstOf(h.sessionOwner(m.cfg.ID, sid)).call(kctx, assistantwire.MethodKeepUndelivered, assistantwire.KeepUndeliveredParams{
+	res, err := callAssistant(kctx, h.asstOf(h.sessionOwner(m.cfg.ID, sid)), assistantwire.KeepUndeliveredMethod, assistantwire.KeepUndeliveredParams{
 		MachineID: m.cfg.ID, SessionID: sid, Params: msg, Human: personSent(ctx), Lang: string(h.contextLang(ctx)), Code: code, Error: why, TriedAt: tried,
 		CredentialID: credential,
-	}, &res)
+	})
 	if err != nil || res.Undelivered == nil {
 		h.logf("send to %s/%s: not kept for later: %v", m.cfg.ID, sid, err)
 		return 0, nil, false
@@ -812,6 +814,21 @@ func heldBody(err error) (int, []byte) {
 		_ = json.Unmarshal(re.Data, &held)
 	}
 	return laterBody(held.Undelivered)
+}
+
+// writeSendAssistantErr answers an assistant error during sendMessageOnce / todoHandoff (before ClaimSend and
+// deliverOnce touch a node): 503 assistant_offline explicitly states delivered:"none" and retryable:true so clients
+// know nothing was sent and can safely retry once the assistant is back.
+func writeSendAssistantErr(w http.ResponseWriter, err error) {
+	var re *rpc.Error
+	if errors.As(err, &re) && re.Code == assistantwire.CodeAssistantOffline {
+		body := apierr.CodeBody(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
+		body["delivered"] = "none"
+		body["retryable"] = true
+		writeErrorBody(w, http.StatusServiceUnavailable, body)
+		return
+	}
+	writeAssistantErr(w, err)
 }
 
 func rpcCodeOf(err error) string {

@@ -355,10 +355,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Capabilities = caps
 			}
 			hasRuntimeRow := false
+			var companionPreview agyPreview
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
-				if runtimeRow, ok := n.runtimes.agyPaneRuntimeRow(runtimeID); ok {
+				if runtimeRow, preview, ok := n.runtimes.agyPaneRuntimeRow(runtimeID); ok {
 					hasRuntimeRow = true
+					companionPreview = preview
 					if s.Model == "" {
 						s.Model = runtimeRow.Model
 					}
@@ -368,14 +370,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.ContextWindow == 0 && runtimeRow.ContextWindow > 0 {
 						s.ContextWindow = runtimeRow.ContextWindow
 					}
-					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
-						s.OutputTokens = runtimeRow.OutputTokens
+					if s.OutputTokensValue() == 0 && runtimeRow.OutputTokensValue() > 0 {
+						s.SetOutputTokens(int(runtimeRow.OutputTokensValue()))
 					}
 					if s.UpdatedAt.IsZero() && !runtimeRow.UpdatedAt.IsZero() {
 						s.UpdatedAt = runtimeRow.UpdatedAt
-					}
-					if s.LastText == "" && runtimeRow.LastText != "" {
-						s.LastText = runtimeRow.LastText
 					}
 					// The companion has already applied the native rewind cut.
 					agyBackgroundTasks{running: runtimeRow.Background, ended: runtimeRow.BackgroundEnded()}.apply(&s)
@@ -391,7 +390,16 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				conversation := agyConversations[id]
 				u, readable := n.agyTranscriptMeta(conversation)
 				if readable {
+					transcriptAt := u.turn.lastTextAt
+					if transcriptAt.IsZero() {
+						transcriptAt = u.modTime
+					}
+					if u.turn.lastText != "" && companionPreview.text != "" && companionPreview.at.After(transcriptAt) {
+						u.turn.lastText = companionPreview.text
+					}
 					n.applyAgyTurnEvidence(&s, conversation, u.turn)
+				} else if s.LastText == "" && companionPreview.text != "" && n.agyConversation(id, a.PaneID) == conversation {
+					s.LastText = companionPreview.text
 				}
 				if hasRuntimeRow {
 					n.resolveAgyContext(&s, agyConversations[id])
@@ -594,6 +602,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
 	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them
 	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
+	n.joinFolderSpaces(out)                  // one folder, one space, whichever app placed a session there (folderspace.go)
 	if n.peer != nil {
 		n.noteCheckpointEnds(out)
 	}

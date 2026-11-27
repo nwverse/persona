@@ -120,6 +120,13 @@ type BotFeatures struct {
 	// TopicCot: a topic run also shows its thinking and tools in a native agent message, beside the progress card.
 	// On by default, including settings saved before it; off keeps the card's folded process panel.
 	TopicCot bool `json:"topic_cot"`
+	// DMCot: a private-chat run also shows its thinking and tools in a native agent message, beside the progress card
+	// (#16847). Off by default, and for settings saved before it: they have no such key.
+	DMCot bool `json:"dm_cot"`
+	// CotAnswer: a run whose agent message is allowed (dm_cot, topic_cot) gets its answer inside that message and no
+	// progress or answer card; cards take over when the message cannot carry it (#16847). Off by default, and for
+	// settings saved before it.
+	CotAnswer bool `json:"cot_answer"`
 	// ReadGroup: the owner's "@bot /read <task>" in a group the bot is in reads the group's recent messages, images and
 	// files as the owner, then does the task and answers under that message (#11803, bots_read.go). Off by default, and
 	// for settings saved before it: they have no such key.

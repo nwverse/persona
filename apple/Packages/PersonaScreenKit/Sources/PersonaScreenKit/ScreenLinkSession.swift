@@ -1018,15 +1018,17 @@ extension ScreenLinkSession {
                     sendFlow(route, .use([ScreenLinkOffset(ch, rx.expected)]))
                 }
             }
+            let givenUpBefore = rx.givenUp
             let req = rx.requests(at: t, rtt: (f.meter.srttMs ?? 20) / 1000, jitter: (f.meter.jitterMs ?? 0) / 1000)
             f.receiver = rx
-            if req.skip != nil {
+            let newGiveUp = rx.givenUp > givenUpBefore
+            if newGiveUp {
                 f.giveUps.append(t)
                 f.giveUps.removeAll { t - $0 > Self.flowGiveUpWindow }
             }
             flows[route] = f
             if let off = req.skip {
-                if f.giveUps.count > Self.flowGiveUps {
+                if newGiveUp, f.giveUps.count > Self.flowGiveUps {
                     leaveFlow(route, .degraded)
                     continue
                 }

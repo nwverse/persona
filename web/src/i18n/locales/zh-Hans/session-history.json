@@ -6,8 +6,8 @@
   "all_computers": "所有电脑",
   "all_agents": "所有 Agent 类型",
   "earlier": "更早",
-  "empty": "还没有已结束的会话。",
-  "older_search": "此中枢仅搜索标题和预览。更新后可搜索对话。",
+  "empty": "暂无已结束的会话。",
+  "older_search": "当前 hub 仅支持搜索标题和预览。更新 hub 后即可搜索完整对话内容。",
   "open_terminals": "浏览标签页",
-  "resume_named": "继续 {title}"
+  "resume_named": "恢复 {title}"
 }

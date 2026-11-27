@@ -882,6 +882,28 @@ func TestNodeSessions(t *testing.T) {
 	}
 }
 
+func TestNodeSessionOrcaTerminalRoundTrip(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	state := NodeSession{Pane: "orca:tab:leaf", Launcher: "claude", Cwd: "/project",
+		OrcaTerminal: json.RawMessage(`{"pane":"orca:tab:leaf","incarnation":"original"}`)}
+	if err := d.PutNodeSession(ctx, "server", "s1", state); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.NodeSessions(ctx, "server")
+	var owner map[string]string
+	if err != nil || json.Unmarshal(got["s1"].OrcaTerminal, &owner) != nil || owner["incarnation"] != "original" {
+		t.Fatalf("reloaded Orca ownership = %v, %v", owner, err)
+	}
+	state.Pane, state.OrcaTerminal = "orca:other:leaf", nil
+	if err := d.PutNodeSession(ctx, "server", "s1", state); err != nil {
+		t.Fatal(err)
+	}
+	got, err = d.NodeSessions(ctx, "server")
+	if err != nil || got["s1"].Pane != state.Pane || got["s1"].OrcaTerminal != nil {
+		t.Fatalf("stale ownership survived rebinding: %+v, %v", got["s1"], err)
+	}
+}
+
 // Origin is authorization state needed by node-owned recovery before the manager can re-attest a continuation.
 // Keep it in the existing node_model JSON through a real write/read cycle; no schema migration is involved.
 func TestNodeSessionOriginRoundTrip(t *testing.T) {

@@ -18,8 +18,7 @@ import (
 // category's choice (the model configuration's records, models.go), the model fields of providers added in Persona
 // (launchers.managed, models_launchers.go) and named tiers an Agent can be started on (agent_start, task_plan). A
 // switch writes all of it in one transaction and keeps what it replaced, so one rollback undoes it; every switch,
-// rollback and edit is in the history. Profiles are the user's to edit: the two built-in ones start as copies of the
-// configuration they were made from.
+// rollback and edit is in the history. Users can create profiles or use their model settings directly.
 
 const (
 	modelProfilesKey     = "model_profiles"       // modelProfiles: the profiles
@@ -38,9 +37,6 @@ const (
 	shownProfileEvents  = 20
 	modelProfileRolling = "rollback" // not an id: POST /api/v1/model-profiles/rollback
 	legacyRollbackID    = "previous" // fallback rollback id for legacy single-slot Previous images
-	// seededProfile is the template marked in use when the templates are made: a copy of the configuration, so
-	// nothing switches, and the tiers work from the start.
-	seededProfile = "performance"
 )
 
 var (
@@ -237,7 +233,7 @@ type modelProfiles struct {
 }
 
 type modelProfileState struct {
-	Active         string              `json:"active,omitempty"` // the profile last switched to ("" none yet)
+	Active         string              `json:"active,omitempty"` // the profile in use ("" none)
 	At             time.Time           `json:"at,omitzero"`
 	By             ProfileActor        `json:"by,omitzero"`
 	Previous       *modelProfileImage  `json:"previous,omitempty"`         // latest rollback point (synced with Rollbacks for backward compatibility)
@@ -537,15 +533,8 @@ func (s *Service) normalizeProfilePurposes(ctx context.Context, purposes map[str
 	return out, nil
 }
 
-// seed marks seededProfile in use when the templates are made (modelProfilesLocked said so): it is a copy of the
-// configuration, so nothing switches and there is nothing to roll back to.
-func (st *modelProfileState) seed() {
-	if st.Active != "" {
-		return
-	}
-	now := time.Now().UTC()
-	st.Active, st.At, st.By = seededProfile, now, ProfileActor{Kind: "system"}
-	st.record(ModelProfileEvent{At: now, Action: "seed", To: seededProfile, By: st.By})
+func (st *modelProfileState) clearActive() {
+	st.Active, st.At, st.By = "", time.Time{}, ProfileActor{}
 }
 
 func (st *modelProfileState) record(e ModelProfileEvent) {
@@ -557,6 +546,7 @@ func (st *modelProfileState) record(e ModelProfileEvent) {
 
 var (
 	errModelProfileNotFound    = i18n.Err("assistant-model_profiles.err_not_found")
+	errModelProfileEmpty       = i18n.Err("assistant-model_profiles.err_no_profiles")
 	errModelProfileConflict    = i18n.Err("assistant-model_profiles.err_conflict")
 	errModelProfileNoRollback  = i18n.Err("assistant-model_profiles.err_no_rollback")
 	errModelProfileAtomicStore = i18n.Err("assistant-model_profiles.err_atomic_store")
@@ -592,7 +582,7 @@ func (s *Service) readModelProfiles(ctx context.Context) (modelProfiles, bool, e
 var seededTierNames = [][2]string{{"strong", "core"}, {"standard", "dev"}}
 
 // seededTierAliases are the older names the seeded tier name answers to (strong for core, standard for dev), in a
-// fresh slice. The templates and a capture give them to the tiers they make, as migrateSeededTiers gives them to a
+// fresh slice. A capture gives them to the tiers it makes, as migrateSeededTiers gives them to a
 // migrated tier, so a stored plan task, a start-defaults preset or an older client naming the old one resolves on
 // every profile, whichever is in use.
 func seededTierAliases(name string) []string {
@@ -672,38 +662,23 @@ func (s *Service) putModelProfileSettings(ctx context.Context, values map[string
 	return errModelProfileAtomicStore
 }
 
-// modelProfilesLocked reads profiles or builds two templates from the current configuration (models.mu held).
-// The caller persists templates only after its operation has passed all checks, with the state seed() marks.
-func (s *Service) modelProfilesLocked(ctx context.Context) (modelProfiles, bool, error) {
+// modelProfilesLocked reads the catalog (models.mu held). An unconfigured hub has the zero-value catalog.
+func (s *Service) modelProfilesLocked(ctx context.Context) (modelProfiles, error) {
 	if plan := ownerProfilePlanFrom(ctx); plan != nil {
 		if !plan.loaded {
-			ps, _, err := s.modelProfilesLocked(withoutOwnerProfilePlan(ctx))
+			ps, _, err := s.readModelProfiles(ctx)
 			if err != nil {
-				return modelProfiles{}, false, err
+				return modelProfiles{}, err
 			}
 			plan.profiles = cloneModelProfiles(ps)
 			plan.loaded = true
 		}
 		// Every preparation receives its own deep copy. Only an explicit planned
 		// catalog write advances the shared batch snapshot.
-		return cloneModelProfiles(plan.profiles), false, nil
+		return cloneModelProfiles(plan.profiles), nil
 	}
-	ps, ok, err := s.readModelProfiles(ctx)
-	if err != nil || ok {
-		return ps, false, err
-	}
-	purposes, launchers, tiers, err := s.captureModels(ctx)
-	if err != nil {
-		return ps, false, err
-	}
-	l, now := s.requestCtxLang(ctx), time.Now().UTC()
-	for _, id := range []string{"performance", "economy"} {
-		ps.Profiles = append(ps.Profiles, ModelProfile{ID: id, Name: i18n.T(l, "assistant-model_profiles.name_"+id),
-			Description: i18n.T(l, "assistant-model_profiles.about_"+id), Purposes: maps.Clone(purposes),
-			Launchers: maps.Clone(launchers), Tiers: maps.Clone(tiers), UpdatedAt: now})
-	}
-	ps.Revision = 1
-	return ps, true, nil
+	ps, _, err := s.readModelProfiles(ctx)
+	return ps, err
 }
 
 // captureModels is the configuration as a profile would set it: every category's own choice, the model fields of the
@@ -760,6 +735,9 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 		var m LauncherModels
 		for _, f := range m.fields(&l.ManagedLauncher) {
 			if l.Kind == "api" && f.name != "model" {
+				continue
+			}
+			if *f.launcher == "" && f.name != "small_model" && strings.HasSuffix(f.name, "_model") {
 				continue
 			}
 			*f.set = profileValue(*f.launcher)

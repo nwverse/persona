@@ -285,7 +285,7 @@ describe("a Persona conversation's own approval card (#4883)", () => {
 
   it("labels the next-unanswered entry in all three languages", () => {
     expect(enTasks.next_unanswered).toBe("Next waiting for your answer");
-    expect(zhTasks.next_unanswered).toBe("下一条等你回复");
+    expect(zhTasks.next_unanswered).toBe("下一条待你回复");
     expect(jaTasks.next_unanswered).toBe("次の回答待ち");
   });
 
@@ -304,7 +304,7 @@ describe("a Persona conversation's own approval card (#4883)", () => {
   });
 
   it("says it waits for the user's approval, in every language", () => {
-    expect(zh.permission_kicker).toBe("在等你批准");
+    expect(zh.permission_kicker).toBe("等待你的批准");
     expect(en.permission_kicker).toBe("Waiting for your approval");
     expect(ja.permission_kicker).toBe("承認を待っています");
   });

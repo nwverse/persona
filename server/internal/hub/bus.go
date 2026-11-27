@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
@@ -54,6 +55,32 @@ func handleBus(method string, fn busCall) {
 		panic("bus: method registered twice: " + method)
 	}
 	busMethods[method] = fn
+}
+
+// handleTypedBus binds a handler to the method's request and result types. The
+// decoder accepts unknown fields, and invalidPrefix keeps the method's error text.
+func handleTypedBus[P, R any](method buswire.Method[P, R], invalidPrefix string, fn func(*Hub, context.Context, *busConn, P) (R, error)) {
+	handleTypedBusWithDecoder(method, func(_ *busConn, params json.RawMessage) (P, error) {
+		var p P
+		if err := json.Unmarshal(params, &p); err != nil {
+			return p, &rpc.Error{Code: bus.CodeInvalidParams, Message: invalidPrefix + err.Error()}
+		}
+		return p, nil
+	}, fn)
+}
+
+func handleTypedBusWithDecoder[P, R any](method buswire.Method[P, R], decode func(*busConn, json.RawMessage) (P, error), fn func(*Hub, context.Context, *busConn, P) (R, error)) {
+	handleBus(method.Name, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
+		p, err := decode(c, params)
+		if err != nil {
+			return nil, err
+		}
+		out, err := fn(h, ctx, c, p)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	})
 }
 
 // handleBusEvent registers what takes event (a one-way message) once a connection said its handshake; unregistered

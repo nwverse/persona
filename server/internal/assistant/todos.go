@@ -1107,10 +1107,12 @@ func (s *Service) todoRoutes() {
 			sharedBlockers = p.sharedBlockers()
 			if cfg := s.settings(r.Context()); cfg.todosV2On() {
 				sharedBlockers = mergePersistedSharedBlockers(list, p, sharedBlockers)
+				directions := s.todoBoardDirectionLabels(r.Context())
+				populateTodoEffectiveDirections(list, directions)
 				if !paged {
 					// The board is the same complete projection as Counts. The closed_limit option bounds the rows a list
 					// client has to parse; it does not silently create a second, smaller set of board totals.
-					board = buildTodoBoardProjectionWithOptions(list, s.todoBoardDirectionLabels(r.Context()), cfg.todosV2FoldChildrenOn())
+					board = buildTodoBoardProjectionWithOptions(list, directions, cfg.todosV2FoldChildrenOn())
 				}
 			}
 		}
@@ -1539,7 +1541,12 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusNotFound, errors.New("agent link not found"))
 			return
 		}
+		if !s.loadWork(r.Context()) {
+			apierr.Write(w, http.StatusServiceUnavailable, errors.New("the agents' work could not be read yet"))
+			return
+		}
 
+		key := [2]string{mid, sid}
 		s.todos.writing.Lock()
 		if st := s.todoDB(); st != nil {
 			if err := st.UnlinkTodoAgent(r.Context(), todoID, mid, sid); err != nil {
@@ -1551,10 +1558,12 @@ func (s *Service) todoRoutes() {
 
 		now := time.Now().UTC()
 		var unlinkedCwd string
+		var detached bool
 		s.todos.mu.Lock()
 		if target, ok := s.todos.todos[todoID]; ok {
 			for i := range target.Agents {
 				if target.Agents[i].MachineID == mid && target.Agents[i].SessionID == sid {
+					detached = target.Agents[i].DismissedAt == nil
 					unlinkedCwd = target.Agents[i].Cwd
 					target.Agents[i].ReleasedAt = &now
 					target.Agents[i].DismissedAt = &now
@@ -1563,12 +1572,25 @@ func (s *Service) todoRoutes() {
 			}
 			target.UpdatedAt = now
 		}
-		if curTid, ok := s.todos.activeBySession[[2]string{mid, sid}]; ok && curTid == todoID {
-			delete(s.todos.activeBySession, [2]string{mid, sid})
+		if s.todos.activeBySession[key] == todoID {
+			delete(s.todos.activeBySession, key)
 		}
+		_, stillAttached := s.todos.activeBySession[key]
 		s.todos.mu.Unlock()
+		var retired *db.SessionWork
+		var hiddenCard string
+		if detached && !stillAttached {
+			retired, hiddenCard = s.retireDetachedRetry(key, now)
+		}
 		s.todos.writing.Unlock()
 
+		if retired != nil {
+			s.saveWork(*retired)
+			if hiddenCard != "" {
+				s.recordEnd(hiddenCard, "cancelled", nil)
+			}
+			s.bindRetiredTurn(key, now)
+		}
 		s.linksChanged(r.Context())
 		s.todosChanged(r.Context())
 		if unlinkedCwd != "" {

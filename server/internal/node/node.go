@@ -44,6 +44,7 @@ import (
 
 type Node struct {
 	cacheWarm     *assistantCachePool
+	agyModelPool  *agyModelRunPool
 	segmentStarts segmentStarts
 	segmentInputs segmentInputs
 	runtimeUsage  runtimeUsageReports
@@ -185,6 +186,7 @@ type Node struct {
 	agyParentSubs *lru[string, agyParentSubagentInfo]
 	agyReports    map[string]agyHookReport  // pane -> what its agy hook last said (agyhooks.go)
 	agyBound      map[string]agyPaneBinding // herdr pane -> last accepted non-subagent agy conversation (agypane.go)
+	agyRoots      agyRootsState             // agy data directories besides the default (agyroots.go)
 	agyTitles     *agyTitleBook             // agy's own conversation titles, as last read (agytitle.go)
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
@@ -296,6 +298,15 @@ type Node struct {
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
 	usageRetried map[string]time.Time
+
+	// agyIdle*: Antigravity idle auto-compaction policy, per-session idle tracking, and hub-reported pending
+	// interaction session IDs (agy_idle_compact.go).
+	agyIdleMu         sync.Mutex
+	agyIdleClock      func() time.Time // nil uses time.Now (tests override per-node)
+	agyIdlePolicy     *assistantwire.AgyIdleCompaction
+	agyIdleSessions   map[string]*agyIdleState
+	agyAttemptSeq     uint64
+	pendingIxSessions map[string]bool
 	// recoveries: a conversation's bounded model-failure recovery, surviving the process replaced by a model switch.
 	// recoveryClosed stops the ended connection's Node from starting another attempt while its processes hand over.
 	recoveries     map[string]*assistantTurnRecovery
@@ -357,8 +368,8 @@ type Node struct {
 	// finishedSince: when each finished Agent's terminal was first seen at rest, with its screen; agentTerms: the
 	// terminals opened for Agents on engines without marks of their own (finished_close.go); n.mu.
 	finishedSince map[string]finishedClock
-	agentTerms    map[string]bool
-	agentRoots    map[string]bool // first shells of Agent worktrees on engines without tokens (personatab.go)
+	agentTerms    map[string]string // pane -> the session it was opened for ("agent": not known yet)
+	agentRoots    map[string]bool   // first shells of Agent worktrees on engines without tokens (personatab.go)
 
 	expectedTokensMu sync.Mutex
 	expectedTokens   map[string]map[string]string
@@ -601,7 +612,8 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	n.streams = streams.New(n.peer.Notify)
 	defer n.streams.CloseAll()
 	defer n.mfUps.abortAll()
-	defer n.closeFulls() // none of the web's full herdr clients outlives this hub connection (fullclient.go)
+	defer n.closeFulls()           // none of the web's full herdr clients outlives this hub connection (fullclient.go)
+	defer n.closeAgyModelRunPool() // tear down any warm agy acp model.run worker before Serve exits (modelrun_agy_pool.go)
 	n.peer.OnEvent = func(event string, params json.RawMessage) {
 		if !n.onMCPWait(event, params) && !n.streams.Event(event, params) && !n.onFullEvent(event, params) {
 			n.onTerminalEvent(event, params)
@@ -926,69 +938,71 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.codexTakeoverCall(ctx, method, params)
 	}
 	var p struct {
-		Path                    string        `json:"path"`
-		SessionID               string        `json:"session_id"`
-		CreationID              string        `json:"creation_id"`
-		Incarnation             string        `json:"incarnation"`
-		OpID                    string        `json:"op_id"`
-		CodexEffortFallback     string        `json:"codex_effort_fallback"`
-		TaskTerminalToken       string        `json:"task_terminal_token"`
-		Cwd                     string        `json:"cwd"`
-		Launcher                string        `json:"launcher"`
-		RequireLauncher         bool          `json:"require_launcher"`
-		AgentType               string        `json:"agent_type"`
-		Model                   string        `json:"model"`
-		ModelFingerprint        string        `json:"model_fingerprint"`
-		SupervisionInstructions *string       `json:"supervision_instructions"`
-		ConfigDir               string        `json:"config_dir"`
-		Prompt                  string        `json:"prompt"`
-		ResumeSessionID         string        `json:"resume_session_id"`
-		ResumeAutomatic         bool          `json:"resume_automatic"`
-		A2AWakeOnSend           bool          `json:"a2a_wake_on_send"`
-		ResumeOutsideHealth     bool          `json:"resume_outside_health"` // session.start: an extension's resume the hub does not list (resumeOutsideHealth)
-		Host                    string        `json:"host"`                  // session.start: the enabled host to open in ("" the default host, #2576)
-		TaskID                  string        `json:"task_id"`
-		WorkspaceID             string        `json:"workspace_id"`
-		WorkspaceLabel          string        `json:"workspace_label"`
-		ReopenWorktreeWorkspace bool          `json:"reopen_worktree_workspace"`
-		NameHint                string        `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
-		Text                    string        `json:"text"`
-		SkillOwner              string        `json:"skill_owner"` // manager-owned identity for explicit skill selections
-		Images                  []proto.Image `json:"images"`
-		PreKeys                 []string      `json:"pre_keys"`
-		Keys                    []string      `json:"keys"`
-		Lines                   int           `json:"lines"`
-		BeforeSeq               int           `json:"before_seq"`
-		AfterSeq                *int          `json:"after_seq"`
-		Limit                   int           `json:"limit"`
-		SinceSeq                int           `json:"since_seq"`
-		Source                  string        `json:"source"`
-		Format                  string        `json:"format"`
-		Turns                   int           `json:"turns"`
-		LazyImages              bool          `json:"lazy_images"`
-		UserInputs              bool          `json:"user_inputs"`
-		MetaOnly                bool          `json:"meta_only"`
-		StrictRead              bool          `json:"strict_read"`
-		FoldWork                bool          `json:"fold_work"`
-		FromSeq                 int           `json:"from_seq"`
-		ThroughSeq              int           `json:"through_seq"`
-		Name                    string        `json:"name"`
-		Pane                    string        `json:"pane"`      // panes.*: a pane the host lists
-		InPane                  string        `json:"in_pane"`   // session.start: a failed start's kept tab to start in (startremedy.go)
-		Direction               string        `json:"direction"` // panes.split: right or down
-		TabID                   string        `json:"tab_id"`    // tabs.*, guarded session tab rename
-		Label                   string        `json:"label"`     // tabs.rename
-		Kind                    string        `json:"kind"`      // tabs.*, panes.git: the host kind ("" the engine's)
-		Op                      string        `json:"op"`        // panes.git: fetch, pull or push
-		Action                  string        `json:"action"`    // launchers.repair: which of its fixed repairs
-		TabName                 *string       `json:"tab_name"`
-		ExpectedTabName         string        `json:"expected_tab_name"` // guarded session tab rename from automatic naming
-		TZ                      string        `json:"tz"`                // the user's time zone
-		DesktopApp              string        `json:"desktop_app"`
-		DesktopProjectID        string        `json:"desktop_project_id"`
-		CreateDirectory         bool          `json:"create_directory"`
-		IdempotencyKey          string        `json:"idempotency_key"`
-		BoundDirectories        []string      `json:"bound_directories"`
+		Path                    string             `json:"path"`
+		SessionID               string             `json:"session_id"`
+		CreationID              string             `json:"creation_id"`
+		Incarnation             string             `json:"incarnation"`
+		OpID                    string             `json:"op_id"`
+		CodexEffortFallback     string             `json:"codex_effort_fallback"`
+		TaskTerminalToken       string             `json:"task_terminal_token"`
+		Cwd                     string             `json:"cwd"`
+		Launcher                string             `json:"launcher"`
+		RequireLauncher         bool               `json:"require_launcher"`
+		AgentType               string             `json:"agent_type"`
+		Model                   string             `json:"model"`
+		ModelAliases            proto.ModelAliases `json:"model_aliases"`
+		ExplicitModel           string             `json:"explicit_model"`
+		ModelFingerprint        string             `json:"model_fingerprint"`
+		SupervisionInstructions *string            `json:"supervision_instructions"`
+		ConfigDir               string             `json:"config_dir"`
+		Prompt                  string             `json:"prompt"`
+		ResumeSessionID         string             `json:"resume_session_id"`
+		ResumeAutomatic         bool               `json:"resume_automatic"`
+		A2AWakeOnSend           bool               `json:"a2a_wake_on_send"`
+		ResumeOutsideHealth     bool               `json:"resume_outside_health"` // session.start: an extension's resume the hub does not list (resumeOutsideHealth)
+		Host                    string             `json:"host"`                  // session.start: the enabled host to open in ("" the default host, #2576)
+		TaskID                  string             `json:"task_id"`
+		WorkspaceID             string             `json:"workspace_id"`
+		WorkspaceLabel          string             `json:"workspace_label"`
+		ReopenWorktreeWorkspace bool               `json:"reopen_worktree_workspace"`
+		NameHint                string             `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
+		Text                    string             `json:"text"`
+		SkillOwner              string             `json:"skill_owner"` // manager-owned identity for explicit skill selections
+		Images                  []proto.Image      `json:"images"`
+		PreKeys                 []string           `json:"pre_keys"`
+		Keys                    []string           `json:"keys"`
+		Lines                   int                `json:"lines"`
+		BeforeSeq               int                `json:"before_seq"`
+		AfterSeq                *int               `json:"after_seq"`
+		Limit                   int                `json:"limit"`
+		SinceSeq                int                `json:"since_seq"`
+		Source                  string             `json:"source"`
+		Format                  string             `json:"format"`
+		Turns                   int                `json:"turns"`
+		LazyImages              bool               `json:"lazy_images"`
+		UserInputs              bool               `json:"user_inputs"`
+		MetaOnly                bool               `json:"meta_only"`
+		StrictRead              bool               `json:"strict_read"`
+		FoldWork                bool               `json:"fold_work"`
+		FromSeq                 int                `json:"from_seq"`
+		ThroughSeq              int                `json:"through_seq"`
+		Name                    string             `json:"name"`
+		Pane                    string             `json:"pane"`      // panes.*: a pane the host lists
+		InPane                  string             `json:"in_pane"`   // session.start: a failed start's kept tab to start in (startremedy.go)
+		Direction               string             `json:"direction"` // panes.split: right or down
+		TabID                   string             `json:"tab_id"`    // tabs.*, guarded session tab rename
+		Label                   string             `json:"label"`     // tabs.rename
+		Kind                    string             `json:"kind"`      // tabs.*, panes.git: the host kind ("" the engine's)
+		Op                      string             `json:"op"`        // panes.git: fetch, pull or push
+		Action                  string             `json:"action"`    // launchers.repair: which of its fixed repairs
+		TabName                 *string            `json:"tab_name"`
+		ExpectedTabName         string             `json:"expected_tab_name"` // guarded session tab rename from automatic naming
+		TZ                      string             `json:"tz"`                // the user's time zone
+		DesktopApp              string             `json:"desktop_app"`
+		DesktopProjectID        string             `json:"desktop_project_id"`
+		CreateDirectory         bool               `json:"create_directory"`
+		IdempotencyKey          string             `json:"idempotency_key"`
+		BoundDirectories        []string           `json:"bound_directories"`
 		// HTTP is a quota plugin's request to send to a launcher's gateway (launchers.http); nil asks for the gateway.
 		HTTP             *quota.Request                `json:"http,omitempty"`
 		Async            bool                          `json:"async"`
@@ -1138,7 +1152,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				}
 				return n.sendFirstCodexCall(ctx, w, params, p.Text, p.Images)
 			}
-			if r, err, handled := n.codexWaitCalls(method, p.SessionID); handled {
+			if r, err, handled := n.codexWaitCalls(method, p.SessionID, p.UserInputs); handled {
 				return r, err
 			}
 		}
@@ -1492,6 +1506,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// PrivateNetwork: the hub is in office network mode (hub.json security.private_network_only), so this node's
 			// tailcat endpoint stops (tailcat.go stopTailcat); nil or false (an older hub) leaves it as it is.
 			PrivateNetwork *bool `json:"private_network"`
+			// AgyIdleCompaction: proactive idle auto-compaction policy for Antigravity sessions (agy_idle_compact.go);
+			// nil leaves the current policy (or defaults) unchanged.
+			AgyIdleCompaction *assistantwire.AgyIdleCompaction `json:"agy_idle_compaction"`
+			// PendingInteractionSessions: session IDs on this machine currently holding pending hub interaction cards
+			// (ask_user / approval), so idle auto-compaction does not compact sessions waiting on the user.
+			PendingInteractionSessions *[]string `json:"pending_interaction_sessions"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
@@ -1509,7 +1529,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 			n.hubMCPWait.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.MCPWait))
 		}
-		if c.ClaudeDirs != nil || c.Keep == nil { // a call that only changes what is kept leaves the directories
+		if c.ClaudeDirs != nil || (c.Keep == nil && c.AgyIdleCompaction == nil && c.PendingInteractionSessions == nil) { // partial updates leave the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
 		}
 		if c.ClaudeDirsBlocked != nil {
@@ -1561,6 +1581,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if c.ClaudeLiveReplies != nil {
 			n.setLiveReplies(*c.ClaudeLiveReplies)
+		}
+		if c.AgyIdleCompaction != nil {
+			n.setAgyIdleCompaction(*c.AgyIdleCompaction)
+		}
+		if c.PendingInteractionSessions != nil {
+			n.setPendingInteractionSessions(*c.PendingInteractionSessions)
 		}
 		return map[string]any{"claude_dirs": n.claudeConfigDirs()}, nil
 	case "usage.windows": // subscription rate-limit windows collected on this computer (usagewindows.go, #2432)
@@ -1718,6 +1744,19 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, p.Host, p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		var modelAliases *proto.ModelAliases
+		if err := p.ModelAliases.Validate(); err != nil {
+			return nil, err
+		}
+		if len(p.ModelAliases) != 0 {
+			_, onRuntime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]
+			runtime, _ := n.startRuntimeIn(withStartHost(ctx, p.Host), p.Launcher)
+			if p.ResumeSessionID != "" || onRuntime || runtime != nil || isDesktopLauncher(p.Launcher) ||
+				isCodexAppLauncher(p.Launcher) || n.startAgentType(p.Launcher, p.AgentType) != "claude" {
+				return nil, refusal("model_aliases_unsupported", "model_aliases require a new Claude Code terminal session", nil)
+			}
+			modelAliases = &p.ModelAliases
+		}
 		if p.ResumeSessionID == "" && p.OpID != "" {
 			existing, finishOp, err := n.beginStartOp(ctx, p.OpID)
 			if err != nil {
@@ -1957,12 +1996,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		// Only Claude Code has a session id before it starts; another agent picks its own (start_agent.go).
 		asyncAgent := n.startAgentType(p.Launcher, p.AgentType)
 		if p.Async && p.ResumeSessionID == "" && asyncAgent == "claude" {
-			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace})
+			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{ModelAliases: modelAliases, ExplicitModel: p.ExplicitModel, CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace})
 			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 		}
 		r := resumed{cwd: p.Cwd, launcher: p.Launcher, mode: p.PermissionMode, effort: p.Effort, tab: tab,
 			taskID: p.TaskID, workspaceID: p.WorkspaceID, workspaceLabel: p.WorkspaceLabel,
-			execution: modelExecution{CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace}}
+			execution: modelExecution{ModelAliases: modelAliases, ExplicitModel: p.ExplicitModel, CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace}}
 		if p.ResumeSessionID != "" {
 			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
@@ -2416,6 +2455,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if rev := dialogRev(text, p.Lines, p.Source, p.Format); rev != "" {
 			res["dialog_rev"] = rev
 		}
+		if ms := n.screenRefresh(p.SessionID); ms > 0 {
+			res["refresh_ms"] = ms // a client polling a screen that cannot stream may read it this often (#17048)
+		}
 		return res, err
 	case "terminal.watch":
 		var a struct {
@@ -2620,7 +2662,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err != nil {
 			if !p.StrictRead {
 				if conv, ok := strings.CutPrefix(p.SessionID, agyAgent+"-"); ok && uuidRe.MatchString(conv) {
-					dir := n.agyDataRoot()
+					dir := n.agyRootFor(conv)
 					if root, rerr := agyBrain(dir, conv); rerr == nil {
 						defer root.Close()
 						if h, _, aerr := n.agyRead(root, filepath.Join(dir, conv), conv, nil); aerr == nil {
@@ -3200,7 +3242,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 			}
 			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": model, "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.effectiveStopCause(id)}, nil
 		}
-		return nil, err
+		return nil, n.readErr(id, err)
 	}
 	n.refresh(id, f)
 	m := f.Meta()
@@ -3224,12 +3266,13 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 			mode = tuiMode(screen) // shift+tab in the terminal shows up in the transcript only with the next prompt
 		}
 	}
+	path := f.Where()
 	cwd := m.Cwd // an agent's latest directory
 	if n.isAssistantSession(id) {
-		cwd = n.assistantCwd(id, f.Path, cwd) // a conversation's own, where it started (#2368)
+		cwd = n.assistantCwd(id, path, cwd) // a conversation's own, where it started (#2368)
 	}
 	return map[string]any{
-		"session_id": id, "transcript_path": f.Path, "cwd": cwd, "model": model, "launcher": st.Launcher,
+		"session_id": id, "transcript_path": path, "cwd": cwd, "model": model, "launcher": st.Launcher,
 		"git_branch": m.GitBranch, "version": m.Version, "permission_mode": mode, "effort": effort,
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,

@@ -1,5 +1,5 @@
 {
-  "failed": "没发出去：{error}",
+  "failed": "发送失败：{error}",
   "clear_and_send": "清空并发送",
   "retry": "重试",
   "check": "核对",

@@ -11,18 +11,21 @@ import { SegmentedTrack } from "../../../ui/Segmented";
 export function BackHeader({
   title,
   subtitle,
+  leading,
   actions,
   onBack,
   onClose,
 }: {
   title: React.ReactNode;
   subtitle?: React.ReactNode;
+  leading?: React.ReactNode;
   actions?: React.ReactNode;
   onBack: () => void;
   onClose: () => void;
 }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
+      {leading}
       <IconButton icon="chevronLeft" label={t("session-files-parts.back")} onClick={onBack} iconSize={16} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13.5px] font-semibold text-ink">{title}</div>

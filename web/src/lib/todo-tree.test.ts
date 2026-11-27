@@ -60,7 +60,7 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
     const tree = buildTodoTree(all, machines, [todo("t1", [link("a")])], noMutes, NOW);
     expect(tree.loose.map((g) => [g.key, g.sessions.map((x) => x.session_id).sort()])).toEqual([["todo:none", ["bot", "hand"]]]);
     // what the group holds, for its ⓘ and its empty state (#3057, #6458); no engine name (DESIGN_SYSTEM 5.6)
-    expect(tree.loose[0].hint).toContain("没挂在任何待办上");
+    expect(tree.loose[0].hint).toContain("未关联到任何待办");
     expect(tree.loose[0].hint).toContain("终端");
     expect(tree.loose[0].hint).not.toMatch(/herdr/i);
     // where it came from stays on the row: the Terminal source mark
@@ -81,7 +81,7 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
     const all = [s("a", "working", "/code/p")];
     expect(buildTodoTree(all, machines, [todo("t1", [link("a")])], noMutes, NOW).loose).toEqual([]);
     const tree = buildTodoTree(all, machines, [todo("t1", [link("a")])], noMutes, NOW, { keepEmpty: true });
-    expect(tree.loose.map((g) => [g.key, g.name, g.agents.length, g.folded])).toEqual([["todo:none", "没挂待办的", 0, true]]);
+    expect(tree.loose.map((g) => [g.key, g.name, g.agents.length, g.folded])).toEqual([["todo:none", "未关联待办", 0, true]]);
     expect(tree.loose[0].hint.length).toBeGreaterThan(0);
   });
 

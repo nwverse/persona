@@ -464,7 +464,9 @@ func readCompletions(body io.Reader) (Reply, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return Reply{}, fmt.Errorf("ai: read stream: %w", err)
+		// reply already carries any usage/model chunks read before the cut: keep them for the usage hook rather than
+		// reporting the failed call as zero tokens. Its Text is still empty (assembled only after the scan).
+		return reply, fmt.Errorf("ai: read stream: %w", err)
 	}
 	if err := consume(); err != nil {
 		return Reply{}, err

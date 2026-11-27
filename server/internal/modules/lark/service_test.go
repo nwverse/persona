@@ -333,7 +333,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
 	if res.Held {
 		r.Held = true
 		delete(r.Ext, "card")
-		for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_calls", "cot_done", "cot_off"} {
+		for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_calls", "cot_done", "cot_off", "cot_answer"} {
 			delete(r.Ext, k)
 		}
 		prog.steps, prog.from = nil, 0

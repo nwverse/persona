@@ -203,6 +203,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if t.Model != "" && !proto.ValidModelID(t.Model) { // it goes to the agent as --model (#1644)
 			return "", fmt.Errorf("task %d: model %q is not a model id: %s", i+1, t.Model, proto.ModelIDRule)
 		}
+		if err := t.ModelAliases.Validate(); err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
 		if scope == nil { // a task leader has none to give and keeps its task's project
 			atts, err := cleanAttachments(t.Attachments)
 			if err == nil {
@@ -469,7 +472,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			}
 		}
 	}
-	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
+	var reuseSpace *string
+	if scope == nil {
+		callerSpace := s.agentCallerSpace(ctx, machine, sessionID)
+		reuseSpace = &callerSpace
+	}
+	dups := s.planDuplicates(ctx, a.Tasks, reuseSpace) // before the plan's own todos exist
 	// Same-directory active agents the conversation already supervises: surfaced with exact ids even when the titles
 	// are worded too differently for planDuplicates (#13192). A hint, never a refusal.
 	reuse := reuseHintText("task_plan", s.planReuseHints(ctx, sessionID, a.Tasks))
@@ -671,6 +679,9 @@ func (s *Service) planSupervisor(ctx context.Context, self, lead string) (string
 
 // applyPlanEdit takes what the user changed on the card; an empty field keeps the assistant's.
 func applyPlanEdit(t *PlanTask, e PlanTask) {
+	if e.ModelAliases != nil {
+		t.ModelAliases = e.ModelAliases
+	}
 	if e.Workspace != nil {
 		t.Workspace, t.WorkspaceResolved, t.WorkspaceInferred = e.Workspace, nil, false
 	}

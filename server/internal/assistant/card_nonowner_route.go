@@ -166,6 +166,7 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 		Tool:      src,
 		Text:      b.String(),
 		At:        now.UTC(),
+		Internal:  true,
 	}
 	if standalonePermission {
 		// The active queue waits for the main conversation to be free and retries under the same message ID.

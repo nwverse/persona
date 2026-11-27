@@ -56,7 +56,7 @@ import { onOpenNewAgent, type NewAgentPreset } from "./lib/new-agent";
 import { closeHelp, useHelpOpen } from "./lib/shortcut-help";
 import { closePalette, openPalette, usePalette } from "./lib/palette";
 import { sidebarRail, sidebarShown, useLayout } from "./lib/layout";
-import { useMacChrome } from "./lib/mac-chrome";
+import { macChromeMode, useMacChrome } from "./lib/mac-chrome";
 import { MacBayTools, MacMainContour } from "./views/MacChrome";
 import { SIDEBAR_LABEL, useShortcuts } from "./lib/use-shortcuts";
 import { Sidebar, SidebarRail } from "./views/Sidebar";
@@ -67,6 +67,7 @@ import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
 import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
+import { TextLookupHost } from "./text-lookup/host";
 import { openStartPage } from "./lib/start-page";
 import { conversationRoute } from "./lib/conversation-page";
 import { useTrackTitle } from "./lib/tracks";
@@ -478,7 +479,7 @@ function Shell() {
   const rail = !narrow && sidebarRail(layout);
   const macChrome = useMacChrome();
   const macWindowed = macChrome.unifiedTitlebar && !macChrome.fullScreen && !narrow;
-  const macBay: "rail" | "hidden" | null = macWindowed ? (rail ? "rail" : !sidebarShown(layout) ? "hidden" : null) : null;
+  const macBay = macWindowed ? (rail ? "rail" : sidebarShown(layout) ? "expanded" : "hidden") : undefined;
   useEffect(() => {
     if (!narrow) setDrawer(false);
   }, [narrow]);
@@ -601,7 +602,7 @@ function Shell() {
       // Health's existing data stays in the default panel without its module (including a core-only build), rather
       // than depending on the optional Space Conversations extension or opening an editable new-conversation home.
       const archive = healthReadOnly(route.slug);
-      main = route.sid || archive ? <Space key={`${route.slug}/${route.sid ?? "home"}`} slug={route.slug} sid={route.sid} fresh={route.fresh || archive} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
+      main = route.sid || route.fresh || archive ? <Space key={`${route.slug}/${route.sid ?? "home"}`} slug={route.slug} sid={route.sid} fresh={route.fresh || archive} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
       break;
     }
     case "track-new":
@@ -678,8 +679,8 @@ function Shell() {
       ref={shell}
       data-app-shell
       data-sidebar-hidden={!sidebarShown(layout) || undefined}
-      data-mac-chrome={macChrome.unifiedTitlebar ? (macChrome.fullScreen ? "fullscreen" : "windowed") : undefined}
-      data-mac-bay={macBay ?? (macWindowed ? "expanded" : undefined)}
+      data-mac-chrome={macChromeMode(macChrome)}
+      data-mac-bay={macBay}
       className="flex h-full overflow-hidden bg-page"
     >
       {/* wide: a fixed column; narrow: a drawer over the page, clear of a landscape notch and the home indicator */}
@@ -700,7 +701,7 @@ function Shell() {
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar active={narrow ? drawer : sidebarShown(layout)} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
+        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} hideCollapse={macWindowed} /> : <Sidebar active={narrow ? drawer : sidebarShown(layout)} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} hideCollapse={macWindowed} />}
         {!narrow && !rail && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}
@@ -753,6 +754,7 @@ function Shell() {
       <AttentionSignals label={title} pane={pane} />
       {/* the counts for the desktop app's island at the MacBook notch (#7669), only in a desktop app that has it */}
       {window.personaDesktop?.setIslandState && <DesktopIslandSignals />}
+      <TextLookupHost />
     </div>
   );
 }

@@ -58,9 +58,9 @@ describe("QueuePanel row actions", () => {
     vi.mocked(api).mockResolvedValue({});
     render(<QueuePanel session={session} draftKey="qp-send" canEdit />);
     const send = within(2, "[data-send-now]");
-    expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Claude，不用等到下一步");
-    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Claude 会马上收到");
-    expect(send.title).toBe("现在就把排队的消息全部发给 Claude，不用等到下一步\nClaude 会马上收到，不用等到下一步。它正在跑的命令会转到后台继续；正在写的回复会带上你的消息重新开始。");
+    expect(send.getAttribute("aria-label")).toBe("立即将所有排队消息发送给 Claude，无需等待下一步");
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Claude 将立即收到这些消息");
+    expect(send.title).toBe("立即将所有排队消息发送给 Claude，无需等待下一步\nClaude 将立即收到这些消息，无需等待下一步。正在运行的命令会转至后台继续执行，正在生成的回复则会结合你的消息重新开始。");
     click(send);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(calls()).toEqual([["/sessions/m/s/queue/send-now", {}]]);
@@ -78,16 +78,16 @@ describe("QueuePanel row actions", () => {
     const persona = { ...session, agent: undefined, assistant: true, queued: ["我的"] } as unknown as Session;
     render(<QueuePanel session={persona} draftKey="qp-persona-send" canEdit persona="Nova" />);
     const send = within(0, "[data-send-now]");
-    expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Nova，不用等到下一步");
-    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Nova 会马上收到");
+    expect(send.getAttribute("aria-label")).toBe("立即将所有排队消息发送给 Nova，无需等待下一步");
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Nova 将立即收到这些消息");
   });
 
   it("explains that a runtime assistant stops its turn and starts only the next queued message", () => {
     const runtime: Session = { ...session, agent: "agy", assistant: true, source_kind: "runtime", capabilities: { queue_send_now: true } };
     render(<QueuePanel session={runtime} draftKey="qp-runtime-assistant-send" canEdit persona="Nova" />);
     const send = within(0, "[data-send-now]");
-    const tip = "停止 Nova 当前这一轮，开始处理下一条排队消息";
-    const body = "Nova 会停止当前这一轮，开始处理下一条排队消息。其余消息仍按原顺序排队。";
+    const tip = "停止 Nova 当前轮次，立即开始处理下一条排队消息";
+    const body = "Nova 将停止当前轮次，开始处理下一条排队消息，其余消息仍按原顺序排队。";
     expect(send.getAttribute("aria-label")).toBe(tip);
     expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toBe(body);
     expect(send.title).toBe(`${tip}\n${body}`);
@@ -291,7 +291,7 @@ describe("QueuePanel relayed group", () => {
     expect(rows().map((r) => r.querySelector("[data-queue-from]")!.textContent)).toEqual(["主对话", "日报"]);
     expect(texts()).toEqual(["帮我看下日程", "汇总"]);
     expect(host.textContent).not.toContain("来自「主对话」：");
-    expect(rows()[0].getAttribute("aria-label")).toBe("排队的第 1 条：来自「主对话」 · 帮我看下日程 · 对话空闲后送达");
+    expect(rows()[0].getAttribute("aria-label")).toBe("第 1 条排队消息：来自「主对话」 · 帮我看下日程 · 对话空闲后送达");
     expect(rows()[0].querySelector("[data-queue-note]")).toBeNull();
   });
 
@@ -304,7 +304,7 @@ describe("QueuePanel relayed group", () => {
     expect(summary().textContent).toBe("1 条消息来自其他对话 · 随下一轮消息送达");
     expect(within(0, "[data-queue-from]").textContent).toBe("日报");
     expect(texts()).toEqual(["备忘"]);
-    expect(rows()[0].getAttribute("aria-label")).toBe("排队的第 1 条：来自「日报」 · 备忘 · 随下一轮消息送达");
+    expect(rows()[0].getAttribute("aria-label")).toBe("第 1 条排队消息：来自「日报」 · 备忘 · 随下一轮消息送达");
     expect(rows()[0].querySelector("button")).toBeNull();
     expect(host.textContent).not.toContain("对话空闲后送达");
   });
@@ -318,9 +318,9 @@ describe("QueuePanel relayed group", () => {
       "随下一轮消息送达", "对话空闲后送达", "对话空闲后送达",
     ]);
     expect(rows().map((row) => row.getAttribute("aria-label"))).toEqual([
-      "排队的第 1 条：来自「日报」 · 备忘 · 随下一轮消息送达",
-      "排队的第 2 条：来自「主对话」 · 帮我看下日程 · 对话空闲后送达",
-      "排队的第 3 条：其他对话 · 督办消息 · 对话空闲后送达",
+      "第 1 条排队消息：来自「日报」 · 备忘 · 随下一轮消息送达",
+      "第 2 条排队消息：来自「主对话」 · 帮我看下日程 · 对话空闲后送达",
+      "第 3 条排队消息：其他对话 · 督办消息 · 对话空闲后送达",
     ]);
   });
 
@@ -346,7 +346,7 @@ describe("QueuePanel relayed group", () => {
     click(summary());
     expect(host.querySelector("[data-queue-from]")).toBeNull();
     expect(texts()).toEqual(["日报的通知", "督办消息"]);
-    expect(rows()[0].getAttribute("aria-label")).toBe("排队的第 1 条：其他对话 · 日报的通知 · 对话空闲后送达");
+    expect(rows()[0].getAttribute("aria-label")).toBe("第 1 条排队消息：其他对话 · 日报的通知 · 对话空闲后送达");
     expect(rows()[0].querySelector("[data-queue-note]")).toBeNull();
   });
 
@@ -429,7 +429,7 @@ describe("QueuePanel status, always-visible Send now and photo thumbnails (#1087
     expect(firstActions.className).not.toContain("opacity-0");
     expect(firstSendNow.className).not.toContain("opacity-0");
     expect(firstSendNow.textContent).toContain("立即发送");
-    expect(firstSendNow.title).toContain("现在就把排队的消息全部发给 Claude");
+    expect(firstSendNow.title).toContain("立即将所有排队消息发送给 Claude");
 
     const secondActions = rows()[1].querySelector<HTMLElement>("[data-queue-actions]")!;
     expect(secondActions.className).toContain("opacity-0");

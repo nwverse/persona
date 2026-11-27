@@ -286,8 +286,7 @@ type Session struct {
 	// largest windows are a few million tokens (Tokens32 saturates anything bigger).
 	ContextTokens int32 `json:"context_tokens,omitempty"`
 	ContextWindow int32 `json:"context_window,omitempty"`
-	// OutputTokens is cumulative generated output, not the latest context size or transcript revision.
-	OutputTokens int `json:"output_tokens,omitempty"`
+	// Cumulative generated output lives in SessionHierarchy; see OutputTokensValue / SetOutputTokens.
 	// Efforts are the levels session.modes takes for Effort when they are not Claude Code's (which the apps know): a
 	// Codex thread the phone drives through its app-server (node/codex_effort.go), its model's levels weakest first; a
 	// runtime's row of an agent that is not Claude Code's, as the runtime lists them (Paseo's, #8133; the node drops
@@ -635,6 +634,12 @@ const (
 	NotFoundNoTranscript   = "no_transcript"
 	NotFoundUnknownSession = "unknown_session"
 )
+
+// NotRunningEngine is the data.reason of a node's not_running refusal of a message to a session that is not live in an
+// engine that cannot bring it back from the phone (node/sendsafe.go notRunningRefusal), with data.engine the engine's
+// name. The hub words it in the request's language (apierr.Call, rpc-errors.not_running_engine); a not_running without
+// it (an older node, a runtime's own answer, a resume that never came up) keeps the node's words (#17044).
+const NotRunningEngine = "engine_cannot_reopen"
 
 // CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
 // and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was

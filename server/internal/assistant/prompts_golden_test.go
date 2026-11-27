@@ -271,7 +271,8 @@ func TestGoldenBotReadGroup(t *testing.T) {
 	// The prompt as the lark module fills it for a /read (its read.go; readPrompt checks it is these).
 	readPrompt := func(owner, lang, chat, message, thread, task string, direct bool) prompts.BotReadGroup {
 		return prompts.BotReadGroup{Owner: owner, Language: lang, ChatID: chat, MessageID: message, ThreadID: thread, Task: task,
-			Dir: "~/.persona/lark-read/" + message, Default: 40, Most: 500, FileMB: 50, TotalMB: 200, Images: 20, Direct: direct}
+			Dir: "~/.persona/lark-read/" + message, Default: 40, Most: 500, FileMB: 50, TotalMB: 200, Images: 20,
+			Minutes: 20, Calls: 40, Direct: direct}
 	}
 	for _, direct := range []bool{false, true} {
 		suffix := ""

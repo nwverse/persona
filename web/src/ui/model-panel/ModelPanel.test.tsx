@@ -500,7 +500,7 @@ describe("the model panel", () => {
 
   it("the star saves a copy of the row's setup once; Favorites lists it, and its star removes it", async () => {
     await open();
-    const star = () => document.body.querySelector('[data-panel-section="provider"]')!.querySelectorAll<HTMLButtonElement>('button[aria-label="存为收藏"]')[1];
+    const star = () => document.body.querySelector('[data-panel-section="provider"]')!.querySelectorAll<HTMLButtonElement>('button[aria-label="加入收藏"]')[1];
     act(() => star().click());
     // the row's star is one way: a second press saves nothing new
     act(() => star().click());
@@ -551,7 +551,7 @@ describe("the model panel", () => {
     act(() => button("Codex").click());
     type(search(), "vendor/new-1");
     expect(rows().map((r) => r.textContent)).toEqual([expect.stringContaining("使用「vendor/new-1」")]);
-    expect(row("使用「vendor/new-1」").textContent).toContain("Claude · 列表里没有，按输入的 ID 使用");
+    expect(row("使用「vendor/new-1」").textContent).toContain("Claude · 未在列表中，将直接按输入的 ID 使用");
     key(search(), "Enter");
     await flush();
     expect(onPick).toHaveBeenCalledWith({
@@ -566,9 +566,9 @@ describe("the model panel", () => {
     const onForget = vi.fn();
     await open({ onForget });
     const typed = row("vendor/model-x");
-    expect(typed.textContent).toContain("Claude · 输入过的");
+    expect(typed.textContent).toContain("Claude · 历史输入");
     expect(typed.querySelector(".font-mono")).not.toBeNull();
-    act(() => typed.querySelector<HTMLButtonElement>('button[aria-label="忘记「vendor/model-x」"]')!.click());
+    act(() => typed.querySelector<HTMLButtonElement>('button[aria-label="移除「vendor/model-x」"]')!.click());
     expect(onForget).toHaveBeenCalledWith("claude", "vendor/model-x");
   });
 
@@ -591,7 +591,7 @@ describe("the model panel", () => {
     });
     const sections = [...document.body.querySelectorAll('[data-panel-section="provider"]')];
     act(() => launcher("codex").click());
-    expect(sections[1].querySelector('[role="status"]')?.textContent).toContain("正在读取模型");
+    expect(sections[1].querySelector('[role="status"]')?.textContent).toContain("正在加载模型");
     expect(sections[2].textContent).toContain("连不上");
     act(() => button("重试").click());
     expect(onReload).toHaveBeenCalledWith("cx2");
@@ -678,7 +678,7 @@ describe("launcher-first acceptance #10249", () => {
   it("search waits for unread launcher lists before claiming there are no matches", async () => {
     const { render } = await open({ providers: [claude(), codex({ models: null, loading: true, unavailable: undefined })] });
     type(search(), "unlisted model");
-    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("正在读取模型");
+    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("正在加载模型");
     expect(document.body.textContent).not.toContain("没有匹配的模型");
     act(() => render({ providers: [claude(), codex({ models: [], unavailable: undefined })] }));
     expect(document.body.querySelector('[role="status"]')).toBeNull();

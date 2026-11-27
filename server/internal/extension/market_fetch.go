@@ -235,7 +235,7 @@ func (m *Market) FetchSigned(ctx context.Context) (*Fetched, error) {
 		err := anonymous.get(mirrorCtx, m.CatalogMirror, "application/json", &b, IndexMost)
 		stop()
 		if err == nil {
-			if f, err := ParseCatalog([]byte(b.String()), key); err == nil {
+			if f, err := ParseCatalogKeysForBuild([]byte(b.String()), []string{key}, m.HubBuild); err == nil {
 				return f, nil
 			}
 		}
@@ -246,7 +246,7 @@ func (m *Market) FetchSigned(ctx context.Context) (*Fetched, error) {
 	if err != nil {
 		return nil, catalogFailure(ErrCatalogUnavailable, err)
 	}
-	return ParseCatalogKeys(raw, m.VerifyKeys())
+	return ParseCatalogKeysForBuild(raw, m.VerifyKeys(), m.HubBuild)
 }
 
 // VerifyKeys are the keys a catalog of m must be signed by (any one of them): the compiled-in key for the official

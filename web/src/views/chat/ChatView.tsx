@@ -1726,7 +1726,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       // a worker's conversation in a Team panel, and an Agent's in a task's or an Agent's side panel, leave Esc to the
       // panel (it closes it) and to the page beside it
       if (embedded || inPanel) return;
-      if (e.key === "Escape" && !e.defaultPrevented) {
+      if (e.key === "Escape" && !e.defaultPrevented && !e.isComposing && e.keyCode !== 229) {
         if (e.target instanceof Element && e.target.closest("[data-session-overview]")) return;
         if ((state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
           e.preventDefault();
@@ -3783,7 +3783,7 @@ function TitleEditor({ session, title, onDone }: { session: Session; title: stri
       onChange={(e) => setValue(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.nativeEvent.isComposing) return;
+        if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
         if (e.key === "Enter") {
           e.preventDefault();
           commit();
