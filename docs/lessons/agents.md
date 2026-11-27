@@ -1,5 +1,7 @@
 # Lessons: Claude Code, Codex, and herdr
 
+- ACP pending approvals retain the original permission request and reattach with the same card ID; pause the prompt watchdog while waiting, and clear the pause on resolution or explicit interruption. Never cancel the whole turn to detach an approval (#17414).
+
 ## A delivery label does not prove a disabled feature (#16936)
 
 - A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require

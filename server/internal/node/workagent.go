@@ -153,6 +153,8 @@ func agyModeFlags(mode string) string {
 		return " --mode accept-edits"
 	case "auto":
 		return " --mode auto"
+	case proto.ModePlan:
+		return " --mode plan"
 	}
 	return ""
 }

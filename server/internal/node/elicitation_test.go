@@ -11,6 +11,33 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+func TestElicitationRuntimeURL(t *testing.T) {
+	n, hub := runtimeNode(t)
+	host := dialRuntime(t, n, dshHello())
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{{SessionID: "url-session", Cwd: t.TempDir()}}})
+	waitFor(t, "URL session listed", func() bool { _, ok := listed(t, n)["url-session"]; return ok })
+	hub.mu.Lock()
+	hub.resolve = func(proto.Interaction) proto.Resolution { return proto.Resolution{Action: "accept"} }
+	hub.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	want := &proto.Elicitation{Mode: "url", URL: "https://example.com/confirm", Message: "Confirm access", ID: "request-url"}
+	var res proto.Resolution
+	err := host.peer.Call(ctx, "interaction.create", map[string]any{"interaction": proto.Interaction{
+		Kind: proto.IxElicitation, SessionID: "url-session", Elicitation: want,
+	}}, &res)
+	if err != nil || res.Action != "accept" {
+		t.Fatalf("URL resolution: %+v, %v", res, err)
+	}
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	got := hub.asked[0]
+	if got.Kind != proto.IxElicitation || got.Elicitation == nil || got.Elicitation.Mode != want.Mode ||
+		got.Elicitation.URL != want.URL || got.Elicitation.Message != want.Message || got.Elicitation.ID != want.ID {
+		t.Fatalf("URL interaction: %+v", got)
+	}
+}
+
 func TestElicitationHook(t *testing.T) {
 	for _, mode := range []string{"form", "url"} {
 		for _, action := range []string{"accept", "decline", "cancel", "dismiss", "invalid", "timeout", "disconnect"} {

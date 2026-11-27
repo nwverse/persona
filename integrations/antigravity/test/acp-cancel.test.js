@@ -821,7 +821,7 @@ test('permission cards forward always_label, honor always responses, and never s
     await n.peer.call('session.interrupt', { session_id: pid })
   })
 
-  await t.test('detached pending permission cancels the turn cleanly without executing, retrying, or recording an error', async (t) => {
+  await t.test('detached pending permission holds the turn without executing, cancelling, or recording an error', async (t) => {
     const { n, record, start, status } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
     const askSpec = {
       toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"wait"}'` } },
@@ -829,22 +829,25 @@ test('permission cards forward always_label, honor always responses, and never s
     }
     n.resolve = (ix) => ({ dismiss: true, pending: true, approval_id: ix.id, message: 'Still waiting for owner.' })
     const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
-    await until('pending permission answered cancelled', () => permissionAnswers(record).length === 1, SLOW)
-    assert.deepEqual(permissionAnswers(record)[0].result, cancelled)
-    await until('turn ended cleanly via session/cancel', () => received(record).some((m) => m.ended === SESSION), SLOW)
-    await until('session no longer working', () => status(pid) !== 'working', SLOW)
+    await until('pending permission resumes waiting', () => n.asked.length === 2, SLOW)
+    assert.equal(permissionAnswers(record).length, 0)
+    assert.equal(received(record).some((m) => m.method === 'session/cancel'), false)
+    await until('pending card shown blocked', () => status(pid) === 'blocked', SLOW)
     const row = n.last('runtime.sessions')?.sessions.find((s) => s.session_id === pid)
     assert.equal(row?.turn_error, undefined)
     assert.equal(received(record).filter((m) => m.method === 'session/prompt').length, 1)
     const items = await n.peer.call('session.items', { session_id: pid })
     assert.equal(items.items.some((it) => it.kind === 'notice' && it.text === '已中断'), false)
+    await n.peer.call('session.interrupt', { session_id: pid })
+    assert.deepEqual(permissionAnswers(record)[0].result, cancelled)
   })
 
-  await t.test('detached pending permission lets a queued clarification question run immediately after cancel', async (t) => {
+  await t.test('detached pending permission resumes the same approval before running a queued clarification', async (t) => {
     const { n, record, start } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
     const askSpec = {
       toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"clarify"}'` } },
       options: fullOptions,
+      endOnAnswer: true,
     }
     const pendingGate = Promise.withResolvers()
     n.resolve = () => pendingGate.promise
@@ -853,9 +856,14 @@ test('permission cards forward always_label, honor always responses, and never s
     // Owner asks a clarification question while the approval detaches as pending.
     const queued = await n.peer.call('session.send', { session_id: pid, text: 'reply', assistant: true })
     assert.deepEqual(queued, { ok: true, queued: true })
+    const approvalGate = Promise.withResolvers()
+    n.resolve = () => approvalGate.promise
     pendingGate.resolve({ dismiss: true, pending: true, approval_id: n.asked[0].id, message: 'Owner asked a question.' })
-    await until('pending card answered cancelled', () => permissionAnswers(record).length === 1, SLOW)
-    assert.deepEqual(permissionAnswers(record)[0].result, cancelled)
+    await until('same approval waits again', () => n.asked.length === 2, SLOW)
+    assert.equal(n.asked[0].id, n.asked[1].id)
+    assert.equal(permissionAnswers(record).length, 0)
+    assert.equal(received(record).some((m) => m.method === 'session/cancel'), false)
+    approvalGate.resolve({ allow: true })
     const prompts = () => received(record).filter((m) => m.method === 'session/prompt')
     await until('queued clarification question runs next', () => prompts().length === 2, SLOW)
     assert.deepEqual(prompts()[1].params.prompt, [{ type: 'text', text: 'reply' }])
@@ -914,7 +922,7 @@ test('permission cards forward always_label, honor always responses, and never s
     assert.equal(prompts().length, 5, 'interrupted turn must drop its queued refusal note')
   })
 
-  await t.test('detached pending permission withdraws sibling asks cleanly without executing either', async (t) => {
+  await t.test('explicit interrupt withdraws pending and sibling asks without executing either', async (t) => {
     const { n, record, start, status } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
     const askSpec = {
       asks: [
@@ -930,6 +938,8 @@ test('permission cards forward always_label, honor always responses, and never s
     const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
     await until('both sibling cards waiting on hub', () => n.asked.length === 2, SLOW)
     first.resolve({ dismiss: true, pending: true, approval_id: n.asked[0].id, message: 'Waiting on card 1.' })
+    await until('pending sibling reattaches', () => n.asked.length === 3, SLOW)
+    assert.equal(permissionAnswers(record).length, 0); await n.peer.call('session.interrupt', { session_id: pid })
     await until('both permission asks answered cancelled', () => permissionAnswers(record).length === 2, SLOW)
     assert.deepEqual(permissionAnswers(record).map((a) => a.result), [cancelled, cancelled])
     await until('sibling card withdrawn via interaction.cancel', () => n.all('interaction.cancel').some((ev) => ev.id === n.asked[1].id), SLOW)
@@ -951,9 +961,11 @@ test('permission cards forward always_label, honor always responses, and never s
     }
     n.resolve = (ix) => ({ dismiss: true, pending: true, approval_id: ix.id, message: 'Still waiting.' })
     const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('pending card reattaches', () => n.asked.length === 2, SLOW)
+    await n.peer.call('session.interrupt', { session_id: pid })
     await until('both pending ask and racing write_file answered', () => permissionAnswers(record).length === 2, SLOW)
     assert.deepEqual(permissionAnswers(record).map((a) => a.result), [cancelled, cancelled])
-    assert.equal(n.asked.length, 1, 'racing write_file must neither auto-execute nor raise a card')
+    assert.equal(n.asked.length, 2, 'racing write_file must neither auto-execute nor raise a card')
     await until('turn ended cleanly', () => received(record).some((m) => m.ended === SESSION), SLOW)
     await until('session settled', () => status(pid) !== 'working', SLOW)
   })
@@ -982,6 +994,8 @@ test('permission cards forward always_label, honor always responses, and never s
     const queued = await n.peer.call('session.send', { session_id: pid, text: 'reply', assistant: true })
     assert.deepEqual(queued, { ok: true, queued: true })
     secondGate.resolve({ dismiss: true, pending: true, approval_id: n.asked[1].id, message: 'Clarifying card 2.' })
+    await until('pending second card reattaches', () => n.asked.length === 3, SLOW)
+    await n.peer.call('session.queue.send_now', { session_id: pid })
     await until('second card answered cancelled', () => permissionAnswers(record).length === 2, SLOW)
     assert.deepEqual(permissionAnswers(record)[1].result, cancelled)
     const prompts = () => received(record).filter((m) => m.method === 'session/prompt')

@@ -106,6 +106,7 @@ func TestAgyModeFlags(t *testing.T) {
 		"default":        "",
 		"acceptEdits":    " --mode accept-edits",
 		"auto":           " --mode auto",
+		proto.ModePlan:   " --mode plan",
 		proto.ModeBypass: " --dangerously-skip-permissions",
 	} {
 		if got := agyModeFlags(mode); got != want {

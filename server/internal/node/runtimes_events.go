@@ -347,7 +347,7 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 	}
 	ix := p.Interaction
 	switch ix.Kind {
-	case proto.IxQuestion, proto.IxPlan, proto.IxPermission:
+	case proto.IxQuestion, proto.IxPlan, proto.IxPermission, proto.IxElicitation:
 	default:
 		return nil, fmt.Errorf("unsupported interaction kind %q", ix.Kind)
 	}

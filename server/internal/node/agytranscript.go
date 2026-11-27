@@ -959,7 +959,8 @@ func agyAttachedImagePaths(text string) map[string]bool {
 }
 
 var agyToolNames = map[string]string{
-	"run_command": "Bash", "view_file": "Read", "read_file": "Read", "write_to_file": "Write", "write_file": "Write",
+	"exit_plan_mode": "ExitPlanMode",
+	"run_command":    "Bash", "view_file": "Read", "read_file": "Read", "write_to_file": "Write", "write_file": "Write",
 	"replace_file_content": "Edit", "edit_file": "Edit", "grep_search": "Grep", "find_by_name": "Glob",
 	"search_web": "WebSearch", "read_url_content": "WebFetch", "ask_question": "AskUserQuestion", "invoke_subagent": "Agent",
 	"bash": "Bash", "read": "Read", "write": "Write", "edit": "Edit", "multi_edit": "MultiEdit", "ls": "LS", "grep": "Grep", "glob": "Glob",

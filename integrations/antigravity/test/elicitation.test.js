@@ -141,12 +141,11 @@ describe('antigravity ask_question elicitation mapping', () => {
     )
   })
 
-  it('returns cancel on cancel, dismiss, or empty answers and rejects url mode', () => {
+  it('returns cancel on cancel, dismiss, or empty answers and invalid schemas', () => {
     const mapped = mapElicitationRequest(agyTwoQuestions)
     assert.deepEqual(mapElicitationAnswer(mapped, { cancel: true }), { action: 'cancel' })
     assert.deepEqual(mapElicitationAnswer(mapped, { dismiss: true }), { action: 'cancel' })
     assert.deepEqual(mapElicitationAnswer(mapped, { answers: {} }), { action: 'cancel' })
-    assert.equal(mapElicitationRequest({ mode: 'url', message: 'Open URL', url: 'https://example.com' }), null)
     assert.equal(mapElicitationRequest({ mode: 'form', requestedSchema: { type: 'object', properties: {} } }), null)
   })
 
@@ -196,7 +195,7 @@ describe('antigravity ACP and runtime elicitation bridge', () => {
     const prompt = acp.prompt(SESSION, [{ type: 'text', text: `elicit ${JSON.stringify({ endOnAnswer: true })}` }])
     await until('elicitation request received', () => replyElicit, SLOW)
     const init = received(record).find((m) => m.method === 'initialize')
-    assert.deepEqual(init.params.clientCapabilities, { elicitation: { form: {} } })
+    assert.deepEqual(init.params.clientCapabilities, { elicitation: { form: {}, url: {} } })
     assert.equal(acp.permissionRequests, 1)
     await delay(450)
     assert.equal(acp.pending.size, 1, 'prompt inactivity timer stays paused while waiting on question')
