@@ -1,18 +1,18 @@
-Split code, repo research and multi-step work. Use machines_list, KB, agents_list and preferences to explain choices. Main/lead, read-only, user_requested and preapproved plans start now; others and owner_step need 开始. Queued means dispatched; check the to-do. Reuse suggested idle Agents via agent_send, even after closure, when context and permissions fit.
+Split code, repo research and multi-step work; check machines_list, KB, agents_list, preferences. Main/lead, readonly, user_requested and preapproved start now; others/owner_step need 开始. Queued=dispatched. Reuse suggested idle Agents via agent_send (even after closure) if context/permissions fit. Keep reminders/events separate.
 
-Explicit machine keeps fixed (default, refuses unavailable launchers) or flexible (moves portable work on failed health checks, explain why). Omit machine for automatic placement with optional placement_constraints. Planning leads own their tasks; main owns its own and receives needs_user escalations. Main may pick a lead; agent_transfer persists ownership. Incompatible leads need supervision_policy first. Check returned supervisor and similar work, reusing an active same-directory Agent before starting a new one. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).
+Explicit machine: fixed (default, refuses unavailable launchers) or flexible (health-based moves, explain why); omit for auto placement with placement_constraints. Leads own tasks; main owns its own, receives needs_user, may pick a lead (agent_transfer persists); incompatible leads need supervision_policy. Check supervisor, similar work, active same-dir Agents; pass todo_id for unassigned to-dos. Issue/PR URLs in title/goal/prompt block open duplicates: use continues, todo_id or distinct_from (other hints advisory).
 
-Started tasks keep a hub brief (owner request or started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides. Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.
+Started tasks keep a hub brief (owner request/started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults merged+closed unless PR/draft-only); readonly needs goal. expect_minutes: omit=auto, positive overrides. Use continues+continues_why, task_retry (failed starts), task_scope+scope_revision (approved changes).
 
-Edits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.
+Edits need readonly=false+write permission; replace readonly Codex for fixes or use agent_send when permissions match. readonly=true adds readonly constraint (Claude/agy: bypassPermissions; Codex: plan unless assistant.readonly_mode=prompt; pi/cursor refuse). role=worker, or leader for direct workers via restricted task_plan/task_review.
 
-Use repositories_list or repository_get when needed; an explicit repository URL or path takes precedence. Bindings never imply machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.
+Use repositories_list/repository_get when needed; explicit repository URL or path takes precedence. Bindings never imply machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only owner closes terminals on acceptance.
 
-Saved workspace naming plan on existing todo: {"backend":{"operation_id":"<id>"}}. Multi-repo container: {"container":{"selected_repo_ids":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.
+Saved workspace plan on existing todo: {"backend":{"operation_id":"id"}}. Multi-repo container: {"container":{"selected_repo_ids":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.
 
-Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default task/<todo id>); reuse needs a clean, unused checkout. {"existing":"<cwd or id>","queue":true} selects it without switching; busy queues FIFO only if requested or owner waits. "none" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.
+Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default task/{todo id}); reuse needs a clean, unused checkout. {"existing":"<cwd or id>","queue":true} selects it without switching; busy queues FIFO only if requested or owner waits. "none" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.
 
-`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.{{template "shared/mcp_language" .}}
+`wait_seconds` observes <=50s after dispatch, appending `Inline observation` JSON (`completed`+`reply`, `question`+`interaction_id`, `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids). Never answers, accepts, resends or cancels; `task_review` supervision applies. Older nodes may time out. Only one immediately dispatchable task waits; cards/multi-task return immediately.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -168,7 +168,7 @@ Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default
           },
           "continues": {
             "type": "string",
-            "description": "Original todo id; reuses todo/brief, stops prior Agents, reopens if closed."
+            "description": "Original todo id (needs continues_why); reuses todo/brief, stops prior Agents, reopens if closed."
           },
           "scope_revision": {
             "type": "string",
@@ -177,6 +177,27 @@ Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default
           "continues_why": {
             "type": "string",
             "description": "With continues: one-line replacement reason."
+          },
+          "distinct_from": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "todo_id",
+                "reason"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "todo_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "description": "new tasks only: explain each conflicting open todo. Reasons stay in the brief"
           },
           "started_why": {
             "type": "string",
@@ -205,7 +226,7 @@ Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default
               "human",
               "autonomous"
             ],
-            "description": "Optional: human or autonomous."
+            "description": "Optional to-do audience."
           },
           "direction_id": {
             "type": "string",
@@ -228,7 +249,7 @@ Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default
           },
           "inbox_item": {
             "type": "string",
-            "description": "Handed-off Inbox ID or 'none'; links without filing/replying."
+            "description": "Inbox ID or 'none' to skip; omit to link sole eligible handoff (multiple need ID; none stays unlinked). Never files/replies."
           },
           "tier": {
             "type": "string",

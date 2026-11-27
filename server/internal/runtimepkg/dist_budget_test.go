@@ -98,9 +98,10 @@ import (
 // 1,424 B of gzipped-package budget (302,838 B -> 304,262 B).
 // Preserving delivered replies across live Antigravity background wakes, in-place RUNNING->DONE updates, and runtime-sdk catch-up/batch delta ordering (#14920) adds 1,015 B over main (304,262 B -> 305,277 B).
 // Keeping Antigravity summary-db connection() atomic and closing on probe() error adds 48 B (305,277 B -> 305,325 B).
+// Persisting the model after the first turn and restoring older Antigravity sessions from their transcript adds 100 B (#16458).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 305_325
+	const budget = 305_425
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
