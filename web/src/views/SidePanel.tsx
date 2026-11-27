@@ -285,7 +285,7 @@ export function SidePanelView({
         "fixed inset-x-0 top-(--kb-top) z-30 flex h-(--kb-h) flex-col bg-page shadow-overlay max-lg:pr-[env(safe-area-inset-right)] max-lg:pl-[env(safe-area-inset-left)] lg:relative lg:inset-auto lg:top-auto lg:z-auto lg:h-auto lg:w-(--panel-w) lg:shrink-0 lg:border-l lg:border-line lg:shadow-none",
         maximized && "lg:hidden",
       )}
-      style={{ "--panel-w": `${width}px`, animation: `slide-in-right 260ms ${EASE} both` } as React.CSSProperties}
+      style={{ "--panel-w": `${width}px`, animation: `slide-in-right 260ms ${EASE} backwards` } as React.CSSProperties}
     >
       {/* the panel is on the right: dragging its left edge left (or ArrowLeft) widens it */}
       <ResizeHandle

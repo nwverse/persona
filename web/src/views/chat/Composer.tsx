@@ -118,6 +118,14 @@ interface ConfirmState {
   onConfirm: () => void;
 }
 
+interface ImagePreviewState {
+  id: string;
+  closing?: boolean;
+  originThumb: DOMRect | null;
+  originBox: DOMRect | null;
+  slotHeight: number;
+}
+
 const PASTE_CHIP_CHARS = 800;
 const PASTE_CHIP_LINES = 12;
 
@@ -291,6 +299,10 @@ export const Composer = memo(function Composer({
   const [plusOpen, setPlusOpen] = useState(false);
   const panel = useRef<ComposerPanelHandle>(null);
   const [editing, setEditing] = useState<Attachment | null>(null);
+  const [imagePreview, setImagePreview] = useState<ImagePreviewState | null>(null);
+  const imageStageMounted = Boolean(imagePreview);
+  const imageExpanded = Boolean(imagePreview && !imagePreview.closing);
+  const dockSlot = useRef<HTMLDivElement>(null);
   // Enter while blocked (#4480): a line says why nothing went, the button and the card light up; it fades after a while
   const [nudge, setNudge] = useState(0);
   useEffect(() => {
@@ -362,8 +374,57 @@ export const Composer = memo(function Composer({
   // appends at once to the ref as well, so a second paste or draft image in the same tick sees it
   const appendImage = (a: Attachment) => {
     void ImageEditor.preload().catch(() => {});
+    preloadComposerOverlay();
     attsNow.current = [...attsNow.current, a];
     setAtts((cur) => [...cur, a]);
+    setImagePreview((cur) => (cur && !cur.closing ? { ...cur, id: a.id } : cur));
+  };
+  const closeImagePreview = useCallback((immediate = false) => {
+    setImagePreview((cur) => {
+      if (!cur) return null;
+      if (immediate || !ComposerOverlay.ready()) return null;
+      return cur.closing ? cur : { ...cur, closing: true };
+    });
+  }, []);
+  const openImagePreview = (id: string) => {
+    preloadComposerOverlay();
+    setExpanded(false);
+    setImagePreview((cur) => {
+      if (cur) return { ...cur, id, closing: false };
+      const boxRect = box.current?.getBoundingClientRect() ?? null;
+      let thumbRect: DOMRect | null = null;
+      if (box.current) {
+        for (const el of box.current.querySelectorAll<HTMLElement>("[data-attachment-id]")) {
+          if (el.dataset.attachmentId === id) {
+            thumbRect = el.getBoundingClientRect();
+            break;
+          }
+        }
+      }
+      return {
+        id,
+        originThumb: thumbRect,
+        originBox: boxRect,
+        slotHeight: boxRect?.height ?? 0,
+      };
+    });
+  };
+  const removeAttachment = (id: string) => {
+    const idx = attsNow.current.findIndex((a) => a.id === id);
+    const att = idx >= 0 ? attsNow.current[idx] : undefined;
+    // an edited picture's source and edits go with it
+    if (att) releaseAttachments([att]);
+    const next = attsNow.current.filter((a) => a.id !== id);
+    attsNow.current = next;
+    setAtts(next);
+    if (editing?.id === id) setEditing(null);
+    setImagePreview((cur) => {
+      if (!cur) return null;
+      if (next.length === 0) return ComposerOverlay.ready() ? { ...cur, closing: true } : null;
+      if (cur.id !== id) return cur;
+      const adjacent = next[Math.min(Math.max(idx, 0), next.length - 1)];
+      return adjacent ? { ...cur, id: adjacent.id } : null;
+    });
   };
   // Pictures past what a message holds are not dropped (#12973): they go to the session's computer as files, as the share
   // sheet sends them, with one word on which limit it was; with no computer to send them to they are turned away.
@@ -418,7 +479,10 @@ export const Composer = memo(function Composer({
     setDraft(restoreSkills(storedValue(`draft:${draftKey}`) ?? ""));
     setPlusOpen(false);
     releaseAttachments(attsNow.current);
+    attsNow.current = [];
     setAtts([]);
+    setEditing(null);
+    setImagePreview(null);
     setPastedBlocks([]);
     // not on a touch screen alone: there the focus brings the keyboard up over the conversation just opened. Nor when
     // the person already went to another field or a dialog by then.
@@ -584,13 +648,13 @@ export const Composer = memo(function Composer({
   }, [draftKey, saveDraft]);
 
   // the words the box was last measured with: while it only grows past the cap, it is not measured again
-  const sizedFor = useRef({ draft: "", compact });
+  const sizedFor = useRef({ draft: "", compact, imageExpanded });
   useLayoutEffect(() => {
     const el = input.current?.element;
     if (!el) return;
     const was = sizedFor.current;
     const breaks = (text: string) => text.split("\n").length;
-    const grows = was.compact === compact && draft.length >= was.draft.length && breaks(draft) >= breaks(was.draft);
+    const grows = was.compact === compact && was.imageExpanded === imageExpanded && draft.length >= was.draft.length && breaks(draft) >= breaks(was.draft);
     // Mid-composition, or past the six-line cap and only growing, the box is not collapsed to measure: its scrollHeight
     // already covers the words, and a collapse would throw its scroll to the top and make the IME's candidates flicker.
     // It shrinks when the composition ends (this runs again then).
@@ -606,7 +670,7 @@ export const Composer = memo(function Composer({
     const holder = el.parentElement;
     const held = holder?.style.minHeight ?? "";
     if (holder) holder.style.minHeight = `${holder.getBoundingClientRect().height}px`;
-    sizedFor.current = { draft, compact };
+    sizedFor.current = { draft, compact, imageExpanded };
     // the collapse resets the box's own scroll: put it back, or a long draft jumps to its first line on every key
     const top = el.scrollTop;
     el.style.height = "0px";
@@ -622,8 +686,8 @@ export const Composer = memo(function Composer({
     const cap = COMPOSER_LINES * line + pad;
     const over = offersExpand(lineCount(h - pad, line), COMPOSER_LINES);
     setGrow((g) => (g.cap === cap && g.over === over ? g : { cap, over }));
-  }, [doc, compact, grow.over, ime.composing]);
-  const showExpand = compact && grow.over && !disabled;
+  }, [doc, compact, grow.over, ime.composing, imageExpanded]);
+  const showExpand = compact && grow.over && !disabled && !imageStageMounted;
   useEffect(() => {
     if (!compact || disabled) setExpanded(false);
   }, [compact, disabled]);
@@ -705,6 +769,8 @@ export const Composer = memo(function Composer({
     releaseAttachments(attsNow.current);
     attsNow.current = [];
     setAtts([]);
+    setEditing(null);
+    setImagePreview(null);
     edit.cancel();
     requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
   };
@@ -713,7 +779,7 @@ export const Composer = memo(function Composer({
     offered: Boolean(onEditLastMessage),
     busy: Boolean(working || needsYou || disabled || blocked || loadingDraft),
     holds: Boolean(draft || pastedBlocks.length || atts.length || files.length || reading.current || contexts.length || quotes.length),
-    menu: Boolean(slashOpen || mOpen || history.searching || document.querySelector("[role=dialog],[role=menu]")),
+    menu: Boolean(slashOpen || mOpen || history.searching || imageExpanded || document.querySelector("[role=dialog],[role=menu]")),
   });
 
   const replaceAtCaret = (insert: InlineDocument, at: MentionToken | null, space = false) => {
@@ -780,9 +846,12 @@ export const Composer = memo(function Composer({
     // a touch screen alone: the keyboard goes down and the search box waits for a tap, so no key lands in the covered box
     if (!hasFinePointer()) input.current?.blur();
   };
-  // a box turned off takes its + panel with it: it would come back later and take the focus
+  // a box turned off takes its + panel and expanded image stage with it
   useEffect(() => {
-    if (disabled) setPlusOpen(false);
+    if (disabled) {
+      setPlusOpen(false);
+      setImagePreview(null);
+    }
   }, [disabled]);
 
   // A Files panel entry dropped on the box becomes the same reference as a picker result.
@@ -931,7 +1000,9 @@ export const Composer = memo(function Composer({
     draftNow.current = [];
     unsaved.current = null;
     storeDraft(draftKey, "");
+    attsNow.current = [];
     setAtts([]);
+    closeImagePreview();
     setPastedBlocks([]);
     refs.forEach((r) => removeContext(draftKey, r.id));
     setQuotes(draftKey, []);
@@ -965,6 +1036,7 @@ export const Composer = memo(function Composer({
       if (mounted.current && keyNow.current === draftKey) {
         setDraft((cur) => joinDrafts(value, cur));
         if (sentPasted.length) setPastedBlocks((cur) => [...sentPasted, ...cur]);
+        attsNow.current = [...sent, ...attsNow.current];
         setAtts((cur) => [...sent, ...cur]);
       } else {
         if (fullDoc.length) sendDraft(draftKey, { type: "unsent", text: writeInlineDraft(fullDoc) });
@@ -1021,27 +1093,80 @@ export const Composer = memo(function Composer({
     query, source: mention, machineId, within: box, memory: catalogMemory, ime: ime.tracker,
   };
   const commandPalette = () => <SlashPalette {...slashProps} active={Math.min(active, Math.max(rows.length - 1, 0))} />;
+  const onDragOverDrop = (e: React.DragEvent) => {
+    if (!editor && (e.dataTransfer.types.includes("Files") || dragHasEntry(e.dataTransfer))) {
+      e.preventDefault();
+      setDragging(true);
+    }
+  };
+  const onDragLeaveDrop = (e: React.DragEvent) => {
+    const related = e.relatedTarget as Node | null;
+    if (related && (e.currentTarget.contains(related) || box.current?.contains(related) || (related instanceof Element && related.closest("[data-composer-image-stage]")))) return;
+    setDragging(false);
+  };
+  const onDropFiles = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    if (dropEntry(e)) return;
+    void addFiles(e.dataTransfer.files);
+  };
   return (
-    <div
-      ref={box}
-      className="relative"
-      inert={loadingDraft || undefined}
-      onDragOver={(e) => {
-        if (!editor && (e.dataTransfer.types.includes("Files") || dragHasEntry(e.dataTransfer))) {
-          e.preventDefault();
-          setDragging(true);
+    <>
+      {imageStageMounted && (
+        <div
+          ref={dockSlot}
+          aria-hidden="true"
+          data-composer-placeholder=""
+          className="pointer-events-none shrink-0"
+          style={{ height: imagePreview!.slotHeight }}
+        />
+      )}
+      {imageStageMounted && (
+        <Suspense fallback={null}>
+          <ComposerOverlay
+            imageStage={{
+              attachments: atts,
+              activeId: imagePreview!.id,
+              closing: Boolean(imagePreview!.closing),
+              originThumbRect: imagePreview!.originThumb,
+              originBoxRect: imagePreview!.originBox,
+              composerRef: box,
+              slotRef: dockSlot,
+              innerOverlayOpen: Boolean(slashOpen || mOpen || plusOpen || history.searching || editing || confirmState || expanded),
+              dragging,
+              onSelect: (id) => setImagePreview((cur) => (cur && !cur.closing ? { ...cur, id } : cur)),
+              onAnnotate: () => {
+                const target = atts.find((a) => a.id === imagePreview!.id) ?? atts[0] ?? null;
+                if (target) setEditing(target);
+              },
+              onClose: () => closeImagePreview(),
+              onCloseComplete: () => setImagePreview((cur) => (cur?.closing ? null : cur)),
+              onDragOverStage: onDragOverDrop,
+              onDragLeaveStage: onDragLeaveDrop,
+              onDropStage: onDropFiles,
+            }}
+          />
+        </Suspense>
+      )}
+      <div
+        ref={box}
+        data-composer-image-expanded={imageExpanded ? "" : undefined}
+        className={imageStageMounted ? "fixed inset-x-0 mx-auto" : "relative"}
+        style={
+          imageStageMounted
+            ? {
+                zIndex: 36,
+                width: compact ? "calc(100vw - 20px)" : "min(920px, calc(100vw - 48px))",
+                bottom: "calc(max(0px, 100dvh - var(--kb-top) - var(--kb-h)) + max(12px, env(safe-area-inset-bottom)))",
+                transformOrigin: "center bottom",
+              }
+            : undefined
         }
-      }}
-      onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragging(false);
-        if (dropEntry(e)) return;
-        void addFiles(e.dataTransfer.files);
-      }}
-    >
+        inert={loadingDraft || undefined}
+        onDragOver={onDragOverDrop}
+        onDragLeave={onDragLeaveDrop}
+        onDrop={onDropFiles}
+      >
       {slashOpen && (
         <Suspense fallback={null}>
           {slashSkillActive ? (
@@ -1072,7 +1197,8 @@ export const Composer = memo(function Composer({
       <div
         className={cx(
           // a container: what sits in its bottom row (the model pill) takes its width modes from the card's own width
-          "@container/composer relative flex flex-col gap-1.5 rounded-[14px] bg-surface/95 p-1.5 shadow-card backdrop-blur-md transition-shadow duration-150 focus-within:shadow-[0_0_0_1px_var(--line-strong)]",
+          "@container/composer relative flex flex-col gap-1.5 rounded-[14px] bg-surface/95 p-1.5 backdrop-blur-md transition-shadow duration-150 focus-within:shadow-[0_0_0_1px_var(--line-strong)]",
+          imageExpanded ? "shadow-overlay ring-1 ring-line-strong" : "shadow-card",
           dragging && "ring-2 ring-accent",
         )}
       >
@@ -1118,12 +1244,13 @@ export const Composer = memo(function Composer({
         )}
         {(atts.length > 0 || files.length > 0) && (
           <div data-composer-attachments className="flex flex-wrap items-center gap-2 px-0.5 pt-0.5 empty:hidden">
-            <AttachmentTiles attachments={atts} onOpen={(id) => setEditing(atts.find((a) => a.id === id) ?? null)} onRemove={(id) => {
-              const att = atts.find((a) => a.id === id);
-              // an edited picture's source and edits go with it
-              if (att) releaseAttachments([att]);
-              setAtts((cur) => cur.filter((a) => a.id !== id));
-            }} />
+            <AttachmentTiles
+              attachments={atts}
+              activeId={imageExpanded ? imagePreview?.id : undefined}
+              keepFocus
+              onOpen={openImagePreview}
+              onRemove={removeAttachment}
+            />
             <FileTiles draftKey={draftKey} files={files} />
           </div>
         )}
@@ -1245,6 +1372,12 @@ export const Composer = memo(function Composer({
                 return;
               }
             }
+            if (e.key === "Escape" && imageExpanded && !plusOpen && !editing && !confirmState && !expanded && !document.querySelector("[role=dialog],[role=menu]")) {
+              e.preventDefault();
+              e.stopPropagation();
+              closeImagePreview();
+              return;
+            }
             // Esc while editing cancels it; kept from ChatView's interrupt on the window
             if (escapeCancelsEdit(e, Boolean(editingLast))) {
               e.preventDefault();
@@ -1280,7 +1413,10 @@ export const Composer = memo(function Composer({
           placeholder={pill && hasFinePointer() ? t("chat-composer.suggestion", { suggestion: pill }) : placeholder}
           label={editor?.label ?? t("chat-composer.message")}
           title={!editor && hasFinePointer() ? (onEditLastMessage ? t("composer.history_hint_edit") : t("composer.history_hint")) : undefined}
-          style={{ maxHeight: grow.cap ? `min(${grow.cap}px, ${INPUT_MAX})` : INPUT_MAX }}
+          style={{
+            minHeight: imageExpanded ? (compact ? 44 : 64) : undefined,
+            maxHeight: imageExpanded ? "min(240px, calc(var(--kb-h) * 0.28))" : grow.cap ? `min(${grow.cap}px, ${INPUT_MAX})` : INPUT_MAX,
+          }}
           className={cx("min-h-[calc(1lh+var(--spacing)*1.5)] w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-[14px] leading-[21px] text-ink outline-none [@media(pointer:coarse)]:text-[16px] [@media(pointer:coarse)]:leading-[24px] [overflow-wrap:anywhere] placeholder:text-ink-3 disabled:opacity-50 aria-disabled:opacity-50", showExpand && "pr-8")}
         />
         {showExpand && (
@@ -1427,7 +1563,9 @@ export const Composer = memo(function Composer({
               setEditing(null);
               // the picture as it came stays the source (the first edit's tile URL, kept); the earlier result goes
               const source = old.edited?.source ?? old.url;
-              setAtts((cur) => cur.map((a) => (a.id === old.id ? fromDraftImage(img, a.id, { source, ...state }) : a)));
+              const updated = fromDraftImage(img, old.id, { source, ...state });
+              attsNow.current = attsNow.current.map((a) => (a.id === old.id ? updated : a));
+              setAtts((cur) => cur.map((a) => (a.id === old.id ? updated : a)));
               if (old.url !== source) URL.revokeObjectURL(old.url);
             }}
           />
@@ -1460,7 +1598,8 @@ export const Composer = memo(function Composer({
           <p className="text-[length:var(--chat-secondary)] leading-relaxed text-ink-2">{confirmState.message}</p>
         </Dialog>
       )}
-    </div>
+      </div>
+    </>
   );
 });
 
