@@ -173,7 +173,7 @@ func (n *Node) compactAssistantProc(ctx context.Context, p *assistantProc, start
 	p.mu.Unlock()
 	n.setCompaction(id, &proto.Compaction{State: proto.CompactionRunning, StartedAt: startedAt})
 	var err error
-	if p.agent == "codex" {
+	if p.cx != nil {
 		err = p.cx.compact(ctx)
 	} else {
 		line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": n.assistantCompactCommand(id)}})

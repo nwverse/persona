@@ -131,7 +131,7 @@ public nonisolated enum JSON {
     /// Compares two RFC3339 instants without discarding fractions past Date's
     /// millisecond wire precision. The existing parser validates the instants;
     /// fractional digits are needed only when those instants land in one millisecond.
-    public static func compareOccurrenceTimes(_ lhs: String, _ rhs: String) -> Comparison? {
+    public static func compareOccurrenceTimes(_ lhs: String, _ rhs: String) -> ComparisonResult? {
         guard let left = parseDate(lhs), let right = parseDate(rhs) else { return nil }
         if left < right { return .orderedAscending }
         if left > right { return .orderedDescending }

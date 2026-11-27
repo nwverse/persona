@@ -609,24 +609,36 @@ func TestHerdrStartIntoAGivenWorkspaceReturnsOnABlockedClaude(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitCalls(t, f, "session.snapshot", 2)
+	// A managed launcher's start gets Persona's settings with its gateway merged in (#1336), in a private per-start
+	// file with the model this start runs, not the shared "<launcher>-claude-settings.json" (#17035).
+	settings, err := filepath.Glob(filepath.Join(personaDir(home), "launcher-settings", "model-aliases-*.json"))
+	if err != nil || len(settings) != 1 {
+		t.Fatalf("per-start settings %v, %v; want one model-aliases file", settings, err)
+	}
+	if info, err := os.Stat(settings[0]); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the per-start settings must be private: %v", err)
+	}
+	s := readSettings(t, settings[0])
+	env, _ := s["env"].(map[string]any)
+	if env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com" || env["ANTHROPIC_MODEL"] != "m" || s["model"] != "m" {
+		t.Fatalf("the launcher's gateway and model are missing: %v", s)
+	}
 	assertTrace(t, f.trace(), []string{
 		call("session.snapshot", nil),
 		call("tab.create", map[string]any{"workspace_id": "w2", "cwd": home, "label": "a very long tab name that goes p", "focus": false, "env": agentEnvParam}),
 		markTab("w2:p5", startID),
-		// A managed launcher's start gets Persona's settings with its gateway merged in (#1336).
 		call("pane.send_input", map[string]any{"pane_id": "w2:p5", "keys": []string{"Enter"},
 			"text": inAgentEnv(personaDir(home), "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --session-id "+startID+" --settings "+
-				shellQuote(filepath.Join(personaDir(home), "launcher-settings", "work_gw-claude-settings.json"))+
-				" --mcp-config "+shellQuote(filepath.Join(personaDir(home), "mcp.json"))+" --allowedTools "+shellQuote(ownToolsRule), shellQuote)}),
+				shellQuote(settings[0])+
+				" --mcp-config "+shellQuote(filepath.Join(personaDir(home), "mcp.json"))+" --allowedTools "+shellQuote(ownToolsRule)+" --model m", shellQuote)}),
 		readVisible("w2:p5"), agentGet("w2:p5"),
 		call("agent.rename", map[string]any{"target": "w2:p5", "name": "j-0e0000"}),
-		// herdr's restore resumes it through the launcher too, not with a bare `claude --resume` (#1879).
+		// herdr's restore resumes it through the launcher too, not with a bare `claude --resume` (#1879), with the
+		// same per-start settings and model.
 		resumeHeld("w2:p5", startID, inAgentEnv(personaDir(home), "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --resume "+startID+" --settings "+
-			filepath.Join(personaDir(home), "launcher-settings", "work_gw-claude-settings.json")+
-			" --mcp-config "+filepath.Join(personaDir(home), "mcp.json")+" --allowedTools "+ownToolsRule, dquote))[0],
+			settings[0]+" --mcp-config "+filepath.Join(personaDir(home), "mcp.json")+" --allowedTools "+ownToolsRule+" --model m", dquote))[0],
 		resumeHeld("w2:p5", startID, inAgentEnv(personaDir(home), "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --resume "+startID+" --settings "+
-			filepath.Join(personaDir(home), "launcher-settings", "work_gw-claude-settings.json")+
-			" --mcp-config "+filepath.Join(personaDir(home), "mcp.json")+" --allowedTools "+ownToolsRule, dquote))[1],
+			settings[0]+" --mcp-config "+filepath.Join(personaDir(home), "mcp.json")+" --allowedTools "+ownToolsRule+" --model m", dquote))[1],
 		call("session.snapshot", nil),
 	})
 	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(startID, proto.StatusIdle, "w2:p5", "w2:t5", "w2", home, "")}, nil))

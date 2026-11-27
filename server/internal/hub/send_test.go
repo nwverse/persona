@@ -52,6 +52,16 @@ func (s *sentStore) SettleSend(_ context.Context, id, state string) error {
 // the connection, which the test may close like a dropped ssh link.
 func pipeNode(t *testing.T, h *Hub, id string, send func(ctx context.Context) error) *rpc.Peer {
 	t.Helper()
+	return pipeNodeRPC(t, h, id, func(ctx context.Context, method string, _ json.RawMessage) (any, error) {
+		if method != "session.send" {
+			return map[string]any{}, nil
+		}
+		return map[string]any{"ok": true}, send(ctx)
+	})
+}
+
+func pipeNodeRPC(t *testing.T, h *Hub, id string, reply func(context.Context, string, json.RawMessage) (any, error)) *rpc.Peer {
+	t.Helper()
 	m := h.byID[id]
 	if m == nil {
 		m = newMachine(h, MachineConfig{ID: id, Name: id})
@@ -61,12 +71,7 @@ func pipeNode(t *testing.T, h *Hub, id string, send func(ctx context.Context) er
 	hubIn, nodeOut := io.Pipe()
 	nodeIn, hubOut := io.Pipe()
 	hubPeer, nodePeer := rpc.New("h", hubOut), rpc.New("n", nodeOut)
-	nodePeer.OnRequest = func(ctx context.Context, method string, _ json.RawMessage) (any, error) {
-		if method != "session.send" {
-			return map[string]any{}, nil
-		}
-		return map[string]any{"ok": true}, send(ctx)
-	}
+	nodePeer.OnRequest = reply
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() { _ = hubPeer.Serve(ctx, hubIn) }()
@@ -211,18 +216,30 @@ func TestSendRetryAfterRestartAndRefusal(t *testing.T) {
 // client_ops receipt as "failed" instead of 502 + "unknown".
 func TestSendMessageDeliveryRefusalReturns409AndFailedClientOp(t *testing.T) {
 	for _, tc := range []struct {
-		name, opID, code string
+		name, opID, code, data, dialog string
+		screenReads                    int32
 	}{
-		{name: "dialog_open", opID: "00000000-0000-4000-8000-000000000502", code: "dialog_open"},
-		{name: "not_delivered", opID: "00000000-0000-4000-8000-000000000503", code: "not_delivered"},
+		{name: "named dialog", opID: "00000000-0000-4000-8000-000000000502", code: "dialog_open", data: `{"delivered":"none","dialog":"Choose a workspace"}`, dialog: "Choose a workspace"},
+		{name: "host dialog", opID: "00000000-0000-4000-8000-000000000503", code: "dialog_open", data: `{"delivered":"none"}`, dialog: "Select a model", screenReads: 1},
+		{name: "other refusal", opID: "00000000-0000-4000-8000-000000000504", code: "not_delivered", data: `{"delivered":"none"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &clientOpsStore{sharedStore: newSentStore(), ops: map[string]db.ClientOp{}}
 			h := newTestHub(t)
 			h.store = store
-			pipeNode(t, h, "box", func(context.Context) error {
-				return &rpc.Error{Code: tc.code, Message: "refused", Data: json.RawMessage(`{"delivered":"none"}`)}
+			var reads atomic.Int32
+			pipeNodeRPC(t, h, "box", func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+				switch method {
+				case "session.send":
+					return nil, &rpc.Error{Code: tc.code, Message: "refused", Data: json.RawMessage(tc.data)}
+				case "session.screen":
+					reads.Add(1)
+					return map[string]string{"text": "Select a model\n❯ 1. Default\n  2. Other\nEnter to select · Esc to cancel\n"}, nil
+				default:
+					return map[string]any{}, nil
+				}
 			})
+			h.machineByID("box").setSessions([]proto.Session{{SessionID: "s1", Agent: "claude", PaneID: "w1:p1", Status: proto.StatusIdle}})
 			req := httptest.NewRequest(http.MethodPost, sendPath, strings.NewReader(`{"text":"hello"}`))
 			req.RemoteAddr = "127.0.0.1:12345"
 			req.Header.Set("Authorization", "Bearer "+h.cfg.Token)
@@ -236,6 +253,12 @@ func TestSendMessageDeliveryRefusalReturns409AndFailedClientOp(t *testing.T) {
 			}
 			if w.Code != http.StatusConflict || out["code"] != tc.code || out["delivered"] != "none" {
 				t.Fatalf("response = %d %v, want 409 code=%q delivered=none", w.Code, out, tc.code)
+			}
+			if tc.dialog != "" && (out["dialog"] != tc.dialog || out["machine_id"] != "box" || out["session_id"] != "s1") {
+				t.Fatalf("response = %v, want dialog %q on box/s1", out, tc.dialog)
+			}
+			if n := reads.Load(); n != tc.screenReads {
+				t.Fatalf("read the terminal %d time(s), want %d", n, tc.screenReads)
 			}
 			op, err := store.ClientOp(context.Background(), tc.opID)
 			if err != nil || op == nil || op.State != "failed" {
@@ -364,5 +387,22 @@ func TestSendMessageAssistantOfflineReleasesClientOpAndRetriesWithSameID(t *test
 				t.Fatalf("node typed = %d, want 1", typed.Load())
 			}
 		})
+	}
+}
+
+func TestSendToAssistantReturnsDialogTerminal(t *testing.T) {
+	h, m, manager := undeliveredHub(t, func(context.Context) error {
+		return &rpc.Error{Code: "dialog_open", Message: "refused", Data: json.RawMessage(`{"delivered":"none","dialog":"Choose a workspace"}`)}
+	})
+	w := sendAs(h, m, `{"text":"Carry on","client_msg_id":"assistant-dialog"}`)
+	var out map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusConflict || out["code"] != "dialog_open" || out["delivered"] != "none" || out["dialog"] != "Choose a workspace" || out["machine_id"] != "box" || out["session_id"] != "s1" {
+		t.Fatalf("response = %d %v, want 409 dialog_open with the dialog on box/s1", w.Code, out)
+	}
+	if len(manager.keeps()) != 0 {
+		t.Fatal("a definite refusal must not be queued again")
 	}
 }
