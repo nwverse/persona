@@ -18,15 +18,17 @@ class ViewerSystemBars {
 /** Native application configuration, shared by workspace and detached views. */
 @ObservedV2
 export class NativeEnvironment {
-  @Trace reduceMotion: boolean = false;
+  @Trace foreground: boolean = true;
   private watchingMotion: boolean = false;
-  private motionChanged: (value: boolean) => void = (value: boolean): void => { this.reduceMotion = value; };
+  private motionChanged: (value: boolean) => void = (value: boolean): void => { this.observedMotion = value; };
   @Trace dark: boolean = false;
   @Trace fontScale: number = 1;
   @Trace safeBottomPx: number = 0;
   @Trace safeTopPx: number = 0;
   @Trace keyboardHeightPx: number = 0;
   @Trace windowWidthPx: number = 0;
+  @Trace windowHeightPx: number = 0;
+  @Trace isFullScreen: boolean = false;
   private windowRef: window.Window | undefined;
   private viewerBars: ViewerSystemBars | undefined;
   private viewerRevision: number = 0;
@@ -62,10 +64,15 @@ export class NativeEnvironment {
     }).catch(() => {});
   }
 
+  @Trace private observedMotion: boolean | undefined = undefined;
+  get reduceMotion(): boolean {
+    if (this.observedMotion !== undefined) return this.observedMotion;
+    try { return accessibility.isAnimationReduceEnabledSync(); } catch (_) { return false; }
+  }
   bindWindow(value: window.Window): void {
     this.unbindWindow(); this.windowRef = value;
     try {
-      this.reduceMotion = accessibility.isAnimationReduceEnabledSync();
+      this.observedMotion = accessibility.isAnimationReduceEnabledSync();
       accessibility.onAnimationReduceStateChange(this.motionChanged);
       this.watchingMotion = true;
     } catch (_) { /* Older system versions use the native animation scale. */ }
@@ -79,12 +86,12 @@ export class NativeEnvironment {
   unbindWindow(): void {
     if (this.watchingMotion) {
       try { accessibility.offAnimationReduceStateChange(this.motionChanged); } catch (_) {}
-      this.watchingMotion = false;
+      this.watchingMotion = false; this.observedMotion = undefined;
     }
     this.viewerRevision++;
     this.viewerBars = undefined;
     const value = this.windowRef, keyboard = this.keyboardChanged; this.windowRef = undefined; this.keyboardChanged = undefined;
-    this.keyboardHeightPx = 0;
+    this.keyboardHeightPx = 0; this.isFullScreen = false; this.windowHeightPx = 0;
     if (!value) return;
     try { value.off('windowSizeChange', this.sizeChanged); value.off('windowRectChange', this.rectChanged); value.off('avoidAreaChange', this.avoidChanged); if (keyboard) value.off('keyboardHeightChange', keyboard); } catch (_) {}
   }
@@ -96,7 +103,9 @@ export class NativeEnvironment {
       this.safeBottomPx = rect.top + rect.height - bottom;
       this.keyboardHeightPx = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_KEYBOARD).bottomRect?.height || 0;
       this.windowWidthPx = Number.isFinite(rect.width) ? rect.width : 0;
+      this.windowHeightPx = Number.isFinite(rect.height) ? rect.height : 0;
       this.safeTopPx = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect?.height || 0;
+      this.isFullScreen = this.windowRef.getWindowStatus() === window.WindowStatusType.FULL_SCREEN;
     } catch (_) {}
   }
 

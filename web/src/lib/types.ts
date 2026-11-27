@@ -700,6 +700,14 @@ export interface FoldSource {
   title?: string;
 }
 
+/** An out-of-band declarative view attached by a tool call in a folded run (#14730); never sent to model runtimes. */
+export interface FoldToolView {
+  item_id?: string;
+  tool_use_id?: string;
+  tool?: string;
+  view: Record<string, unknown>;
+}
+
 /** What model requests used (proto.TokenUsage): tokens by kind, `in` without the cache; `cache_write_1h` is the part of
  *  `cache_write` written for an hour; `fast`: Claude Code's fast speed. Entries with the same `id` (and model) are one
  *  report, counted once. */
@@ -735,7 +743,9 @@ export interface Item {
   narration?: boolean;
   codex_heartbeat_quiet?: boolean;
   task?: TaskNote;
-  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[]; sources?: FoldSource[] };
+  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[]; sources?: FoldSource[]; tool_views?: FoldToolView[] };
+  /** Out-of-band declarative UI views returned by a tool call (#14730); never sent to model runtimes. */
+  tool_views?: unknown[];
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
   /** A Codex visualize marker (kind "visualization"): a self-contained HTML fragment on the node, fetched through the
    *  session visualization route. `mode` is "wide" or absent; the bytes are never carried here. */
@@ -919,6 +929,9 @@ export interface Interaction {
   cwd?: string;
   kind: "question" | "plan" | "permission" | "screen" | "elicitation";
   created_at?: string;
+  expires_at?: string;
+  seen_at?: string;
+  seen_ttl_seconds?: number;
   tool_name?: string;
   questions?: Question[];
   plan?: string;
@@ -1051,6 +1064,18 @@ export interface LauncherHealth {
   checked_at?: string;
 }
 
+export type TodosV2AutoSeen = "off" | "subtasks" | "all_autonomous";
+export type TodosV2PendingReviewSLAHours = 0 | 12 | 24 | 48;
+export type TodosV2CanWaitSLAHours = 0 | 24 | 48 | 72;
+
+/** Additive user-configurable attention preferences under todos_v2 (#16098, #16111). */
+export interface TodosV2AttentionPrefs {
+  todos_v2_auto_seen?: TodosV2AutoSeen;
+  todos_v2_pending_review_sla_hours?: TodosV2PendingReviewSLAHours;
+  todos_v2_can_wait_sla_hours?: TodosV2CanWaitSLAHours;
+  todos_v2_fold_children?: boolean;
+}
+
 export interface AssistantInfo {
   /** The manager that answered, including the default whose request carried no manager header. */
   manager?: string;
@@ -1067,6 +1092,8 @@ export interface AssistantInfo {
   leaders?: string[];
   /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
   main_background_folded?: boolean;
+  /** Opt-in to fold routine relay replies and skip their finished notification in the main conversation. */
+  fold_routine_relay_replies?: boolean;
   /** "Show scheduled task chats" in the sidebar's Recent (#8324, lib/recent-task-chats.ts): one value on the hub for all
    *  of the user's devices, off by default; absent from an older hub (no switch, and Recent leaves them out). */
   recent_task_chats?: boolean;
@@ -1081,6 +1108,21 @@ export interface AssistantInfo {
   /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
    *  it; absent before that and from an older hub. Read-only. */
   background_supervisor?: string;
+  /** Unified experimental To-dos & Tasks Labs toggle (#14538, #14584); off by default and absent from older hubs. */
+  todos_v2?: boolean;
+  /** Auto-clear unseen badges for autonomously completed to-dos under todos_v2 (#16098, #16111); defaults to "all_autonomous". */
+  todos_v2_auto_seen?: TodosV2AutoSeen;
+  /** Quiet window in hours before pending_review escalates to needs_you under todos_v2 (#16098, #16111); defaults to 24. */
+  todos_v2_pending_review_sla_hours?: TodosV2PendingReviewSLAHours;
+  /** Deferral window in hours before non-urgent can_wait decisions escalate under todos_v2 (#16098, #16111); defaults to 48. */
+  todos_v2_can_wait_sla_hours?: TodosV2CanWaitSLAHours;
+  /** Fold non-urgent child tasks under top-level goals in board projection under todos_v2 (#16098, #16111); defaults to true. */
+  todos_v2_fold_children?: boolean;
+  /** Unified experimental Integrations & Extensions Labs toggle (#14802, #14805); off by default and absent from older hubs. */
+  integrations_v2?: boolean;
+  work_guide?: boolean;
+  /** Additive receipts for Labs experiments. Older managers omit the field. */
+  labs_seen?: string[];
   conversations: Session[];
 }
 

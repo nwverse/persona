@@ -29,9 +29,9 @@ test('without a versioned description the resolved Claude ID names it; anything 
 
 test('the New session picker labels its options and its field this way', async () => {
   const { readFileSync } = await import('node:fs');
-  const page = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
-  assert.ok(page.includes('options.push({value:launcherModelLabel(item)})'));
-  assert.ok(page.includes("return match ? launcherModelLabel(match) : tr('agent_default_model');"));
+  const choices = readFileSync(new URL('../entry/src/main/ets/models/AgentLaunchChoices.ets', import.meta.url), 'utf8');
+  assert.ok(choices.includes('launchModelName(id,launcherModelLabel(v))'));
+  assert.ok(choices.includes('model ? launcherModelLabel(model) : picked'));
 });
 
 test('New session offers the picked model\'s efforts, the default row\'s when none is picked, none for a typed ID', async () => {
@@ -47,6 +47,6 @@ test('New session offers the picked model\'s efforts, the default row\'s when no
   assert.deepEqual(startEfforts([{ id: 'gpt-6.2', default: true, efforts: ['minimal', 'low'] }], ''), ['minimal', 'low']);
   const { readFileSync } = await import('node:fs');
   const page = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
-  assert.ok(page.includes("this.chosenLauncher()?.agent || '', this.startModel, this.chosenEffort());"), 'the start sends the effort it shows');
-  assert.ok(page.includes('this.keepStartEffort();'), 'a model change drops an effort the new model lacks');
+  assert.ok(page.includes('const effort = this.startAgentEffort();'));
+  assert.ok(page.includes('this.agentEffort = this.startAgentEffort();'));
 });

@@ -1,15 +1,27 @@
+import { LengthMetrics, SegmentButtonV2ItemOptions } from '@kit.ArkUI';
+import { PhoneGroupingGlyph } from './PhoneGroupingGlyph';
 import { agentBrand, agentBrandColor } from '../design/AgentBrand';
 import { IconActions } from '../design/IconActions';
-import { ColorMetrics, LengthMetrics } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
-import { CapsuleSegmentButtonV2, SegmentButtonV2ItemOptions, SegmentButtonV2Items } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
-import { AgentWorkspace, AgentWorkspaceGroup, NEEDS_GROUP } from '../models/AgentWorkspace';
+import { AgentDecisionCard, AgentDecisionQueue } from '../models/AgentDecisionQueue';
+import { AgentWorkspace, AgentWorkspaceGroup, agentGroupingLabels, NEEDS_GROUP } from '../models/AgentWorkspace';
+import { ProjectAgent, ProjectCatalog, ProjectWorktree } from '../models/ProjectCatalog';
+import { AgentDirectoryRowContent } from './AgentDirectoryRowContent';
+import { AgentNeedsYouMark } from './AgentNeedsYouMark';
+import { recommendedOptionTitle, interactionToolName } from '../models/InteractionDecision';
+import { agentPaneSource } from '../core/AgentListAdapter';
+import { WorktreeChange } from '../models/WorktreeActions';
+import { AgentRepositoryRows } from './AgentRepositoryRows';
+import { AgentTaskGrouping, agentTaskSectionsFor } from '../models/AgentTaskGrouping';
+import { AgentTaskSection } from '../models/AgentTaskSections';
+import { AgentTaskGroupRows } from './AgentTaskGroupRows';
 import { agentRowPreview, agentRowTone, runningSubagents } from '../core/AgentRowPreview';
 import { ResourceRow, Wire } from '../models/Wire';
 import { unavailableSessionSources } from '../models/SessionRelations';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
+import { PhoneStyle } from '../design/PhoneStyle';
 import { Colors } from '../design/Colors';
 import { ButtonStyles, SelectStyles } from '../design/Controls';
 import { Symbols } from '../design/Symbols';
@@ -20,13 +32,10 @@ import { nativeSheetInset } from '../platform/NativeInsets';
 import { Haptics } from '../platform/Haptics';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
 
-const QUICK_FILTERS: string[] = ['all', 'needsYou', 'working', 'unread', 'backgroundWaiting'];
-const QUICK_LABELS: Record<string, string> = {'all': 'all', 'needsYou': 'needs_you', 'working': 'working', 'unread': 'unread',
-  'backgroundWaiting': 'agent_group_background'};
+const QUICK_FILTERS: string[] = ['all', 'needsYou', 'unread', 'working', 'backgroundWaiting', 'feishu', 'terminal'];
+const QUICK_LABELS: Record<string,string> = { 'all':'all', 'needsYou':'needs_you', 'unread':'agent_group_unread', 'working':'working', 'backgroundWaiting':'agent_group_background', 'feishu':'agent_source_lark_group', 'terminal':'terminal' };
 const STATE_TOTAL_GROUPS: string[] = ['pinned', NEEDS_GROUP];
 const ROW_TIME_REFRESH_MS: number = 30000;
-const GROUPINGS: string[] = ['state', 'machine', 'space'];
-const GROUP_LABELS: Record<string, string> = {'state': 'agent_group_state', 'machine': 'agent_filter_machine', 'space': 'agent_group_space'};
 const STATE_LABELS: Record<string, string> = {'pinned': 'agent_group_pinned', 'needs': 'needs_you', 'state/needs': 'needs_you',
   'state/unread': 'agent_group_unread', 'state/awaiting': 'agent_group_awaiting', 'state/working': 'working',
   'state/background': 'agent_group_background', 'state/just_finished': 'agent_group_just_finished',
@@ -37,7 +46,6 @@ const STATE_LABELS: Record<string, string> = {'pinned': 'agent_group_pinned', 'n
 class AgentRowPresentation {
   @Trace raw: string = '';
   @Trace lastText: string = '';
-  @Trace brand: string = '';
   @Trace rootTitle: string = '';
   @Trace relativeKind: string = '';
   @Trace familySummary: string = '';
@@ -53,6 +61,8 @@ class AgentRowPresentation {
   @Trace sessionId: string = '';
   @Trace spaceName: string = '';
   @Trace recentContent: string = '';
+  @Trace provider: string = '';
+  @Trace brand: string = '';
   @Trace status: string = '';
   /** needs_you, working, background or unread: the mark on the avatar corner; empty for none. */
   @Trace tone: string = '';
@@ -62,6 +72,16 @@ class AgentRowPresentation {
   data: Record<string, Object> = {};
   @Trace metadata: string[] = [];
   @Trace selectionKey: string = '';
+  @Trace activity: ProjectAgent | undefined = undefined;
+  @Trace activitySource: string = '';
+  private activityRaw: string = '';
+  prepareActivity(row:ResourceRow): void {
+    if (this.activity && this.activityRaw === row.raw && this.activity.row === row) return;
+    const data = row.data(), source=agentPaneSource(Wire.text(data,'pane_id'));
+    this.activity = new ProjectAgent(row,data);
+    this.activitySource = source === 'feishu' ? 'agent_source_lark_group' : source === 'terminal' ? 'terminal' : '';
+    this.activityRaw = row.raw;
+  }
 }
 
 @ObservedV2
@@ -69,6 +89,8 @@ class BoundAgentRow {
   readonly identity: string;
   readonly key: string;
   @Trace bound: BoundRow<ResourceRow>;
+  @Trace first: boolean = false;
+  @Trace last: boolean = false;
   @Trace presentation: AgentRowPresentation;
 
   constructor(bound: BoundRow<ResourceRow>) {
@@ -122,6 +144,7 @@ struct AgentStateMark {
 export struct AgentListPage {
   @Require @Param model: ClientModel;
   @Param rail: boolean = false;
+  @Param compactRoot: boolean = false;
   @Param readingDetail: boolean = false;
   @Param active: boolean = true;
   @Param retainWorkspace: boolean = false;
@@ -131,17 +154,60 @@ export struct AgentListPage {
   @Local refreshing: boolean = false;
   @Local environment: NativeEnvironment = nativeEnvironment;
   @Event onOpen: (row: ResourceRow) => void = () => {};
+  @Event onOpenTodo: (row: ResourceRow) => void = () => {};
+  @Event onRepositoryOpen: (kind:string,key:string) => void = () => {};
+  @Event onRepositoryChanged: (tree:ProjectWorktree,change:WorktreeChange) => void = () => {};
+  @Event onSearchMode: (editing: boolean) => void = () => {};
   @Event onVisible: (row: ResourceRow, ratio: number) => void = () => {};
   @Param workspace: AgentWorkspace = new AgentWorkspace();
+  @Param projectCatalog: ProjectCatalog = new ProjectCatalog();
+  @Param taskGrouping: AgentTaskGrouping = new AgentTaskGrouping();
+  @Param externalSearchControls:boolean = false;
+  @Local taskRowsByKey: Map<string,BoundAgentRow> = new Map();
   @Local look: DeviceLook = deviceLook;
+  @Computed get displayedAgentStyle():string {
+    if(this.look.agentDisplay==='list')return 'list';
+    return this.model.style==='beautiful'?'beautiful':this.look.agentDisplay;
+  }
+  @Monitor('displayedAgentStyle') displayChanged():void {
+    this.workspace.setCompactDisplay(this.displayedAgentStyle==='list');
+  }
   @Local groupBindings: BoundAgentGroup[] = [];
   @Local mixedMachines: boolean = false;
+  @Local listWidth:number=0;
+  private narrowRow():boolean { return this.listWidth>0 && this.listWidth<252*Math.min(this.environment.fontScale,Tokens.interfaceScaleFor(15)); }
+  @Param decisions: AgentDecisionQueue = new AgentDecisionQueue();
+  private stopDecisionEvents: (()=>void) | undefined;
+  private decisionQueued: number = -1;
+  private reloadDecisions(): void {
+    clearTimeout(this.decisionQueued);
+    if (this.externalSearchControls || !this.active || this.rail || !this.compactRoot) return;
+    const owner = this.model;
+    this.decisionQueued=setTimeout(() => this.decisions.reload(owner).then(() => {
+      if (this.active && this.model === owner) this.workspace.updateSupervisorCards(owner,this.decisions);
+    }).catch(() => {}),50);
+  }
+  private retireDecisions(): void {
+    clearTimeout(this.decisionQueued);
+    if (this.externalSearchControls) return;
+    this.decisions.clear(); this.workspace.updateSupervisorCards(this.model);
+  }
+
+  @Local searchOpen: boolean = false;
+  @Local searchEditing: boolean = false;
+  @Local pageOriginY: number = -1;
+  private searchField: SearchController = new SearchController();
+  private agentScroller: Scroller = new Scroller();
+  private pullY: number = -1;
+  private pullX: number = 0;
+  private revealedDuringPull: boolean = false;
+  private focusSearch: boolean = false;
+  private focusTimer: number = -1;
   @Local mixedHubs: boolean = false;
   /** Row times read this, so they move on every 30 s while the list is on screen. */
   @Local clock: number = Date.now();
   private clockTimer: number = -1;
   private rowVisibility: Map<string, number> = new Map();
-  @Local filterWidth: number = 0;
   private rowBindingOwner: Object | undefined;
   private rowBindingScope: string = '';
   private groupBindingSequence: number = 0;
@@ -161,8 +227,14 @@ export struct AgentListPage {
     if (Math.abs(value - this.filterInset) > 0.1) this.filterInset = value;
   }
 
-  aboutToAppear(): void { this.syncRowBindings(); if (this.active) { this.activateWorkspace(); this.startClock(); } }
-  aboutToDisappear(): void { this.stopClock(); this.editorOpen = false; this.filterSheetOpen = false; this.editingAdmission = undefined; this.workspace.revokeRowActions(); if (!this.retainWorkspace) this.workspace.hide(); }
+  aboutToAppear(): void {
+    this.workspace.setCompactDisplay(this.displayedAgentStyle==='list');
+    this.stopDecisionEvents=this.model.observeEvents((_payload:string, type:string) => {
+      if (['interaction','interactions','interaction_resolved'].includes(type)) this.reloadDecisions();
+      if (['todo','assistant_feed'].includes(type) && ['todo','direction'].includes(this.workspace.groupingMode)) this.refreshGroupingSupport();
+    });
+    this.reloadDecisions(); this.syncRowBindings(); if (this.active) { this.activateWorkspace(); this.startClock(); } }
+  aboutToDisappear(): void { this.stopClock(); if (!this.externalSearchControls) this.taskGrouping.clear(); this.stopDecisionEvents?.(); this.retireDecisions(); this.resetSearchReveal(); this.editorOpen = false; this.filterSheetOpen = false; this.editingAdmission = undefined; this.workspace.revokeRowActions(); if (!this.retainWorkspace) this.workspace.hide(); }
 
   private startClock(): void {
     this.clock = Date.now();
@@ -170,10 +242,11 @@ export struct AgentListPage {
   }
   private stopClock(): void { if (this.clockTimer !== -1) { clearInterval(this.clockTimer); this.clockTimer = -1; } }
 
-  @Monitor('active') visibleChanged(): void { if (this.active) this.startClock(); else this.stopClock(); if (!this.active) { this.editorOpen = false; this.filterSheetOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; this.workspace.revokeRowActions(); if (!this.retainWorkspace) this.workspace.hide(); } else this.activateWorkspace(); }
-  @Monitor('model.forgottenEpoch') forgottenChanged(): void { this.workspace.forgetHub(this.model.forgottenProfile); if (this.editingRow?.group === this.model.forgottenProfile) { this.editorOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; } }
-  @Monitor('model.profile') profileChanged(): void { this.editorOpen = false; this.editingAdmission = undefined; this.syncRowBindings(); if (!this.active) return; this.activateWorkspace(); }
+  @Monitor('active') visibleChanged(): void { if (this.active) this.startClock(); else this.stopClock(); if (this.active) this.reloadDecisions(); else this.retireDecisions(); if (!this.active) { this.resetSearchReveal(); this.editorOpen = false; this.filterSheetOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; this.workspace.revokeRowActions(); if (!this.retainWorkspace) this.workspace.hide(); } else this.activateWorkspace(); }
+  @Monitor('model.forgottenEpoch') forgottenChanged(): void { this.retireDecisions(); this.reloadDecisions(); this.workspace.forgetHub(this.model.forgottenProfile); if (this.editingRow?.group === this.model.forgottenProfile) { this.editorOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; } }
+  @Monitor('model.profile') profileChanged(): void { this.taskGrouping.clear(); this.retireDecisions(); this.reloadDecisions(); this.resetSearchReveal(); this.editorOpen = false; this.editingAdmission = undefined; this.syncRowBindings(); if (!this.active) return; this.activateWorkspace(); }
   @Monitor('selectedRow') externalSelectionChanged(): void { this.workspace.selectExternal(this.selectedRow); }
+  @Monitor('model.directorySessions', 'model.directoryReady') directoryChanged(): void { if (!this.active) return; this.reloadDecisions(); this.workspace.update(this.model, this.readingDetail); this.workspace.selectExternal(this.selectedRow); }
   @Computed get machineRosterKey(): string {
     // Ignore metrics and last_seen updates. A reachability change also invalidates cached child activity.
     const machines = this.model.directoryReady ? this.model.directoryMachines : this.model.machines;
@@ -191,16 +264,27 @@ export struct AgentListPage {
   }
   @Monitor('model.features') featuresChanged(): void {
     if (!this.active) return; this.workspace.update(this.model, this.readingDetail);
+    this.refreshGroupingSupport();
     this.workspace.refresh(this.model).catch(() => undefined);
   }
   @Monitor('model.connected') connectionChanged(): void {
-    if (!this.active) return; this.workspace.update(this.model, this.readingDetail);
-    if (this.model.connected) this.workspace.refresh(this.model).catch(() => undefined);
+    this.reloadDecisions(); if (!this.active) return; this.workspace.update(this.model, this.readingDetail);
+    if (this.model.connected) { this.refreshGroupingSupport(); this.workspace.refresh(this.model).catch(() => undefined); }
   }
   @Monitor('workspace.groups', 'workspace.groupingMode') rowsChanged(): void { this.syncRowBindings(); }
   @Monitor('readingDetail') detailChanged(): void { this.workspace.setReadingDetail(this.readingDetail); }
 
+  private refreshGroupingSupport(): void {
+    if (!this.active) return;
+    const client=this.model, scope=client.scope(), generation=client.connectionGeneration();
+    this.taskGrouping.refresh(client).then(() => {
+      if (this.active && this.model === client && client.owns(generation,scope) && this.workspace.isBoundTo(client))
+        this.workspace.updateGroupingSupport(this.taskGrouping.supportsTodos,this.taskGrouping.supportsDirections);
+    }).catch(() => {});
+  }
   private activateWorkspace(): void {
+    if (this.externalSearchControls) { this.syncRowBindings(); return; }
+    this.refreshGroupingSupport();
     if (this.workspace.isBoundTo(this.model)) {
       this.workspace.update(this.model, this.readingDetail);
       this.workspace.selectExternal(this.selectedRow);
@@ -209,6 +293,7 @@ export struct AgentListPage {
     }
     this.workspace.open(this.model, this.readingDetail).then(() => {
       if (!this.active || !this.workspace.isBoundTo(this.model)) return;
+      this.workspace.updateGroupingSupport(this.taskGrouping.supportsTodos,this.taskGrouping.supportsDirections);
       this.workspace.selectExternal(this.selectedRow); this.syncRowBindings();
     }).catch(() => undefined);
   }
@@ -248,6 +333,14 @@ export struct AgentListPage {
       next.push(binding);
     });
     this.groupBindings = next;
+    if (this.workspace.groupingMode === 'todo' || this.workspace.groupingMode === 'direction') {
+      const prior = sameOwnerScope ? Array.from(this.taskRowsByKey.values()) : [];
+      const taskRows = reconcileBoundRows(prior.map((binding:BoundAgentRow)=>binding.bound),this.workspace.unpinnedRows,
+        (row:ResourceRow)=>row.key(),sameOwnerScope ? this.model : undefined,this.model,scope,scope);
+      const mapped = new Map<string,BoundAgentRow>();
+      for (const binding of this.bindAgentRows(prior,taskRows,true)) mapped.set(binding.bound.value.key(),binding);
+      this.taskRowsByKey = mapped;
+    } else if (this.taskRowsByKey?.size) this.taskRowsByKey = new Map();
     this.rowBindingOwner = this.model; this.rowBindingScope = scope;
   }
 
@@ -255,10 +348,11 @@ export struct AgentListPage {
     const available = new Map<string, BoundAgentRow>();
     current.forEach((binding: BoundAgentRow) => available.set(binding.identity, binding));
     const result: BoundAgentRow[] = [];
-    rows.forEach((bound: BoundRow<ResourceRow>) => {
+    rows.forEach((bound: BoundRow<ResourceRow>, index: number) => {
       let binding = available.get(bound.identity);
       if (binding) { available.delete(bound.identity); binding.bound = bound; }
       else binding = new BoundAgentRow(bound);
+      binding.first = index === 0; binding.last = index === rows.length - 1;
       if (project) this.updateAgentRowPresentation(binding.presentation, bound.value);
       result.push(binding);
     });
@@ -270,6 +364,12 @@ export struct AgentListPage {
       const data = Wire.parse(row.raw);
       presentation.raw = row.raw; presentation.data = data;
       presentation.lastText = Wire.text(data, 'last_text');
+      const agent = (Wire.text(data, 'agent') || Wire.text(data, 'agent_type')).toLowerCase();
+      const label = Wire.text(data, 'agent_label') || Wire.text(data, 'launcher');
+      const known = agent || label.toLowerCase();
+      presentation.brand = known === 'codex' || known === 'openai' ? 'codex' :
+        (known === 'claude' || known === 'claude-code' || known === 'claude code' ? 'claude' : '');
+      presentation.provider = label || (presentation.brand === 'codex' ? 'Codex' : presentation.brand === 'claude' ? 'Claude' : agent);
       presentation.rawStatus = Wire.text(data, 'status');
       presentation.brand = Wire.text(data, 'agent') || Wire.text(data, 'agent_type') || (Wire.text(data, 'source_kind').startsWith('codex') ? 'codex' : 'claude');
       presentation.updatedAt = Date.parse(Wire.text(data, 'updated_at'));
@@ -280,6 +380,7 @@ export struct AgentListPage {
       presentation.sessionId = Wire.text(data, 'session_id');
       presentation.spaceName = Wire.text(data, 'space_name');
     }
+    if (this.compactRoot && !this.rail || this.workspace?.groupingMode === 'app' || this.workspace?.groupingMode === 'recent') presentation.prepareActivity(row);
     const root = this.workspace.relations.root(row), kids = this.workspace.foldedChildren(row);
     presentation.rootTitle = root?.title || root?.id || '';
     presentation.relativeKind = root ? this.workspace.relations.kind(row) : '';
@@ -325,19 +426,8 @@ export struct AgentListPage {
   }
 
   /** All, the states that have agents now, and the chosen one while it empties so it can be left (as iOS). */
-  private quickFilters(): string[] {
-    return QUICK_FILTERS.filter((key: string) => key === 'all' || key === this.workspace.quickFilter || (this.workspace.counts[key] || 0) > 0);
-  }
-  private quickLabel(key: string): string {
-    const count = key === 'all' ? 0 : this.workspace.counts[key] || 0;
-    return tr(QUICK_LABELS[key]) + (count ? ' ' + String(count) : '');
-  }
-  private quickIndex(): number {
-    const index = this.quickFilters().indexOf(this.workspace.quickFilter);
-    return index < 0 ? 0 : index;
-  }
-  private chooseQuick(index: number): void {
-    const key = this.quickFilters()[index];
+
+  private chooseQuick(key: string): void {
     if (key && key !== this.workspace.quickFilter) { Haptics.tap(); this.workspace.setQuickFilter(key); }
   }
 
@@ -363,7 +453,8 @@ export struct AgentListPage {
   }
 
   private machineOptions(): ResourceRow[] {
-    return this.model.directoryReady ? this.model.directoryMachines : this.model.machines;
+    return (this.model.directoryReady ? this.model.directoryMachines : this.model.machines)
+      .filter((row: ResourceRow) => this.workspace.includesHub(row.group));
   }
 
   private machineLabel(): string {
@@ -391,16 +482,23 @@ export struct AgentListPage {
     this.workspace.setMachineFilter(machine ? this.workspace.machineIdentity(machine) : '').catch(() => undefined);
   }
 
+  @Computed get availableGroupings(): string[] {
+    return this.workspace.groupingOptions();
+  }
+  @Computed get taskSections(): AgentTaskSection[] {
+    return agentTaskSectionsFor(this.model,this.workspace,this.taskGrouping,this.workspace.groupingMode);
+  }
   private groupingIndex(): number {
-    const index = GROUPINGS.indexOf(this.workspace.groupingMode);
-    return index < 0 ? 0 : index;
+    return this.availableGroupings.indexOf(this.workspace.groupingMode);
   }
 
   private selectGrouping(index: number): void {
-    this.workspace.setGroupingMode(GROUPINGS[index] || 'state');
+    const grouping=this.availableGroupings[index];
+    if (grouping) this.workspace.setGroupingMode(grouping);
   }
 
   private openRow(row: ResourceRow): void {
+    if (this.compactRoot) { this.searchField.stopEditing(); this.resetSearchReveal(); }
     this.workspace.selectRow(row); this.onOpen(row);
   }
 
@@ -440,68 +538,144 @@ export struct AgentListPage {
       } } });
   }
 
-  @Builder rowMenu(binding: BoundAgentRow) {
+  @Builder rowMenu(binding:BoundAgentRow) { this.sessionMenu(binding.bound.value,binding.presentation.spaceName) }
+  @Builder sessionMenu(row:ResourceRow,spaceName:string) {
     Menu() {
-      MenuItem({ content: tr(this.workspace.isPinned(binding.bound.value) ? 'agent_unpin' : 'agent_pin') })
-        .enabled(this.workspace.rowOnline(binding.bound.value) && !this.workspace.busy)
-        .onClick(() => this.workspace.togglePin(binding.bound.value).catch(() => undefined))
-      if (this.workspace.canInterrupt(binding.bound.value)) MenuItem({ content: tr('agent_interrupt') })
-        .enabled(!this.workspace.busy).onClick(() => this.interruptRow(binding.bound.value))
-      MenuItem({ content: tr(this.workspace.isMuted(binding.bound.value) ? 'unmute' : 'mute') })
-        .enabled(this.workspace.rowOnline(binding.bound.value) && !this.workspace.busy)
-        .onClick(() => this.workspace.toggleMute(binding.bound.value).catch(() => undefined))
-      if (this.workspace.isSpacePinned(binding.bound.value) || binding.presentation.spaceName) {
-        MenuItem({ content: tr(this.workspace.isSpacePinned(binding.bound.value) ? 'agent_unpin_space' : 'agent_pin_space') })
-          .enabled(this.workspace.rowOnline(binding.bound.value) && !this.workspace.busy)
-          .onClick(() => this.workspace.togglePin(binding.bound.value, true).catch(() => undefined))
-        MenuItem({ content: tr(this.workspace.isSpaceMuted(binding.bound.value) ? 'agent_unmute_space' : 'agent_mute_space') })
-          .enabled(this.workspace.rowOnline(binding.bound.value) && !this.workspace.busy)
-          .onClick(() => this.workspace.toggleMute(binding.bound.value, true).catch(() => undefined))
+      MenuItem({ content: tr(this.workspace.isPinned(row) ? 'agent_unpin' : 'agent_pin') })
+        .enabled(this.workspace.rowOnline(row) && !this.workspace.busy)
+        .onClick(() => this.workspace.togglePin(row).catch(() => undefined))
+      if (this.workspace.canInterrupt(row)) {
+        MenuItem({ content: tr('agent_interrupt') }).enabled(!this.workspace.busy).onClick(() => this.interruptRow(row))
       }
-      if (this.workspace.canMarkSeen(binding.bound.value)) MenuItem({ content: tr('agent_mark_seen') })
-        .enabled(!this.workspace.busy).onClick(() => this.workspace.markSeen(binding.bound.value).catch(() => undefined))
-      if (this.workspace.canRename(binding.bound.value)) MenuItem({ content: tr('rename') }).enabled(!this.workspace.busy)
-        .onClick(() => this.openRename(binding.bound.value))
-      if (this.workspace.canClose(binding.bound.value)) MenuItem({ content: tr('close') }).enabled(!this.workspace.busy)
-        .onClick(() => this.confirmClose(binding.bound.value))
-      if (this.workspace.canDelete(binding.bound.value)) MenuItem({ content: tr('delete') }).enabled(!this.workspace.busy)
-        .onClick(() => this.confirmDelete(binding.bound.value))
+      MenuItem({ content: tr(this.workspace.isMuted(row) ? 'unmute' : 'mute') })
+        .enabled(this.workspace.rowOnline(row) && !this.workspace.busy)
+        .onClick(() => this.workspace.toggleMute(row).catch(() => undefined))
+      if (this.workspace.isSpacePinned(row) || spaceName) {
+        MenuItem({ content: tr(this.workspace.isSpacePinned(row) ? 'agent_unpin_space' : 'agent_pin_space') })
+          .enabled(this.workspace.rowOnline(row) && !this.workspace.busy)
+          .onClick(() => this.workspace.togglePin(row, true).catch(() => undefined))
+        MenuItem({ content: tr(this.workspace.isSpaceMuted(row) ? 'agent_unmute_space' : 'agent_mute_space') })
+          .enabled(this.workspace.rowOnline(row) && !this.workspace.busy)
+          .onClick(() => this.workspace.toggleMute(row, true).catch(() => undefined))
+      }
+      if (this.workspace.canMarkSeen(row)) MenuItem({ content: tr('agent_mark_seen') })
+        .enabled(!this.workspace.busy).onClick(() => this.workspace.markSeen(row).catch(() => undefined))
+      if (this.workspace.canRename(row)) MenuItem({ content: tr('rename') }).enabled(!this.workspace.busy)
+        .onClick(() => this.openRename(row))
+      if (this.workspace.canClose(row)) MenuItem({ content: tr('close') }).enabled(!this.workspace.busy)
+        .onClick(() => this.confirmClose(row))
+      if (this.workspace.canDelete(row)) MenuItem({ content: tr('delete') }).enabled(!this.workspace.busy)
+        .onClick(() => this.confirmDelete(row))
     }
   }
 
-  @Builder groupHeader(binding: BoundAgentGroup) {
-    Column({ space: Tokens.fine }) {
-      if (binding.value.parent === 'quiet') {
-        Text(tr('agent_group_quiet_spaces')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
-      }
-      Row({ space: Tokens.gap }) {
-        Column({ space: Tokens.fine }) {
-          Row({ space: Tokens.gap }) {
-            Text(this.groupTitle(binding.value)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
-              .fontColor(binding.value.id === NEEDS_GROUP ? Colors.needs : Colors.secondary).maxLines(2).flexShrink(1)
-            if (this.groupTotal(binding.value)) Text(this.groupTotal(binding.value)).fontSize(Tokens.caption).fontWeight(FontWeight.Medium)
-              .fontColor(binding.value.id === NEEDS_GROUP ? Colors.needs : Colors.secondary)
-          }.alignItems(VerticalAlign.Center)
-          if (this.groupNeeds(binding.value) || this.groupCounts(binding.value)) Text() {
-            if (this.groupNeeds(binding.value)) Span(this.groupNeeds(binding.value)).fontColor(Colors.needs).fontWeight(FontWeight.Medium)
-            if (this.groupNeeds(binding.value) && this.groupCounts(binding.value)) Span(' · ').fontColor(Colors.secondary)
-            if (this.groupCounts(binding.value)) Span(this.groupCounts(binding.value)).fontColor(Colors.secondary)
-          }.fontSize(Tokens.caption)
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1).constraintSize({minHeight:Tokens.touch}).justifyContent(FlexAlign.Center)
-          .onClick(() => { if (!this.workspace.search && binding.value.id !== NEEDS_GROUP) this.toggleGroup(binding.value.id); })
-          .accessibilityGroup(true).accessibilityText([this.groupTitle(binding.value), this.groupTotal(binding.value), this.groupNeeds(binding.value),
-            this.groupCounts(binding.value)].filter((value: string) => !!value).join(' · '))
-        if (binding.value.id !== NEEDS_GROUP) Button({ type: ButtonType.Circle }) {
-          SymbolGlyph(binding.value.folded ? Symbols.down : Symbols.up).fontSize(Tokens.symbolFont).fontColor([Colors.link])
-        }.attributeModifier(ButtonStyles.icon).enabled(!this.workspace.search)
-          .accessibilityText(this.groupTitle(binding.value) + ' ' + tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'))
-          .onClick(() => this.toggleGroup(binding.value.id)).id('agents.group.toggle.' + binding.value.id)
-      }.width('100%').alignItems(VerticalAlign.Center)
-    }.alignItems(HorizontalAlign.Start)
-      .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.fine }).width('100%')
+  private groupTitle(group:AgentWorkspaceGroup):string {
+    if (group.titleKey) return tr(group.titleKey).replace('{agent}',group.machineName);
+    return tr(STATE_LABELS[group.id] || '') || group.machineName;
+  }
+  private appCountKeys(group:AgentWorkspaceGroup):string[] {
+    return ['needs_you','working','unread','backgroundWaiting','idle'].filter((key:string)=>Wire.number(group.stateCounts,key)>0);
+  }
+  private appCountColor(key:string):ResourceColor {
+    return key === 'needs_you' ? Colors.needs : key === 'working' || key === 'backgroundWaiting' ? Colors.working : key === 'unread' ? Colors.unread : Colors.tertiary;
+  }
+  private appCountLabel(group:AgentWorkspaceGroup,key:string):string {
+    const name = key === 'unread' ? 'agent_group_unread' : key === 'backgroundWaiting' ? 'agent_group_background' : key;
+    return String(Wire.number(group.stateCounts,key)) + ' ' + tr(name);
+  }
+  @Builder activityMark(group:AgentWorkspaceGroup) {
+    if (group.id === 'app/desktop/claude code') Image($r('app.media.project_agent_claude')).width(18).height(18).objectFit(ImageFit.Contain)
+    else if (group.id === 'app/desktop/codex') Image($r('app.media.project_agent_openai')).width(18).height(18).objectFit(ImageFit.Contain).fillColor(Colors.ink)
+    else if (group.id.startsWith('app/desktop/') && group.presentation!=='app-project') Text(group.machineName.slice(0,1).toUpperCase()).fontSize(15).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
+    else if (group.presentation === 'app-project') SymbolGlyph(Symbols.folder).fontSize('16vp').fontColor([Colors.secondary])
+    else if (group.id === 'app/other') SymbolGlyph(Symbols.agents).fontSize('16vp').fontColor([Colors.secondary])
+    else Text('›_').fontSize('11vp').fontFamily('monospace').fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+      .width(18).height(14).textAlign(TextAlign.Center).border({width:1,color:Colors.secondary,radius:3}).accessibilityLevel('no')
+  }
+  @Builder needsYouHeader(binding:BoundAgentGroup) {
+    Button({type:ButtonType.Normal}) {
+      Row({space:6}) {
+        Text(this.groupTitle(binding.value)).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(600)
+          .fontColor(Colors.systemControls && Colors.styleID==='glass' ? $r('app.color.phone_agent_section_ink') : Colors.secondary)
+          .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+        if (binding.value.totalRowCount>0) {
+          Text(binding.value.totalRowCount>99?'99+':String(binding.value.totalRowCount)).fontSize(13)
+            .maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center)
+            .fontColor(Colors.systemControls && Colors.styleID==='glass' ? $r('app.color.phone_agent_count_ink') : Colors.needs)
+            .padding({left:6,right:6}).height(PhoneStyle.formSize(18.33,25.67,this.environment.fontScale))
+            .constraintSize({minWidth:PhoneStyle.formSize(20.33,23.67,this.environment.fontScale)})
+            .backgroundColor(Colors.systemControls && Colors.styleID==='glass' ? $r('app.color.phone_agent_count_fill') : Colors.control)
+            .borderRadius(20)
+        }
+        Blank().layoutWeight(1)
+        if (binding.value.folded) SymbolGlyph(Symbols.expand).fontSize(Tokens.interfaceFontVp(12,this.environment.fontScale)).fontColor([Colors.tertiary])
+      }.width('100%').padding({left:20,right:20})
+    }.width('100%').height(PhoneStyle.formSize(40.33,47.67,this.environment.fontScale)).padding(0).backgroundColor(Color.Transparent)
+      .accessibilityText(this.groupTitle(binding.value)+' · '+String(binding.value.totalRowCount)+' · '+tr(binding.value.folded?'agent_expand':'agent_collapse'))
+      .responseRegion([{x:0,y:-2,width:'100%',height:44},{x:0,y:0,width:'100%',height:'100%'}])
+      .onClick(()=>this.toggleGroup(binding.value.id)).id('agents.group.toggle.'+binding.value.id)
   }
 
-  private groupTitle(group: AgentWorkspaceGroup): string { return tr(STATE_LABELS[group.id] || '') || group.machineName; }
+  @Builder groupHeader(binding: BoundAgentGroup) {
+    if (binding.value.presentation) Column() {
+      if (binding.value.presentation === 'recent') Row({space:6}) {
+        Text(this.groupTitle(binding.value)).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontWeight(600).fontColor(Colors.secondary)
+        this.activityTotal(binding.value.totalRowCount)
+      }.width('100%').constraintSize({minHeight:PhoneStyle.formSize(40.3,48,this.environment.fontScale)})
+        .padding({left:20,right:20}).accessibilityGroup(true).id('agents.recent.heading')
+      else Button({type:ButtonType.Normal}) {
+        Row({space:6}) {
+          this.activityMark(binding.value)
+          Text(this.groupTitle(binding.value)).fontSize(binding.value.presentation==='app-project' ? 15 : 13)
+            .maxFontScale(Tokens.interfaceScaleFor(binding.value.presentation==='app-project' ? 15 : 13))
+            .fontWeight(600).fontColor(Colors.secondary).flexShrink(1).maxLines(2)
+          if (binding.value.subtitle) Text(binding.value.subtitle).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.tertiary).maxLines(1)
+          Blank().layoutWeight(1)
+          ForEach(this.appCountKeys(binding.value),(key:string)=>{
+            Row({space:4}) {
+              Circle().width(6).height(6).fill(this.appCountColor(key))
+              Text(String(Wire.number(binding.value.stateCounts,key))).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(600).fontColor(Colors.secondary)
+            }.accessibilityGroup(true).accessibilityText(this.appCountLabel(binding.value,key)).id('agents.app.count.'+key)
+          },(key:string)=>key)
+          this.activityTotal(binding.value.totalRowCount)
+          SymbolGlyph(binding.value.folded ? Symbols.expand : Symbols.down).fontSize('12vp').fontColor([Colors.secondary])
+        }.width('100%')
+      }.width('100%').constraintSize({minHeight:binding.value.presentation==='app-project' ?
+        PhoneStyle.formSize(56.3,64,this.environment.fontScale) : PhoneStyle.formSize(64,78,this.environment.fontScale)})
+       .padding({left:20,right:20,top:binding.value.presentation==='app-project' ? 0 : 18})
+       .backgroundColor(binding.value.presentation==='app-project' ? Colors.surface : Color.Transparent)
+       .borderRadius({topLeft:binding.value.firstProject ? 26:0,topRight:binding.value.firstProject ? 26:0,
+         bottomLeft:binding.value.lastProject && binding.value.folded ? 26:0,bottomRight:binding.value.lastProject && binding.value.folded ? 26:0})
+       .accessibilityText([this.groupTitle(binding.value),binding.value.subtitle,tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'),
+         ...this.appCountKeys(binding.value).map((key:string)=>this.appCountLabel(binding.value,key)),String(binding.value.totalRowCount)]
+         .filter((part:string)=>!!part).join(' · '))
+       .onClick(()=>this.toggleGroup(binding.value.id)).id('agents.group.toggle.'+binding.value.id)
+    }.width('100%').padding({left:4,right:4})
+    else if (this.compactRoot && !this.rail && binding.value.id==='state/needs') Column() {
+      this.needsYouHeader(binding)
+    }.width('100%').padding({left:this.floatingStatusCards?16:4,right:this.floatingStatusCards?16:4,top:20})
+    else Column({ space: 4 }) {
+      if (binding.value.parent === 'quiet') {
+        Text(tr('agent_group_quiet_spaces')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
+      }
+      Button({ type: ButtonType.Normal }) {
+        Row({ space: 6 }) {
+          Text(this.groupTitle(binding.value))
+            .fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(FontWeight.Medium).fontColor(Colors.ink).flexShrink(1).maxLines(this.narrowRow() ? 4 : 2)
+          Text(String(binding.value.totalRowCount)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
+          Blank().layoutWeight(1)
+          SymbolGlyph(binding.value.folded ? Symbols.expand : Symbols.down).fontSize('12vp').fontColor([Colors.secondary])
+        }.width('100%').constraintSize({ minHeight: 44 })
+      }.width('100%').padding({ left: 4, right: 5 }).backgroundColor(Color.Transparent)
+        .accessibilityText(this.groupTitle(binding.value) + ' · ' +
+          String(binding.value.totalRowCount) + ' · ' + tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'))
+        .onClick(() => this.toggleGroup(binding.value.id)).id('agents.group.toggle.' + binding.value.id)
+    }.width('100%').padding({ top: 6 }).alignItems(HorizontalAlign.Start)
+  }
+  @Builder activityTotal(value:number) {
+    Text(String(value)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(600).fontColor(Colors.secondary)
+      .padding({left:6,right:6,top:1,bottom:1}).backgroundColor(Colors.control).borderRadius(9)
+  }
 
   /** By Status sections, Pinned and Needs you say how many rows they hold, as iOS's section headers. */
   private groupTotal(group: AgentWorkspaceGroup): string {
@@ -529,6 +703,9 @@ export struct AgentListPage {
   private rowStatus(presentation: AgentRowPresentation): string {
     if (presentation.tone === 'background') return tr('agent_group_background');
     return presentation.status ? tr(presentation.status) : '';
+  }
+  private needsStatusLabel(groupId: string): boolean {
+    return groupId !== 'pinned' && (!groupId.startsWith('state/') || groupId === 'state/muted');
   }
 
   private rowStatusColor(presentation: AgentRowPresentation): ResourceColor {
@@ -560,8 +737,17 @@ export struct AgentListPage {
 
   @Builder filterSheet() {
     Column() {
+      if (this.model.profiles.length > 1 || this.workspace.currentHubOnly) {
+        Row({ space: Tokens.page }) {
+          Text(tr('phone_agents_current_hub')).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontColor(Colors.ink).layoutWeight(1)
+          Toggle({ type: ToggleType.Switch, isOn: this.workspace.currentHubOnly })
+            .accessibilityText(tr('phone_agents_current_hub')).id('agents.current_hub')
+            .onChange((value: boolean) => this.workspace.setCurrentHubOnly(value))
+        }.width('100%').constraintSize({ minHeight: Tokens.header }).alignItems(VerticalAlign.Center)
+        Divider().strokeWidth(Tokens.hairline).color(Colors.divider)
+      }
       Row({ space: Tokens.page }) {
-        Text(tr('agent_filter_machine')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+        Text(tr('agent_filter_machine')).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontColor(Colors.ink).layoutWeight(1)
         Select(this.machineSelectOptions()).selected(this.machineIndex()).value(this.machineLabel())
           .attributeModifier(SelectStyles.inline).constraintSize({ minHeight: Tokens.touch, maxWidth: '68%' })
           .onSelect((index: number) => this.selectMachine(index)).id('agents.machine_filter')
@@ -569,7 +755,7 @@ export struct AgentListPage {
       Divider().strokeWidth(Tokens.hairline).color(Colors.divider)
       if (this.workspace.historySupported()) {
         Row({ space: Tokens.page }) {
-          Text(tr('agent_history')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+          Text(tr('agent_history')).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontColor(Colors.ink).layoutWeight(1)
           Toggle({ type: ToggleType.Switch, isOn: this.workspace.history })
             .onChange((value: boolean) => this.workspace.setHistory(value))
             .accessibilityText(tr('agent_history')).id('agents.history')
@@ -577,9 +763,9 @@ export struct AgentListPage {
         Divider().strokeWidth(Tokens.hairline).color(Colors.divider)
       }
       Row({ space: Tokens.page }) {
-        Text(tr('grouping')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
-        Select(GROUPINGS.map((key) => ({ value: tr(GROUP_LABELS[key]) } as SelectOption)))
-          .selected(this.groupingIndex()).value(tr(GROUP_LABELS[GROUPINGS[this.groupingIndex()]]))
+        Text(tr('grouping')).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontColor(Colors.ink).layoutWeight(1)
+        Select(this.availableGroupings.map((key:string) => ({ value: tr(agentGroupingLabels[key]) } as SelectOption)))
+          .selected(this.groupingIndex()).value(tr(agentGroupingLabels[this.workspace.groupingMode]))
           .attributeModifier(SelectStyles.inline).constraintSize({ minHeight: Tokens.touch, maxWidth: '68%' })
           .onSelect((index: number) => this.selectGrouping(index)).id('agents.grouping')
       }.width('100%').constraintSize({ minHeight: Tokens.header }).alignItems(VerticalAlign.Center)
@@ -595,6 +781,184 @@ export struct AgentListPage {
 
   private isRowSelected(binding: BoundAgentRow): boolean {
     return this.selectionVisible && this.workspace.selectedKey === binding.presentation.selectionKey;
+  }
+  private cardTitle(card:AgentDecisionCard,binding:BoundAgentRow):string {
+    if (card.request.kind==='plan') return tr('phone_agent_plan_approval');
+    if (card.request.kind==='permission') return tr('phone_agent_needs_approval');
+    if (card.request.kind==='question') return tr('phone_agent_asks').replace('{agent}',card.questionAgent(binding.bound.value) || tr('agent'));
+    return tr('needs_you');
+  }
+
+  private decisionPreview(card:AgentDecisionCard):string {
+    if (card.request.kind==='permission') {
+      const tool=interactionToolName(card.request);
+      if (tool && card.preview.startsWith(tool+': ')) {
+        return tr('phone_agent_permission_preview').replace('{tool}',() => tool).replace('{target}',() => card.preview.slice(tool.length+2));
+      }
+    }
+    return card.preview;
+  }
+
+  @Computed get decisionButtonHeight():number { return PhoneStyle.formSize(28,35.33,this.environment.fontScale); }
+
+  private choiceLabel(card:AgentDecisionCard, choice:string):string {
+    if (card.request.kind==='permission') return tr(choice==='deny' ? 'phone_agent_deny_choice' : card.namedPermissionAgent ? 'approve' : 'allow');
+    return recommendedOptionTitle(choice) ?? choice;
+  }
+  private choiceRecommended(card:AgentDecisionCard, choice:string):boolean {
+    return card.request.kind==='question' && recommendedOptionTitle(choice)!==undefined;
+  }
+  private choiceHeight(card:AgentDecisionCard,choice:string):number {
+    return this.choiceRecommended(card,choice) ? PhoneStyle.formSize(29.33,36.67,this.environment.fontScale) : this.decisionButtonHeight;
+  }
+  private choiceMaterial(prominent:boolean):LinearGradientOptions | undefined {
+    if (!Colors.systemControls || Colors.styleID!=='glass') return undefined;
+    const fill=prominent ? $r('app.color.phone_agent_allow_fill') : $r('app.color.phone_agent_quick_fill');
+    const light=prominent ? $r('app.color.phone_agent_allow_highlight') : $r('app.color.phone_agent_quick_highlight');
+    const edge=2/this.decisionButtonHeight;
+    return {direction:GradientDirection.Bottom,colors:[[light,0],[fill,edge],[fill,1-edge],[light,1]]};
+  }
+
+  @Builder decisionChoices(card:AgentDecisionCard,binding:BoundAgentRow) {
+    Scroll() {
+      Row({space:8}) {
+        ForEach(card.quickOptions(),(choice:string) => {
+          Button({type:ButtonType.Capsule}) {
+            Row({space:6}) {
+              Text(this.choiceLabel(card,choice)).fontSize(String(PhoneStyle.formSize(15,20.33,this.environment.fontScale))+'vp')
+                .maxLines(1).fontWeight(FontWeight.Medium).fontColor(card.request.kind==='permission' && choice==='allow' ? Colors.onAction :
+                  Colors.systemControls && Colors.styleID==='glass' ? $r('app.color.phone_agent_quick_ink') : Colors.link)
+              if (this.choiceRecommended(card,choice)) {
+                Text(tr('phone_agent_recommended')).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12))
+                  .lineHeight(PhoneStyle.settingsExampleLineHeight(14.33,21.67,this.environment.fontScale)).maxLines(1)
+                  .fontWeight(FontWeight.Medium).fontColor($r('app.color.phone_agent_recommended_ink'))
+                  .padding({left:8,right:8,top:2.5,bottom:2.5}).backgroundColor($r('app.color.phone_agent_recommended_fill')).borderRadius(Tokens.capsule)
+              }
+            }
+          }.height(this.choiceHeight(card,choice)).padding({left:card.request.kind==='permission'?10:10.5,right:card.request.kind==='permission'?10:10.5}).flexShrink(0)
+            .backgroundColor(card.request.kind==='permission' && choice==='allow' ? Colors.action :
+              Colors.systemControls && Colors.styleID==='glass' ? $r('app.color.phone_agent_quick_fill') : Colors.surface)
+            .linearGradient(this.choiceMaterial(card.request.kind==='permission' && choice==='allow'))
+            .outline({width:Colors.systemControls && Colors.styleID==='glass' && !(card.request.kind==='permission' && choice==='allow') ? 0.5 : 0,
+              color:$r('app.color.phone_agent_quick_edge'),radius:Tokens.capsule})
+            .responseRegion({x:0,y:(this.choiceHeight(card,choice)-44)/2,width:'100%',height:44})
+            .accessibilityText(this.choiceRecommended(card,choice) ?
+              tr('phone_agent_recommended_accessible').replace('{value}',() => this.choiceLabel(card,choice)) : this.choiceLabel(card,choice))
+            .enabled(this.active && this.decisions.enabled(this.model,binding.bound.value,card))
+            .onClick(() => this.decisions.answer(this.model,binding.bound.value,card,choice,util.generateRandomUUID(),this.workspace.actionTicket(binding.bound.value)))
+            .id('agents.answer.'+card.request.id+'.'+choice)
+        },(choice:string)=>choice)
+      }
+    }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).align(Alignment.Start).width('100%')
+  }
+
+  @Builder needsYouCards(binding:BoundAgentRow) {
+    ListItem() {
+      Column() {
+        Column() {
+          ForEach(this.decisions.forSession(this.model,binding.bound.value),(card:AgentDecisionCard,index:number) => {
+            Column({space:12}) {
+              Button({type:ButtonType.Normal}) {
+                Row({space:8}) {
+                  AgentNeedsYouMark({kind:card.request.kind,fontScale:this.environment.fontScale,surface:Colors.surface})
+                  Column({space:2}) {
+                    Text(this.cardTitle(card,binding)).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(600)
+                      .lineHeight(PhoneStyle.settingsExampleLineHeight(20.33,27.67,this.environment.fontScale)).maxLines(2).fontColor(Colors.ink)
+                    if (!index) Text([binding.bound.value.title,this.model.machineName(card.machine)].filter((v:string)=>!!v).join(' · '))
+                      .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).lineHeight(PhoneStyle.settingsExampleLineHeight(14.33,21.67,this.environment.fontScale))
+                      .fontColor(Colors.secondary).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+                  }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                  SymbolGlyph(Symbols.expand).fontSize(Tokens.interfaceFontVp(12,this.environment.fontScale)).fontWeight(600).fontColor([Colors.tertiary])
+                }.width('100%')
+              }.width('100%').constraintSize({minHeight:0}).padding(0).backgroundColor(Color.Transparent)
+                .responseRegion([{x:0,y:-12,width:'100%',height:44},{x:0,y:0,width:'100%',height:'100%'}])
+                .onClick(() => this.openRow(binding.bound.value)).id('agents.request.'+card.request.id)
+              if (card.preview) Text(this.decisionPreview(card)).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.ink)
+                .lineSpacing(LengthMetrics.vp(PhoneStyle.sidebarMetric(17*(1.45-1.19),this.environment.fontScale)),{onlyBetweenLines:true})
+                .lineHeight(PhoneStyle.settingsExampleLineHeight(20.33,27.67,this.environment.fontScale)).maxLines(3).textAlign(TextAlign.Start)
+                .width('100%').onClick(() => this.openRow(binding.bound.value)).id('agents.preview.'+card.request.id)
+              if (card.quickOptions().length) this.decisionChoices(card,binding)
+            }.width('100%').alignItems(HorizontalAlign.Start).padding({left:20,right:20,top:index===0?19:20})
+          },(card:AgentDecisionCard) => card.key+card.request.raw)
+        }.width('100%').padding({bottom:19})
+        if (!this.detachedDecisionRows && !this.endsSurface(binding,'state/needs')) {
+          Divider().strokeWidth(1).color(Colors.systemControls && Colors.styleID==='glass' ?
+            $r('app.color.phone_agent_session_separator') : Colors.divider).margin({left:20,right:20})
+        }
+      }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface)
+        .borderRadius({topLeft:this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26:0,
+          topRight:this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26:0,
+          bottomLeft:this.detachedDecisionRows || this.endsSurface(binding,'state/needs') ? 26:0,
+          bottomRight:this.detachedDecisionRows || this.endsSurface(binding,'state/needs') ? 26:0})
+    }.margin({left:this.floatingStatusCards?16:4,right:this.floatingStatusCards?16:4,
+      top:this.detachedDecisionRows?4:0,bottom:this.detachedDecisionRows?4:0})
+      .onVisibleAreaChange([0,1],(visible:boolean,ratio:number) => this.onVisible(binding.bound.value,visible ? ratio : 0))
+      .onDisAppear(() => this.onVisible(binding.bound.value,0)).bindContextMenu(this.rowMenu(binding),ResponseType.LongPress)
+      .id('agent.'+binding.bound.value.group+'.'+binding.bound.value.manager+'.'+binding.bound.value.machine+'.'+binding.bound.value.id)
+  }
+
+  @Computed get orderedNeedsRows():BoundAgentRow[] {
+    const group=this.groupBindings.find((item:BoundAgentGroup):boolean=>item.value.id==='state/needs');
+    if (!group) return [];
+    return group.rows.slice().sort((a:BoundAgentRow,b:BoundAgentRow) =>
+      this.decisions.waitingSince(this.model,a.bound.value)-this.decisions.waitingSince(this.model,b.bound.value));
+  }
+  @Computed get detachedDecisionRows():boolean { return this.floatingStatusCards || this.displayedAgentStyle==='beautiful'; }
+  private displayRows(group:BoundAgentGroup):BoundAgentRow[] {
+    return this.compactRoot && !this.rail && group.value.id==='state/needs' ? this.orderedNeedsRows : group.rows;
+  }
+  private startsSurface(row:BoundAgentRow,id:string):boolean {
+    return this.compactRoot && !this.rail && id==='state/needs' ? this.orderedNeedsRows[0]===row : row.first;
+  }
+  private endsSurface(row:BoundAgentRow,id:string):boolean {
+    return this.compactRoot && !this.rail && id==='state/needs' ? this.orderedNeedsRows[this.orderedNeedsRows.length-1]===row : row.last;
+  }
+  @Builder groupRow(binding:BoundAgentRow,groupId:string,endOfSurface:boolean=true) {
+    if (this.compactRoot && !this.rail && groupId==='state/needs' && this.decisions.forSession(this.model,binding.bound.value).length)
+      this.needsYouCards(binding)
+    else if (this.compactRoot && !this.rail && binding.presentation.activity)
+      this.activityRow(binding,groupId,endOfSurface)
+    else this.agentRow(binding,groupId)
+  }
+  @Computed get floatingStatusCards():boolean {
+    return this.compactRoot && !this.rail && this.displayedAgentStyle==='cards';
+  }
+  private activityPlace(binding:BoundAgentRow,groupId:string):string {
+    const value=binding.presentation, agent=value.activity;
+    if (!agent) return '';
+    if ((this.workspace.groupingMode==='space' && agent.spaceId && groupId.endsWith('/'+agent.spaceId)) ||
+      (groupId.includes('/project/') && !groupId.endsWith('/other#'))) return agent.tab;
+    const place=[value.spaceName,agent.tab !== value.spaceName ? agent.tab : ''].filter((part:string)=>!!part).join(' › ');
+    return [place,this.mixedMachines ? value.metadata[1] : ''].filter((part:string)=>!!part).join(' · ');
+  }
+  @Builder activityRow(binding:BoundAgentRow,groupId:string,endOfSurface:boolean,depth:number=0) {
+    ListItem() {
+      Column() {
+        AgentDirectoryRowContent({agent:binding.presentation.activity!,display:this.displayedAgentStyle,muted:this.workspace.isMuted(binding.bound.value),
+          hideState:groupId.startsWith('state/') && groupId!=='state/muted',age:this.rowTime(binding.presentation),place:this.activityPlace(binding,groupId),
+          showsSource:!!binding.presentation.activitySource,sourceTitle:binding.presentation.activitySource ? tr(binding.presentation.activitySource) : '',
+          narrow:this.listWidth>0 && this.listWidth<296,leftInset:(groupId.includes('/project/') ? 36 : 20)+16*depth,
+          controlScale:Math.max(1,Math.min(this.environment.fontScale,67/51)),fontScale:this.environment.fontScale,
+          tint:this.rowStatusColor(binding.presentation),activityList:true})
+      }.width('100%').backgroundColor(this.isRowSelected(binding) ? Colors.selection : this.displayedAgentStyle==='cards'?Colors.grouped:Colors.surface)
+       .borderRadius({topLeft:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,topRight:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,
+         bottomLeft:this.endsSurface(binding,groupId) && endOfSurface ? 26:0,bottomRight:this.endsSurface(binding,groupId) && endOfSurface ? 26:0})
+    }.margin({left:this.floatingStatusCards?0:4,right:this.floatingStatusCards?0:4}).accessibilityGroup(true)
+      .accessibilityText([binding.presentation.provider,this.rowStatus(binding.presentation),binding.bound.value.title,
+        this.rowTime(binding.presentation),binding.presentation.recentContent,binding.presentation.activitySource ? tr(binding.presentation.activitySource) : '',
+        this.activityPlace(binding,groupId),binding.presentation.activity?.model || '',binding.presentation.activity?.todoTitle || ''].filter((part:string)=>!!part).join(' · '))
+      .selectable(true).selected(this.isRowSelected(binding)).onClick(()=>this.openRow(binding.bound.value))
+      .onVisibleAreaChange([0,1],(visible:boolean,ratio:number)=>this.onVisible(binding.bound.value,visible ? ratio : 0))
+      .onDisAppear(()=>this.onVisible(binding.bound.value,0)).bindContextMenu(this.rowMenu(binding),ResponseType.LongPress)
+      .id('agent.'+binding.bound.value.group+'.'+binding.bound.value.manager+'.'+binding.bound.value.machine+'.'+binding.bound.value.id)
+  }
+
+  @Builder taskRow(row:ResourceRow,depth:number) {
+    if (this.taskRowsByKey.has(row.key())) {
+      if(this.compactRoot && !this.rail && this.taskRowsByKey.get(row.key())!.presentation.activity)
+        this.activityRow(this.taskRowsByKey.get(row.key())!,this.workspace.groupingMode,true,depth)
+      else this.agentRow(this.taskRowsByKey.get(row.key())!,this.workspace.groupingMode,depth)
+    }
   }
   /** A row can show twice (its group and Needs you); the list reports the larger of the two. */
   private reportVisible(row: ResourceRow, copy: string, ratio: number): void {
@@ -616,29 +980,37 @@ export struct AgentListPage {
     return presentation.subagents > 0 && !presentation.familySummary ? tr('agent_subagents_running').replace('{count}', String(presentation.subagents)) : '';
   }
 
-  @Builder agentRow(binding: BoundAgentRow, groupId: string) {
+  @Builder agentRow(binding: BoundAgentRow, groupId: string, depth:number=0) {
     ListItem() {
       Column() {
-      Row({ space: Tokens.gap }) {
-        Stack({ alignContent: Alignment.BottomEnd }) {
-          Column() {
-            if (agentBrand(binding.presentation.brand)) Image(agentBrand(binding.presentation.brand)).width(Tokens.section).height(Tokens.section)
-              .objectFit(ImageFit.Contain).fillColor(agentBrandColor(binding.presentation.brand)).accessibilityText(binding.presentation.brand)
-            else SymbolGlyph(Symbols.agent).fontSize(Tokens.symbolFont).fontColor([Colors.teal]).accessibilityText(binding.presentation.brand)
-          }.width(Tokens.avatar).height(Tokens.avatar).alignItems(HorizontalAlign.Center).justifyContent(FlexAlign.Center)
-            .backgroundColor(Colors.control).borderRadius(Tokens.avatar / 2).opacity(binding.presentation.muted ? Tokens.mutedOpacity : 1)
-          if (binding.presentation.tone) AgentStateMark({ tone: binding.presentation.tone,
-            breathing: binding.presentation.tone === 'needs_you' && this.active && !this.environment.reduceMotion })
-        }.width(Tokens.avatar).height(Tokens.avatar)
-        if (!this.rail) Column({ space: Tokens.fine }) {
-          Row({ space: Tokens.gap }) {
-            Text(binding.bound.value.title || tr('agent_untitled')).fontSize(Tokens.body)
-              .fontWeight(binding.presentation.status === 'unread' && !binding.presentation.muted ? FontWeight.Bold : FontWeight.Medium)
-              .fontColor(Colors.ink).layoutWeight(1).maxLines(this.environment.fontScale >= 1.5 ? 2 : 1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            if (binding.presentation.muted) SymbolGlyph(Symbols.muted).fontSize(Tokens.caption).fontColor([Colors.secondary])
-            if (this.environment.fontScale < 1.5 && this.rowTime(binding.presentation)) Text(this.rowTime(binding.presentation)).fontSize(Tokens.caption).fontColor(Colors.secondary)
-          }.width('100%').alignItems(VerticalAlign.Center)
-          if (this.environment.fontScale >= 1.5 && this.rowTime(binding.presentation)) Text(this.rowTime(binding.presentation)).fontSize(Tokens.caption).fontColor(Colors.secondary)
+        Row({ space: 10 }) {
+          Stack({ alignContent: Alignment.BottomEnd }) {
+            Stack() {
+              if (this.rail) Text((binding.bound.value.title || tr('agent_untitled')).slice(0, 2)).fontSize('13vp').fontColor(Colors.ink).maxLines(1)
+              else if (binding.presentation.brand === 'codex') {
+                Image($r('app.media.project_agent_openai')).width(21).height(21).objectFit(ImageFit.Contain).fillColor(Colors.ink)
+              } else if (binding.presentation.brand === 'claude') {
+                Image($r('app.media.project_agent_claude')).width(22).height(22).objectFit(ImageFit.Contain)
+              } else if (binding.presentation.provider) {
+                Text(binding.presentation.provider.slice(0, 1).toUpperCase()).fontSize('16vp').fontWeight(binding.presentation.status === 'unread' && !binding.presentation.muted ? FontWeight.Bold : FontWeight.Medium).fontColor(Colors.ink)
+              } else SymbolGlyph(Symbols.agent).fontSize('18vp').fontColor([this.rowStatusColor(binding.presentation)])
+            }.width(32).height(32).backgroundColor(Colors.control).borderRadius(9).opacity(binding.presentation.muted ? Tokens.mutedOpacity : 1)
+            if (binding.presentation.tone) {
+              AgentStateMark({ tone: binding.presentation.tone, breathing: binding.presentation.tone === 'needs_you' && this.active && !this.environment.reduceMotion })
+            }
+          }.width(34).height(34)
+          if (!this.rail) Column({ space: 3 }) {
+            Row({ space: 6 }) {
+              Text(binding.bound.value.title || tr('agent_untitled')).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(binding.presentation.status === 'unread' && !binding.presentation.muted ? FontWeight.Bold : FontWeight.Medium)
+                .fontColor(Colors.ink).layoutWeight(1).maxLines(this.narrowRow() ? 4 : 1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+              if (binding.presentation.muted) { SymbolGlyph(Symbols.muted).fontSize('12vp').fontColor([Colors.secondary]) }
+              if (!this.narrowRow()) Text(this.rowTime(binding.presentation)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
+            }.width('100%').alignItems(VerticalAlign.Center)
+            if (binding.presentation.recentContent) {
+              Text(binding.presentation.recentContent).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary).width('100%')
+                .maxLines(this.narrowRow() ? 4 : this.look.density === 'compact' ? 1 : 2).textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
           if (binding.presentation.rootTitle) {
             Row({space:Tokens.fine}) {
               if (binding.presentation.relativeKind === 'subtask') ToolGlyph({name:'agent', glyphSize:Tokens.meta, ink:Colors.teal})
@@ -647,25 +1019,16 @@ export struct AgentListPage {
                 .fontSize(Tokens.caption).fontColor(Colors.secondary).layoutWeight(1).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
             }.width('100%')
           }
-          if (this.mixedMachines && this.workspace.groupingMode !== 'machine' && binding.presentation.place) Text(binding.presentation.place).fontSize(Tokens.caption).fontColor(Colors.secondary).width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          if (binding.presentation.recentContent) Text(binding.presentation.recentContent).fontSize(Tokens.meta)
-            .fontColor(Colors.secondary).width('100%').maxLines(this.look.density === 'compact' || this.rail ? 1 : 2).textOverflow({ overflow: TextOverflow.Ellipsis })
-          if (this.subagentLine(binding.presentation)) Text(this.subagentLine(binding.presentation)).fontSize(Tokens.caption)
-            .fontColor(Colors.secondary).width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          if (binding.presentation.status === 'working' && binding.presentation.tone !== 'background') {
-            Row({ space: Tokens.fine }) {
-              if (this.active && !this.environment.reduceMotion) LoadingProgress().width(Tokens.caption).height(Tokens.caption).color(Colors.working)
-              else Circle().width(Tokens.stateMark).height(Tokens.stateMark).fill(Colors.working)
-              Text(tr('working')).fontSize(Tokens.caption).fontWeight(FontWeight.Medium).fontColor(Colors.working)
-            }.padding({left:Tokens.gap, right:Tokens.gap, top:2, bottom:2}).backgroundColor(Colors.control).borderRadius(Tokens.capsule)
-          } else if (this.rowStatus(binding.presentation)) Text(this.rowStatus(binding.presentation)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
-            .fontColor(this.rowStatusColor(binding.presentation)).width('100%')
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1).opacity(binding.presentation.muted ? Tokens.mutedOpacity : 1)
-      }.width('100%').alignItems(VerticalAlign.Center).justifyContent(this.rail ? FlexAlign.Center : FlexAlign.Start)
-        .padding({ left: this.rail ? Tokens.inset : binding.presentation.indented ? Tokens.page + Tokens.section : Tokens.page, right: this.rail ? Tokens.inset : Tokens.page, top: this.look.density === 'compact' ? Tokens.gap : Tokens.inset,
-          bottom: this.look.density === 'compact' ? Tokens.gap : Tokens.inset })
-        .onClick(() => this.openRow(binding.bound.value))
-        .accessibilityGroup(true).accessibilityText(this.rowSpoken(binding))
+            this.rowContext(binding.presentation.place || this.rowPlace(binding.presentation), this.needsStatusLabel(groupId) ? this.rowStatus(binding.presentation) : '',
+              this.rowStatusColor(binding.presentation))
+            if (this.narrowRow() && this.rowTime(binding.presentation)) {
+              Text(this.rowTime(binding.presentation)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
+            }
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+          if (!this.rail) SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+        }.width('100%').alignItems(VerticalAlign.Center).justifyContent(this.rail ? FlexAlign.Center : FlexAlign.Start)
+          .padding({ left: this.rail ? 5 : binding.presentation.indented ? 13 + Tokens.section : 13, right: this.rail ? 5 : 11,
+            top: this.look.density === 'compact' ? 7 : 10, bottom: this.look.density === 'compact' ? 7 : 10 })
       if (!this.rail && binding.presentation.familySummary) {
         Button({type:ButtonType.Normal,buttonStyle:ButtonStyleMode.TEXTUAL}) {
           Row({space:Tokens.fine}) {
@@ -678,71 +1041,215 @@ export struct AgentListPage {
           .accessibilityText(binding.presentation.familySummary + ' ' + tr(binding.presentation.familyExpanded ? 'agent_collapse' : 'agent_expand'))
           .onClick(() => this.toggleFamilyRow(binding.bound.value)).id('agents.family.' + binding.bound.value.key())
       }
+        if (!this.endsSurface(binding,groupId) && !this.rail) Divider().strokeWidth(0.5).color(Colors.divider).margin({ left: 57 })
       }.width('100%')
-    }
-      .selectable(true).selected(this.isRowSelected(binding))
-      .backgroundColor(this.isRowSelected(binding) ? Colors.selection : Colors.canvas)
+    }.accessibilityGroup(true).accessibilityText(this.rowSpoken(binding))
+      .selectable(true).selected(this.isRowSelected(binding)).padding({left:18*Math.min(3,Math.max(0,depth))})
+      .backgroundColor(this.isRowSelected(binding) ? Colors.selection : Colors.surface)
+      .borderRadius({ topLeft: this.startsSurface(binding,groupId) && !this.rail ? 13 : 0, topRight: this.startsSurface(binding,groupId) && !this.rail ? 13 : 0,
+        bottomLeft: this.endsSurface(binding,groupId) && !this.rail ? 13 : 0, bottomRight: this.endsSurface(binding,groupId) && !this.rail ? 13 : 0 })
+      .onClick(() => this.openRow(binding.bound.value))
       .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => this.reportVisible(binding.bound.value, groupId === NEEDS_GROUP ? NEEDS_GROUP : 'list', visible ? ratio : 0))
       .onDisAppear(() => this.reportVisible(binding.bound.value, groupId === NEEDS_GROUP ? NEEDS_GROUP : 'list', 0))
       .bindContextMenu(this.rowMenu(binding), ResponseType.LongPress)
       .id('agent.' + (groupId === NEEDS_GROUP ? 'needs.' : '') + binding.bound.value.group + '.' + binding.bound.value.manager + '.' + binding.bound.value.machine + '.' + binding.bound.value.id)
   }
 
-  @Builder searchControl() {
-    Search({ value: this.workspace.search, placeholder: tr('search_sessions') })
-      .height(Math.max(Tokens.touch, Tokens.lineHeight * this.environment.fontScale + Tokens.page))
-      .textFont({ size: Tokens.body }).placeholderFont({ size: Tokens.body }).caretStyle({ color: Colors.action })
-      .onChange((value: string) => this.workspace.setSearch(value)).id('agents.search')
-  }
-  @Builder filterControl() {
-    Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.filter).fontSize(Tokens.symbolFont).fontColor([Colors.link]) }.attributeModifier(ButtonStyles.chrome).accessibilityText(tr('agent_filter_button'))
-      .onClick(() => this.filterSheetOpen = true).id('agents.filter')
-  }
-  private quickFilterUsesSelect(): boolean {
-    if (this.environment.fontScale >= 1.5 || this.filterWidth <= 0) return true;
-    const context = this.getUIContext();
-    let labelWidth = 0;
-    const filters = this.quickFilters();
-    filters.forEach((key: string) => {
-      labelWidth = Math.max(labelWidth, context.px2vp(context.getMeasureUtils().measureText({
-        textContent: this.quickLabel(key), fontSize: String(Tokens.meta) + 'fp', fontWeight: FontWeight.Medium
-      })));
-    });
-    const slotWidth = Math.max(Tokens.touch, labelWidth + Tokens.inset * 2);
-    return this.filterWidth - Tokens.page * 2 - Tokens.fine * 2 < slotWidth * filters.length;
+  @Builder rowContext(place: string, status: string, color: ResourceColor) {
+    if ((place || status) && this.narrowRow()) {
+      Column({ space: 3 }) {
+        if (status) Text(status).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(FontWeight.Medium).fontColor(color)
+        if (place) Text(place).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary).maxLines(3).textOverflow({overflow:TextOverflow.Ellipsis})
+      }.width('100%').alignItems(HorizontalAlign.Start)
+    } else if (place || status) {
+      Row({ space: 5 }) {
+        if (status) Text(status).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(FontWeight.Medium).fontColor(color).maxLines(1)
+        if (place) Text(place).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary).layoutWeight(1).maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }.width('100%')
+    }
   }
 
+  private rowPlace(presentation: AgentRowPresentation): string {
+    const parts: string[] = [];
+    if (presentation.provider) parts.push(presentation.brand === 'claude' ? 'Claude' : presentation.brand === 'codex' ? 'Codex' : presentation.provider);
+    if (this.mixedMachines && this.workspace.groupingMode !== 'machine' && presentation.metadata[1]) parts.push(presentation.metadata[1]);
+    const folder = presentation.spaceName || (presentation.worktree || presentation.cwd || presentation.repositoryRoot).split(/[\\/]/).filter((part: string) => !!part).pop();
+    if (folder && !parts.includes(folder)) parts.push(folder);
+    return parts.join(' · ');
+  }
+
+  private searchVisible(): boolean { return !this.compactRoot || this.searchOpen || !!this.workspace.search; }
+  private resetSearchReveal(): void {
+    clearTimeout(this.focusTimer); this.searchOpen = false; this.setSearchEditing(false); this.focusSearch = false; this.pullY = -1; this.revealedDuringPull = false;
+  }
+  private trackPull(event: TouchEvent): void {
+    if (event.type === TouchType.Down) this.revealedDuringPull = false;
+    if (this.externalSearchControls || !this.compactRoot || !this.active || this.searchEditing || this.workspace.search) return;
+    if (event.type === TouchType.Down) {
+      let top = false;
+      try { top = this.agentScroller.currentOffset().yOffset <= 1; } catch (_) { }
+      if ((top || this.searchOpen) && event.touches.length === 1) {
+        this.pullX = event.touches[0].windowX; this.pullY = event.touches[0].windowY;
+      } else this.pullY = -1;
+    } else if (event.type === TouchType.Move && event.touches.length === 1 && this.pullY >= 0) {
+      const dy = event.touches[0].windowY - this.pullY, dx = Math.abs(event.touches[0].windowX - this.pullX);
+      if (Math.abs(dy) >= 48 && Math.abs(dy) > 1.5 * dx) {
+        if (dy > 0 && !this.searchOpen) { this.revealedDuringPull = true; this.searchOpen = true; }
+        else if (dy < 0 && this.searchOpen) this.searchOpen = false;
+        this.pullY = -1;
+      }
+    } else this.pullY = -1;
+  }
+  private refreshAgents(): void {
+    if (this.revealedDuringPull) { this.revealedDuringPull = false; this.refreshing = false; return; }
+    this.reloadDecisions(); this.workspace.setReadingDetail(false);
+    const refreshes:Promise<void>[] = [this.workspace.refresh(this.model)];
+    if (this.workspace.groupingMode === 'repo') refreshes.push(this.projectCatalog.refresh(this.model));
+    this.refreshGroupingSupport();
+    Promise.all(refreshes).catch(() => {}).finally(() => {
+      if (this.active && this.workspace.isBoundTo(this.model)) this.workspace.setReadingDetail(this.readingDetail);
+      this.refreshing = false;
+    });
+  }
+  @Computed get shownQuickFilters(): string[] {
+    const counts = this.workspace.filterCounts;
+    const known = this.workspace.quickCountsKnown();
+    return QUICK_FILTERS.filter((key: string) => !known || key === 'all' || key === this.workspace.quickFilter || Wire.number(counts,key)>0);
+  }
+  private quickHeight(): number { return PhoneStyle.formSize(44,57.7,this.environment.fontScale); }
+  private setSearchEditing(editing:boolean): void {
+    if (editing === this.searchEditing) return;
+    this.searchEditing = editing; this.onSearchMode(editing);
+  }
+  private activateSearch(): void {
+    this.focusSearch = true; this.searchOpen = true;
+    this.focusMountedSearch();
+  }
+  private focusMountedSearch(attempt:number=0): void {
+    clearTimeout(this.focusTimer);
+    if (!this.active || !this.searchOpen || !this.focusSearch) return;
+    // ArkUI's native menu can still own focus while the new search field enters the page.
+    this.focusTimer = setTimeout(() => {
+      if (!this.active || !this.searchOpen || !this.focusSearch) return;
+      const ui=this.getUIContext(), field=ui.getFrameNodeById('agents.search');
+      if (field && field.getMeasuredSize().width > 0) {
+        try { ui.getFocusController().requestFocus('agents.search'); } catch (_) { /* The outgoing menu may cover this frame. */ }
+      }
+      if (this.focusSearch && attempt < 8) this.focusMountedSearch(attempt + 1);
+      else this.focusSearch = false;
+    },45);
+  }
+  private headerTopInset(): number {
+    if (!this.compactRoot || this.pageOriginY < 0 || !this.environment.isFullScreen) return 6;
+    const ui=this.getUIContext();
+    const height=ui.px2vp(this.environment.windowHeightPx), width=ui.px2vp(this.environment.windowWidthPx);
+    if (height < 600 || width >= height) return 6;
+    const top=Math.max(Tokens.compactStatusInset,ui.px2vp(this.environment.safeTopPx));
+    // The phone shell leaves 34 points of room under its 44-point navigation bar.
+    // A folded search band is 54 points shorter than its revealed field and filters.
+    const firstRow=this.searchEditing ? top : top+44+34+(this.searchVisible() ? 10 : 20);
+    return Math.max(0,firstRow-this.pageOriginY);
+  }
+
+  @Builder searchControl() {
+    Search({value:this.workspace.search,placeholder:tr('agents_search_prompt'),controller:this.searchField})
+      .maxFontScale(Tokens.interfaceFontMaxScale).height(44).margin(0)
+      .cancelButton({style:this.workspace.search ? CancelButtonStyle.INPUT : CancelButtonStyle.INVISIBLE})
+      .textFont({size:Tokens.interfaceFontVp(17,this.environment.fontScale)}).placeholderFont({size:Tokens.interfaceFontVp(17,this.environment.fontScale)}).caretStyle({color:Colors.action})
+      .onFocus(() => { if (this.compactRoot) { this.focusSearch = false; this.searchOpen = true; this.setSearchEditing(true); } })
+      .onBlur(() => { if (!this.workspace.search) this.setSearchEditing(false); })
+      .onChange((value: string) => { if (this.compactRoot) this.searchOpen = true; this.workspace.setSearch(value); })
+      .onAppear(() => this.focusMountedSearch()).id('agents.search')
+  }
+  @Builder displayChoices() {
+    Menu(){
+      ForEach(['avatar','compact','cards','list'],(style:string)=>{
+        MenuItem({content:tr('phone_agent_display_'+style)}).selected(this.look.agentDisplay===style).selectIcon(true)
+          .onClick(()=>{this.look.setAgentDisplay(style);}).id('agents.display.'+style)
+      },(style:string)=>style)
+    }
+  }
+  @Builder groupingMenu() {
+    Menu() {
+      ForEach(this.availableGroupings,(key:string,index:number) => {
+        MenuItem({content:tr(agentGroupingLabels[key])}).selected(key===this.workspace.groupingMode).selectIcon(true)
+          .onClick(() => this.selectGrouping(index)).id('agents.grouping.'+key)
+      },(key:string)=>key)
+      MenuItem({content:tr('phone_agent_display_title'),builder:()=>{this.displayChoices();}}).id('agents.display')
+      MenuItem({content:tr('search_sessions')}).onClick(()=>this.activateSearch()).id('agents.search_reveal')
+      MenuItem({content:tr('agent_filters_title')}).onClick(()=>this.filterSheetOpen=true).id('agents.grouping.filters')
+    }
+  }
+  @Builder filterControl() {
+    if (this.compactRoot) {
+      Button({type:ButtonType.Circle}) {
+        PhoneGroupingGlyph({controlHeight:this.quickHeight()})
+      }
+        .width(this.quickHeight()).height(this.quickHeight()).padding(0).backgroundColor(Color.Transparent)
+        .accessibilityText(tr('agent_grouping_current').replace('{group}',tr(agentGroupingLabels[this.workspace.groupingMode])))
+        .accessibilityCustomActions([{name:tr('search_sessions'),onAction:()=>this.activateSearch()}])
+        .bindMenu(this.groupingMenu).id('agents.grouping.quick')
+    } else {
+      Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.filter).fontSize(Tokens.symbolFont).fontColor([Colors.link]) }.attributeModifier(ButtonStyles.chrome).accessibilityText(tr('agent_filter_button'))
+        .onClick(() => this.filterSheetOpen = true).id('agents.filter')
+    }
+  }
   @Builder filters() {
-    if (!this.rail) Column({ space: Tokens.gap }) {
-      if (this.environment.fontScale >= 1.5) {
-        this.searchControl()
-        this.filterControl()
-      } else {
-        Row({ space: Tokens.gap }) {
-          Row() { this.searchControl() }.layoutWeight(1)
-          this.filterControl()
+    if (!this.rail) Column({ space: this.compactRoot && this.searchVisible() ? 20 : 6 }) {
+      if (this.searchVisible()) {
+        if (this.compactRoot) Row({space: 11}) {
+          Column() { this.searchControl() }.layoutWeight(1)
+          if (this.searchEditing) {
+            Button({type:ButtonType.Circle}) { SymbolGlyph($r('sys.symbol.xmark')).fontSize('16vp').fontColor([Colors.ink]) }
+              .width(44).height(44).padding(0).backgroundColor(Colors.control).accessibilityText(tr('cancel'))
+              .onClick(() => { this.searchField.stopEditing(); this.workspace.setSearch(''); this.resetSearchReveal(); }).id('agents.search_cancel')
+          }
         }.width('100%')
+        else this.searchControl()
       }
-      if (this.quickFilterUsesSelect()) {
-        Select(this.quickFilters().map((key: string) => ({ value: this.quickLabel(key) } as SelectOption)))
-          .selected(this.quickIndex()).value(this.quickLabel(this.quickFilters()[this.quickIndex()])).attributeModifier(SelectStyles.inline).width('100%').constraintSize({ minHeight: Tokens.touch })
-          .onSelect((index: number) => this.chooseQuick(index)).id('agents.quick')
-      } else {
-        // The filters list only states that have sessions, so the set can change while the chosen filter keeps its key
-        // at a new position. CapsuleSegmentButtonV2 then reads a backplate position it has not laid out yet and throws
-        // (getBackplatePosition): build a new one whenever the set of segments changes rather than updating it in place.
-        ForEach([this.quickFilters().join('|')], (_set: string) => {
-        CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items(this.quickFilters().map((key: string) => ({ text: this.quickLabel(key) } as SegmentButtonV2ItemOptions))),
-          selectedIndex: this.quickIndex(), $selectedIndex: (index: number) => this.chooseQuick(index),
-          itemSelectedBackgroundColor: ColorMetrics.resourceColor(Colors.action), itemSelectedFontColor: ColorMetrics.resourceColor(Colors.onAction),
-          itemFontColor: ColorMetrics.resourceColor(Colors.secondary), buttonBackgroundColor: ColorMetrics.resourceColor(Colors.control),
-          itemFontSize: LengthMetrics.fp(Tokens.meta), itemSelectedFontSize: LengthMetrics.fp(Tokens.meta),
-          itemMinHeight: LengthMetrics.vp(Tokens.touch), buttonMinHeight: LengthMetrics.vp(Tokens.touch), itemPadding: { start: LengthMetrics.vp(Tokens.inset), end: LengthMetrics.vp(Tokens.inset) },
-          buttonPadding: LengthMetrics.vp(Tokens.fine) }).width('100%')
-        }, (set: string) => set)
+      Row({ space: this.compactRoot ? 0 : 6 }) {
+        Scroll() {
+          Row({ space: 4 }) {
+            ForEach(this.shownQuickFilters, (key: string) => {
+              Button({ type: ButtonType.Capsule }) {
+                Row({space:4}) {
+                  if (key !== 'all' && key !== 'feishu' && key !== 'terminal') Circle().width(5).height(5)
+                    .fill(key === 'needsYou' ? Colors.needs : key === 'unread' ? Colors.unread : key === 'working' ? Colors.working : Colors.secondary)
+                  Text(tr(QUICK_LABELS[key])).fontSize(Tokens.interfaceFontVp(15,this.environment.fontScale))
+                    .fontWeight(this.workspace.quickFilter === key ? FontWeight.Bold : FontWeight.Normal)
+                    .fontColor(this.workspace.quickFilter === key ? Colors.link : Colors.ink).maxLines(1)
+                  if (key !== 'all' && this.workspace.filterCounts[key] !== undefined) Text(String(Wire.number(this.workspace.filterCounts,key)))
+                    .fontSize(Tokens.interfaceFontVp(15,this.environment.fontScale)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+                }.padding({left:8,right:8,top:4,bottom:4}).borderRadius(40)
+                  .backgroundColor(this.compactRoot && this.workspace.quickFilter === key ? Colors.selection : Color.Transparent)
+              }
+                .height(this.quickHeight()).constraintSize({minWidth:this.quickHeight()}).padding(0)
+                .backgroundColor(this.compactRoot ? Color.Transparent : this.workspace.quickFilter === key ? Colors.selection : Colors.control)
+                .accessibilityText(tr(QUICK_LABELS[key]))
+                .accessibilityDescription(key !== 'all' && this.workspace.filterCounts[key] !== undefined ? String(Wire.number(this.workspace.filterCounts,key)) : '')
+                .accessibilitySelected(this.workspace.quickFilter === key)
+                .responseRegion({x:0,y:0,width:'100%',height:this.quickHeight()})
+                .onClick(() => { this.chooseQuick(key); }).id('agents.quick.' + key)
+            }, (key: string) => key)
+          }.padding({left:4,right:4})
+        }.layoutWeight(1).height(this.quickHeight()).align(Alignment.Start).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+          .id('agents.quick')
+        if (this.compactRoot) Divider().vertical(true).strokeWidth(0.5).height(22*this.quickHeight()/44).color(Colors.divider)
+        this.filterControl()
+      }.width('100%').height(this.quickHeight()).borderRadius(this.compactRoot ? 44 : 0).clip(this.compactRoot)
+        .backgroundColor(this.compactRoot ? Colors.grouped : Color.Transparent)
+        .outlineWidth(this.compactRoot ? 0.5 : 0).outlineColor(Colors.divider).outlineRadius(44)
+      if (this.workspace.machineFilter) {
+        Button({ type: ButtonType.Capsule }) {
+          Row({ space: 5 }) {
+            SymbolGlyph($r('sys.symbol.xmark')).fontSize('11vp').fontColor([Colors.link])
+            Text(this.machineLabel()).fontSize(13).maxFontScale(Tokens.navigationTextMaxScale).fontColor(Colors.link).flexShrink(1).maxLines(2)
+          }
+        }.constraintSize({minHeight:44,maxWidth:'100%'}).padding({ left: 10, right: 10, top:3, bottom:3 }).backgroundColor(Colors.surface)
+          .accessibilityText(this.machineLabel() + ' · ' + tr('clear')).onClick(() => this.selectMachine(0)).id('agents.machine.clear')
       }
-    }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap }).width('100%')
-      .onAreaChange((_old: Area, area: Area) => { const width = Number(area.width); if (Number.isFinite(width) && width > 0) this.filterWidth = width; })
+    }.alignItems(HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: this.headerTopInset(), bottom: 4 }).width('100%')
   }
 
   @Builder renameForm() {
@@ -755,22 +1262,13 @@ export struct AgentListPage {
         Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('save')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('save', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('save')).bindTips(tr('save')).enabled(!this.workspace.busy)
           .onClick(() => this.saveRename()).id('agents.rename_save')
       }.width('100%').justifyContent(FlexAlign.End)
-      if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta)
+      if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
         .fontColor($r('app.color.persona_danger')).width('100%')
     }.padding(Tokens.page).width('100%')
   }
 
-  build() {
-    Column() {
-      this.filters()
-      if (this.model.directoryUnavailable > 0) Text(tr('directory_partly_unavailable')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).padding(Tokens.inset).width('100%')
-      if (this.workspace.error && !this.editorOpen) Text(tr(this.workspace.error)).fontSize(Tokens.meta)
-        .fontColor($r('app.color.persona_danger')).padding(Tokens.inset).width('100%')
-      Refresh({ refreshing: $$this.refreshing }) {
-      List() {
-        if (!this.workspace.hasRows() && (this.workspace.loading || this.workspace.awaitingSource() && !this.workspace.sourceProblem())) ListItem() {
-          LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page)
-        }.id('agents.loading')
+  @Builder resultList() {
+      List({scroller:this.agentScroller}) {
         if (this.markAllCount() > 0) ListItem() {
           Button() {
             Row({ space: Tokens.gap }) {
@@ -782,37 +1280,68 @@ export struct AgentListPage {
             .enabled(!this.workspace.busy).onClick(() => this.markAllSeen())
             .accessibilityText(tr('agent_mark_all_seen') + ' · ' + this.markAllLabel(this.markAllCount())).id('agents.mark_all_seen')
         }
+        if (!this.workspace.hasRows() && !this.workspace.loading && this.workspace.sourceProblem()) {
+          ListItem() { Text(tr(this.workspace.sourceProblem())).fontSize(Tokens.meta).fontColor(Colors.secondary).padding(Tokens.page) }.id('agents.unavailable')
+        } else if ((this.workspace.loading || this.workspace.awaitingSource()) && !this.workspace.hasRows()) ListItem() { LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page) }
         ForEach(this.groupBindings, (binding: BoundAgentGroup) => {
             ListItemGroup({ header: () => this.groupHeader(binding) }) {
-              Repeat<BoundAgentRow>(binding.rows).each((entry: RepeatItem<BoundAgentRow>) => this.agentRow(entry.item, binding.value.id))
-                .key((rowBinding: BoundAgentRow) => rowBinding.key)
-                .virtualScroll({ totalCount: binding.rows.length, reusable: false })
+              ForEach(this.displayRows(binding), (rowBinding: BoundAgentRow) => this.groupRow(rowBinding, binding.value.id,
+                binding.value.presentation !== 'app-project' || binding.value.lastProject), (rowBinding: BoundAgentRow) =>
+                rowBinding.key)
             }.id('agents.group.' + binding.value.id)
-            if (!binding.value.folded && !this.workspace.search && this.workspace.quickFilter === 'all' && (binding.value.id === 'state/idle' || binding.value.totalRowCount > binding.value.rows.length || this.workspace.idleRowsExpanded(binding.value.id))) ListItem() {
+            if (binding.value.presentation !== 'app-parent' && !binding.value.folded &&
+                (binding.value.capped || binding.value.totalRowCount > binding.value.rows.length)) ListItem() {
               Button() {
                 Row({ space: Tokens.gap }) {
-                  Text(binding.value.id === 'state/idle' || this.workspace.idleRowsExpanded(binding.value.id) ? tr('agent_collapse') : String(binding.value.totalRowCount - binding.value.rows.length) + ' ' + tr('agent_group_more_idle')).fontSize(Tokens.meta).fontColor(Colors.link).layoutWeight(1)
-                  SymbolGlyph(binding.value.id === 'state/idle' || this.workspace.idleRowsExpanded(binding.value.id) ? Symbols.up : Symbols.down).fontSize(Tokens.symbolFont).fontColor([Colors.link])
+                  Text(binding.value.capped ? (binding.value.rows.length === binding.value.totalRowCount ? tr('agent_collapse') :
+                    tr('agent_show_all_count').replace('{count}',String(binding.value.totalRowCount))) :
+                    String(binding.value.totalRowCount-binding.value.rows.length)+' '+tr('agent_group_more_idle'))
+                    .fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor(Colors.link).layoutWeight(1)
+                  SymbolGlyph(Symbols.down).fontSize(Tokens.symbolFont).fontColor([Colors.link])
                 }.width('100%').padding(Tokens.page).constraintSize({ minHeight: Tokens.touch })
               }.type(ButtonType.Normal).buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).width('100%')
                 .onClick(() => this.toggleIdle(binding.value.id)).id('agents.idle.expand.' + binding.value.id)
             }
           }, (binding: BoundAgentGroup) => binding.key)
-        if (!this.workspace.hasRows() && !this.workspace.loading && !this.workspace.awaitingSource()) ListItem() {
-          Text(tr(this.workspace.search ? 'no_results' : 'empty')).fontSize(Tokens.meta).padding(Tokens.page).width('100%')
+        if (this.workspace.groupingMode === 'repo') {
+          AgentRepositoryRows({model:this.model,workspace:this.workspace,catalog:this.projectCatalog,rows:this.workspace.unpinnedRows,
+            rowActions:(row:ResourceRow,spaceName:string)=>{this.sessionMenu(row,spaceName);},
+            onOpen:(row:ResourceRow)=>this.openRow(row),onRoute:(kind:string,key:string)=>this.onRepositoryOpen(kind,key),
+            onChanged:(tree:ProjectWorktree,change:WorktreeChange)=>this.onRepositoryChanged(tree,change)})
+        } else if (this.workspace.groupingMode === 'todo' || this.workspace.groupingMode === 'direction') {
+          Repeat<AgentTaskSection>(this.taskSections).each((entry:RepeatItem<AgentTaskSection>) => {
+            AgentTaskGroupRows({section:entry.item,workspace:this.workspace,phone:this.compactRoot && !this.rail,onOpen:(row:ResourceRow)=>this.openRow(row),
+              onOpenTodo:(row:ResourceRow)=>this.onOpenTodo(row),
+              rowContent:(row:ResourceRow,depth:number):void=>this.taskRow(row,depth)})
+          }).key((section:AgentTaskSection)=>section.key)
+        } else if (!this.workspace.hasRows() && !this.workspace.loading && !this.workspace.awaitingSource()) ListItem() {
+          Text(tr(this.workspace.search ? 'no_results' : 'empty')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).padding(Tokens.page).width('100%')
         }.id('agents.empty')
-        if (!this.workspace.hasRows() && !this.workspace.loading && this.workspace.sourceProblem()) ListItem() {
-          Text(tr(this.workspace.sourceProblem())).fontSize(Tokens.meta).fontColor(Colors.secondary).padding(Tokens.page).width('100%')
-        }.id('agents.unavailable')
-      }.width('100%').height('100%').padding({ bottom: Tokens.listTail })
-        .divider({ strokeWidth: Tokens.hairline, startMargin: Tokens.page + Tokens.avatar + Tokens.gap,
-          endMargin: Tokens.page, color: Colors.divider })
-      }.width('100%').layoutWeight(1).onRefreshing(() => { this.workspace.setReadingDetail(false); this.workspace.refresh(this.model).finally(() => { this.workspace.setReadingDetail(this.readingDetail); this.refreshing = false; }); })
+      }.width('100%').height('100%').onAreaChange((_:Area,area:Area)=>{this.listWidth=Number(area.width);}).padding({ left: this.rail || this.floatingStatusCards ? 0 : 12, right: this.rail || this.floatingStatusCards ? 0 : 12, bottom: Tokens.listTail }).backgroundColor(Colors.grouped)
+        .onTouch((event: TouchEvent) => this.trackPull(event)).id('agents.list.'+this.workspace.groupingMode)
+  }
+
+  build() {
+    Column() {
+      if (!this.externalSearchControls) this.filters()
+      if (this.model.directoryUnavailable > 0) Text(tr('directory_partly_unavailable')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary')).padding(Tokens.inset).width('100%')
+      if (this.decisions.error) Text(tr(this.decisions.error)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor(Colors.danger).padding(Tokens.inset).width('100%')
+      if (this.workspace.error && !this.editorOpen) Text(tr(this.workspace.error)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
+        .fontColor($r('app.color.persona_danger')).padding(Tokens.inset).width('100%')
+      if (this.externalSearchControls) {
+        this.resultList()
+      } else Refresh({ refreshing: $$this.refreshing }) {
+        this.resultList()
+      }.width('100%').layoutWeight(1).onRefreshing(() => this.refreshAgents())
       .bindSheet($$this.filterSheetOpen, this.filterSheet(), {
         title: { title: tr('agent_filters_title') }, height: SheetSize.FIT_CONTENT, showClose: true,
         onAppear: () => { this.filterReady = true; this.measureFilters(); }, onDisappear: () => this.filterReady = false
       })
-    }.width('100%').height('100%').backgroundColor(Colors.canvas)
+    }.width('100%').height('100%').backgroundColor(Colors.grouped)
+      .onAreaChange((_previous:Area,area:Area) => {
+        const y=Number(area.globalPosition.y);
+        if (this.compactRoot && Math.abs(y-this.pageOriginY)>0.2) this.pageOriginY=y;
+      })
       .bindSheet($$this.editorOpen, this.renameForm(), { title: { title: tr('rename') }, height: SheetSize.MEDIUM, showClose: true })
   }
 }

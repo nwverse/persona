@@ -1,24 +1,26 @@
-import { pasteboard } from '@kit.BasicServicesKit';
-import { AddComputerFields } from './AddComputerFields';
-import { MachineDirectoryView, MachineFactsCard, MachineLoadingCard, MachineRefresh } from './MachineDirectoryView';
-import { MachineCard, MachineReadings, machineCards } from '../models/MachineDirectory';
+import { DeviceMark } from '../design/DeviceMark';
+import type { MachinePlatform } from '../models/DeviceIdentity';
+import { machinePlatform } from '../models/DeviceIdentity';
+import { bindingPermission } from '../core/PhoneSettingsPermissions';
+import { PhoneSectionTitle } from '../design/PhoneStyle';
 import { Symbols } from '../design/Symbols';
 import { IconActions } from '../design/IconActions';
-import { ButtonStyles, ScrollStyles, SelectStyles } from '../design/Controls';
+import { ButtonStyles } from '../design/Controls';
+import { SelectStyles } from '../design/Controls';
 import { ComposeListItemV2, ContentItemV2, LengthMetrics } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
 import { ManagementModel, ManagementRow, ManagementInput } from '../models/ManagementModel';
 import { ResourceRow, Wire } from '../models/Wire';
-import { NavigationContext } from '../models/NavigationContext';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
-import { tr } from '../design/Strings';
+import { tr, trError } from '../design/Strings';
 import { nativeNotifications, NativeNotifications } from '../platform/NativeNotifications';
 import { listScheduleTemplates } from '../core/ScheduleTemplates';
 import type { ScheduleTemplate } from '../core/ScheduleTemplates';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
 import { AgentWorkspace } from '../models/AgentWorkspace';
 import { Colors } from '../design/Colors';
+import { PhoneAppearanceSettings } from './PhoneAppearanceSettings';
 import { DeviceLookPicker } from './DeviceLookPicker';
 import { LicenseNotices } from './LicenseNotices';
 import { common } from '@kit.AbilityKit';
@@ -27,20 +29,21 @@ import { common } from '@kit.AbilityKit';
 export struct SettingsPage {
   @Require @Param model: ClientModel;
   @Param page: string = '';
-  @Param machineRoute: string = '';
   @Param active: boolean = true;
   @Param agentWorkspace: AgentWorkspace = new AgentWorkspace();
   @Local machineOwner: ClientModel | undefined;
+  @Param agentLayoutOnly: boolean = false;
+  @Param phoneAppearanceRoute: string = '';
+  @Param initialMachine: ResourceRow | undefined = undefined;
   @Local machineDirectoryKey: string = '';
   @Local namingMachine: string = '';
   @Local nameDraft: string = '';
-  private namingOwner?: ClientModel;
+  private namingOwner: ClientModel | undefined;
   private namingGeneration: number = -1;
-  @Local machineReadings: MachineReadings = new MachineReadings();
+  private loadedMachineRoute: string = '';
+  private machineChoice: ResourceRow | undefined = undefined;
   private machineRevision: number = 0;
-  private machineBinding: string = '';
-  @Local pairingOwnerScope: string = '';
-  @Local pairingOwnerEpoch: number = -1;
+  private pairingOwnerScope: string = '';
   private mounted: boolean = false;
   @Local appearanceRevision: number = 0;
   @Event onOpen: (page: string) => void = () => {};
@@ -69,12 +72,13 @@ export struct SettingsPage {
   private catalogBindingScope: string = '';
   @Local notifications: NativeNotifications = nativeNotifications;
   @Local addComputerOpen: boolean = false;
-  @Local showComputerReceipt: boolean = false;
   @Local computerName: string = '';
   @Local computerOs: string = 'mac';
   @Local purposeIndex: number = 0;
+  @Local modelScopeExpanded:boolean=false;
   @Local permissionMode: string = '';
   @Local effortMode: string = '';
+  @Local sessionModel: string = '';
   @Local scheduleEditOpen: boolean = false;
   @Local extensionPreviewOpen: boolean = false;
   @Local licenseNoticesOpen: boolean = false;
@@ -132,14 +136,15 @@ export struct SettingsPage {
     if (!current()) return;
     await this.look.bind(owner);
   }
-  private basePage(): string { return this.page === 'extension_detail' || this.page === 'extension_catalog' ? 'extensions' : this.page === 'connector_detail' ? 'connectors' : this.page === 'channel_detail' ? 'channels' : this.page; }
+  private basePage(): string { return this.page==='models' ? 'models_catalog' : this.page === 'extension_detail' || this.page === 'extension_catalog' ? 'extensions' : this.page === 'connector_detail' ? 'connectors' : this.page === 'channel_detail' ? 'channels' : this.page; }
   private async loadSettingsPage(): Promise<void> {
     if (!this.mounted || !this.active) return;
-    if (this.page === 'machines' || this.page === 'machine_detail') { await this.loadMachineDirectory(); return; }
+    if (this.page === 'machines') { await this.loadMachineDirectory(); return; }
     const page = this.page, owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope(), revision = ++this.machineRevision, target = owner.selected;
+    const sessionTarget = owner.target(target);
     const current = (): boolean => this.mounted && this.active && this.page === page && this.model === owner && revision === this.machineRevision && owner.owns(generation, scope);
     this.management.setAdmission(current);
-    await this.management.load(this.basePage(), owner); if (!current()) return;
+    await this.management.load(this.basePage(), owner, page==='model_purpose' ? target.id : ''); if (!current()) return;
     const row = new ManagementRow(target.id, target.title, target.detail, target.data());
     if (page === 'extension_detail') await this.management.openExtension(owner, row);
     else if (page === 'connector_detail') this.management.openConnector(row);
@@ -147,7 +152,9 @@ export struct SettingsPage {
     else if (page === 'extension_catalog') await this.management.loadExtensionCatalog(owner);
     if (!current()) return;
     this.purposeIndex = Math.max(0, this.management.catalogPurposes.findIndex((item: Record<string, Object>) => Wire.text(item, 'id') === this.management.selectedId));
+    if (['session_permissions', 'session_effort', 'session_model'].includes(page) && owner.target() !== sessionTarget) return;
     this.permissionMode = Wire.text(owner.selected.data(), 'permission_mode'); this.effortMode = Wire.text(owner.selected.data(), 'effort');
+    this.sessionModel = Wire.text(owner.selected.data(), 'model');
   }
   private openDetail(page: string, item?: ManagementRow): void {
     if (!this.mounted || !this.active) return;
@@ -155,25 +162,12 @@ export struct SettingsPage {
     row.group = this.model.profile.id; row.manager = this.model.profile.manager; row.detail = item?.detail || ''; row.raw = JSON.stringify(item?.raw || Wire.payload([], [])); this.onDetail(page, row);
   }
 
-  aboutToDisappear(): void { this.machineReadings.stop(); this.mounted = false; this.appearanceRevision++; this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); }
+  aboutToDisappear(): void { this.mounted = false; this.appearanceRevision++; this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); }
   @Monitor('management.extensionDetailMissing') extensionRemoved(): void { if (this.mounted && this.active && this.page === 'extension_detail' && this.management.extensionDetailMissing) this.onBack(); }
-  @Monitor('active') machineVisibilityChanged(): void {
-    this.appearanceRevision++;
-    if (!this.active) {
-      this.machineReadings.pause(); this.machineRevision++;
-      if (this.page === 'appearance') this.look.bind(undefined);
-    } else if (this.mounted) {
-      if (this.page === 'machine_detail') this.loadMachineDirectory(true);
-      else this.loadSettingsPage();
-      this.loadLook();
-    }
-  }
-  @Monitor('machineRoute') machineRouteChanged(): void {
-    if (this.mounted && this.active && this.page === 'machine_detail') this.loadMachineDirectory();
-  }
-  @Monitor('model.connected') settingsConnectionChanged(): void { if (!this.model.connected) this.machineReadings.stop(); if (this.mounted && this.active) { if (this.model.connected) this.loadSettingsPage(); this.loadLook(); } }
+  @Monitor('active') machineVisibilityChanged(): void { this.appearanceRevision++; if (!this.active) { this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); } else if (this.mounted) { this.loadSettingsPage(); this.loadLook(); } }
+  @Monitor('model.connected') settingsConnectionChanged(): void { if (this.mounted && this.active) { if (this.model.connected) this.loadSettingsPage(); this.loadLook(); } }
   @Monitor('model.profile', 'model.forgottenEpoch', 'model.connected') scheduleOwnerChanged(): void { this.appearanceRevision++; this.syncCatalogRows(); this.syncManagementRows(); this.management.scheduleReceiptChat(this.model); this.loadLook(); }
-  @Monitor('page') settingsPageChanged(): void { this.appearanceRevision++; }
+  @Monitor('page') settingsPageChanged(): void { this.appearanceRevision++; if (this.mounted && this.active && ['session_model', 'session_effort', 'session_permissions'].includes(this.page)) this.loadSettingsPage(); }
   @Monitor('management.catalogRows') catalogRowsChanged(): void { this.syncCatalogRows(); }
 
   @Monitor('management.rows', 'management.scheduleRuns', 'management.channelDetail', 'management.selectedId', 'page', 'model.profile', 'machineOwner')
@@ -219,83 +213,55 @@ export struct SettingsPage {
       this.catalogBindingScope, scope);
     this.catalogBindingOwner = this.model; this.catalogBindingScope = scope;
   }
+  @Monitor('initialMachine') routedMachineChanged():void {
+    if (this.mounted && this.active && this.page==='machines' && (this.initialMachine?.key() || '')!==this.loadedMachineRoute)
+      this.loadMachineDirectory();
+  }
+
+  private sameRoutedMachine(candidate:ResourceRow,target:ResourceRow):boolean {
+    const owner=this.model.profile;
+    const group=candidate.group || owner.id, targetGroup=target.group || owner.id;
+    const manager=candidate.manager || (group===owner.id ? owner.manager : '');
+    const targetManager=target.manager || (targetGroup===owner.id ? owner.manager : '');
+    return candidate.id===target.id && group===targetGroup && manager===targetManager;
+  }
+
+  private clearMachineChoice():void {
+    this.machineChoice=undefined; this.machineOwner=undefined; this.machineDirectoryKey='';
+    this.management.rows=[]; this.management.selectedId=''; this.management.pairing={}; this.management.error='';
+    this.management.setAdmission(():boolean => false);
+    this.pairingOwnerScope=''; this.computerName=''; this.computerOs='mac'; this.addComputerOpen=false;
+  }
+
   private machineOptions(): ResourceRow[] { return this.model.directoryReady ? this.model.directoryMachines : this.model.machines; }
-  private machineSessions(): ResourceRow[] {
-    return this.model.directoryReady ? this.model.directorySessions : this.model.sessions;
-  }
-  @Computed get overviewCards(): MachineCard[] {
-    return machineCards(this.machineOptions(), this.machineSessions(), this.model.profile.id, this.model.profile.manager);
-  }
-  @Computed get detailTarget(): ResourceRow { return NavigationContext.from('settings', this.machineRoute).row; }
-  @Computed get detailOwner(): ClientModel | undefined {
-    const row = this.detailTarget, group = row.group || this.model.profile.id;
-    const profile = group === this.model.profile.id ? this.model.profile : this.model.profiles.find(p => p.id === group);
-    if (!profile || !row.id || row.kind !== 'machine') return undefined;
-    const manager = row.manager || profile.manager, owners = this.model.directoryOwners();
-    const bound = this.machineOwner;
-    if (bound && bound.profile.id === group && bound.profile.manager === manager && owners.includes(bound)) return bound;
-    return owners.find((view: ClientModel) => view.profile.id === group && view.profile.manager === manager);
-  }
-  @Computed get detailCard(): MachineCard | undefined {
-    const target = this.detailTarget, owner = this.detailOwner;
-    if (!owner) return undefined;
-    const item = this.machineRow();
-    const confirmed = this.machineOwner === owner && this.machineDirectoryKey === target.key() && item?.id === target.id ? item : undefined;
-    const readingDirectory = !this.machineOwner || this.management.loading;
-    if (!confirmed && !readingDirectory) return undefined;
-    // The route's own live directory can already paint the card while management verifies its actions.
-    const cached = owner.machines.find((row: ResourceRow) => row.id === target.id &&
-      (!row.group || row.group === owner.profile.id) && (!row.manager || row.manager === owner.profile.manager));
-    const data = cached?.data() || confirmed?.raw;
-    if (!data) return undefined;
-    const row = ResourceRow.from(data, 'machine');
-    row.group = owner.profile.id; row.manager = owner.profile.manager;
-    if (!owner.connected) row.state = 'offline';
-    return machineCards([row], owner.sessions, row.group, row.manager)[0];
-  }
-  private openMachine(row: ResourceRow): void {
-    if (!this.mounted || !this.active) return;
-    const target = new ResourceRow(row.id, row.title, 'machine');
-    target.group = row.group || this.model.profile.id; target.manager = row.manager; target.machine = row.machine;
-    this.onDetail('machine_detail', target);
-  }
-  private async loadMachineDirectory(resuming: boolean = false): Promise<void> {
-    const owner = this.model;
-    if (this.page === 'machine_detail') {
-      const selected = this.detailTarget;
-      if (selected.kind !== 'machine' || !selected.id) { this.management.error = 'request_updated'; return; }
-      const revision = this.machineRevision + 1;
-      await this.chooseMachine(selected, resuming);
-      const view = this.machineOwner;
-      if (this.machineRevision === revision && this.mounted && this.active && view && view === this.detailOwner && this.machineDirectoryKey === selected.key()) {
-        await this.machineReadings.start(view, () => this.detailCard ? [this.detailCard.row] : []);
-      }
-      return;
+  private machineLabel(row: ResourceRow): string { return [this.model.groupName(row), row.manager, row.title || row.id].filter((value: string) => !!value).join(' · '); }
+  private async loadMachineDirectory(): Promise<void> {
+    const owner=this.model, generation=owner.connectionGeneration(), scope=owner.scope(), revision=++this.machineRevision;
+    const route=this.initialMachine, routeKey=route?.key() || '';
+    if (this.loadedMachineRoute!==routeKey) {
+      this.clearMachineChoice();
+      this.loadedMachineRoute=routeKey;
     }
-    const generation = owner.connectionGeneration(), scope = owner.scope(), revision = ++this.machineRevision;
-    const current = (): boolean => this.mounted && this.active && this.model === owner && this.machineRevision === revision && owner.owns(generation, scope);
-    if (this.machineOwner !== owner || this.machineDirectoryKey) {
-      this.management.pairing = {}; this.pairingOwnerScope = ''; this.addComputerOpen = false; this.computerName = '';
-    }
-    this.machineOwner = owner; this.machineDirectoryKey = '';
-    this.management.setAdmission(current);
-    await Promise.all([owner.refreshDirectory(), this.management.load('machines', owner)]);
-    if (current()) await this.machineReadings.start(owner, () => this.machineOptions());
+    const current=():boolean => this.mounted && this.active && revision===this.machineRevision &&
+      owner===this.model && owner.owns(generation,scope) && routeKey===(this.initialMachine?.key() || '');
+    let refreshFailed=false;
+    try { await owner.refreshDirectory(); } catch (_) { refreshFailed=true; }
+    if (!current()) return;
+    const list=this.machineOptions();
+    let selected=list.find((row:ResourceRow) => row.key()===this.machineDirectoryKey);
+    if (!selected && route?.id) selected=list.find((row:ResourceRow) => this.sameRoutedMachine(row,route));
+    if (!selected && !route?.id) selected=list.find((row:ResourceRow) => row.key()===this.model.selected.key()) || list[0];
+    if (selected) { await this.chooseMachine(selected); return; }
+    this.clearMachineChoice(); this.management.loading=false;
+    if (route?.id || refreshFailed) { this.management.error=refreshFailed ? 'offline' : 'admin_machine_unavailable'; return; }
+    this.machineOwner=owner;
+    this.management.setAdmission(():boolean => current() && this.machineOwner===owner);
+    await this.management.load('machines',owner);
   }
-  private async chooseMachine(row: ResourceRow, resuming: boolean = false): Promise<void> {
+  private async chooseMachine(row: ResourceRow): Promise<void> {
     const generation = this.model.connectionGeneration(), scope = this.model.scope(), revision = ++this.machineRevision;
-    const current = (): boolean => this.mounted && this.active && revision === this.machineRevision && this.model.owns(generation, scope);
-    const binding = (view: ClientModel): string => JSON.stringify([generation, scope, view.connectionGeneration(), view.scope(), view.pairingRevision()]);
-    const previous = this.machineOwner;
-    if (resuming && previous && previous === this.detailOwner && previous.connected && this.machineDirectoryKey === row.key() &&
-      this.machineBinding === binding(previous) && !this.management.loading && !this.management.saving && !this.management.error && this.machineRow()) {
-      this.management.setAdmission((): boolean => current() && this.machineOwner === previous && this.detailOwner === previous &&
-        this.machineDirectoryKey === row.key() && this.machineBinding === binding(previous));
-      return;
-    }
-    this.machineBinding = '';
     if (this.machineDirectoryKey !== row.key()) { this.management.pairing = {}; this.pairingOwnerScope = ''; this.computerName = ''; this.computerOs = 'mac'; this.addComputerOpen = false; }
-    this.machineDirectoryKey = row.key(); this.machineOwner = undefined; this.management.rows = []; this.management.selectedId = ''; this.management.error = ''; this.management.loading = true;
+    this.machineChoice = row; this.machineDirectoryKey = row.key(); this.machineOwner = undefined; this.management.rows = []; this.management.selectedId = ''; this.management.error = ''; this.management.loading = true;
     this.management.setAdmission((): boolean => false);
     try {
       const owner = await this.model.viewFor(row);
@@ -305,7 +271,6 @@ export struct SettingsPage {
       await this.management.load('machines', owner);
       if (!this.mounted || !this.active || revision !== this.machineRevision || !this.model.owns(generation, scope)) return;
       this.management.selectedId = row.id;
-      if (!this.management.error) this.machineBinding = binding(owner);
     } catch (_) { if (this.mounted && this.active && revision === this.machineRevision && this.model.owns(generation, scope)) this.management.error = 'offline'; }
     finally { if (revision === this.machineRevision) this.management.loading = false; }
   }
@@ -327,6 +292,7 @@ export struct SettingsPage {
     return values;
   }
   private modeOptionsFor(field: string): string[] {
+    if (field === 'model') return this.management.providerModels.map((item: Record<string, Object>) => Wire.text(item, 'id'));
     return field === 'permission_mode' ? this.modeOptions() : Wire.strings(this.model.selected.data(), 'efforts');
   }
   private modeName(field: string, value: string): string {
@@ -334,10 +300,22 @@ export struct SettingsPage {
       return ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'].includes(value)
         ? tr('assistant_feed_permission_' + value) : value;
     }
+    if (field === 'model') {
+      const item = this.management.providerModels.find((option: Record<string, Object>) => Wire.text(option, 'id') === value);
+      return item ? Wire.text(item, 'name', value) || value : value;
+    }
+    if (['none', 'minimal', 'ultra'].includes(value)) return tr('session_effort_' + value);
     return tr(value);
+  }
+  private modeLabel(field: string): string {
+    return tr(field === 'model' ? 'model' : field === 'effort' ? 'reasoning_effort' : 'permission_mode');
+  }
+  private modeDraft(field: string): string {
+    return field === 'model' ? this.sessionModel : field === 'effort' ? this.effortMode : this.permissionMode;
   }
   private currentModeName(field: string): string {
     const value = Wire.text(this.model.selected.data(), field);
+    if (!value && field === 'model') return tr('unknown');
     return value ? this.modeName(field, value) : tr('automatic');
   }
   private purposeProviders(): Record<string, Object>[] {
@@ -373,50 +351,61 @@ export struct SettingsPage {
   private purposeChanged(): boolean {
     return this.management.purposeChanged();
   }
+  private purposePermissionOptions():string[] {
+    const options=this.management.permissionChoices(),value=this.management.purposeDraft.permissionMode;
+    if (!options.length) return [];
+    return [''].concat(options,value && !options.includes(value) ? [value] : []);
+  }
+  private purposePermissionName(value:string):string {
+    return value ? this.modeName('permission_mode',value) : tr(this.management.selectedId==='inbox.agent' ? 'phone_default_permissions' : 'default');
+  }
   private modeOptions(): string[] {
     const values = ['default', 'acceptEdits', 'plan', 'auto'];
     if (Wire.bool(this.model.selected.data(), 'bypass_available')) values.push('bypassPermissions');
     return values;
   }
-  private modeSupported(): boolean {
-    const capabilities = Wire.object(this.model.selected.data(), 'capabilities');
-    return this.model.selected.kind === 'session' && Wire.bool(capabilities, 'modes');
+  private namingCurrent(): boolean {
+    const owner = this.machineOwner;
+    return !!owner && this.namingMachine !== '' && this.namingMachine === this.machineDirectoryKey && this.namingOwner === owner &&
+      this.namingGeneration === owner.connectionGeneration();
+  }
+  private async saveMachineName(): Promise<void> {
+    const owner = this.machineOwner, row = this.machineRow();
+    if (!owner || !row || !this.namingCurrent() || !this.mounted || !this.active) return;
+    if (await this.management.renameMachine(owner, row, this.nameDraft) && this.namingCurrent()) {
+      this.namingMachine = ''; await this.loadMachineDirectory();
+    }
   }
   private machineRow(): ManagementRow | undefined {
     return this.management.rows.find((item: ManagementRow) => item.id === this.management.selectedId);
   }
+  @Computed get selectedPlatform(): MachinePlatform { return machinePlatform(this.machineRow()?.raw || {}); }
   private screenMachine(): ResourceRow | undefined {
-    const selected = this.machineRow(), owner = this.machineOwner;
-    if (!selected || !owner) return undefined;
-    for (const row of owner.machines) {
-      if (row.id !== selected.id) continue;
-      if (row.key() === this.machineDirectoryKey) return row;
-      if (row.group) continue;
-      const qualified = ResourceRow.from(row.data(), 'machine');
-      qualified.group = owner.profile.id; qualified.manager = row.manager || owner.profile.manager;
-      if (qualified.key() === this.machineDirectoryKey) return qualified;
-    }
-    return undefined;
-  }
-  private supportsScreen(row: ResourceRow): boolean {
-    return row.supportsScreen();
+    const selected = this.machineRow();
+    if (!selected || !this.machineOwner) return undefined;
+    const local=this.machineOwner.machines.find((row:ResourceRow) => row.id===selected.id && row.key()===this.machineDirectoryKey);
+    if (local?.group) return local;
+    // The per-manager list omits its group. The aggregate directory always supplies it.
+    const choice=this.machineChoice, profile=this.machineOwner.profile;
+    if (!choice || !profile || choice.id!==selected.id || choice.group && choice.group!==profile.id ||
+      choice.manager && choice.manager!==profile.manager) return undefined;
+    const row=this.machineOwner.machines.find((r:ResourceRow) => r.id===selected.id && !r.group && (!r.manager || r.manager===profile.manager));
+    if (!row) return undefined;
+    const scoped=ResourceRow.from(row.data(),'machine');
+    scoped.group=profile.id; scoped.manager=profile.manager; return scoped;
   }
   private canOpenScreen(): boolean {
-    const row = this.screenMachine();
-    return !!row && this.mounted && this.active && !!this.machineOwner?.connected && !this.model.demo &&
-      !this.management.loading && this.supportsScreen(row);
+    const row = this.screenMachine(); if (!this.mounted || !this.active || !row || !this.machineOwner?.connected || this.model.demo || this.management.loading) return false;
+    const data = row.data(), os = Wire.text(data, 'os', Wire.text(Wire.object(data, 'system'), 'os'));
+    return ['', 'mac', 'darwin'].includes(os) && Wire.bool(data, 'online') && !Wire.bool(data, 'pending') && !Wire.bool(data, 'pending_confirm') && ['', 'confirmed', 'personal', 'work'].includes(Wire.text(data, 'trust'));
   }
   private rowEnabled(row: ManagementRow): boolean { return Wire.bool(row.raw, 'enabled'); }
-  private canOpenComputerForm(): boolean {
-    return this.mounted && this.active && !!this.machineOwner?.connected && this.machineOwner.features.includes('machines_add') &&
-      (!this.machineDirectoryKey || !!this.screenMachine());
-  }
-  private canPairComputer(): boolean { return this.canOpenComputerForm() && !this.management.loading && !this.management.saving; }
+  private canPairComputer(): boolean { return this.mounted && this.active && !!this.machineOwner?.connected && !this.management.loading && (!this.machineDirectoryKey || !!this.screenMachine()); }
   private async createComputerPairing(): Promise<void> {
     const owner = this.machineOwner; if (!owner || !this.canPairComputer()) return;
     const generation = owner.connectionGeneration(), scope = owner.scope(), revision = this.machineRevision;
     const ok = await this.management.createPairing(owner, this.computerName, this.computerOs);
-    if (ok && this.mounted && this.active && this.machineOwner === owner && revision === this.machineRevision && owner.owns(generation, scope)) { const selected = owner.machines.find((row: ResourceRow) => row.key() === this.machineDirectoryKey); if (selected) this.management.selectedId = selected.id; this.pairingOwnerScope = scope; this.pairingOwnerEpoch = owner.pairingRevision(); this.computerName = ''; this.showComputerReceipt = true; if (this.page === 'machines') await this.model.refreshDirectory(); }
+    if (ok && this.mounted && this.active && this.machineOwner === owner && revision === this.machineRevision && owner.owns(generation, scope)) { const selected = owner.machines.find((row: ResourceRow) => row.key() === this.machineDirectoryKey); if (selected) this.management.selectedId = selected.id; this.pairingOwnerScope = scope; this.computerName = ''; this.addComputerOpen = false; }
   }
   private canRenew(): boolean {
     return this.canPairComputer() && this.pairingOwnerScope === this.machineOwner?.scope() && this.management.canRenewPairing();
@@ -451,13 +440,15 @@ export struct SettingsPage {
       } } });
   }
   private saveMode(field: string): void {
-    const value = field === 'permission_mode' ? this.permissionMode : this.effortMode;
-    const row = this.model.selected, scope = this.model.scope(), target = this.model.target(row);
+    const owner = this.model, row = owner.selected, scope = owner.scope(), generation = owner.connectionGeneration(),
+      target = owner.target(row), revision = this.machineRevision, value = this.modeDraft(field);
+    if (!this.management.canEditSessionMode(owner, field) || !this.modeOptionsFor(field).includes(value)) return;
     this.getUIContext().showAlertDialog({ title: tr('confirm'),
-      message: row.title + '\n' + tr(field === 'permission_mode' ? 'permission_mode' : 'reasoning_effort') + ': ' + this.modeName(field, value),
+      message: row.title + '\n' + this.modeLabel(field) + ': ' + this.modeName(field, value),
       primaryButton: { value: tr('cancel'), action: () => {} },
       secondaryButton: { value: tr('save'), action: () => {
-        if (this.model.scope() === scope && this.model.target() === target) this.management.saveMode(this.model, field, value);
+        if (this.mounted && this.active && this.model === owner && this.machineRevision === revision &&
+          owner.owns(generation, scope) && owner.target() === target) this.management.saveMode(owner, field, value);
       } } });
   }
   private showError(): boolean { return this.management.error.length > 0; }
@@ -600,12 +591,71 @@ export struct SettingsPage {
 
   @Builder status() {
     if (this.management.loading) LoadingProgress().height(Tokens.touch).width(Tokens.touch)
-    if (this.showError()) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+    if (this.showError()) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+  }
+
+  private purposeSummary(row:Record<string,Object>):string {
+    const effective=Wire.object(row,'effective'),mode=Wire.text(row,'kind')==='launcher' ?
+      (Wire.text(row,'id')==='inbox.agent' ? bindingPermission('inbox.agent',Wire.text(Wire.object(row,'override'),'permission_mode')) || 'default' :
+        Wire.text(effective,'permission_mode')) : '';
+    const effort=Wire.text(effective,'effort');
+    return [Wire.text(effective,'model'),effort ? tr(effort) : '',mode ? this.purposePermissionName(mode) : '']
+      .filter((value:string)=>!!value).join(' · ') || tr(Wire.text(effective,'provider') ? 'automatic' : 'phone_model_unset');
+  }
+  private purposeInheritance(row:Record<string,Object>):string {
+    const parent=Wire.text(row,'parent');
+    if (!Wire.strings(row,'fields').length || (parent!=='agent.new' && Wire.text(row,'id')!=='assistant.supervise')) return '';
+    const binding=Wire.object(row,'override');
+    return tr(Object.keys(binding).some((key:string)=>!!Wire.text(binding,key)) ? 'phone_model_configured' :
+      parent==='agent.new' ? 'phone_follow_agents' : 'phone_model_follow_main');
+  }
+  private openPurpose(row:Record<string,Object>):void {
+    const id=Wire.text(row,'id');
+    if (!id || !this.management.modelCatalogRows().some((entry:Record<string,Object>)=>Wire.text(entry,'id')===id)) return;
+    this.openDetail('model_purpose',new ManagementRow(id,this.purposeLabel(row),Wire.text(row,'description'),row));
+  }
+  @Builder modelCatalogPage() {
+    List({space:8}) {
+      if (this.management.loading) ListItem() { LoadingProgress().height(30).width(30) }
+      if (this.management.error) ListItem() { Column({space:6}) {
+        Text(trError(this.management.error)).fontColor(Colors.danger)
+        Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).onClick(()=>{this.loadSettingsPage();})
+      } }
+      if (this.management.modelCatalogRows().length) {
+        ListItem() { PhoneSectionTitle({text:tr('phone_model_choose_uses')}) }
+        ForEach(this.management.modelCatalogRows(),(row:Record<string,Object>)=>{
+          ListItem() {
+            Button({type:ButtonType.Normal}) {
+              Column({space:4}) {
+                Text(this.purposeLabel(row)).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.ink).maxLines(1)
+                if (Wire.text(row,'description').trim()) Text(Wire.text(row,'description').trim()).fontSize(13).fontColor(Colors.secondary)
+                Text(this.purposeSummary(row)).fontSize(15).maxLines(1).fontColor(Colors.secondary)
+                if (this.purposeInheritance(row)) Text(this.purposeInheritance(row)).fontSize(13).fontColor(Colors.secondary)
+                if (Wire.text(row,'status')) Text(Wire.text(row,'status')).fontSize(13).fontColor(Colors.secondary)
+              }.alignItems(HorizontalAlign.Start).width('100%')
+            }.width('100%').padding({left:16,right:16,top:9,bottom:9}).backgroundColor(Colors.card(false))
+              .onClick(()=>this.openPurpose(row)).id('model-purpose-'+Wire.text(row,'id'))
+          }
+        },(row:Record<string,Object>)=>Wire.text(row,'id'))
+        if (this.management.modelCategories().length) {
+          ListItem() { Button(tr('phone_model_scope'),{buttonStyle:ButtonStyleMode.TEXTUAL}).onClick(()=>{this.modelScopeExpanded=!this.modelScopeExpanded;}).id('model-config-scope') }
+          if (this.modelScopeExpanded) ForEach(this.management.modelCategories(),(row:Record<string,Object>)=>{
+            ListItem() { Column({space:4}) {
+              Text(this.purposeLabel(row)).fontSize(15).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+              Text(Wire.rows(row,'uses').map((use:Record<string,Object>)=>Wire.text(use,'name')).filter((name:string)=>!!name).join('、')).fontSize(15).fontColor(Colors.secondary)
+            }.alignItems(HorizontalAlign.Start).padding(12) }
+          },(row:Record<string,Object>)=>Wire.text(row,'id'))
+          ListItem() { Text(tr('phone_model_scope_hint')).fontSize(13).fontColor(Colors.secondary).padding(8) }
+        }
+      } else if (!this.management.loading && !this.management.error) { ListItem() { Text(tr('phone_model_none')).fontColor(Colors.secondary).padding(16) } }
+      ListItem() { PhoneSectionTitle({text:tr('phone_settings_advanced')}) }
+      ListItem() { Button(tr('phone_model_provider_keys'),{buttonStyle:ButtonStyleMode.TEXTUAL}).onClick(()=>this.onOpen('launchers')).id('settings-model-providers') }
+    }.width('100%').height('100%').padding({left:16,right:16,top:12,bottom:16}).backgroundColor(Colors.grouped)
   }
 
   @Builder modelsPage() {
     Column() {
-      if (this.management.catalogPurposes.length > 0) {
+      if (this.page!=='model_purpose' && this.management.catalogPurposes.length > 0) {
         Select(this.selectOptions(this.management.catalogPurposes.map((item: Record<string, Object>) => this.purposeLabel(item)))).attributeModifier(SelectStyles.inline)
           .selected(this.purposeIndex).value(this.purposeLabel(this.management.catalogPurposes[this.purposeIndex] || {}))
           .onSelect((index: number) => {
@@ -650,216 +700,152 @@ export struct SettingsPage {
           if (Wire.text(this.management.purpose, 'status')) ListItem() {
             ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('status'), secondaryText: Wire.text(this.management.purpose, 'status') }) })
           }
-          ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('save')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('save', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('save')).bindTips(tr('save')).enabled(this.purposeChanged() && !this.management.saving)
-            .onClick(() => this.management.savePurpose(this.model)) }
+          if (this.management.purposePermissionInEffect()) ListItem() {
+            ComposeListItemV2({contentItemV2:new ContentItemV2({primaryText:tr('permissions'),
+              secondaryText:this.purposePermissionName(this.management.purposePermissionInEffect())})})
+          }.id('settings.model.permission_effective')
+          if (this.purposePermissionOptions().length) ListItem() {
+            Column({space:6}) {
+              Text(tr(this.management.selectedId==='inbox.agent' ? 'phone_inbox_permissions':'permissions')).fontSize(16).fontColor(Colors.ink)
+              Select(this.selectOptions(this.purposePermissionOptions().map((v:string)=>this.purposePermissionName(v)))).attributeModifier(SelectStyles.inline)
+                .value(this.purposePermissionName(this.management.purposeDraft.permissionMode)).enabled(!this.management.saving && !this.management.purposeConflict)
+                .onSelect((index:number)=>{const values=this.purposePermissionOptions();if(index>=0 && index<values.length)this.management.changePurposeDraft('permission_mode',values[index]);})
+                .id('settings.model.permission')
+              if (this.management.selectedId==='inbox.agent') {
+                Text(tr('phone_inbox_permission_hint')).fontSize(13).fontColor(this.management.purposeDraft.permissionMode==='bypassPermissions' ? Colors.danger:Colors.secondary)
+                Button(tr('phone_follow_agents'),{buttonStyle:ButtonStyleMode.TEXTUAL}).enabled(!this.management.saving && !this.management.purposeConflict)
+                  .onClick(()=>{this.management.restoreInboxInheritance();this.management.loadPurposeModels(this.model);}).id('settings.model.follow_agents')
+              }
+            }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
+          }
+          if (this.management.purposeConflict) ListItem() {
+            Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).onClick(()=>{this.management.selectPurpose(this.model,this.management.selectedId);}).id('settings.model.reload')
+          }
+          ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('save')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('save', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('save')).bindTips(tr('save'))
+            .enabled(this.purposeChanged() && !this.management.saving && !this.management.purposeConflict).onClick(() => this.management.savePurpose(this.model)).id('settings.model.save') }
         }
-        if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+        if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
       }.width('100%').layoutWeight(1)
     }.width('100%').height('100%').enabled(!this.management.saving)
   }
 
   @Builder sessionModePage(field: string) {
     Column() {
-      if (!this.modeSupported() || field === 'effort' && Wire.strings(this.model.selected.data(), 'efforts').length === 0) {
+      if (!this.management.canEditSessionMode(this.model, field)) {
         Text(tr('no_capability')).padding(Tokens.page)
       } else {
         List() {
-          ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr(field === 'permission_mode' ? 'permission_mode' : 'reasoning_effort'),
+          ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: this.modeLabel(field),
             secondaryText: this.currentModeName(field) }) }) }
-          ListItem() {
-            Select(this.selectOptions(this.modeOptionsFor(field).map((item: string) => this.modeName(field, item)))).attributeModifier(SelectStyles.inline)
-              .value(this.currentModeName(field))
-              .onSelect((index: number) => {
-                const values = this.modeOptionsFor(field);
-                if (field === 'permission_mode') this.permissionMode = values[index]; else this.effortMode = values[index];
-              })
+          if (field === 'model' && this.modeOptionsFor(field).length === 0 && !this.management.loading && !this.management.error) {
+            ListItem() { Text(tr('session_models_empty')).padding(Tokens.inset) }
           }
+          if (this.modeOptionsFor(field).length > 0) { ListItem() {
+            Select(this.selectOptions(this.modeOptionsFor(field).map((item: string) => this.modeName(field, item)))).attributeModifier(SelectStyles.inline)
+              .selected(this.modeOptionsFor(field).indexOf(this.modeDraft(field)))
+              .value(this.modeDraft(field) ? this.modeName(field, this.modeDraft(field)) : this.currentModeName(field))
+              .onSelect((index: number) => {
+                const value = this.modeOptionsFor(field)[index];
+                if (!value) return;
+                if (field === 'permission_mode') this.permissionMode = value;
+                else if (field === 'effort') this.effortMode = value;
+                else this.sessionModel = value;
+              })
+          } }
           ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('save')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('save', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('save')).bindTips(tr('save')).enabled(!this.management.saving &&
-            (field === 'permission_mode' ? this.permissionMode !== Wire.text(this.model.selected.data(), field) : this.effortMode !== Wire.text(this.model.selected.data(), field)))
+            !this.management.loading && this.modeOptionsFor(field).includes(this.modeDraft(field)) && this.modeDraft(field) !== Wire.text(this.model.selected.data(), field))
             .onClick(() => this.saveMode(field)) }
         }.width('100%')
       }
-      if (this.management.error) Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
+      if (this.management.error) Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
+      if (field === 'model' && this.management.error && !this.management.loading && this.model.connected) {
+        Button(tr('retry')).onClick(() => this.loadSettingsPage())
+      }
     }.width('100%').height('100%')
   }
 
-  @Computed get receiptAvailable(): boolean {
-    return !!this.machineOwner && this.pairingOwnerScope === this.machineOwner.scope() &&
-      this.pairingOwnerEpoch === this.machineOwner.pairingRevision() && !!Wire.text(this.management.pairing, 'pair_url');
-  }
-  private openComputerForm(receipt: boolean = false): void {
-    if (!this.canOpenComputerForm()) return;
-    this.showComputerReceipt = receipt && this.receiptAvailable;
-    this.computerName = ''; this.computerOs = 'mac'; this.addComputerOpen = true;
-  }
-
-  private async copyComputerPairing(key: string): Promise<void> {
-    if (!this.mounted || !this.active || !this.addComputerOpen || !this.showComputerReceipt || !this.receiptAvailable) return;
-    const value = Wire.text(this.management.pairing, key);
-    if (!value) return;
-    try {
-      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, value);
-      const property = data.getProperty(); property.shareOption = pasteboard.ShareOption.LOCALDEVICE;
-      data.setProperty(property); await pasteboard.getSystemPasteboard().setData(data);
-      this.getUIContext().getPromptAction().showToast({ message: tr('machine_copied') });
-    } catch (_) {
-      this.getUIContext().getPromptAction().showToast({ message: tr('machine_copy_failed') });
-    }
-  }
-
   @Builder computerForm() {
-    Scroll() {
-      Column({ space: Tokens.section }) {
-        if (this.showComputerReceipt && this.receiptAvailable) {
-          Text(Wire.text(this.management.pairing, 'name')).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
-          Text(tr('machine_pair_instructions')).fontSize(Tokens.body).fontColor(Colors.secondary)
-          Button(tr('machine_copy_link')).attributeModifier(ButtonStyles.primary).width('100%')
-            .onClick(() => this.copyComputerPairing('pair_url')).id('machines.add.copy')
-          if (Wire.text(this.management.pairing, 'command')) {
-            Button(tr('machine_copy_command')).attributeModifier(ButtonStyles.secondary).width('100%').onClick(() => this.copyComputerPairing('command'))
-          }
-          if (Wire.text(this.management.pairing, 'expires_at')) {
-            Text(tr('expires_at') + ' ' + new Date(Wire.text(this.management.pairing, 'expires_at')).toLocaleString())
-              .fontSize(Tokens.meta).fontColor(Colors.secondary)
-          }
-          if (this.canRenew()) Button(tr('new_pairing_code')).attributeModifier(ButtonStyles.secondary)
-            .onClick(() => this.management.renewPairing(this.machineOwner || this.model))
-          Button(tr('close')).attributeModifier(ButtonStyles.secondary).width('100%').onClick(() => this.addComputerOpen = false)
-        } else {
-          Text(tr('machine_add_hint')).fontSize(Tokens.body).fontColor(Colors.secondary).id('machines.add.hint')
-          if (this.model.profiles.length > 1) Text(this.machineOwner?.profile.name || this.model.profile.name).fontSize(Tokens.meta).fontColor(Colors.secondary)
-          AddComputerFields({ name: this.computerName, system: this.computerOs,
-            onName: (value: string) => this.computerName = value, onSystem: (value: string) => this.computerOs = value })
-          Button(tr('generate_code')).attributeModifier(ButtonStyles.primary).width('100%')
-            .enabled(this.canPairComputer() && !!this.computerName.trim() && !this.management.saving)
-            .onClick(() => this.createComputerPairing()).id('machines.add.generate')
-        }
-        if (this.management.error) Text(tr(this.management.error)).fontSize(Tokens.meta).fontColor(Colors.danger)
-      }.width('100%').constraintSize({ maxWidth: Tokens.masterMax }).alignItems(HorizontalAlign.Start)
-        .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.page, bottom: Tokens.section })
-    }.width('100%').height('100%').attributeModifier(ScrollStyles.form).id('machines.add.form')
-  }
-
-  private async saveMachineName(): Promise<void> {
-    const owner = this.machineOwner, row = this.machineRow();
-    if (!owner || !row || owner !== this.namingOwner || owner.connectionGeneration() !== this.namingGeneration ||
-      this.namingMachine !== this.machineDirectoryKey || !this.mounted || !this.active) return;
-    if (await this.management.renameMachine(owner, row, this.nameDraft)) this.namingMachine = '';
-  }
-
-  private async openMachineAdmin(): Promise<void> {
-    const owner = this.detailOwner, row = this.detailCard?.row;
-    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    if (!context || !owner || !row || owner.demo || !this.active || !this.mounted) return;
-    if (!/^https?:\/\/[^/?#]+\/?$/.test(owner.profile.baseUrl)) {
-      this.management.error = 'machine_admin_root'; return;
-    }
-    try { await context.openLink(owner.profile.baseUrl.replace(/\/+$/, '') + '/admin/machines'); }
-    catch (_) { if (this.active && this.detailOwner === owner) this.management.error = 'machine_admin_unavailable'; }
-  }
-
-  @Builder machineManagement() {
-    Column({ space: Tokens.gap }) {
-      if (this.machineOwner && this.machineRow() && this.management.canRenameMachine(this.machineOwner, this.machineRow()!)) {
-        if (this.namingMachine === this.machineDirectoryKey && this.namingOwner === this.machineOwner &&
-          this.namingGeneration === this.machineOwner.connectionGeneration()) {
-          TextInput({ text: this.nameDraft, placeholder: this.detailTarget.id }).accessibilityText(tr('machine_rename'))
-            .onChange((value: string) => this.nameDraft = value).onSubmit(() => this.saveMachineName()).enabled(!this.management.saving)
-          if (this.management.error) { Text(tr(this.management.error)).fontSize(Tokens.meta).fontColor(Colors.danger) }
-          Text(tr('machine_rename_hint')).fontSize(Tokens.caption).fontColor(Colors.secondary)
-          Row({ space: Tokens.gap }) {
-            Button(tr('cancel')).attributeModifier(ButtonStyles.secondary).enabled(!this.management.saving).onClick(() => this.namingMachine = '')
-            Button(tr('save')).attributeModifier(ButtonStyles.primary).enabled(!this.management.saving).onClick(() => this.saveMachineName())
-          }
-        } else {
-          Button(tr('machine_rename')).attributeModifier(ButtonStyles.secondary).width('100%').id('machines.rename')
-            .onClick(() => {
-              this.nameDraft = this.detailCard?.row.title || this.detailTarget.id;
-              this.namingOwner = this.machineOwner; this.namingGeneration = this.machineOwner?.connectionGeneration() ?? -1;
-              this.namingMachine = this.machineDirectoryKey;
-            })
-        }
-      }
-      Button(tr('machine_admin_remove')).attributeModifier(ButtonStyles.quiet).fontColor(Colors.danger)
-        .width('100%').id('machines.remove.admin').onClick(() => this.openMachineAdmin())
-    }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
-  }
-
-  @Builder machineDetail() {
-    List({ space: Tokens.inset }) {
-      if (this.detailCard) {
-        ListItem() { MachineFactsCard({ card: this.detailCard, sample: this.detailOwner ? this.machineReadings.sample(this.detailOwner, this.detailCard.row) : undefined, showAgents: false }) }
-        if (this.detailCard.pending) {
-          ListItem() {
-            Column({ space: Tokens.inset }) {
-              Text(tr('machine_trust_hint')).fontSize(Tokens.meta).fontColor(Colors.secondary)
-              Row({ space: Tokens.gap }) {
-                Button(tr('machine_remove_pending')).attributeModifier(ButtonStyles.secondary).fontColor(Colors.danger).layoutWeight(1)
-                  .enabled(!!this.screenMachine() && !this.management.loading && !this.management.saving)
-                  .onClick(() => { const row = this.machineRow(); if (row) this.confirmMachine(row, false); })
-                Button(tr('confirm_computer')).attributeModifier(ButtonStyles.primary).layoutWeight(1)
-                  .enabled(!!this.screenMachine() && !this.management.loading && !this.management.saving)
-                  .onClick(() => { const row = this.machineRow(); if (row) this.confirmMachine(row, true); }).id('machines.confirm')
-              }.width('100%')
-            }.width('100%').padding(Tokens.page).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
-          }
-        } else {
-          if (this.detailCard.online) ListItem() {
-            Button(tr('agent_new_session')).attributeModifier(ButtonStyles.secondary).width('100%')
-              .enabled(!!this.screenMachine() && !this.management.loading)
-              .onClick(() => { const row = this.screenMachine(); if (this.active && row) this.onNewSession(row); }).id('machines.new.session')
-          }
-          if (!this.model.demo && this.detailCard.online && this.supportsScreen(this.detailCard.row)) ListItem() {
-            Button(tr('computer_screen_open')).attributeModifier(ButtonStyles.secondary).width('100%')
-              .enabled(this.canOpenScreen())
-              .onClick(() => { const row = this.screenMachine(); if (row && this.canOpenScreen()) this.onComputer(row); }).id('machines.screen')
-          }
-          if (this.detailOwner && !this.detailOwner.demo && Wire.text(this.detailCard.row.data(), 'kind') !== 'hub') {
-            ListItem() { this.machineManagement() }
-          }
-          ListItem() {
-            Text(tr('agents')).fontSize(Tokens.body).fontColor(Colors.ink).fontWeight(FontWeight.Medium)
-          }
-          if (!this.detailCard.online || !this.detailCard.agents.length) ListItem() {
-            Text(tr(this.detailCard.online ? 'machine_no_agents' : 'machine_offline_agents')).fontSize(Tokens.meta).fontColor(Colors.secondary)
-              .width('100%').padding(Tokens.page).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
-          }
-          if (this.detailCard.online) Repeat<ResourceRow>(this.detailCard.agents).each((entry: RepeatItem<ResourceRow>) => {
-            ListItem() {
-              Row({ space: Tokens.inset }) {
-                Text(entry.item.title || entry.item.id).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
-                SymbolGlyph(Symbols.expand).fontSize(Tokens.symbolFont).fontColor([Colors.secondary])
-              }.width('100%').padding(Tokens.page).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
-            }.onClick(() => this.onChat(entry.item)).id('machines.agent.' + entry.item.id)
-          }).key((agent: ResourceRow) => agent.key()).virtualScroll({ totalCount: this.detailCard.agents.length, reusable: false })
-        }
-      } else if (this.management.loading || !this.machineOwner && !this.management.error) {
-        ListItem() { MachineLoadingCard() }.id('machines.detail.loading')
-        ListItem() { Text(tr('machine_loading_detail')).fontSize(Tokens.meta).fontColor(Colors.secondary) }
-      } else if (!this.management.error) {
-        ListItem() { Text(tr('machine_gone')).fontSize(Tokens.meta).fontColor(Colors.secondary).padding(Tokens.page) }
-      }
-      if (this.management.error && (!this.namingMachine || this.namingMachine !== this.machineDirectoryKey)) ListItem() { Text(tr(this.management.error)).fontSize(Tokens.meta).fontColor(Colors.danger) }
-      if (this.detailOwner?.features.includes('machines_add') && this.model.profiles.length > 1) ListItem() {
-        Button(tr('add_computer')).attributeModifier(ButtonStyles.secondary).enabled(this.canPairComputer()).onClick(() => this.openComputerForm())
-      }
-    }.height('100%').width('100%').padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.page })
-      .edgeEffect(EdgeEffect.None).backgroundColor(Colors.grouped).id('machines.detail')
+    Column({ space: Tokens.page }) {
+      TextInput({ text: this.computerName, placeholder: tr('name') }).onChange((value: string) => this.computerName = value)
+      Select(this.selectOptions(['Mac', 'Linux', 'Windows'])).attributeModifier(SelectStyles.inline).selected(this.computerOs === 'mac' ? 0 : this.computerOs === 'linux' ? 1 : 2).value(this.computerOs === 'mac' ? 'Mac' : this.computerOs === 'linux' ? 'Linux' : 'Windows')
+        .onSelect((index: number) => this.computerOs = ['mac', 'linux', 'windows'][index])
+      Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('generate_code')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('generate_code', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('generate_code')).bindTips(tr('generate_code')).enabled(this.canPairComputer() && this.computerName.trim().length > 0 && !this.management.saving)
+        .onClick(() => this.createComputerPairing())
+      if (this.management.error) Text(trError(this.management.error)).fontColor($r('app.color.persona_danger'))
+    }.padding(Tokens.page).width('100%')
   }
 
   @Builder machinesPage() {
     Column() {
-      if (this.page === 'machine_detail') {
-        MachineRefresh({ controlId: 'machines.detail.pull', available: !!this.detailOwner?.connected, loading: this.management.loading,
-          onRefresh: () => this.loadMachineDirectory() }) { this.machineDetail() }
-      } else MachineDirectoryView({ model: this.model, cards: this.overviewCards, readings: this.machineReadings,
-        loading: this.model.directoryLoading || this.management.loading, error: !this.model.connected && this.model.workspaceStatus(this.model.profile) === 'workspace_pair_again' ? 'workspace_pair_hint' : this.management.error,
-        addVisible: this.model.features.includes('machines_add'), addEnabled: this.canOpenComputerForm(),
-        receiptAvailable: this.receiptAvailable, onReceipt: () => this.openComputerForm(true),
-        onAdd: () => this.openComputerForm(), onMachine: (row: ResourceRow) => this.openMachine(row), onRefresh: () => this.loadMachineDirectory() })
+      List() {
+        if ((this.machineOwner || this.model).features.includes('machines_add')) ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('add_computer')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('add_computer', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('add_computer')).bindTips(tr('add_computer')).enabled(this.canPairComputer()).onClick(() => this.addComputerOpen = true) }.padding({ left: Tokens.page, right: Tokens.page })
+        if (this.machineOptions().length > 0) ListItem() {
+          Select(this.selectOptions(this.machineOptions().map((row: ResourceRow) => this.machineLabel(row)))).attributeModifier(SelectStyles.inline)
+            .selected(Math.max(0, this.machineOptions().findIndex((row: ResourceRow) => row.key() === this.machineDirectoryKey)))
+            .value(this.machineOptions().find((row: ResourceRow) => row.key() === this.machineDirectoryKey) ? this.machineLabel(this.machineOptions().find((row: ResourceRow) => row.key() === this.machineDirectoryKey) as ResourceRow) : tr('machine'))
+            .onSelect((index: number) => { const row = this.machineOptions()[index]; if (row) this.chooseMachine(row); }).enabled(!this.management.loading && !this.addComputerOpen).width('100%')
+        }.padding({ left: Tokens.page, right: Tokens.page })
+        if (this.machineRow()) {
+          ListItem() {
+            Row({ space: Tokens.inset }) {
+              DeviceMark({ family: this.selectedPlatform.family, fallback: Symbols.machine })
+                .id('machines.os.' + (this.selectedPlatform.family || 'unknown'))
+              Column({ space: Tokens.fine }) {
+                Text(tr('platform')).fontSize(Tokens.body).fontColor(Colors.ink)
+                if (this.selectedPlatform.detail) Text(this.selectedPlatform.detail).fontSize(Tokens.meta).fontColor(Colors.secondary)
+              }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+            }.width('100%').padding(Tokens.page)
+          }
+          ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('status'),
+            secondaryText: Wire.text(this.machineRow()?.raw || {}, 'error', Wire.text(this.machineRow()?.raw || {}, 'state', tr(Wire.bool(this.machineRow()?.raw || {}, 'online') ? 'online' : 'offline'))) }) }) }
+          if (this.machineOwner && this.management.canRenameMachine(this.machineOwner, this.machineRow()!)) {
+            if (this.namingCurrent()) {
+              ListItem() {
+                Column({ space: Tokens.gap }) {
+                  TextInput({ text: this.nameDraft, placeholder: this.machineRow()?.id || '' }).accessibilityText(tr('machine_rename'))
+                    .onChange((value: string) => this.nameDraft = value).onSubmit(() => this.saveMachineName()).enabled(!this.management.saving).id('machines.rename.input')
+                  Text(tr('machine_rename_hint')).fontSize(Tokens.caption).fontColor(Colors.secondary)
+                  Row({ space: Tokens.gap }) {
+                    Button(tr('cancel')).attributeModifier(ButtonStyles.secondary).enabled(!this.management.saving).onClick(() => this.namingMachine = '')
+                    Button(tr('save')).attributeModifier(ButtonStyles.primary).enabled(!this.management.saving).onClick(() => this.saveMachineName()).id('machines.rename.save')
+                  }
+                }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.page)
+              }
+            } else {
+              ListItem() {
+                Button(tr('machine_rename'), { buttonStyle: ButtonStyleMode.TEXTUAL }).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.link)
+                  .width('100%').id('machines.rename').onClick(() => {
+                    this.nameDraft = this.machineRow()?.title || this.machineRow()?.id || '';
+                    this.namingOwner = this.machineOwner; this.namingGeneration = this.machineOwner?.connectionGeneration() ?? -1;
+                    this.namingMachine = this.machineDirectoryKey; this.management.error = '';
+                  })
+              }
+            }
+          }
+          if (this.screenMachine() && Wire.bool(this.screenMachine()!.data(), 'online')) {
+            ListItem() { Button(tr('agent_new_session'), { buttonStyle: ButtonStyleMode.TEXTUAL }).width('100%')
+              .enabled(!this.management.loading).id('machines.new.session')
+              .onClick(() => { const row = this.screenMachine(); if (this.active && row) this.onNewSession(row); }) }
+          }
+          ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('computer_screen_open')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('computer_screen_open', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('computer_screen_open')).bindTips(tr('computer_screen_open')).enabled(this.canOpenScreen()).onClick(() => { const row = this.screenMachine(); if (row && this.canOpenScreen()) this.onComputer(row); }).id('machines.screen') }.padding({ left: Tokens.page, right: Tokens.page })
+          if (Wire.text(this.machineRow()?.raw || {}, 'trust') === 'pending') {
+            ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('confirm_computer')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('confirm_computer', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('confirm_computer')).bindTips(tr('confirm_computer')).enabled(!!this.screenMachine() && !this.management.loading).onClick(() => this.confirmMachine(this.machineRow() as ManagementRow, true)) }
+            ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('reject')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('reject', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('reject')).bindTips(tr('reject')).enabled(!!this.screenMachine() && !this.management.loading).onClick(() => this.confirmMachine(this.machineRow() as ManagementRow, false)) }
+          }
+        }
+        if (this.machineOwner && this.pairingOwnerScope === this.machineOwner.scope() && this.management.pairing['pair_url']) {
+          ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: Wire.text(this.management.pairing, 'name'),
+            secondaryText: Wire.text(this.management.pairing, 'machine') }) }) }
+          ListItem() { Text(Wire.text(this.management.pairing, 'pair_url')).copyOption(CopyOptions.LocalDevice).padding(Tokens.page) }
+          ListItem() { Text(tr('expires_at') + ': ' + Wire.text(this.management.pairing, 'expires_at')).padding(Tokens.page) }
+          if (this.canRenew()) ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('new_pairing_code')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('new_pairing_code', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('new_pairing_code')).bindTips(tr('new_pairing_code')).onClick(() => this.management.renewPairing(this.machineOwner || this.model)) }
+          if (Wire.text(this.management.pairing, 'command')) ListItem() { Text(Wire.text(this.management.pairing, 'command')).copyOption(CopyOptions.LocalDevice).padding(Tokens.page) }
+        }
+        if (!this.management.rows.length && !this.management.loading) ListItem() { Text(tr('no_computer')).padding(Tokens.page) }
+        if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      }.width('100%').layoutWeight(1)
     }.width('100%').height('100%')
-      .bindSheet($$this.addComputerOpen, this.computerForm(), { title: { title: tr('add_computer') }, height: SheetSize.LARGE,
-        keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY, showClose: true })
+      .bindSheet($$this.addComputerOpen, this.computerForm(), { title: { title: tr('add_computer') }, height: SheetSize.MEDIUM, showClose: true })
   }
 
   @Builder scheduleForm() {
@@ -889,7 +875,7 @@ export struct SettingsPage {
       }
       Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('save')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('save', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('save')).bindTips(tr('save')).enabled(this.management.scheduleValid() && !this.management.saving).onClick(() => this.confirmScheduleSave())
       Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('cancel')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('cancel', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('cancel')).bindTips(tr('cancel')).onClick(() => { if (this.management.cancelSchedule()) this.scheduleEditOpen = false; })
-      if (this.management.error) Text(tr(this.management.error)).fontColor($r('app.color.persona_danger'))
+      if (this.management.error) Text(trError(this.management.error)).fontColor($r('app.color.persona_danger'))
     }.padding(Tokens.page).width('100%')
   }
 
@@ -904,40 +890,73 @@ export struct SettingsPage {
     }
   }
 
+  private scheduleTime(value:string): string {
+    if (!value) return '';
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return value;
+    return date.toLocaleDateString() + ' · ' + String(date.getHours()).padStart(2,'0') + ':' + String(date.getMinutes()).padStart(2,'0');
+  }
+  @Builder scheduleMenu(row:ManagementRow) {
+    Menu() {
+      MenuItem({content:tr('edit')}).onClick(() => { this.management.beginSchedule(row); this.scheduleEditOpen = true; })
+      MenuItem({content:tr('run_now')}).onClick(() => this.confirmScheduleRun(row))
+      MenuItem({content:tr('delete')}).contentFontColor(Colors.danger).onClick(() => this.confirmScheduleDelete(row))
+    }
+  }
   @Builder schedulesPage() {
-    List() {
-      ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('add')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('add', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('add')).bindTips(tr('add')).bindMenu(this.scheduleCreateMenu) }
+    List({space:6}) {
+      ListItem() {
+        Row({space:10}) {
+          Button({type:ButtonType.Normal}) {
+            Row({space:7}) { SymbolGlyph(Symbols.plus).fontSize(16).fontColor([Colors.link]); Text(tr('create')).fontSize(15).fontWeight(FontWeight.Medium).fontColor(Colors.link) }
+          }.height(38).padding({left:13,right:13}).borderRadius(18).backgroundColor(Colors.surface).bindMenu(this.scheduleCreateMenu).id('schedules.create')
+          Blank().layoutWeight(1)
+          Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.refresh).fontSize(16).fontColor([Colors.ink]) }
+            .width(38).height(38).padding(0).backgroundColor(Colors.surface).accessibilityText(tr('refresh'))
+            .onClick(() => this.management.load('schedules',this.model)).id('schedules.refresh')
+        }.width('100%')
+      }
+      ListItem() { PhoneSectionTitle({text:tr('phone_scheduled'),trailing:String(this.management.rows.length)}) }
       ForEach(this.managementRowBindings, (binding: BoundRow<ManagementRow>) => {
         ListItem() {
           Column() {
-            Row() {
-              ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title,
-                secondaryText: Wire.text(binding.value.raw, 'next_run', Wire.text(binding.value.raw, 'last_status')) }) }).layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: Wire.bool(binding.value.raw, 'enabled') })
-                .onChange((enabled: boolean) => this.management.setScheduleEnabled(this.model, binding.value, enabled))
-                .accessibilityText(binding.value.title)
-            }
-            Row() {
-              Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('edit')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('edit', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('edit')).bindTips(tr('edit')).onClick(() => { this.management.beginSchedule(binding.value); this.scheduleEditOpen = true; })
-              Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('run_now')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('run_now', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('run_now')).bindTips(tr('run_now')).onClick(() => this.confirmScheduleRun(binding.value))
-              Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('delete')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('delete', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('delete')).bindTips(tr('delete')).onClick(() => this.confirmScheduleDelete(binding.value))
-            }
-          }
+            Row({space:10}) {
+              Stack() { SymbolGlyph(Symbols.calendar).fontSize(18).fontColor([Colors.teal]) }.width(32).height(32).backgroundColor(Colors.control).borderRadius(8)
+              Column({space:4}) {
+                Text(binding.value.title).fontSize(17).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(2)
+                if (binding.value.detail || Wire.text(binding.value.raw,'last_status'))
+                  Text(this.scheduleTime(binding.value.detail) || Wire.text(binding.value.raw,'last_status')).fontSize(13).fontColor(Colors.secondary).maxLines(2)
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Toggle({type:ToggleType.Switch,isOn:Wire.bool(binding.value.raw,'enabled')}).selectedColor(Colors.positive)
+                .onChange((enabled:boolean) => this.management.setScheduleEnabled(this.model,binding.value,enabled)).accessibilityText(binding.value.title)
+              Button({type:ButtonType.Circle}) { Image(Symbols.more).width(18).height(18).fillColor(Colors.secondary) }
+                .width(31).height(31).padding(0).backgroundColor(Colors.control).accessibilityText(tr('more')).bindMenu(this.scheduleMenu(binding.value))
+                .id('schedule.menu.' + binding.value.id)
+            }.width('100%')
+          }.width('100%').padding(12).backgroundColor(Colors.surface).borderRadius(14)
         }.id('schedule.' + binding.value.id)
       }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (this.management.lastRunReceipt['session_id']) ListItem() {
         ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('run_started') }) })
       }.onClick(() => { const target = this.management.scheduleReceiptChat(this.model); if (target) this.onChat(target); }).id('schedule.receipt')
-      ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('refresh')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('refresh', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('refresh')).bindTips(tr('refresh')).onClick(() => this.management.load('schedules', this.model)) }
+      if (!this.management.rows.length && !this.management.loading && !this.management.error)
+        ListItem() { Text(tr('phone_no_schedules')).fontSize(15).fontColor(Colors.secondary).padding(16).width('100%').backgroundColor(Colors.surface).borderRadius(14) }
+      if (this.scheduleRunBindings.length) ListItem() { PhoneSectionTitle({text:tr('phone_history')}) }
       ForEach(this.scheduleRunBindings, (binding: BoundRow<ManagementRow>) => {
-        ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title,
-          secondaryText: Wire.text(binding.value.raw, 'status') + ' · ' + Wire.text(binding.value.raw, 'at', Wire.text(binding.value.raw, 'due')) }) }) }
-          .id('schedule.run.' + binding.value.id)
+        ListItem() {
+          Row({space:10}) {
+            Column({space:4}) {
+              Text(binding.value.title).fontSize(16).fontColor(Colors.ink).maxLines(2)
+              Text([Wire.text(binding.value.raw,'status'),this.scheduleTime(Wire.text(binding.value.raw,'at') || Wire.text(binding.value.raw,'due'))].filter((v:string) => !!v).join(' · ')).fontSize(13).fontColor(Colors.secondary)
+            }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+            SymbolGlyph(Symbols.expand).fontSize(13).fontColor([Colors.secondary])
+          }.padding(13).width('100%').backgroundColor(Colors.surface).borderRadius(12)
+        }.id('schedule.run.' + binding.value.id)
           .onClick(() => { const target = this.management.scheduleRunChat(this.model, binding.value); if (target) this.onChat(target); })
       }, (binding: BoundRow<ManagementRow>) => binding.key)
-      if (!this.management.rows.length && !this.management.loading) ListItem() { Text(tr('empty')).padding(Tokens.page) }
-      if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
-    }.width('100%').height('100%')
+      if (this.management.loading) ListItem() { LoadingProgress().width(28).height(28) }
+      if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor(Colors.danger).padding(Tokens.inset) }
+    }.width('100%').height('100%').padding({left:16,right:16,top:6,bottom:12}).backgroundColor(Colors.grouped)
       .bindSheet($$this.scheduleEditOpen, this.scheduleForm(), { title: { title: tr(this.management.scheduleDraft.id ? 'edit' : 'create') }, height: SheetSize.LARGE, showClose: true,
         onDisappear: (): void => { this.management.cancelSchedule(); } })
   }
@@ -954,7 +973,7 @@ export struct SettingsPage {
           }
         }.id('triage.' + key)
       }, (key: string) => key)
-      if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
   }
 
@@ -1035,7 +1054,7 @@ export struct SettingsPage {
           .enabled(this.management.previewReady() && !this.management.saving)
           .onClick(() => this.management.confirmExtensionPreview(this.model).then((ok: boolean) => { if (ok) this.extensionPreviewOpen = false; }))
       }.justifyContent(FlexAlign.SpaceBetween).width('100%').padding(Tokens.inset)
-      if (this.management.error) Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
+      if (this.management.error) Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
     }.width('100%').height('100%')
   }
 
@@ -1068,7 +1087,7 @@ export struct SettingsPage {
         }.id('catalog.' + Wire.text(binding.value.raw, 'market') + '.' + binding.value.id)
       }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (!this.management.catalogRows.length && !this.management.loading) ListItem() { Text(tr('empty')).padding(Tokens.page) }
-      if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
   }
 
@@ -1134,7 +1153,7 @@ export struct SettingsPage {
       }, (page: Record<string, Object>) => Wire.text(page, 'id'))
       if (Wire.text(this.management.extensionDetail, 'origin').startsWith('market:') && !Wire.bool(this.management.extensionDetail, 'read_only'))
         ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('remove')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('remove', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('remove')).bindTips(tr('remove')).onClick(() => this.confirmExtensionRemove()) }
-      if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
   }
 
@@ -1192,7 +1211,7 @@ export struct SettingsPage {
         if (Wire.text(this.selectedConnector()?.raw || {}, 'account'))
           ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('sign_out')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('sign_out', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('sign_out')).bindTips(tr('sign_out')).onClick(() => this.confirmConnectorLogout()) }
       }
-      if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
   }
 
@@ -1223,7 +1242,7 @@ export struct SettingsPage {
         }.id(page + '.' + binding.value.id)
       }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (!this.management.rows.length && !this.management.loading) ListItem() { Text(tr('empty')).padding(Tokens.page) }
-      if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
   }
 
@@ -1289,7 +1308,7 @@ export struct SettingsPage {
         if (this.channelWaitingText()) ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('waiting'),
           secondaryText: this.channelWaitingText() }) }) }
       }
-      if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
   }
 
@@ -1316,7 +1335,7 @@ export struct SettingsPage {
         }.id('channel.' + binding.value.id)
       }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (!this.management.rows.length && !this.management.loading) ListItem() { Text(tr('empty')).padding(Tokens.page) }
-      if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
   }
 
@@ -1335,7 +1354,7 @@ export struct SettingsPage {
       }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (!this.management.rows.length && !this.management.loading) ListItem() { Text(tr('empty')).padding(Tokens.page) }
       if (Wire.identifier(this.management.data, 'next')) ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('load_more')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('load_more', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('load_more')).bindTips(tr('load_more')).enabled(!this.management.loading).onClick(() => this.management.loadMoreLedger(this.model)) }
-      if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
   }
 
@@ -1345,6 +1364,7 @@ export struct SettingsPage {
       if (kind === 'language') this.applyLanguage(index, owner, revision, scope, generation);
       else if (kind === 'color') this.applyColorMode(index, owner, revision, scope, generation);
       else if (kind === 'style') this.applyStyle(index, owner, revision, scope, generation);
+      else if (kind === 'phoneNavigation' && this.appearanceCurrent(owner,revision,scope,generation)) this.look.setPhoneNavigation(index === 1 ? 'merged' : 'separate');
       else if (kind === 'density') this.applyDensity(index, owner, revision, scope, generation);
       else if (kind === 'group') this.applyAgentGrouping(index, owner, workspace, revision, scope, generation);
     };
@@ -1357,43 +1377,69 @@ export struct SettingsPage {
     const owner = this.model, scope = owner.scope(), generation = owner.connectionGeneration();
     return (): void => { if (this.appearanceCurrent(owner, revision, scope, generation)) this.loadLook(); };
   }
+  @Builder phoneLookPage() {
+    if (this.phoneAppearanceRoute === 'phone_look_avatar') {
+      List() {
+        DeviceLookPicker({model:this.look,showAccent:false,active:this.appearanceCurrent(this.model,this.appearanceRevision,this.model.scope(),this.model.connectionGeneration()),
+          onAvatarSelected:this.appearanceAvatarAction(this.appearanceRevision,false),onRefresh:this.appearanceRefreshAction(this.appearanceRevision)})
+      }.width('100%').height('100%').backgroundColor(Colors.sheetBackground)
+    } else {
+      ForEach([this.appearanceRevision], (revision: number) => {
+        PhoneAppearanceSettings({model:this.model,look:this.look,route:this.phoneAppearanceRoute,
+          active:this.appearanceCurrent(this.model,revision,this.model.scope(),this.model.connectionGeneration()),
+          onOpen:(key:string) => this.onOpen(key)})
+      }, (revision:number) => String(revision))
+    }
+  }
+  @Builder appearanceGeneral() {
+    ForEach([this.appearanceRevision], (revision: number) => {
+      DeviceLookPicker({ model: this.look, active: this.appearanceCurrent(this.model, revision, this.model.scope(), this.model.connectionGeneration()),
+        onAvatarSelected: this.appearanceAvatarAction(revision, false),
+        onAccentSelected: this.appearanceAvatarAction(revision, true),
+        onRefresh: this.appearanceRefreshAction(revision) })
+    }, (revision: number) => String(revision))
+    ListItem() {
+      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+        Text(tr('language')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+        Select([{ value: tr('system') }, { value: 'English' }, { value: '简体中文' }, { value: '日本語' }]).attributeModifier(SelectStyles.inline)
+          .selected(['default', 'en-US', 'zh-CN', 'ja-JP'].indexOf(this.model.language))
+          .value(this.model.language === 'default' ? tr('system') : this.model.language === 'en-US' ? 'English' : this.model.language === 'zh-CN' ? '简体中文' : '日本語')
+          .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(!this.model.languageChanging && this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+          .onSelect(this.appearanceSelector('language', this.appearanceRevision)).id('appearance.language')
+      }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+    }
+    ListItem() {
+      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+        Text(tr('color_mode')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+        Select([{ value: tr('system') }, { value: tr('light') }, { value: tr('dark') }]).attributeModifier(SelectStyles.inline).selected(this.model.appearance)
+          .value(tr(['system', 'light', 'dark'][this.model.appearance] || 'system'))
+          .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+          .onSelect(this.appearanceSelector('color', this.appearanceRevision)).id('appearance.color-mode')
+      }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+    }
+    ListItem() {
+      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+        Text(tr('style')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+        Select([{ value: tr('app_style_system') }, { value: tr('app_style_glass') }, { value: tr('app_style_brief') }, { value: tr('app_style_board') }]).attributeModifier(SelectStyles.inline)
+          .selected(['system', 'glass', 'brief', 'board'].indexOf(this.model.style) < 0 ? 0 : ['system', 'glass', 'brief', 'board'].indexOf(this.model.style))
+          .value(tr(['system', 'glass', 'brief', 'board'].includes(this.model.style) ? 'app_style_' + this.model.style : 'app_style_system'))
+          .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+          .onSelect(this.appearanceSelector('style', this.appearanceRevision)).id('appearance.style')
+      }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+    }
+    ListItem() {
+      Row({space:12}) {
+        Text(tr('flow_navigation')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+        Select([{value:tr('flow_separate')},{value:tr('flow_merged')}]).attributeModifier(SelectStyles.inline)
+          .selected(this.look.phoneNavigation === 'merged' ? 1 : 0).value(tr(this.look.phoneNavigation === 'merged' ? 'flow_merged' : 'flow_separate'))
+          .enabled(this.look.ready && this.appearanceCurrent(this.model,this.appearanceRevision,this.model.scope(),this.model.connectionGeneration()))
+          .onSelect(this.appearanceSelector('phoneNavigation',this.appearanceRevision)).id('appearance.phone-navigation')
+      }.width('100%').constraintSize({minHeight:Tokens.touch}).padding({left:Tokens.page,right:Tokens.page})
+    }
+  }
   @Builder appearancePage() {
     List() {
-      ForEach([this.appearanceRevision], (revision: number) => {
-        DeviceLookPicker({ model: this.look, active: this.appearanceCurrent(this.model, revision, this.model.scope(), this.model.connectionGeneration()),
-          onAvatarSelected: this.appearanceAvatarAction(revision, false),
-          onAccentSelected: this.appearanceAvatarAction(revision, true),
-          onRefresh: this.appearanceRefreshAction(revision) })
-      }, (revision: number) => String(revision))
-      ListItem() {
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
-          Text(tr('language')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
-          Select([{ value: tr('system') }, { value: 'English' }, { value: '简体中文' }, { value: '日本語' }]).attributeModifier(SelectStyles.inline)
-            .selected(['default', 'en-US', 'zh-CN', 'ja-JP'].indexOf(this.model.language))
-            .value(this.model.language === 'default' ? tr('system') : this.model.language === 'en-US' ? 'English' : this.model.language === 'zh-CN' ? '简体中文' : '日本語')
-            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(!this.model.languageChanging && this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
-            .onSelect(this.appearanceSelector('language', this.appearanceRevision)).id('appearance.language')
-        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
-      }
-      ListItem() {
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
-          Text(tr('color_mode')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
-          Select([{ value: tr('system') }, { value: tr('light') }, { value: tr('dark') }]).attributeModifier(SelectStyles.inline).selected(this.model.appearance)
-            .value(tr(['system', 'light', 'dark'][this.model.appearance] || 'system'))
-            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
-            .onSelect(this.appearanceSelector('color', this.appearanceRevision)).id('appearance.color-mode')
-        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
-      }
-      ListItem() {
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
-          Text(tr('style')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
-          Select([{ value: tr('app_style_system') }, { value: tr('app_style_glass') }, { value: tr('app_style_brief') }, { value: tr('app_style_board') }]).attributeModifier(SelectStyles.inline)
-            .selected(['system', 'glass', 'brief', 'board'].indexOf(this.model.style) < 0 ? 0 : ['system', 'glass', 'brief', 'board'].indexOf(this.model.style))
-            .value(tr(['system', 'glass', 'brief', 'board'].includes(this.model.style) ? 'app_style_' + this.model.style : 'app_style_system'))
-            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
-            .onSelect(this.appearanceSelector('style', this.appearanceRevision)).id('appearance.style')
-        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
-      }
+      if (!this.agentLayoutOnly) this.appearanceGeneral()
       ListItem() {
         Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
           Text(tr('agent_density')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
@@ -1430,7 +1476,7 @@ export struct SettingsPage {
             .accessibilityText(tr('message_alerts'))
         }
       }
-      if (this.notifications.error) ListItem() { Text(tr(this.notifications.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.page) }
+      if (this.notifications.error) ListItem() { Text(trError(this.notifications.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.page) }
     }.width('100%').height('100%')
   }
 
@@ -1456,7 +1502,7 @@ export struct SettingsPage {
         ForEach(this.model.profile.addresses, (address: string) => { ListItem() { Text(address).copyOption(CopyOptions.LocalDevice).padding(Tokens.page) } }, (address: string) => address)
       }
       ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('features'), secondaryText: this.model.features.join(', ') }) }) }
-      if (this.model.error) ListItem() { Text(tr(this.model.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      if (this.model.error) ListItem() { Text(trError(this.model.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
       ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('refresh')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('refresh', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('refresh')).bindTips(tr('refresh')).onClick(() => { if (this.model.connected) this.model.refresh(); else this.model.foregrounded(); this.management.load(this.page, this.model); }) }
     }.width('100%').height('100%')
   }
@@ -1469,13 +1515,13 @@ export struct SettingsPage {
 
   build() {
     Column() {
-      if (this.management.loading && this.page !== 'machines' && this.page !== 'machine_detail') {
-        LoadingProgress().height(Tokens.touch).width(Tokens.touch)
-      }
-      if (this.page === 'models' || this.page === 'translation') this.modelsPage()
+      if (this.management.loading) LoadingProgress().height(Tokens.touch).width(Tokens.touch)
+      if (this.page === 'models') this.modelCatalogPage()
+      else if (this.page === 'model_purpose' || this.page === 'translation') this.modelsPage()
       else if (this.page === 'session_permissions') this.sessionModePage('permission_mode')
       else if (this.page === 'session_effort') this.sessionModePage('effort')
-      else if (this.page === 'machines' || this.page === 'machine_detail') this.machinesPage()
+      else if (this.page === 'session_model') this.sessionModePage('model')
+      else if (this.page === 'machines') this.machinesPage()
       else if (this.page === 'schedules') this.schedulesPage()
       else if (this.page === 'triage') this.triagePage()
       else if (this.page === 'extension_detail') this.extensionDetailPage()
@@ -1485,13 +1531,14 @@ export struct SettingsPage {
       else if (this.page === 'extensions' || this.page === 'connectors') this.extensionConnectorPage(this.page)
       else if (this.page === 'channels') this.channelsPage()
       else if (this.page === 'ledger') this.ledgerPage()
+      else if (this.page === 'appearance' && this.phoneAppearanceRoute) this.phoneLookPage()
       else if (this.page === 'appearance') this.appearancePage()
       else if (this.page === 'notifications') this.notificationsPage()
       else if (this.page === 'privacy') this.privacyPage()
       else if (this.page === 'diagnostics') this.diagnosticsPage()
       else this.delegatedPage()
-      if (this.management.error && !['models', 'session_permissions', 'session_effort', 'machines', 'machine_detail', 'schedules', 'triage', 'extensions', 'connectors', 'channels', 'ledger', 'extension_detail', 'connector_detail', 'channel_detail', 'extension_catalog'].includes(this.page))
-        Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
+      if (this.management.error && !['models', 'session_permissions', 'session_effort', 'session_model', 'machines', 'schedules', 'triage', 'extensions', 'connectors', 'channels', 'ledger', 'extension_detail', 'connector_detail', 'channel_detail', 'extension_catalog'].includes(this.page))
+        Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
     }.width('100%').height('100%')
       .bindSheet($$this.extensionPreviewOpen, this.extensionPreviewForm(), { title: { title: tr(Wire.bool(this.management.preview, 'upgrade') ? 'upgrade' : 'install') + ' · ' + tr('permissions') }, height: SheetSize.LARGE, showClose: true })
       .bindSheet($$this.licenseNoticesOpen, this.licenseNoticesForm(), { title: { title: tr('open_source_licenses') }, height: SheetSize.LARGE, showClose: true })

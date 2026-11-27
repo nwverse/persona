@@ -34,7 +34,7 @@ registerHooks({
       export const messageDisplay = text => text;
       export const nativeNotifications = {async clear(){},features(){return ['elicitation'];}};
     `};
-    if (url.endsWith('.ets')) return {format:'module', shortCircuit:true, source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,'').replace(/TranscriptItem, TranscriptBatch, TranscriptAction, TranscriptSnapshot/, '').replace(/, TranscriptBatch, TranscriptSnapshot/, ''))};
+    if (url.endsWith('.ets')) return {format:'module', shortCircuit:true, source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};
     return next(url, context);
   },
 });
@@ -400,4 +400,24 @@ test('unchanged latest pages reuse published records, same-id corrections update
  await model.latest();assert.equal(visible.at(-1).items,prior);assert.equal(snapshots.length,count);
  page=historyPage('history',[1,2]);page.items[1].text='corrected';
  await model.latest();assert.notEqual(visible.at(-1).items,prior);assert.equal(snapshots.at(-1).items[1].text,'corrected');
+});
+
+test('the activity reader loads history without publishing seen, replacing a chat subscription or writing its cache', async () => {
+  const requests = [], sent = [], writes = [], snapshots = [];
+  const latest = historyPage('quiet-history',[8,9],true);
+  const older = historyPage('quiet-history',[6,7],false);
+  const model = new TranscriptModel({machine:'mac', session:'main'},
+    {async call(path) { requests.push(path); return path.includes('before_seq=') ? older : latest; },
+      transport:{send(payload) { sent.push(payload); }}},
+    {async get(){return '';},async put(key){writes.push(key);}}, 'same-as-visible-chat',
+    (items,more)=>snapshots.push({ids:items.map(item=>item.id),more}),error=>assert.fail(error), undefined, undefined, false);
+  await model.open();
+  await model.older();
+  model.close();
+  assert.equal(requests.length,2);
+  assert.ok(requests.every(path=>path.startsWith('/api/v1/sessions/mac/main/items?')));
+  assert.ok(requests[1].includes('before_seq='));
+  assert.equal(snapshots.at(-1).ids.length,4);
+  assert.deepEqual(sent,[]);
+  assert.deepEqual(writes,[]);
 });

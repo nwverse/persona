@@ -14,7 +14,24 @@ let ownerToken: string | undefined;
 let ownerEpoch: string | undefined;
 let ownerGeneration = 0;
 const credentialListeners = new Set<(owner: string) => void>();
+interface SharedGetResult {
+  data: unknown;
+  rawText: string;
+  isJson: boolean;
+  headers: Headers;
+  status: number;
+}
+interface InFlightGet {
+  path: string;
+  fetcher: typeof fetch;
+  controller: AbortController;
+  waiters: number;
+  delivered: number;
+  promise: Promise<SharedGetResult>;
+}
+const inFlightGets = new Map<string, InFlightGet>();
 function publishCredentialOwner(): string {
+  inFlightGets.clear();
   const owner = `credential-${++ownerGeneration}`;
   credentialListeners.forEach((listener) => listener(owner));
   return owner;
@@ -128,7 +145,7 @@ export const CLIENT_VERSION = "1";
  * limit, so a dead link is still dropped. Only the timeout is asked for: the 20 s interval stays the hub's.
  */
 export const CLIENT_PONG_TIMEOUT = 45;
-export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1", "persona_card_ring", "closeout.markdown.v1", "agent_message_hold"];
+export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1", "persona_card_ring", "closeout.markdown.v1", "agent_message_hold", "tool_views"];
 
 // A read the hub has not answered by then fails instead of loading forever (#4492): a restarting hub, a stuck node or a
 // half-dead network. Longer than the hub's own cut-offs for asking a computer (30–40 s), so when the hub has an error
@@ -151,11 +168,49 @@ export class HubTimeoutError extends Error {
   }
 }
 
-type ApiOptions = RequestInit & { json?: unknown; token?: string; tokenOwner?: string; isAuthContextCurrent?: () => boolean; onResponse?: (headers: Headers, status: number) => void; readBlob?: (response: Response, signal?: AbortSignal | null) => Promise<Blob>; allowHtmlResponse?: boolean };
+type ApiOptions = RequestInit & { json?: unknown; token?: string; tokenOwner?: string; isAuthContextCurrent?: () => boolean; onResponse?: (headers: Headers, status: number) => void; readBlob?: (response: Response, signal?: AbortSignal | null) => Promise<Blob>; allowHtmlResponse?: boolean; dedupe?: boolean };
+
+/** Detach in-flight GET entries so subsequent reads issue a fresh request (writes, store mutations, resets). */
+export function invalidateInFlightGets(prefix?: string): void {
+  if (!prefix) {
+    inFlightGets.clear();
+    return;
+  }
+  for (const [key, entry] of inFlightGets) {
+    if (entry.path === prefix || entry.path.startsWith(`${prefix}?`) || entry.path.startsWith(`${prefix}/`)) {
+      inFlightGets.delete(key);
+    }
+  }
+}
+
+function abortError(reason: unknown): DOMException {
+  return isAbort(reason) ? reason : new DOMException("aborted", "AbortError");
+}
+
+function buildHeaders(path: string, init: ApiOptions): Headers {
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${init.token ?? getToken()}`);
+  // the hub writes its error and status text in the interface language (docs/protocol/i18n.md "Protocol")
+  if (!headers.has("Accept-Language")) headers.set("Accept-Language", currentLanguage());
+  CLIENT_HEADERS.forEach(name => headers.set(name, `${CLIENT_PLATFORM}/${CLIENT_VERSION}`));
+  if (!headers.has("X-Persona-Features")) headers.set("X-Persona-Features", CLIENT_FEATURES.join(","));
+  const op = OP_HEADERS.map(name => headers.get(name)).find(Boolean);
+  if (op) OP_HEADERS.forEach(name => headers.set(name, op));
+  // the manager the assistant page shows, on the assistant's requests (lib/manager-choice.ts); none for the default
+  const manager = managerHeaderFor(path);
+  if (manager && !headers.has(MANAGER_HEADER)) headers.set(MANAGER_HEADER, manager);
+  return headers;
+}
+
+function dedupeKey(path: string, owner: string | undefined, init: ApiOptions, headers: Headers): string {
+  const entries = [...headers.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return JSON.stringify([path, owner ?? "", init.token ?? "", init.allowHtmlResponse ? 1 : 0, init.credentials ?? "", init.cache ?? "", entries]);
+}
 
 /** `tokenOwner`: explicit credentials opt into 401 recovery only while both the token and credential generation are current.
  *  `isAuthContextCurrent`: an optional additional lifetime fence for a request scoped to a view or manager.
- *  `timeout`: ms before a read gives up with HubTimeoutError (default READ_TIMEOUT_MS for GET, none otherwise; 0: none). */
+ *  `timeout`: ms before a read gives up with HubTimeoutError (default READ_TIMEOUT_MS for GET, none otherwise; 0: none).
+ *  `dedupe`: coalesce identical in-flight GET requests (default true; pass false for reads that must bypass an older in-flight GET). */
 export function api<T>(path: string, init: ApiOptions & { timeout?: number } = {}): Promise<T> {
   return call<T>(path, init, false);
 }
@@ -168,10 +223,19 @@ export function apiBlob(path: string, init: ApiOptions & { timeout?: number } = 
 }
 
 async function call<T>(path: string, init: ApiOptions & { timeout?: number }, binary: boolean): Promise<T> {
-  const { timeout, ...rest } = init;
+  const { timeout, dedupe, ...rest } = init;
   const read = (init.method ?? "GET").toUpperCase() === "GET";
+  if (!read) inFlightGets.clear();
   const limit = timeout ?? (read ? READ_TIMEOUT_MS : 0);
-  if (!limit) return request<T>(path, rest, binary);
+  const canDedupe = !binary && read && dedupe !== false && init.body === undefined && init.json === undefined && !init.isAuthContextCurrent;
+  if (canDedupe) return callSharedGet<T>(path, rest, limit);
+  if (!limit) {
+    try {
+      return await request<T>(path, rest, binary);
+    } finally {
+      if (!read) inFlightGets.clear();
+    }
+  }
   // The caller's own signal still aborts as before (an AbortError); only the time running out becomes HubTimeoutError.
   const controller = new AbortController();
   const outer = init.signal;
@@ -196,9 +260,75 @@ async function call<T>(path: string, init: ApiOptions & { timeout?: number }, bi
   } catch (e) {
     throw late && isAbort(e) ? new HubTimeoutError() : e;
   } finally {
+    if (!read) inFlightGets.clear();
     clearTimeout(timer);
     outer?.removeEventListener("abort", forward);
   }
+}
+
+function callSharedGet<T>(path: string, init: ApiOptions, limit: number): Promise<T> {
+  const outer = init.signal;
+  if (outer?.aborted) return Promise.reject(abortError(outer.reason));
+  const owner = init.token === undefined ? credentialOwner() : init.tokenOwner;
+  const headers = buildHeaders(path, init);
+  const key = dedupeKey(path, owner, init, headers);
+  const fetcher = fetch;
+  let entry = inFlightGets.get(key);
+  if (entry && entry.fetcher !== fetcher) {
+    inFlightGets.delete(key);
+    entry = undefined;
+  }
+  if (!entry) {
+    const controller = new AbortController();
+    const created: InFlightGet = { path, fetcher, controller, waiters: 0, delivered: 0, promise: null! };
+    inFlightGets.set(key, created);
+    const { onResponse: _onResponse, signal: _signal, ...sharedInit } = init;
+    created.promise = runSharedGet(key, created, path, { ...sharedInit, signal: controller.signal }, owner, headers);
+    // Prevent unhandled rejections if all waiters leave and cancel the shared controller.
+    created.promise.catch(() => {});
+    entry = created;
+  }
+  const active = entry;
+  active.waiters++;
+  return new Promise<T>((resolve, reject) => {
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const detach = (cancel: boolean): boolean => {
+      if (done) return false;
+      done = true;
+      clearTimeout(timer);
+      outer?.removeEventListener("abort", onAbort);
+      active.waiters--;
+      if (cancel && active.waiters === 0) {
+        if (inFlightGets.get(key) === active) inFlightGets.delete(key);
+        active.controller.abort();
+      }
+      return true;
+    };
+    const onAbort = () => {
+      if (detach(true)) reject(abortError(outer?.reason));
+    };
+    outer?.addEventListener("abort", onAbort, { once: true });
+    if (limit > 0) {
+      timer = setTimeout(() => {
+        if (detach(true)) reject(new HubTimeoutError());
+      }, limit);
+    }
+    active.promise.then(
+      (result) => {
+        if (!detach(false)) return;
+        init.onResponse?.(result.headers, result.status);
+        const value = active.delivered++ > 0 && result.isJson && result.rawText
+          ? compatibleEnvelope(JSON.parse(result.rawText))
+          : result.data;
+        resolve(value as T);
+      },
+      (err) => {
+        if (!detach(false)) return;
+        reject(err);
+      },
+    );
+  });
 }
 
 function pause(ms: number, signal: AbortSignal): Promise<void> {
@@ -211,19 +341,61 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+async function runSharedGet(key: string, entry: InFlightGet, path: string, init: ApiOptions, owner: string | undefined, headers: Headers): Promise<SharedGetResult> {
+  const { onResponse: _onResponse, isAuthContextCurrent: _fence, readBlob: _readBlob, allowHtmlResponse, dedupe: _dedupe, ...fetchOptions } = init;
+  const method = init.method ?? "GET";
+  try {
+    for (let tries = 0; ; tries++) {
+      try {
+        let res: Response;
+        try {
+          // Native browser fetch requires the global receiver, not the in-flight entry that stores it.
+          res = await entry.fetcher.call(globalThis, `${BASE}/api/v1${path}`, { redirect: "manual", ...fetchOptions, headers });
+        } catch (e) {
+          if (!isAbort(e)) requestCrumb(method, path, 0);
+          throw e;
+        }
+        const notModified = res.status === 304 && headers.has("If-None-Match");
+        if (!notModified && !allowHtmlResponse && intercepted(res)) {
+          requestCrumb(method, path, res.status);
+          if (owner === undefined || (owner === credentialOwner() && (init.token === undefined || init.token === getToken()))) {
+            reloadForSignIn();
+          }
+          throw new ApiError(res.status || 401, t("lib-api.hub_no_response"), {}, false);
+        }
+        const text = await res.text();
+        let data: Record<string, unknown> = {};
+        let isJson = false;
+        try {
+          data = text ? JSON.parse(text) : {};
+          isJson = typeof data === "object" && data !== null && !Array.isArray(data);
+        } catch {
+          data = { error: /^\s*</.test(text) ? "" : text };
+          isJson = false;
+        }
+        if (!res.ok && !notModified) {
+          requestCrumb(method, path, res.status);
+          if (res.status === 401 && owner !== undefined && owner === credentialOwner() && (init.token === undefined || init.token === getToken())) {
+            onUnauthorized();
+          }
+          const msg = typeof data.error === "string" && data.error ? data.error : `HTTP ${res.status}`;
+          throw new ApiError(res.status, msg, data, isJson, res.headers?.get("X-Request-Id") ?? undefined, path);
+        }
+        return { data: compatibleEnvelope(data), rawText: text, isJson, headers: res.headers, status: res.status };
+      } catch (e) {
+        if (tries >= readRetryMs().length || !isTransient(e)) throw e;
+        await pause(readRetryMs()[tries], entry.controller.signal);
+      }
+    }
+  } finally {
+    if (inFlightGets.get(key) === entry) inFlightGets.delete(key);
+  }
+}
+
 async function request<T>(path: string, init: ApiOptions, binary = false): Promise<T> {
-  const { onResponse, isAuthContextCurrent, readBlob, allowHtmlResponse, ...fetchOptions } = init;
+  const { onResponse, isAuthContextCurrent, readBlob, allowHtmlResponse, dedupe: _dedupe, ...fetchOptions } = init;
   const owner = init.token === undefined ? credentialOwner() : init.tokenOwner;
-  const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${init.token ?? getToken()}`);
-  // the hub writes its error and status text in the interface language (docs/protocol/i18n.md "Protocol")
-  if (!headers.has("Accept-Language")) headers.set("Accept-Language", currentLanguage());
-  CLIENT_HEADERS.forEach(name => headers.set(name, `${CLIENT_PLATFORM}/${CLIENT_VERSION}`));
-  const op = OP_HEADERS.map(name => headers.get(name)).find(Boolean);
-  if (op) OP_HEADERS.forEach(name => headers.set(name, op));
-  // the manager the assistant page shows, on the assistant's requests (lib/manager-choice.ts); none for the default
-  const manager = managerHeaderFor(path);
-  if (manager && !headers.has(MANAGER_HEADER)) headers.set(MANAGER_HEADER, manager);
+  const headers = buildHeaders(path, init);
   let body = init.body;
   if (init.json !== undefined) {
     headers.set("Content-Type", "application/json");
@@ -322,7 +494,7 @@ export function fileThumbURL(mid: string, path: string, cwd?: string, size = 256
   return `${BASE}/api/v1/machines/${enc(mid)}/file/thumb?path=${enc(path)}&cwd=${enc(cwd ?? "")}&size=${size}&token=${enc(getToken())}&thumb=${thumbnailCacheEpoch}`;
 }
 
-export function isAbort(e: unknown) {
+export function isAbort(e: unknown): e is DOMException {
   return e instanceof DOMException && e.name === "AbortError";
 }
 
