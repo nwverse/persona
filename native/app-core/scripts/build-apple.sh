@@ -20,12 +20,12 @@
 # On Linux, for a Linux Apple toolchain such as nwverse/apple-build that builds the iOS app without Xcode (#16944), the
 # same commands build the device and arm64 simulator slices whatever the machine's architecture (every Apple Rust
 # target is a cross target there, and such a toolchain builds for the arm64 simulator), and no macOS slice: macOS
-# `swift test` needs a Mac, and the script says so in one line. With no Apple linker and no xcodebuild, each slice is
-# the static library alone (`cargo rustc --crate-type staticlib`: the crate's cdylib would need that linker), and the
-# script writes the XCFramework itself, laid out as `xcodebuild -create-xcframework` lays it out. The key takes the
-# Apple SDKs' build versions from the toolchain's copy of the Xcode SDKs, found as apple-build finds it
-# (APPLE_BUILD_SDK_ROOT, else sdk_root in its config.json), each `none` when it cannot be read, as when xcrun fails on a
-# Mac. The cache, the stamp and --simulator work as on a Mac. Any other system is refused.
+# `swift test` needs a Mac, and the script says so in one line. With no Apple linker and no xcodebuild, cargo builds
+# the crate without its cdylib (`cargo rustc --crate-type staticlib,rlib`), and the script writes the XCFramework
+# itself, laid out as `xcodebuild -create-xcframework` lays it out. The key takes the Apple SDKs' build versions from
+# the toolchain's copy of the Xcode SDKs, found as apple-build finds it (APPLE_BUILD_SDK_ROOT, else sdk_root in its
+# config.json), each `none` when it cannot be read, as when xcrun fails on a Mac. The cache, the stamp and --simulator
+# work as on a Mac. Any other system is refused.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 CORE="$ROOT/native/app-core"
@@ -210,16 +210,27 @@ fi
 rustup target add --toolchain "$TOOLCHAIN" $TARGETS
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$CORE/target/apple}"
 # Panic metadata from dependencies names their registry source paths. Keep the build machine's home and checkout
-# paths out of the published XCFramework, including when a caller supplies its own CARGO_HOME.
-export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$HOME=/build/home --remap-path-prefix=$ROOT=/build/persona"
+# paths out of the published XCFramework, including when a caller supplies its own CARGO_HOME. A home or checkout
+# reached through a symbolic link is remapped as it really is too: rustup and cargo hand rustc the real path. The
+# checkout's flags come last, so they win for its files, which usually lie in the home.
+remap() { # $1: a path, $2: what it becomes
+  local real
+  printf -- '--remap-path-prefix=%s=%s' "$1" "$2"
+  real=$(cd "$1" 2>/dev/null && pwd -P) || return 0
+  [ "$real" = "$1" ] || printf -- ' --remap-path-prefix=%s=%s' "$real" "$2"
+}
+RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$(remap "$HOME" /build/home) $(remap "$ROOT" /build/persona)"
+export RUSTFLAGS
 for TARGET in $TARGETS; do
   printf 'persona-core-apple: building %s\n' "$TARGET"
   if [ "$HOST_OS" = Linux ]; then
-    # The static library alone: the crate also lists a cdylib, which needs an Apple linker. No dependency compiles C,
-    # so nothing reads an SDK and SDKROOT is left as it is. Like the Mac's build, this sets no deployment target: both
-    # take rustc's default, or the caller's IPHONEOS_DEPLOYMENT_TARGET (part of the key), and make the same objects.
+    # The crate's crate types less the cdylib, which needs an Apple linker. The rlib stays for what it does to the
+    # static library: with an rlib among them, cargo runs none of the profile's fat LTO, as on a Mac, so the library
+    # holds the same objects as the Mac's (a staticlib alone would be one LTO-merged object). No dependency compiles
+    # C, so nothing reads an SDK and SDKROOT is left as it is; like the Mac's build, this sets no deployment target:
+    # both take rustc's default, or the caller's IPHONEOS_DEPLOYMENT_TARGET (part of the key).
     cargo +"$TOOLCHAIN" rustc --manifest-path "$CORE/Cargo.toml" --locked --release -p persona-core-ffi --lib \
-      --target "$TARGET" --crate-type staticlib
+      --target "$TARGET" --crate-type staticlib,rlib
     continue
   fi
   SDKROOT=$(xcrun --sdk macosx --show-sdk-path)

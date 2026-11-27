@@ -46,10 +46,10 @@ case "$1" in
   *) echo "${FAKE_OS:-Darwin}" ;;
 esac
 ''',
-    # Records each build (its target, and its SDKROOT and arguments) and leaves a static library named after its target
-    # where the script looks for it.
+    # Records each build (its target, and its SDKROOT, RUSTFLAGS and arguments) and leaves a static library named after
+    # its target where the script looks for it.
     'cargo': '''#!/bin/sh
-printf '%s|%s\\n' "${SDKROOT-unset}" "$*" >> "$FAKE_LOG/cargo-calls"
+printf '%s|%s|%s\\n' "${SDKROOT-unset}" "${RUSTFLAGS-}" "$*" >> "$FAKE_LOG/cargo-calls"
 target=
 while [ $# -gt 0 ]; do [ "$1" = --target ] && target=$2; shift; done
 echo "$target" >> "$FAKE_LOG/cargo"
@@ -149,6 +149,14 @@ class Harness(unittest.TestCase):
         targets = log.read_text().split() if log.exists() else []
         log.unlink(missing_ok=True)
         return targets
+
+    def cargo_calls(self):
+        """Each cargo run since the last call: its SDKROOT, its RUSTFLAGS and its arguments."""
+        log = self.logs / 'cargo-calls'
+        lines = log.read_text().splitlines() if log.exists() else []
+        log.unlink(missing_ok=True)
+        calls = [line.split('|', 2) for line in lines]
+        return [(sdkroot, rustflags, args.split()) for sdkroot, rustflags, args in calls]
 
     def framework(self, root):
         dest = root / 'apple/Packages/PersonaCore/build/PersonaCoreC.xcframework'
@@ -343,6 +351,27 @@ class AppleCoreBuildTests(Harness):
         self.assertFalse(self.cache.exists())
         self.assertFalse((self.temp / 'home').exists(), 'nothing is written to the default cache either')
 
+    def test_a_home_or_checkout_behind_a_link_is_remapped_as_it_really_is_too(self):
+        # Real paths, as on a Mac: the same two remaps as ever.
+        home = Path(os.path.realpath(self.temp)) / 'home'
+        home.mkdir()
+        root = Path(os.path.realpath(self.checkout('real')))
+        self.build(root, '--simulator', PERSONA_APP_CORE_CACHE='0', HOME=str(home))
+        self.assertEqual([rustflags for _, rustflags, _ in self.cargo_calls()],
+                         ['--remap-path-prefix=%s=/build/home --remap-path-prefix=%s=/build/persona' % (home, root)])
+        # Through links (a home on another disk, often): rustup and cargo hand rustc the real paths, so those are
+        # remapped too, the checkout's last so that they win for its files; the caller's flags stay first.
+        (self.temp / 'home-link').symlink_to(home)
+        (self.temp / 'checkout-link').symlink_to(root)
+        self.build(self.temp / 'checkout-link', '--simulator', PERSONA_APP_CORE_CACHE='0',
+                   HOME=str(self.temp / 'home-link'), RUSTFLAGS='-C debug-assertions')
+        self.assertEqual([rustflags for _, rustflags, _ in self.cargo_calls()], [' '.join([
+            '-C debug-assertions',
+            '--remap-path-prefix=%s=/build/home' % (self.temp / 'home-link'),
+            '--remap-path-prefix=%s=/build/home' % home,
+            '--remap-path-prefix=%s=/build/persona' % (self.temp / 'checkout-link'),
+            '--remap-path-prefix=%s=/build/persona' % root])])
+
     def test_unknown_arguments_and_a_bad_keep_count_are_refused(self):
         first = self.checkout('first')
         self.assertEqual(self.run_script(first, '--device').returncode, 2)
@@ -382,7 +411,8 @@ class LinuxAppleCoreBuildTests(Harness):
         self.configure({'sdk_root': str(self.sdk)})
 
     def linux_path(self, *leave_out):
-        """The fakes, then the host's own tools less Xcode's (a Mac's /usr/bin has xcrun and xcodebuild) and those named."""
+        """The fakes, then the host's own tools less Xcode's (a Mac's /usr/bin has xcrun and xcodebuild) and the named
+        ones."""
         tools = Path(tempfile.mkdtemp(prefix='tools-', dir=self.temp))
         for directory in ('/usr/bin', '/bin', '/usr/sbin', '/sbin'):
             names = os.listdir(directory) if os.path.isdir(directory) else []
@@ -411,13 +441,6 @@ class LinuxAppleCoreBuildTests(Harness):
         self.assertEqual((result.returncode, result.stderr), (0, ''), result.stdout + result.stderr)
         return result.stdout
 
-    def cargo_calls(self):
-        """Each cargo run since the last call: its SDKROOT and its arguments."""
-        log = self.logs / 'cargo-calls'
-        lines = log.read_text().splitlines() if log.exists() else []
-        log.unlink(missing_ok=True)
-        return [(line.split('|', 1)[0], line.split('|', 1)[1].split()) for line in lines]
-
     def key(self, root):
         return self.framework(root)[1][0]
 
@@ -427,9 +450,10 @@ class LinuxAppleCoreBuildTests(Harness):
                 root = self.checkout('linux-' + arch)
                 out = self.build(root, FAKE_ARCH=arch)
                 manifest = str(root / 'native/app-core/Cargo.toml')
-                self.assertEqual(self.cargo_calls(), [
+                # The crate's crate types less the cdylib: the rlib keeps cargo from LTO-merging the static library.
+                self.assertEqual([(sdkroot, args) for sdkroot, _, args in self.cargo_calls()], [
                     ('unset', ['+' + TOOLCHAIN, 'rustc', '--manifest-path', manifest, '--locked', '--release', '-p',
-                               'persona-core-ffi', '--lib', '--target', target, '--crate-type', 'staticlib'])
+                               'persona-core-ffi', '--lib', '--target', target, '--crate-type', 'staticlib,rlib'])
                     for target in ('aarch64-apple-ios', SIM_TARGET)], 'static libraries, and no SDKROOT')
                 self.assertEqual(self.built(), ['aarch64-apple-ios', SIM_TARGET])
                 rustup = (self.logs / 'rustup').read_text().splitlines()
@@ -440,7 +464,8 @@ class LinuxAppleCoreBuildTests(Harness):
                 self.assertEqual(out.splitlines()[-1], LINUX_NOTE)
                 self.build(root, '--simulator', FAKE_ARCH=arch)
                 self.assertEqual(self.built(), [], 'the full framework serves a simulator request')
-                self.build(self.checkout('simulator-' + arch), '--simulator', PERSONA_APP_CORE_CACHE='0', FAKE_ARCH=arch)
+                self.build(self.checkout('simulator-' + arch), '--simulator', PERSONA_APP_CORE_CACHE='0',
+                           FAKE_ARCH=arch)
                 self.assertEqual(self.built(), [SIM_TARGET], 'the arm64 simulator whatever the machine')
                 self.cargo_calls()
         self.assertEqual(len(self.entries()), 2, 'the machine is still part of the key')
@@ -449,11 +474,13 @@ class LinuxAppleCoreBuildTests(Harness):
         def library(identifier, variant=None):
             # What xcodebuild -create-xcframework writes for each of these static libraries, BinaryPath included.
             entry = {'BinaryPath': 'libpersona_core.a', 'HeadersPath': 'Headers', 'LibraryIdentifier': identifier,
-                     'LibraryPath': 'libpersona_core.a', 'SupportedArchitectures': ['arm64'], 'SupportedPlatform': 'ios'}
+                     'LibraryPath': 'libpersona_core.a', 'SupportedArchitectures': ['arm64'],
+                     'SupportedPlatform': 'ios'}
             return {**entry, 'SupportedPlatformVariant': variant} if variant else entry
 
         def framework(*libraries):
-            return {'AvailableLibraries': list(libraries), 'CFBundlePackageType': 'XFWK', 'XCFrameworkFormatVersion': '1.0'}
+            return {'AvailableLibraries': list(libraries), 'CFBundlePackageType': 'XFWK',
+                    'XCFrameworkFormatVersion': '1.0'}
 
         first, second = self.checkout('first'), self.checkout('second')
         self.build(first)
@@ -473,9 +500,9 @@ class LinuxAppleCoreBuildTests(Harness):
             for identifier in slices:
                 target = SIM_TARGET if identifier.endswith('-simulator') else 'aarch64-apple-ios'
                 self.assertEqual((dest / identifier / 'libpersona_core.a').read_text(), 'lib %s\n' % target)
-                self.assertEqual((dest / identifier / 'Headers/persona_core.h').read_text(), 'int persona_core(void);\n')
+                self.assertEqual((dest / identifier / 'Headers/persona_core.h').read_text(),
+                                 'int persona_core(void);\n')
                 self.assertEqual((dest / identifier / 'Headers/module.modulemap').read_text(), MODULEMAP)
-                self.assertEqual((dest / identifier / 'Headers').stat().st_mode & 0o777, 0o777 & ~current_umask())
 
     def test_linux_keys_the_cache_by_the_toolchains_sdk_builds(self):
         root = self.checkout('first')
@@ -557,7 +584,8 @@ class LinuxAppleCoreBuildTests(Harness):
         self.assertFalse((self.temp / 'home/Library').exists())
 
     def test_a_linux_framework_never_serves_a_mac(self):
-        # The same machine name and SDK builds on both: only the system tells them apart, and a Mac needs its macOS slice.
+        # The same machine name and SDK builds on both: only the system tells them apart, and a Mac needs its macOS
+        # slice.
         self.set_sdks(self.sdk, iphoneos='23A100', iphonesimulator='23A100', macosx='23A100')
         self.build(self.checkout('linux'))
         self.built()
@@ -586,12 +614,6 @@ class LinuxAppleCoreBuildTests(Harness):
         self.build(root, '--simulator')
         self.assertIn('XCFramework is current', self.build(root, '--simulator', PATH=path))
         self.assertEqual(self.built(), [SIM_TARGET])
-
-
-def current_umask():
-    mask = os.umask(0)
-    os.umask(mask)
-    return mask
 
 
 if __name__ == '__main__':

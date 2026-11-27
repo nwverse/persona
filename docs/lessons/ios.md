@@ -575,8 +575,12 @@ this by changing a locale, allowing an address or rearranging the generated plis
 ## The Rust core's XCFramework on Linux (2026-11-27, #16944)
 
 - `cargo build -p persona-core-ffi` for an Apple target also links the crate's `cdylib`, which needs an Apple linker
-  that Linux does not have. Build the static library alone (`cargo rustc --lib --crate-type staticlib`); the Rust
-  dependencies compile no C, so that step needs neither an SDK nor clang.
+  that Linux does not have. Leave out only the cdylib (`cargo rustc --lib --crate-type staticlib,rlib`): a staticlib
+  alone gets the release profile's fat LTO, one merged object and a library unlike the Mac's, while with an rlib among
+  the crate types cargo runs no LTO, as on a Mac. The Rust dependencies compile no C, so neither needs an SDK or clang.
+- A home reached through a symbolic link (a devbox's home on another disk) leaks past
+  `--remap-path-prefix=$HOME=…`: rustup and cargo hand rustc the real path of the registry and the checkout. Remap the
+  real paths too.
 - A Linux host is not a Mac with another `uname -m`: a Linux Apple toolchain builds the arm64 simulator on an x86_64
   machine too, and the framework has no macOS slice. Its cache key names the system, or a cache both could reach would
   hand a Mac a full entry with no macOS slice.
