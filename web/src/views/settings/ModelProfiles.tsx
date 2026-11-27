@@ -892,7 +892,7 @@ function ModelProfilesForOwner({
           stackOnNarrow
         >
           <Button
-            tone="quiet"
+            tone="secondary"
             size="sm"
             testId="profile-deactivate-row-button"
             busy={busyAction === "deactivate"}
