@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-func newSpaceThreadEnv(t *testing.T, spaceSlug string) *threadEnv {
+func newSpaceThreadEnv(t *testing.T, spaceSlug string) (*threadEnv, *fleetDevs) {
 	t.Helper()
 	st := &trackKindMemStore{trackRegistryStore: &trackRegistryStore{memStore: &memStore{}, rows: []db.Track{
 		{Slug: spaceSlug, Kind: trackKindSpace, Title: "Research Space", Template: trackTemplateSpace, Revision: 1},
@@ -22,11 +22,19 @@ func newSpaceThreadEnv(t *testing.T, spaceSlug string) *threadEnv {
 	env := newTodoEnv(t, st)
 	env.f.devices[0].Online = true
 	env.f.devices[0].Home = "/home/me"
-	env.s.devs = spaceDevs{fleetDevs: newFleetDevs()}
+	fd := newFleetDevs()
+	fd.add("server", "server").home = "/home/me"
+	fd.add("box", "box")
+	env.s.devs = spaceDevs{fleetDevs: fd}
 	e := withFeishuThread(env)
+	fd.setSessions("server", []proto.Session{
+		{SessionID: "m1", MachineID: "server", Assistant: true},
+		{SessionID: "c1x1x1", MachineID: "server", Assistant: true},
+	})
+	fd.setSessions("box", []proto.Session{{SessionID: "agent01", MachineID: "box", Title: "修发版"}})
 	e.topicModes = map[string]assistantwire.TopicTodoMode{testChat: assistantwire.TopicAnswerOnly}
 	e.topicSpaces = map[string]string{testChat: spaceSlug}
-	return e
+	return e, fd
 }
 
 func spaceTopicEvent(id, threadID, text string, root bool) botcard.MessageEvent {
@@ -43,14 +51,14 @@ func spaceTopicEvent(id, threadID, text string, root bool) botcard.MessageEvent 
 // conversation, creates no to-do and never disturbs the main conversation.
 func TestFeishuSpaceBoundTopicGroupOneConversationPerTopic(t *testing.T) {
 	needsLarkLayer(t)
-	e := newSpaceThreadEnv(t, "research")
+	e, fd := newSpaceThreadEnv(t, "research")
 
 	// Topic 1 first message -> starts a new conversation in space "research".
 	e.deliver(spaceTopicEvent("om_t1_1", "omt_topic_1", "Summarize the benchmark notes", true))
 
 	// No to-do created and main chat m1 was never sent to.
-	if todos := e.list(); len(todos) != 0 {
-		t.Fatalf("unexpected to-dos created: %+v", todos)
+	if todoCount(e.s) != 0 {
+		t.Fatalf("unexpected to-dos created: %d", todoCount(e.s))
 	}
 	for _, h := range handoffs(e.f) {
 		if h.session == "m1" {
@@ -92,10 +100,12 @@ func TestFeishuSpaceBoundTopicGroupOneConversationPerTopic(t *testing.T) {
 	}
 
 	// Register the newly started session on the fake node so follow-up lookup finds it.
-	e.sessions("server",
-		proto.Session{SessionID: "m1", Assistant: true},
-		proto.Session{SessionID: sess1, Assistant: true, Space: "research"},
-	)
+	sessList := []proto.Session{
+		{SessionID: "m1", MachineID: "server", Assistant: true},
+		{SessionID: sess1, MachineID: "server", Assistant: true, Space: "research"},
+	}
+	fd.setSessions("server", sessList)
+	e.sessions("server", sessList...)
 
 	// Topic 1 second message -> reuses sess1 via DeviceSessionSendOnce instead of starting a new conversation.
 	e.deliver(spaceTopicEvent("om_t1_2", "omt_topic_1", "Add latency numbers too", false))
@@ -138,15 +148,15 @@ func TestFeishuSpaceBoundTopicGroupOneConversationPerTopic(t *testing.T) {
 // Explicit /todo still opens a to-do in a space-bound topic group when the owner asks for one.
 func TestFeishuSpaceBoundTopicExplicitTodoStillWorks(t *testing.T) {
 	needsLarkLayer(t)
-	e := newSpaceThreadEnv(t, "research")
+	e, _ := newSpaceThreadEnv(t, "research")
 
 	e.deliver(spaceTopicEvent("om_todo_1", "omt_todo_topic", "/todo Track release checklist", true))
-	todos := e.list()
-	if len(todos) != 1 {
-		t.Fatalf("expected 1 to-do from explicit /todo, got %+v", todos)
+	if todoCount(e.s) != 1 {
+		t.Fatalf("expected 1 to-do from explicit /todo, got %d (notes=%v)", todoCount(e.s), topicNotes(e.f))
 	}
-	if todos[0].Thread == nil || todos[0].Thread.ThreadID != "omt_todo_topic" {
-		t.Fatalf("to-do not bound to topic: %+v", todos[0].Thread)
+	todo := onlyTodo(e.s)
+	if todo.Thread == nil || todo.Thread.ThreadID != "omt_todo_topic" {
+		t.Fatalf("to-do not bound to topic: %+v", todo.Thread)
 	}
 }
 

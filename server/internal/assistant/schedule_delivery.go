@@ -7,17 +7,14 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // TaskDelivery names an optional channel thread where a scheduled task's finished result is posted
 // instead of the owner's private DM mirror, so replies in that thread continue the task's execution conversation.
-type TaskDelivery struct {
-	Channel  string `json:"channel"`
-	ChatID   string `json:"chat_id"`
-	ThreadID string `json:"thread_id"`
-}
+type TaskDelivery = assistantwire.TaskDelivery
 
 func cloneTaskDelivery(d *TaskDelivery) *TaskDelivery {
 	if d == nil {
@@ -75,7 +72,7 @@ func deliveryIn(raw map[string]json.RawMessage) (d *TaskDelivery, has bool, err 
 	return deliveryRaw(v)
 }
 
-func (d *TaskDelivery) isFeishuThread() bool {
+func isFeishuThreadDelivery(d *TaskDelivery) bool {
 	return d != nil && d.Channel == channel.Feishu && d.ChatID != "" && d.ThreadID != ""
 }
 
@@ -97,7 +94,7 @@ func (s *Service) taskDeliveryForConversation(ctx context.Context, machine, sess
 		}
 	}
 	for _, t := range sc.tasks {
-		if !t.Delivery.isFeishuThread() {
+		if !isFeishuThreadDelivery(t.Delivery) {
 			continue
 		}
 		if t.SessionID == session && (t.MachineID == "" || t.MachineID == machine) {

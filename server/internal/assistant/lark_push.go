@@ -102,7 +102,7 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 	if task == "" {
 		task = s.taskOfConversation(ctx, machine, session)
 	}
-	hasThreadDelivery := delivery.isFeishuThread()
+	hasThreadDelivery := isFeishuThreadDelivery(delivery)
 	if !(f.Sync || f.Pushes || hasThreadDelivery) {
 		return
 	}
@@ -147,14 +147,14 @@ func (s *Service) larkMirror(machine, session, label string, main bool, answer, 
 		Main:       main,
 		Label:      label,
 		StillDue: func(ctx context.Context, pushes bool) bool {
-			if pushes && !delivery.isFeishuThread() && s.pushedLately(channel.Feishu, machine, session) {
+			if pushes && !isFeishuThreadDelivery(delivery) && s.pushedLately(channel.Feishu, machine, session) {
 				return false
 			}
 			_, current, last, ok := s.channelLastTurnOf(ctx, machine, session)
 			return ok && current == answer && last == turn
 		},
 	}
-	if delivery.isFeishuThread() {
+	if isFeishuThreadDelivery(delivery) {
 		m.ThreadChatID = delivery.ChatID
 		m.ThreadID = delivery.ThreadID
 	}
