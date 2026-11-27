@@ -419,3 +419,22 @@ func TestExtensionOwnerOperationCannotEnterMaintenanceRoute(t *testing.T) {
 		}
 	}
 }
+
+func TestInternalQueuePersistenceFailureEndsWithoutAuthorization(t *testing.T) {
+	store := &relayWriteFailStore{fleetMem: newFleetMem()}
+	e := newRouteEnv(t, store, true)
+	store.fail.Store(true)
+	defer store.fail.Store(false)
+	ix := askPermission("ix_internal_queue_down", "lead1")
+	ix.MachineID = "server"
+	ix.ToolInput = json.RawMessage(`{"command":"ls /tmp | head"}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, err := e.s.waitInteraction(ctx, ix)
+	if err != nil || r.Allow != nil || !r.Dismiss || r.Reason != "internal_queue_unavailable" {
+		t.Fatalf("non-durable delivery did not end unanswered: %+v, %v", r, err)
+	}
+	if e.pushesOf(ix.ID) != 0 || len(workEventsOf(e.s, "ask_internal_delivery_failed")) != 1 {
+		t.Fatal("queue failure pushed to the owner or lost its failure receipt")
+	}
+}
