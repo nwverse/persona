@@ -48,8 +48,8 @@ test('AGY companion publishes background lifecycles and clears running work when
   mkdirSync(logs, { recursive: true })
   const file = join(logs, 'transcript.jsonl')
   const row = () => node.last('runtime.sessions')?.sessions.find(session => session.session_id === SESSION)
-  const started = new Date(Date.now() - 60_000).toISOString()
-  const ended = new Date().toISOString()
+  const started = new Date().toISOString()
+  const ended = new Date(Date.now() + 1_000).toISOString()
   const taskID = n => `${RAW}/task-${n}`
   const step = (step_index, type, data) => ({ step_index, type, created_at: started, ...data })
   const start = (index, n, description) => step(index, 'GENERIC', {
