@@ -1,5 +1,12 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Inbox handoffs are not task ownership (#17119)
+
+- A conversation's historical handoff does not identify the source of every later task. Omitted sources must not
+  claim unrelated handoffs, and continuations skip source inference. A strongly matching handoff is still inferred:
+  retain its matching snapshot and recheck competing task ownership before admission. Explicit source selection is
+  a separate contract.
+
 ## Persona's own agy hooks: report only, own one key, prove the pane (#13729)
 
 - agy's global `hooks.json` is shared: herdr, Moshi and Orca each own a top-level group. Write only the `persona` key through the ordered-object editor (`editSettings`), never rewrite the others, and treat a changed command (moved binary) as stale, not as foreign.
