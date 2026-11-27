@@ -198,18 +198,44 @@ their rows in `worktree.ps` have pane keys `structured-agent-session-<session-id
 They are now integrated by the Orca bridge in node (`server/internal/node/orcabridge.go`, client `server/internal/orcart/session.go`) through the
 runtime protocol (`docs/integrations/runtimes.md`), like the Paseo bridge but inside node (`net.Pipe` connects to `RuntimeHost`):
 
-- **Activation**: enabled for the Orca engine, closed when switching away. Lists only structured sessions with `agentType: claude` in local worktrees (`hostId: local`);
-  this version does not list structured Codex sessions.
-- **Session ID**: Claude's own ID (`providerSession.id` from `agentSession.history`); history reads the usual Claude transcript.
-  Sessions with no first message lack this ID and appear only after sending one (within 10 seconds). Space is worktree (`worktreeId`), named from branch as for terminal sessions;
-  child worktrees carry `parent_space_id` and collapse under their parent on the web, like terminal sessions (#2073).
-- **State**: poll `worktree.ps` every 1.5 seconds, using row `mainAgent.state` (working / blocked / done); push to hub only when the list changes.
+- **Activation**: enabled for the Orca engine, closed when switching away. Lists every structured session in local worktrees (`hostId: local`), whatever its provider (`agentType`).
+- **Which chats**: the agent rows of `worktree.ps`, and the chat tabs of `session.tabs.listAll` (`type: agent-session`) that `worktree.ps` does not list: Orca reports a
+  chat's row only once it has had a turn, so a chat opened and not written to yet is found only among the tabs. The tabs are read every 5 seconds; an Orca without the method
+  (`method_not_found`) adds none. Checked on Orca 1.4.277.
+- **Content**: a Claude chat's is its Claude transcript (`transcript`, `providerSession.id` from `agentSession.history`), read by the node as usual. A Codex chat is its Codex thread
+  (`codex_thread`, the same field), so the node does not list the thread a second time from Codex's history; its content, like every other provider's chat's and a Claude chat's
+  before its transcript is written, is Orca's own journal (`agentSession.history`, `orcabridge_items.go`): an item's `seq` is its journal sequence, a message's blocks its items
+  `<seq>#<index>` (the user's and the agent's words, reasoning as thinking, tool calls and their results, Orca's warnings and errors as notices; turns, prompts and Orca's
+  bookkeeping left out), `history` the journal's epoch (`orca:<epoch>`, which a rewind changes), `before_seq` / `after_seq` page with Orca's own `before` / `after` cursors.
+  A provider the apps do not know is named in `agent_label` (Antigravity, Gemini, OpenCode…). Rows carry `host: "orca"`, so the apps ask the Orca engine about their worktree.
+- **Session IDs**:
+  - A Claude chat whose Claude session the bridge knows when it first lists it: that Claude session id, the id the same conversation has in a terminal or "Not running"
+    (as before this version, so every link, pin and read state stays).
+  - A chat Persona started (#17047) is `persona-<id>` in Orca and `<id>` in Persona: the id the hub named for it.
+  - Any other chat (Codex, another provider, a Claude chat seen before its first message): Orca's own session id. A Claude chat listed so keeps that id once its Claude
+    session appears; its row names the transcript from then on, and the node lists the transcript under no second id but names it in the row's `aliases`
+    (`docs/integrations/runtimes.md`, "Runtimes that run Claude Code").
+  - The bridge keeps the id it gave each chat in its **book** (`orcabridge_book.go`): `<user cache>/persona/orca/chats.json` (0600, in the node's private cache folder, the 300
+    chats seen last), so a node that restarts gives each chat the same id. A book that is lost loses only the third rule's memory: such a Claude chat comes back under its
+    Claude session id. Space is worktree (`worktreeId`), named from branch as for terminal sessions; child worktrees carry `parent_space_id` and collapse under their parent on
+    the web, like terminal sessions (#2073).
+- **Closed chats**: a chat closed in Orca (its tab gone; its record and journal stay) is listed from the book, not running (`offline`), the latest 80 of the last 7 days, as Paseo
+  lists its archived agents. Its content is read as when it was open. A message to it opens it in Orca again (`agentSession.reveal`) and goes there, never to a terminal;
+  modes are refused until then (`orca_closed`), and closing it in Persona takes it off the list. One Orca no longer has (deleted) answers `session_gone` and leaves the book.
+  While Orca is not running every chat of the book is listed this way. So no chat's Claude transcript is left to the node as an ordinary session not running, which a Resume
+  would open in an Orca terminal: the bridge sends `unlisted_transcripts: []` (it lists its closed chats itself and names none).
+- **State**: poll `worktree.ps` every 1.5 seconds, using row `mainAgent.state` (working / blocked / done); a tab without a turn is idle. Push to hub only when the list changes.
 - **Actions**: send text/images (messages sent while working queue after this turn, `delivery: queue-if-active`), interrupt (`agentSession.cancel`),
   close (`agentSession.close`, like Orca's close button; records remain), change permission mode and thinking effort (`agentSession.setOption`; Orca has no plan mode,
   so plan returns `unsupported`). No terminal, screen reads, keys, or live terminal.
 - **Cards**: when blocked, read `agentSession.currentRequests`, mapping pending approvals to permission cards (if `detail` is tool-input JSON,
   show commands/files like hook cards), plan approvals to plan cards, and questions to question cards. Return answers with Orca option IDs and `expectedRevision`.
-  Cards disappear from the phone if answered on the computer first.
+  Cards disappear from the phone if answered on the computer first. Every answer of a question goes: Orca 1.4.277 takes at most four in one reply and refuses more, which
+  then counts as an answer not taken. An answer Orca did not take (refused, or its outcome unknown) is never dropped: while Orca still waits on the prompt it goes on the phone
+  again as a new card (its own id), a permission card with Orca's words on why in its `reason`.
+- **Errors**: the bridge's refusals keep their codes (`runtime_away`, `refused` and `session_gone` with `delivered: none`, `unknown` with `delivered: unknown`) and carry a
+  `reason` (`orca_away`, `orca_refused`, `orca_unknown`, `orca_session_gone`, `orca_closed`) the hub words in the request's language (`rpc-errors.<reason>`), Orca's own
+  words as the detail.
 - **Write envelope**: every write carries `envelope {sessionId, clientOperationId, expectedRuntimeFence, payloadFingerprint}`.
   `clientOperationId` is `<13-digit-milliseconds>-<32-hex-digits>`; the same message (same `client_msg_id`) reuses it, so Orca returns the original result on resend, never sends twice.
   `payloadFingerprint` is SHA-256 of canonical JSON `{method, sessionId, fields}` (sorted keys, no spaces, escaping as JavaScript `JSON.stringify`).

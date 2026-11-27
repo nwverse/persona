@@ -133,5 +133,10 @@
   "conversation_retired": "This session no longer runs the conversation.",
   "agent_assistant_workspace": "Cannot start an agent in the assistant workspace. Choose the project folder or a separate worktree; no agent was started.",
   "codex_writable_symlink": "Cannot start Codex in workspace-write mode: {name} is a symlink under a writable root, so its sandbox cannot enforce the read-only path. Choose a project folder as cwd or use read-only mode. Nothing was started; the symlink was not changed.",
-  "agy_in_terminal": "This Antigravity conversation is open in agy in a terminal on that computer, and Persona can’t reach that terminal. Nothing was sent. Answer in the terminal, or close agy there and try again."
+  "agy_in_terminal": "This Antigravity conversation is open in agy in a terminal on that computer, and Persona can’t reach that terminal. Nothing was sent. Answer in the terminal, or close agy there and try again.",
+  "orca_away": "Orca isn’t running on that computer, so nothing was sent. Open Orca there and try again.",
+  "orca_refused": "Orca turned this down, and nothing was changed: {detail}",
+  "orca_unknown": "It’s not clear whether Orca did this. Check the chat in Orca on that computer before you try again.",
+  "orca_session_gone": "This chat is no longer in Orca.",
+  "orca_closed": "This chat is closed in Orca. Send it a message to open it again, then change its settings."
 }
