@@ -106,6 +106,11 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	}
 	to, home := s.internalReviewer(ctx, ix)
 	if to == "" || home == "" {
+		// Legacy node questions outside the five manager-owned sources keep
+		// their manual-session fallback when Assistant has not been configured.
+		if src == cardAgentQuestion && ix.ToolName != "ask_user" {
+			return false
+		}
 		s.workEvent(ix.MachineID, ix.SessionID, "ask_internal_unavailable", map[string]any{"id": ix.ID, "source": src})
 		_ = s.resolveRemembered(ix.ID, proto.Resolution{Dismiss: true, Reason: "internal_reviewer_unavailable"}, false)
 		return true

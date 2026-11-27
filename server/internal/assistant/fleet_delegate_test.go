@@ -40,6 +40,7 @@ type delegateFleet struct {
 func newDelegateFleet(t *testing.T, decide func(DelegateParams) (DelegateResult, error)) *delegateFleet {
 	t.Helper()
 	ft := newFleetTest(t)
+	setSettings(t, ft.s, func(v *Settings) { v.Main = "" }) // exercise the manual node-question fallback
 	on := true
 	ft.f.setHello(func(h *Hello) { h.Agents.Delegate.Enabled = &on }) // off by default
 	list := []proto.Session{{SessionID: "s1", Title: "修登录", Cwd: "/code/app", Status: proto.StatusBlocked, UpdatedAt: time.Now().UTC()}}

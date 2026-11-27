@@ -131,7 +131,6 @@ func TestAgentWorkOverTheBus(t *testing.T) {
 	if err := database.PruneSessionWork(t.Context(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	setManagerJSON(t, h, "assistant", map[string]any{"main": "fixture-reviewer", "machine_id": "box"})
 	setManagerJSON(t, h, "agents", map[string]any{"triage": map[string]any{"settle_seconds": 1}})
 	m, n := workMachine(t, h)
 	useModel(t, h, workModel(t, `{"phase":"blocked","on":"user","line":"等你选方案",

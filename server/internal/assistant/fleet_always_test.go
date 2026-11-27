@@ -10,8 +10,9 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// These fixtures exercise the owner's standing authorization and revocation.
 func alwaysIx(id, session string, keys ...string) proto.Interaction {
-	return proto.Interaction{ID: id, MachineID: "mac", SessionID: session, Kind: proto.IxPermission, ToolName: "Bash",
+	return proto.Interaction{ID: id, MachineID: "mac", SessionID: session, Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		ExpiresAt: time.Now().Add(time.Hour), Resumable: true, AlwaysKeys: keys}
 }
 
