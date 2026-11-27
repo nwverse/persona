@@ -57,7 +57,7 @@ func replayWriteFailureStore(h *inboxHub, fail map[string]bool) *inboxPutFailSto
 		inboxBatchMemStore: &inboxBatchMemStore{inboxMemStore: h.st, batchFail: errors.New("force per-row fallback")},
 		fail:               fail,
 	}
-	h.Service.store = func() Store { return st }
+	h.Service.setStore(func() Store { return st })
 	return st
 }
 
