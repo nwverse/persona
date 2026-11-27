@@ -24,7 +24,7 @@ let root: Root;
 const flush = async () => {
   for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
 };
-const row = () => host.querySelector<HTMLAnchorElement>('a[aria-description="Persona 的主对话"]')!;
+const row = () => host.querySelector<HTMLAnchorElement>('a[aria-description="Persona 主对话"]')!;
 const hint = () => row().querySelector("[data-persona-chord]")?.textContent ?? null;
 
 beforeEach(() => {
@@ -94,6 +94,7 @@ describe("the pinned Persona row", () => {
     expect(css).toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\[data-app-shell\]\s+:is\(\[data-sidebar-root\],\s*\[data-sidebar-rail\],\s*\[data-sidebar-sticky\]\)\s*\{[^}]*background:\s*transparent/);
     expect(css).toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\.sidebar-group-heading\s*\{[^}]*position:\s*static;\s*[^}]*background:\s*transparent/);
     expect(css).toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\.sidebar-group-heading\[data-edge\]::after\s*\{[^}]*display:\s*none/);
+    expect(css).toMatch(/\[data-sidebar-rows\]\s+\.group\\\/row:has\(>\s*button\[aria-haspopup="menu"\]\):hover\b/);
   });
 });
 
@@ -122,9 +123,9 @@ describe("the Persona shortcut on the row", () => {
     act(() => root.render(<SidebarRail route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
     const persona = host.querySelector<HTMLAnchorElement>('nav a[aria-label="Persona"]')!;
-    expect(persona.title).toBe("Persona 的主对话 (Ctrl+Alt+P)");
+    expect(persona.title).toBe("Persona 主对话 (Ctrl+Alt+P)");
     act(() => setBinding("persona", "Mod+Shift+Y"));
-    expect(persona.title).toBe("Persona 的主对话 (Ctrl+Shift+Y)");
+    expect(persona.title).toBe("Persona 主对话 (Ctrl+Shift+Y)");
   });
 
   it("Ctrl+Alt+P opens the main conversation, as a click on the row does", async () => {

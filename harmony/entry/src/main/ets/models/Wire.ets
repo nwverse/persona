@@ -176,6 +176,7 @@ export class ChatMessage {
   thoughtCount: number = 0;
   imageId: string = '';
   itemId: string = '';
+  sourceFingerprint: string = '';
   ownerTarget: string = '';
   imagePaths: string[] = [];
   filePaths: string[] = [];

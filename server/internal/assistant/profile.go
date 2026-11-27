@@ -72,14 +72,23 @@ type Settings struct {
 	Former []FormerMain `json:"former_main,omitempty"`
 	// MainTasksQuiet: tasks the main conversation opens are told only there, not pushed, on the Live Activity or in
 	// task badges (#1731). nil is on (the default); the view always says what is in effect.
-	MainTasksQuiet         *bool `json:"main_tasks_quiet,omitempty"`
-	IdleAutoCompact        *bool `json:"idle_auto_compact,omitempty"`
-	IdleAutoCompactMinutes *int  `json:"idle_auto_compact_minutes,omitempty"`
-	IdleAutoCompactTokens  *int  `json:"idle_auto_compact_tokens,omitempty"`
-	CacheKeepalive         *bool `json:"cache_keepalive,omitempty"`
-	CacheKeepaliveMinutes  *int  `json:"cache_keepalive_minutes,omitempty"`
-	CacheKeepaliveMax      *int  `json:"cache_keepalive_max,omitempty"`
-	IdleReleaseMinutes     *int  `json:"idle_release_minutes,omitempty"` // #12008, idle_compact_settings.go
+	MainTasksQuiet *bool `json:"main_tasks_quiet,omitempty"`
+	// ApprovalMirrorMain shows eligible non-main assistant permission cards in Main too. Nil is on;
+	// changing it applies to new cards, and every existing copy still resolves with its authoritative card.
+	ApprovalMirrorMain *bool `json:"approval_mirror_main,omitempty"`
+	// ApprovalMirrorTools replaces the write-tool allowlist for new main-conversation and direct-bot
+	// copies. Nil uses the default; an empty list disables both routes. Existing copies still finish.
+	ApprovalMirrorTools       *[]string `json:"approval_mirror_tools,omitempty"`
+	IdleAutoCompact           *bool     `json:"idle_auto_compact,omitempty"`
+	IdleAutoCompactMinutes    *int      `json:"idle_auto_compact_minutes,omitempty"`
+	IdleAutoCompactTokens     *int      `json:"idle_auto_compact_tokens,omitempty"`
+	AgyIdleAutoCompact        *bool     `json:"agy_idle_auto_compact,omitempty"`
+	AgyIdleAutoCompactMinutes *int      `json:"agy_idle_auto_compact_minutes,omitempty"`
+	AgyIdleAutoCompactTokens  *int      `json:"agy_idle_auto_compact_tokens,omitempty"`
+	CacheKeepalive            *bool     `json:"cache_keepalive,omitempty"`
+	CacheKeepaliveMinutes     *int      `json:"cache_keepalive_minutes,omitempty"`
+	CacheKeepaliveMax         *int      `json:"cache_keepalive_max,omitempty"`
+	IdleReleaseMinutes        *int      `json:"idle_release_minutes,omitempty"` // #12008, idle_compact_settings.go
 	// StartRequestedTasks: a task_plan task the user asked for in so many words starts without the card's "Start"
 	// (#2559). nil is on (the default).
 	StartRequestedTasks     *bool  `json:"start_requested_tasks,omitempty"`
@@ -903,6 +912,7 @@ func (s *Service) settingsChanged(ctx context.Context) {
 	s.syncAutoSupervision(ctx)          // the automatic-supervision switch takes effect now (supervise_switch.go)
 	s.transcriptionSettingsChanged(ctx) // only another contribution chosen drops the readiness answer
 	s.ProfileChanged(ctx)
+	s.syncAgyIdleCompactionToNodes(ctx)
 	s.revalidateFailedStartDeferrals(ctx)
 	s.publish(ctx)
 }
@@ -931,19 +941,24 @@ type assistantView struct {
 	EffectiveWorkspaceRules workspacenaming.Rules  `json:"effective_workspace_rules"`
 	SystemDefaults          *workspacenaming.Rules `json:"system_defaults,omitempty"`
 	Settings
-	Manager                string             `json:"manager"`
-	PermissionDefaults     permissionDefaults `json:"permission_defaults"`
-	Cwd                    string             `json:"cwd"`
-	Conversations          []proto.Session    `json:"conversations"`
-	NotesEffective         string             `json:"notes_effective"`  // what the assistant is told about the user
-	MainTasksQuiet         bool               `json:"main_tasks_quiet"` // in effect (the setting's own is left out while unset)
-	IdleAutoCompact        bool               `json:"idle_auto_compact"`
-	IdleAutoCompactMinutes int                `json:"idle_auto_compact_minutes"`
-	IdleAutoCompactTokens  int                `json:"idle_auto_compact_tokens"`
-	CacheKeepalive         bool               `json:"cache_keepalive"`
-	CacheKeepaliveMinutes  int                `json:"cache_keepalive_minutes"`
-	CacheKeepaliveMax      int                `json:"cache_keepalive_max"`
-	IdleReleaseMinutes     int                `json:"idle_release_minutes"`
+	Manager                   string             `json:"manager"`
+	PermissionDefaults        permissionDefaults `json:"permission_defaults"`
+	Cwd                       string             `json:"cwd"`
+	Conversations             []proto.Session    `json:"conversations"`
+	NotesEffective            string             `json:"notes_effective"`  // what the assistant is told about the user
+	MainTasksQuiet            bool               `json:"main_tasks_quiet"` // in effect (the setting's own is left out while unset)
+	ApprovalMirrorMain        bool               `json:"approval_mirror_main"`
+	ApprovalMirrorTools       []string           `json:"approval_mirror_tools"`
+	IdleAutoCompact           bool               `json:"idle_auto_compact"`
+	IdleAutoCompactMinutes    int                `json:"idle_auto_compact_minutes"`
+	IdleAutoCompactTokens     int                `json:"idle_auto_compact_tokens"`
+	AgyIdleAutoCompact        bool               `json:"agy_idle_auto_compact"`
+	AgyIdleAutoCompactMinutes int                `json:"agy_idle_auto_compact_minutes"`
+	AgyIdleAutoCompactTokens  int                `json:"agy_idle_auto_compact_tokens"`
+	CacheKeepalive            bool               `json:"cache_keepalive"`
+	CacheKeepaliveMinutes     int                `json:"cache_keepalive_minutes"`
+	CacheKeepaliveMax         int                `json:"cache_keepalive_max"`
+	IdleReleaseMinutes        int                `json:"idle_release_minutes"`
 	// StartRequestedTasks is in effect, like MainTasksQuiet.
 	StartRequestedTasks     bool   `json:"start_requested_tasks"`
 	TaskWorkspacePreference string `json:"task_workspace_preference"`
@@ -1039,9 +1054,12 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	v.Launcher = s.launcherNow(ctx)
 	effectiveRules, _ := workspacenaming.Effective(v.WorkspaceRules, workspacenaming.Rules{})
 	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, SystemDefaults: new(workspacenaming.Defaults()), Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
+		ApprovalMirrorMain:  quietOn(v.ApprovalMirrorMain),
+		ApprovalMirrorTools: approvalMirrorToolNames(v),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingAudioDaysOf(v), RecordingAudioDays: recordingAudioDaysOf(v),
 		RecordingTextDays: recordingTextDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingTextDaysOf(v)),
 		IdleAutoCompact: s.idleAutoCompact(ctx), IdleAutoCompactMinutes: s.idleAutoCompactMinutes(ctx), IdleAutoCompactTokens: s.idleAutoCompactTokens(ctx),
+		AgyIdleAutoCompact: s.agyIdleAutoCompact(ctx), AgyIdleAutoCompactMinutes: s.agyIdleAutoCompactMinutes(ctx), AgyIdleAutoCompactTokens: s.agyIdleAutoCompactTokens(ctx),
 		CacheKeepalive: cacheKeepaliveOf(v).Enabled, CacheKeepaliveMinutes: cacheKeepaliveOf(v).IntervalMinutes, CacheKeepaliveMax: cacheKeepaliveOf(v).MaxRequests,
 		IdleReleaseMinutes: s.idleReleaseMinutes(ctx), MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
 		Dashboards:                  v.Dashboards != nil && *v.Dashboards,
@@ -1235,7 +1253,7 @@ func (s *Service) warm(launcher string) {
 	}
 	params := map[string]any{"cwd": cwd, "launcher": launcher, "is_main": true}
 	if picked {
-		err = s.applyPick(ctx, params, pick)
+		err = s.applyPickFor(ctx, purposeMain, params, pick)
 	} else {
 		err = s.applyModel(ctx, purposeMain, params)
 	}

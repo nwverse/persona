@@ -119,22 +119,31 @@ func (r *Registry) autoConfirmPolicies() []AutoConfirmPolicy {
 // that goes by the status (tools, the inbox, the archive) leaves them alone without knowing about the switch.
 var switchedOff sync.Map
 
+// comparableConnector reports whether c can safely be used as a map key or compared with == without panicking.
+// reflect.Value.Comparable inspects dynamic interface fields as well as static types.
+func comparableConnector(c Connector) bool {
+	return c != nil && reflect.ValueOf(c).Comparable()
+}
+
 // SetEnabled switches a connector on or off. Off, it does not run (its Run and Watch are cancelled), offers no tools
 // and brings nothing into the inbox or the knowledge base, and its status is StateDisabled; on, it starts again.
 // Signing in and out (Login) still work while it is off. The hub keeps the choice (it calls this before Start).
 func (r *Registry) SetEnabled(id string, on bool) error {
-	c := r.Get(id)
+	r.mu.Lock()
+	c := r.currentLocked(id)
 	if c == nil {
+		r.mu.Unlock()
 		return fmt.Errorf("no connector %q", id)
 	}
-	if !reflect.TypeOf(c).Comparable() {
+	if !comparableConnector(c) {
+		r.mu.Unlock()
 		return fmt.Errorf("connector %q cannot be switched off (not comparable)", id)
 	}
-	r.mu.Lock()
 	var cancel context.CancelFunc
 	if on {
 		delete(r.off, id)
 		switchedOff.Delete(c)
+		r.startOneLocked(c)
 	} else {
 		r.off[id] = true
 		switchedOff.Store(c, true)
@@ -145,9 +154,6 @@ func (r *Registry) SetEnabled(id string, on bool) error {
 	if cancel != nil {
 		cancel()
 	}
-	if on {
-		r.startOne(c)
-	}
 	return nil
 }
 
@@ -155,7 +161,15 @@ func (r *Registry) SetEnabled(id string, on bool) error {
 func (r *Registry) StartOff(id string) {
 	r.mu.Lock()
 	r.off[id] = true
+	if c := r.currentLocked(id); comparableConnector(c) {
+		switchedOff.Store(c, true)
+	}
+	cancel := r.stop[id]
+	delete(r.stop, id)
 	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // Enabled says whether a connector is switched on (every one is, until SetEnabled says otherwise).
@@ -179,19 +193,20 @@ var feedCaps = map[Feed]Capability{FeedArchive: CapArchive, FeedInbox: CapInbox}
 
 // SetFeed turns one of a connector's feeds on or off. The hub keeps the choice (it calls this before Start).
 func (r *Registry) SetFeed(id string, f Feed, on bool) error {
-	c := r.Get(id)
+	cp, ok := feedCaps[f]
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c := r.currentLocked(id)
 	if c == nil {
 		return fmt.Errorf("no connector %q", id)
 	}
-	cp, ok := feedCaps[f]
 	if !ok {
 		return fmt.Errorf("no feed %q", f)
 	}
-	if !c.Manifest().Has(cp) && !(f == FeedInbox && c.Manifest().InboxSwitch) {
+	m := c.Manifest()
+	if !m.Has(cp) && !(f == FeedInbox && m.InboxSwitch) {
 		return fmt.Errorf("%s has no %s", c.Name(), cp)
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if on {
 		delete(r.feedsOff[id], f)
 	} else {
@@ -210,6 +225,16 @@ func (r *Registry) Feeds(id string, f Feed) bool {
 	return !r.feedsOff[id][f]
 }
 
+// currentLocked is the connector currently registered under id, or nil. Callers hold r.mu.
+func (r *Registry) currentLocked(id string) Connector {
+	for _, c := range r.list {
+		if c.ID() == id {
+			return c
+		}
+	}
+	return nil
+}
+
 // Add registers a connector; its ID must be new and look like one, its manifest pass Check.
 func (r *Registry) Add(c Connector) error {
 	id := c.ID()
@@ -220,13 +245,16 @@ func (r *Registry) Add(c Connector) error {
 		return err
 	}
 	r.mu.Lock()
-	if slices.ContainsFunc(r.list, func(o Connector) bool { return o.ID() == id }) {
+	if r.currentLocked(id) != nil {
 		r.mu.Unlock()
 		return fmt.Errorf("connector %q is registered twice", id)
 	}
 	r.list = append(r.list, c)
+	if r.off[id] && comparableConnector(c) {
+		switchedOff.Store(c, true)
+	}
+	r.startOneLocked(c) // added after Start (a plugin installed or switched on): it runs at once, unless switched off
 	r.mu.Unlock()
-	r.startOne(c) // added after Start (a plugin installed or switched on): it runs at once, unless switched off
 	return nil
 }
 
@@ -241,12 +269,12 @@ func (r *Registry) Remove(id string) {
 	}
 	c := r.list[i]
 	r.list = slices.Delete(r.list, i, i+1)
+	if comparableConnector(c) {
+		switchedOff.Delete(c)
+	}
 	cancel := r.stop[id]
 	delete(r.stop, id)
 	r.mu.Unlock()
-	if reflect.TypeOf(c).Comparable() {
-		switchedOff.Delete(c)
-	}
 	if cancel != nil {
 		cancel()
 	}
@@ -332,7 +360,7 @@ func (r *Registry) ForAgents(name string) bool {
 
 // StatusOf is a connector's status: StateDisabled when the user switched it off; one without a status is always ok.
 func StatusOf(ctx context.Context, c Connector) Status {
-	if c != nil && reflect.TypeOf(c).Comparable() {
+	if comparableConnector(c) {
 		if _, off := switchedOff.Load(c); off {
 			return Status{State: StateDisabled}
 		}

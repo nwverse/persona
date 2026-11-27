@@ -12,16 +12,25 @@ def active_candidate(pulls, repository, channel):
     """Return the one eligible PR; do not silently choose among competing sources."""
     candidates = []
     for pull in pulls:
-        if pull.get("state") != "OPEN" or pull.get("draft") is not False:
+        if not isinstance(pull, dict):
+            raise release_pr.ReleaseError("open release PR entry must be an object")
+        if pull.get("state") not in ("open", "OPEN") or pull.get("draft") is not False:
             continue
-        if (pull.get("base") or {}).get("ref") != "main":
+        base = pull.get("base")
+        if not isinstance(base, dict) or base.get("ref") != "main":
             continue
-        if (pull.get("head") or {}).get("repo", {}).get("full_name") != repository:
+        head = pull.get("head")
+        head_repo = head.get("repo") if isinstance(head, dict) else None
+        if not isinstance(head_repo, dict) or head_repo.get("full_name") != repository:
             continue
-        if (pull.get("user") or {}).get("login") != "chyroc":
+        user = pull.get("user")
+        if not isinstance(user, dict) or user.get("login") != "chyroc":
+            continue
+        title = pull.get("title")
+        if not isinstance(title, str):
             continue
         try:
-            release_pr.release_title(pull.get("title", ""), channel == "beta")
+            release_pr.release_title(title, channel == "beta")
         except release_pr.ReleaseError:
             continue
         number = pull.get("number")
@@ -51,8 +60,11 @@ def main():
         raise SystemExit("open release PR response is not a list")
     candidate = active_candidate(pulls, args.repository, args.channel)
     if candidate:
+        html_url = candidate.get("html_url")
+        if not isinstance(html_url, str) or not html_url.strip():
+            raise SystemExit("an open release candidate has no valid PR url")
         print(candidate["number"])
-        print(candidate["html_url"])
+        print(html_url)
 
 
 if __name__ == "__main__":

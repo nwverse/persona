@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -47,6 +48,10 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv("NODE_TEST_PLUGIN"); mode != "" { // the test binary as a plugin's program (plugins_test.go)
 		runTestPlugin(mode)
 	}
+	if os.Getenv("PERSONA_TEST_CLAUDE_USAGE_CLI") == "1" { // fake Claude CLI before TestMain unsets CLAUDE_CONFIG_DIR
+		runFakeClaudeUsageCLI()
+		os.Exit(0)
+	}
 	if os.Getenv("NODE_TEST_PREFLIGHT") == "1" { // the test binary as the preflight's child (preflight_test.go)
 		// NODE_TEST_PREFLIGHT_SLOW: start that much later, as on a busy machine; NODE_TEST_PREFLIGHT_STARTED: a file
 		// to write the time to once running, for a test that times the run without the start.
@@ -75,6 +80,9 @@ func TestMain(m *testing.M) {
 	codexStartupLook = time.Second
 	// No test may reach the user's running Orca: the default metadata path points nowhere.
 	os.Setenv("ORCA_USER_DATA_PATH", "/tmp/persona-test-no-orca")
+	// Nor the user's book of Orca chats in the node's cache folder (orcabridge_book.go): kept in memory unless a test
+	// gives it a file.
+	orcaBookPath = func() string { return "" }
 	// Nor the user's botmux: a node registers no botmux host unless a test gives it one.
 	botmuxBin = func() string { return "" }
 	// Nor the user's Tern: no tern binary is found (a test that wants one gives its client a fake).
@@ -86,8 +94,11 @@ func TestMain(m *testing.M) {
 	// Nor the user's Codex catalog: a model recovery on a Codex list runs no `codex debug models` (a test that wants
 	// windows gives its own, assistant_fallback_window.go).
 	codexDebugModels = func(context.Context, *Node, string) ([]byte, error) { return nil, errors.New("no codex in tests") }
-	// Subscription usage tests provide their own app-server instead of polling a real account.
+	// Subscription usage tests provide their own CLI / app-server instead of polling a real account.
 	codexUsageCLI = func() (string, error) { return "", errors.New("no codex in tests") }
+	claudeUsageCommand = func(context.Context, string, []string, []string, bool) (*exec.Cmd, error) {
+		return nil, errors.New("no claude in tests")
+	}
 	// Nor the ChatGPT app's bundled codex: a test that wants one sets its own (codex_bundled_test.go).
 	bundledCodexCLI = func() string { return "" }
 	// Nor the user's Paseo: its home points nowhere (a test that wants one sets its own).
@@ -589,7 +600,8 @@ func TestOrcaKeysAndText(t *testing.T) {
 	}
 }
 
-// A colored screen read gets the plain rows (CRLF-ended like colored ones); "recent" reads the screen too.
+// A colored screen read gets the plain rows (CRLF-ended like colored ones); "recent" asks for Orca's output tail
+// first (hostorca_scrollback.go), and reads the screen when Orca answers with the screen (nothing above it).
 func TestOrcaScreenIsPlain(t *testing.T) {
 	n, o, _ := orcaSession(t)
 	o.SetScreen("term_1", "line one\nline two\n")
@@ -605,6 +617,7 @@ func TestOrcaScreenIsPlain(t *testing.T) {
 	}
 	assertTrace(t, o.Trace(), []string{
 		`terminal.read {"screen":true,"terminal":"term_1"}`,
+		`terminal.read {"limit":750,"terminal":"term_1"}`,
 		`terminal.read {"screen":true,"terminal":"term_1"}`,
 	})
 	if _, err := request(t, n, "terminal.watch", map[string]any{"session_id": sidA}); err == nil ||

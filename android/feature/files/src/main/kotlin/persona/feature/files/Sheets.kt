@@ -205,13 +205,19 @@ internal object Xlsx {
      * that never was (serial 60, after Lotus 1-2-3): days from 61 on count from 1899-12-30, earlier ones from 12-31.
      */
     fun date(raw: String): String {
-        val v = raw.toDoubleOrNull()?.takeIf { it.isFinite() && it > -1 && it < 2_958_466 } ?: return raw
-        if (v >= 60 && v < 61) return if (v == 60.0) "1900-02-29" else "1900-02-29 " + time(LocalDateTime.of(2000, 1, 1, 0, 0).plusSeconds(((v - 60) * 86_400).roundToLong()))
-        val seconds = (v * 86_400).roundToLong()
-        val t = (if (v < 60) LocalDateTime.of(1899, 12, 31, 0, 0) else LocalDateTime.of(1899, 12, 30, 0, 0)).plusSeconds(seconds)
-        val day = "%04d-%02d-%02d".format(Locale.ROOT, t.year, t.monthValue, t.dayOfMonth)
-        if (seconds % 86_400 == 0L) return day
-        return if (v < 1) time(t) else "$day ${time(t)}"
+        val v = raw.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 && it < 2_958_466 } ?: return raw
+        val totalSeconds = (v * 86_400).roundToLong()
+        val days = totalSeconds / 86_400L
+        val secOfDay = totalSeconds % 86_400L
+        val t = LocalDateTime.of(2000, 1, 1, 0, 0).plusSeconds(secOfDay)
+        if (days == 0L) return time(t)
+        val day = if (days == 60L) {
+            "1900-02-29"
+        } else {
+            val d = (if (days < 60L) LocalDateTime.of(1899, 12, 31, 0, 0) else LocalDateTime.of(1899, 12, 30, 0, 0)).plusDays(days)
+            "%04d-%02d-%02d".format(Locale.ROOT, d.year, d.monthValue, d.dayOfMonth)
+        }
+        return if (secOfDay == 0L) day else "$day ${time(t)}"
     }
 
     private fun time(t: LocalDateTime) =
@@ -228,7 +234,7 @@ internal object Xlsx {
                 when (Xml.local(qName)) { "si" -> current.setLength(0); "rPh" -> phonetic++; "t" -> inText = phonetic == 0 }
             }
             override fun endElement(uri: String?, localName: String?, qName: String) {
-                when (Xml.local(qName)) { "si" -> strings.add(current.toString()); "rPh" -> phonetic--; "t" -> inText = false }
+                when (Xml.local(qName)) { "si" -> strings.add(current.toString()); "rPh" -> if (phonetic > 0) phonetic--; "t" -> inText = false }
             }
             override fun characters(ch: CharArray, start: Int, length: Int) { if (inText) current.appendRange(ch, start, start + length) }
         })
@@ -257,13 +263,21 @@ internal object Xlsx {
         return formats.map { id -> id in 14..22 || id in 45..47 || custom[id]?.let(::isDateCode) == true }
     }
 
-    /** A custom number format is a date when it has date letters outside quotes and brackets ([Red], "text"). */
+    /** A custom number format is a date when it has date letters outside quotes, brackets ([Red], "text"), escapes (\x), and padding (_x, *x). */
     private fun isDateCode(code: String): Boolean {
         val plain = StringBuilder()
         var skip: Char? = null
-        for (ch in code.lowercase(Locale.ROOT)) {
+        var i = 0
+        val lower = code.lowercase(Locale.ROOT)
+        while (i < lower.length) {
+            val ch = lower[i++]
             if (skip != null) { if (ch == skip) skip = null; continue }
-            when (ch) { '"' -> skip = '"'; '[' -> skip = ']'; else -> plain.append(ch) }
+            when (ch) {
+                '"' -> skip = '"'
+                '[' -> skip = ']'
+                '\\', '_', '*' -> i++
+                else -> plain.append(ch)
+            }
         }
         return plain.any { it in "ymdhs" }
     }
@@ -291,6 +305,7 @@ internal object Xlsx {
         val value = StringBuilder()
         var inValue = false
         var inInline = false
+        var phonetic = 0
         fun flushRow() {
             if (rowIndex < 0) return
             while (row.lastOrNull() == "") row.removeAt(row.size - 1)
@@ -314,17 +329,22 @@ internal object Xlsx {
                         cellType = attributes.getValue("t") ?: ""
                         cellStyle = attributes.getValue("s")?.toIntOrNull() ?: 0
                         value.setLength(0)
+                        inValue = false
+                        inInline = false
+                        phonetic = 0
                     }
                     "v" -> inValue = true
-                    "is" -> inInline = true
-                    "t" -> if (inInline) inValue = true
+                    "is" -> { inInline = true; phonetic = 0 }
+                    "rPh" -> if (inInline) phonetic++
+                    "t" -> if (inInline && phonetic == 0) inValue = true
                 }
             }
 
             override fun endElement(uri: String?, localName: String?, qName: String) {
                 when (Xml.local(qName)) {
                     "v", "t" -> inValue = false
-                    "is" -> inInline = false
+                    "rPh" -> if (inInline && phonetic > 0) phonetic--
+                    "is" -> { inInline = false; phonetic = 0 }
                     "c" -> {
                         if (sheet.capped) return
                         val raw = value.toString()

@@ -93,17 +93,18 @@ export struct LiveViewSettingsCard {
       Row({ space: 5 }) {
         Circle().width(6).height(6).fill(this.phaseTint(this.previewState.phase))
         Text(this.capsuleTrailing(this.previewState))
-          .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontWeight(FontWeight.Medium)
-          .fontColor('#FFFFFF')
+          .fontColor(Color.White)
           .maxLines(1)
       }
     }
     .height(34)
-    .padding({ left: 12, right: 12 })
-    .backgroundColor('#000000')
+    .padding({ left: Tokens.spaceM, right: Tokens.spaceM })
+    .backgroundColor(Color.Black)
     .borderRadius(17)
-    .border({ width: this.env.dark ? 0.5 : 0, color: '#2EFFFFFF', radius: 17 })
+    .border({ width: this.env.dark ? 0.5 : 0, color: Colors.hairlineGlass, radius: 17 })
     .shadow(PhoneStyle.floatingElevation(this.env.dark))
     .animation(Motion.state(this.env.reduceMotion))
     .id('live_view.preview.capsule')
@@ -208,10 +209,10 @@ export struct LiveViewSettingsCard {
     }
     .width('100%')
     .padding(14)
-    .backgroundColor(this.env.dark ? '#E61C1C1E' : '#F8FFFFFF')
+    .backgroundColor(Colors.elevatedGlass)
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-    .borderRadius(18)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.env.dark), radius: 18 })
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.env.dark), radius: Tokens.radiusCard })
     .shadow(PhoneStyle.floatingElevation(this.env.dark))
     .animation(Motion.state(this.env.reduceMotion))
     .id('live_view.preview.card')
@@ -241,11 +242,12 @@ export struct LiveViewSettingsCard {
   build() {
     Column({ space: Tokens.inset }) {
       Text(tr('live_view_section_title'))
-        .fontSize(Tokens.interfaceFontVp(15, this.env.fontScale))
-        .fontWeight(FontWeight.Medium)
+        .fontSize(Tokens.typeSectionHeader)
+        .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSectionHeader))
+        .fontWeight(600)
         .fontColor(Colors.secondary)
         .width('100%')
-        .padding({ left: 4 })
+        .padding({ left: Tokens.spaceXs })
 
       // Hardware Live Capsule + Lock-Screen banner preview inside an iOS inset-grouped stage
       Column({ space: 14 }) {
@@ -290,10 +292,10 @@ export struct LiveViewSettingsCard {
         .borderRadius(Tokens.capsule)
       }
       .width('100%')
-      .padding({ left: 12, right: 12, top: 14, bottom: 12 })
+      .padding({ left: Tokens.spaceM, right: Tokens.spaceM, top: 14, bottom: Tokens.spaceM })
       .backgroundColor(Colors.surface)
-      .borderRadius(20)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 20 })
+      .borderRadius(Tokens.radiusSheetCard)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusSheetCard })
       .shadow(PhoneStyle.cardElevation(this.env.dark))
 
       // Live View toggles

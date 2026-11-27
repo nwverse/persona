@@ -222,6 +222,13 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         EngineFooterNoneOffline("The machine is offline; the choice applies once it connects. The desktop apps' sessions show, and starting or continuing a session from your phone is off."),
         EngineSwitched("Engine switched"),
         EngineSavedOffline("Saved. Applies once connected"),
+        /** Choose Engine on a computer that uses several engines no single option stands for (#17052): the set, its default. */
+        EngineSetNotice("This computer uses %1\$s together, with %2\$s as the default. To change which engines it uses, open this computer in Persona on the web."),
+        EngineFooterSet("Sessions from every engine this computer uses are shown. New sessions from your phone open in %1\$s."),
+        EngineFooterSetOffline("The machine is offline; the choice applies once it connects. New sessions from your phone will open in %1\$s."),
+        EngineFooterSetOne("Only %1\$s will be used: the other engines are turned off and only its sessions are shown."),
+        EngineFooterSetOneOffline("The machine is offline; the choice applies once it connects. Only %1\$s will be used, and the other engines are turned off."),
+        EngineDefaultChanged("Default engine changed"),
         ToolRun("Run"),
         ToolRead("Read"),
         ToolEdit("Edit"),

@@ -200,19 +200,22 @@ func TestInteractionResolveRowLockedPostgres(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	ix := permission("ix_lock_" + randomHex(6))
-	ready, done := make(chan struct{}), make(chan struct{})
+	ready, done := make(chan error, 1), make(chan struct{})
 	var got proto.Resolution
 	var waitErr error
 	go func() {
 		defer close(done)
-		got, waitErr = s.waitInteractionReady(ctx, ix, nil, ready)
+		got, waitErr = s.waitInteractionReadyResult(ctx, ix, nil, ready)
 	}()
 	t.Cleanup(func() {
 		cancel()
 		<-done
 	})
 	select {
-	case <-ready:
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("interaction registration failed: %v", err)
+		}
 	case <-done:
 		t.Fatalf("interaction ended before registration: %+v, %v", got, waitErr)
 	case <-ctx.Done():

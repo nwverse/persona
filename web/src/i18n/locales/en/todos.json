@@ -31,6 +31,13 @@
   "kicker_question": "Has a question",
   "reopen_todo": "Reopen to-do",
   "complete_todo": "Complete to-do",
+  "report_concern_action": "Report and close…",
+  "report_concern_title": "Report outcome",
+  "report_concern_hint": "The summary for “{title}” will be saved in the decision history.",
+  "report_concern_label": "Outcome summary",
+  "report_concern_placeholder": "What was the outcome?",
+  "report_concern_submit": "Report and close",
+  "report_concern_success": "Outcome reported",
   "agent_count_one": "{count} agent",
   "agent_count_other": "{count} agents",
   "not_handed": "Not handed to an agent yet",
@@ -506,5 +513,11 @@
   "grouping_v2_request": "By request",
   "detail_direction_inherited_hint": "Inherited from {name}",
   "detail_direction_inherited_picker_hint": "Currently inherited from {name}. Apply to pin explicitly, pick another direction, or remove it.",
-  "detail_subtask_direction_mismatch": "Direction: {direction}"
+  "detail_subtask_direction_mismatch": "Direction: {direction}",
+  "direction_uncategorized": "Uncategorized",
+  "done_direction_filter_label": "Filter completed to-dos by direction",
+  "direction_done_count": "Done {count}",
+  "direction_review_done_label_one": "Review {count} completed item in {direction}",
+  "direction_review_done_label_other": "Review {count} completed items in {direction}",
+  "detail_subtasks_done_toggle": "Completed subtasks · {count}"
 }

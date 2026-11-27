@@ -43,6 +43,7 @@ type agentLaunch struct {
 	TaskInstructions                 string
 	Agent                            string // "claude" (empty means claude), "codex", "traex", "pi"
 	Launcher, Settings, Hooks, Model string
+	managed                          bool   // a refresh must run through personad launch even if a later catalog omits it
 	Effort                           string // a work agent's explicit effort, empty for its default
 	Mode                             string // an agy's permission mode (agyModeFlags), empty in a record from before it
 	Display                          string // the live replies plugin's directory, "" for none (liveRepliesPlugin)
@@ -61,7 +62,11 @@ type claudeLaunch = agentLaunch
 // claudeCommandLine is the command that starts Claude for spec with args (--session-id / --resume …, mode flags),
 // quoting with q.
 func (n *Node) claudeCommandLine(spec claudeLaunch, args string, q func(string) string) string {
-	cmd := n.launcherCommandQ(spec.Launcher, q) + " " + args
+	launcher := n.launcherCommandQ(spec.Launcher, q)
+	if spec.managed {
+		launcher = q(n.bin) + " launch " + spec.Launcher
+	}
+	cmd := launcher + " " + args
 	for _, dir := range spec.AdditionalDirs {
 		cmd += " --add-dir " + q(dir)
 	}

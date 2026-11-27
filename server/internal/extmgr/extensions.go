@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/moduleswitch"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/proc"
@@ -631,7 +632,7 @@ func (ps *extensions) changed(c extension.Change) {
 		ps.forgetAssistantData(ctx, c.ID) // what the assistant read of its data directory goes with it
 		// What the user let it read of the assistant's sensitive information goes too (#13246): installed again, it
 		// starts as a third party's with no grant.
-		if err := ps.h.callAssistant(ctx, assistantwire.MethodExtensionTrustForget, assistantwire.ExtensionTrustForget{Extension: c.ID}, nil); err != nil {
+		if _, err := buswire.Call(ctx, assistantCaller(ps.h.callAssistant), assistantwire.ExtensionTrustForgetMethod, assistantwire.ExtensionTrustForget{Extension: c.ID}); err != nil {
 			ps.logf("plugin %s removed: its trust was not forgotten: %v", c.ID, err)
 		}
 		if n, err := ps.h.removeHandoffRules(ctx, c.ID, ""); err != nil {
@@ -658,6 +659,9 @@ func (ps *extensions) changed(c extension.Change) {
 	}
 	if ps.h != nil {
 		ps.h.agentFiltersChanged(ctx) // only when they changed (agent_filters.go)
+	}
+	if ps.h != nil && textLookupTouched(c.Old, c.ID, ps.reg) {
+		ps.h.textLookupChanged() // the apps ask GET /api/v1/text-lookup again
 	}
 	if ps.h != nil {
 		ps.h.sendReport() // its looks came or went: the hub serves them from the report (hub/looks.go)

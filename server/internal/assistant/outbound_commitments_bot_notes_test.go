@@ -19,7 +19,7 @@ func TestOutboundPromiseAutomaticBotNoteDoesNotCreatePromise(t *testing.T) {
 		notes++
 		return map[string]any{"message_id": "om_note"}, nil
 	})
-	s.botNoteTo(context.Background(), runTo(r.Ext), r.ReplyTo, "I'll share the results later.")
+	s.botNoteTo(context.Background(), feishuTarget{ChatID: r.Ext["chat"], InThread: true}, r.ReplyTo, "I'll share the results later.")
 	if notes != 1 {
 		t.Fatalf("automatic note was not delivered: %d", notes)
 	}
@@ -43,7 +43,7 @@ func TestOutboundPromiseAutomaticBotNoteDoesNotFulfill(t *testing.T) {
 			promise := outwardReceipts(t, h.store())[0]
 			expired := promise.DueAt.Add(24 * time.Hour)
 			h.superviseWatch(ctx, expired)
-			h.botNoteTo(ctx, runTo(r.Ext), r.ReplyTo, "The answer could not be sent. Open the app.")
+			h.botNoteTo(ctx, feishuTarget{ChatID: r.Ext["chat"], InThread: true}, r.ReplyTo, "The answer could not be sent. Open the app.")
 			h.superviseWatch(ctx, expired.Add(time.Second))
 			got := outwardReceipts(t, h.store())
 			if len(got) != 1 || !got[0].FulfilledAt.IsZero() {

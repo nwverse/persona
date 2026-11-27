@@ -684,6 +684,7 @@ function HistoryStatus({ v, onLoad }: { v: FeedView; onLoad: () => void }) {
         {t("session-terminalpanel.loading_older")}
       </div>
     );
+  if (v.dropped) return <div className={cls}>{t("session-terminalpanel.history_dropped")}</div>;
   if (v.atLimit) return <div className={cls}>{t("session-terminalpanel.history_limit")}</div>;
   if (!v.hasOlder) return <div className={cls}>{t("session-terminalpanel.history_start")}</div>;
   return (
@@ -706,7 +707,8 @@ function SizeLabel({ v, switching }: { v: FeedView; switching: boolean }) {
   if (v.control === "starting") return <span className="hidden shrink-0 whitespace-nowrap text-[11.5px] text-ink-3 @md:inline">{t("session-terminalpanel.size_starting")}</span>;
   // The switch is the truth only when it shows what happens: "Take control" while the keys go in, or "View only" chosen.
   if (switching && (v.control === "active" || !v.wants)) return null;
-  const title = v.mode === "poll" ? t("session-terminalpanel.size_poll_hint") : t("session-terminalpanel.size_watch_hint");
+  const title =
+    v.mode !== "poll" ? t("session-terminalpanel.size_watch_hint") : v.pollFast ? t("session-terminalpanel.size_poll_fast_hint") : t("session-terminalpanel.size_poll_hint");
   return (
     <span title={title} className="hidden shrink-0 whitespace-nowrap text-[11.5px] text-ink-3 @md:inline">
       {t("session-terminalpanel.size_watch_only")}

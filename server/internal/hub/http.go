@@ -82,6 +82,9 @@ func (h *Hub) routes() http.Handler {
 	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
+		if !h.requestHasApprovalMirrors(r) {
+			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool { return ix.MirrorOf != "" })
+		}
 		if restrictedAgentData(r) {
 			em := extensionManager(r)
 			ro := principalOf(r.Context()).Role == roleReadOnly
@@ -426,6 +429,7 @@ func logRequests(h *Hub, next http.Handler) http.Handler {
 		if !compat.HeaderConflict(r.Header, "X-Persona-Client") {
 			client = parseRequestClient(compat.Header(r.Header, "X-Persona-Client"))
 		}
+		client.Instance = parseRequestClientInstance(r.Header.Get("X-Persona-Client-Instance"))
 		r = r.WithContext(context.WithValue(r.Context(), requestClientKey{}, client))
 		id := requestID(r.Header.Get("X-Client-Request-Id"))
 		w.Header().Set("X-Request-Id", id)
@@ -962,18 +966,19 @@ func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 }
 
 type sessionStartRequest struct {
-	MachineID        string        `json:"machine_id"`
-	Cwd              string        `json:"cwd"`
-	Launcher         string        `json:"launcher"`
-	AgentType        string        `json:"agent_type,omitempty"`
-	WorkSession      bool          `json:"work_session,omitempty"`
-	Model            string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
-	Prompt           string        `json:"prompt"`
-	ClientMsgID      string        `json:"client_msg_id,omitempty"`
-	Images           []proto.Image `json:"images,omitempty"`
-	ResumeSessionID  string        `json:"resume_session_id"`
-	WorkspaceID      string        `json:"workspace_id"`
-	DesktopProjectID string        `json:"desktop_project_id"`
+	ModelAliases     proto.ModelAliases `json:"model_aliases,omitempty"`
+	MachineID        string             `json:"machine_id"`
+	Cwd              string             `json:"cwd"`
+	Launcher         string             `json:"launcher"`
+	AgentType        string             `json:"agent_type,omitempty"`
+	WorkSession      bool               `json:"work_session,omitempty"`
+	Model            string             `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
+	Prompt           string             `json:"prompt"`
+	ClientMsgID      string             `json:"client_msg_id,omitempty"`
+	Images           []proto.Image      `json:"images,omitempty"`
+	ResumeSessionID  string             `json:"resume_session_id"`
+	WorkspaceID      string             `json:"workspace_id"`
+	DesktopProjectID string             `json:"desktop_project_id"`
 	// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
 	// Checked by the node (an older node ignores it and starts in its engine).
 	Host           string `json:"host,omitempty"`
@@ -1020,6 +1025,14 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 // handoff: p carries generated context (context_handoff.go), not words someone typed; indirect: the request was
 // marked "via" (viaMarked). Neither counts as the owner's input.
 func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff, indirect bool) {
+	if err := p.ModelAliases.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(p.ModelAliases) != 0 && p.ResumeSessionID != "" {
+		writeErr(w, http.StatusBadRequest, errors.New("model_aliases require a new Claude Code session"))
+		return
+	}
 	orig := p
 	replay := heldStartReplayOf(r.Context())
 	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) {
@@ -1484,11 +1497,12 @@ func (h *Hub) broadcast(v any) {
 		return
 	}
 	typ, _ := m["type"].(string)
-	var elicitation bool
+	var elicitation, approvalMirror bool
 	if ix, ok := m["interaction"].(proto.Interaction); ok {
 		elicitation = ix.Kind == proto.IxElicitation
+		approvalMirror = ix.MirrorOf != ""
 	}
-	h.broadcastTo(typ, b, elicitation)
+	h.broadcastToApprovalMirror(typ, b, elicitation, approvalMirror)
 }
 
 // broadcastRaw sends every app the message b (of type typ).
@@ -1497,6 +1511,10 @@ func (h *Hub) broadcastRaw(typ string, b []byte) { h.broadcastTo(typ, b, false) 
 // broadcastTo sends every app the message b (of type typ); an MCP form or URL request (elicitation) only goes to the
 // apps that said they can answer one.
 func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
+	h.broadcastToApprovalMirror(typ, b, elicitation, false)
+}
+
+func (h *Hub) broadcastToApprovalMirror(typ string, b []byte, elicitation, approvalMirror bool) {
 	switch typ {
 	case "sessions", "interaction", "interaction_resolved": // what the Fleet activity is made of
 		h.live.changed()
@@ -1509,7 +1527,7 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 	if h.events == nil {
 		h.events = newEventLog()
 	}
-	b = h.events.add(b, elicitation, time.Now())
+	b = h.events.addApprovalMirror(b, elicitation, approvalMirror, time.Now())
 	// Each broadcast has one type and localizer; keep its language forms local to this call.
 	localize := i18n.ExtensionEvent
 	if typ == "machines" {
@@ -1521,6 +1539,9 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 			continue
 		}
 		if elicitation && !c.has("elicitation") {
+			continue
+		}
+		if approvalMirror && !c.wants(featureApprovalMirrors) {
 			continue
 		}
 		if typ == legacyLarkEvent && c.has(featureLarkViaMessaging) {

@@ -185,6 +185,14 @@ func (h larkHost) ResolveTarget(ctx context.Context, t botTarget) (assistantwire
 	return chatResolved(rt), err
 }
 
+func (h larkHost) SessionExists(ctx context.Context, machine, session string) bool {
+	if machine == "" {
+		machine = h.s.settings(ctx).MachineID
+	}
+	_, ok := h.s.session(ctx, machine, session)
+	return ok
+}
+
 // chatResolved is a resolved target as the module names it.
 func chatResolved(rt resolvedTarget) assistantwire.ChatResolved {
 	return assistantwire.ChatResolved{Machine: rt.machine, MachineName: rt.machineName, Session: rt.session, Label: rt.label,
@@ -251,11 +259,6 @@ func (h larkHost) InterruptConversation(ctx context.Context, rt assistantwire.Ch
 }
 
 func (h larkHost) TurnPending(machine, session string) bool { return h.s.turnPending(machine, session) }
-
-func (h larkHost) StopProgressCard(ctx context.Context, f FeishuFeatures, t botTarget, messageID string) (string, string) {
-	out := h.s.stopProgressCard(ctx, f, t, messageID)
-	return out.kind, out.message
-}
 
 func (h larkHost) Conversations(ctx context.Context) ([]proto.Session, string) {
 	return h.s.conversations(ctx, false, "")
@@ -353,7 +356,24 @@ func (h larkHost) AskSensitive(ctx context.Context, ix proto.Interaction) bool {
 	return h.s.ixSensitive(ctx, ix)
 }
 
+func (h larkHost) AskDirect(ctx context.Context, ix proto.Interaction) bool {
+	return h.s.nonMainAssistantPermission(ctx, ix)
+}
+
 func (h larkHost) AskState(id string) (ended, pending bool) { return h.s.ixState(id) }
+
+func (h larkHost) AskStateFor(ix proto.Interaction) (ended, pending bool) {
+	_, pending = h.s.ixState(ix.ID)
+	return h.s.interactionEndedFor(ix), pending
+}
+
+// AskPostHook is the existing test-only race hook; the module calls it through
+// an optional interface after the first occurrence check, before claiming a card.
+func (h larkHost) AskPostHook(ix proto.Interaction) {
+	if h.s.postCardHook != nil {
+		h.s.postCardHook(ix)
+	}
+}
 
 func (h larkHost) AskPending(id string) (proto.Interaction, bool) { return h.s.pendingIx(id) }
 
@@ -361,10 +381,18 @@ func (h larkHost) ResolveInteraction(ctx context.Context, id string, r proto.Res
 	return h.s.resolveInteraction(ctx, channel.Feishu, id, r, action)
 }
 
+func (h larkHost) ResolveInteractionAt(ctx context.Context, id string, r proto.Resolution, action string, expected *time.Time) (bool, error) {
+	return h.s.resolveInteractionAt(ctx, channel.Feishu, id, r, action, expected)
+}
+
 func (h larkHost) ValidateClarifyQuestion(text string) error { return validateClarifyQuestion(text) }
 
 func (h larkHost) ClarifyInteraction(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string) (bool, error) {
 	return h.s.clarifyInteraction(ctx, channel.Feishu, id, question, clientMsgID, action, chatID, messageID)
+}
+
+func (h larkHost) ClarifyInteractionAt(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string, expected *time.Time) (bool, error) {
+	return h.s.clarifyInteractionAt(ctx, channel.Feishu, id, question, clientMsgID, action, chatID, messageID, expected)
 }
 
 // AcceptAction answers a press of a "Please verify" or decision card's button ({a: accept}): the toast's kind and
@@ -478,20 +506,13 @@ func (h larkHost) TodoOfThread(chatID, threadID string) (assistantwire.ChatTodo,
 	return out, true
 }
 
-func (h larkHost) ThreadNoReply(ctx context.Context, ev botcard.MessageEvent, todoID, chatID, threadID string) {
+// ThreadNoReply records the owner's choice to stop reporting back, then replies in the to-do's topic.
+func (h larkHost) ThreadNoReply(ctx context.Context, messageID, todoID string, to assistantwire.ChannelTarget) {
 	t, ok := h.s.todoNow(todoID)
 	if !ok {
 		t = Todo{ID: todoID}
 	}
-	h.s.threadNoReply(ctx, ev, t, &feishuTopic{Chat: chatID, Thread: threadID})
-}
-
-func (h larkHost) ThreadRoutes(ctx context.Context, todoID string, f FeishuFeatures) ([]botTarget, error) {
-	t, ok := h.s.todoNow(todoID)
-	if !ok {
-		t = Todo{ID: todoID}
-	}
-	return h.s.threadRoutes(ctx, t, f)
+	h.s.stopReportOf(ctx, messageID, t, to, "thread_question", db.DecisionThread)
 }
 
 // TopicDecision notes text, said in a topic as message messageID, as a decision of todo todoID (asked as question).
@@ -535,10 +556,6 @@ func (h larkHost) SettleAskClaim(ctx context.Context, todoID string, ok bool) {
 }
 
 func (h larkHost) CloseAskTodo(ctx context.Context, todoID string) { h.s.closeAskTodo(ctx, todoID) }
-
-func (h larkHost) OpenTarget(ctx context.Context, st FeishuStatus) (botTarget, string, string) {
-	return h.s.openTarget(ctx, st)
-}
 
 func (h larkHost) TodoTitle(ctx context.Context, words string, l i18n.Lang, linkLabel bool) (string, bool) {
 	var title string
