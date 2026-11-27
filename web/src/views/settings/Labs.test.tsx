@@ -128,7 +128,7 @@ describe("Settings › Labs", () => {
     await click(radios()[1]);
     expect(field().querySelector('[role="alert"]')?.textContent).toBe(t("settings-labs.save_failed"));
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_standard"));
-    expect(field().textContent).not.toContain(t("settings-configuration.saved"));
+    expect(field().querySelector("[aria-live]")?.textContent).not.toContain(t("settings-configuration.saved"));
   });
 
   it("says when the browser won't let it read what is saved", async () => {

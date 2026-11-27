@@ -182,6 +182,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if !explicitSpeed {
 		argv, codex = n.codexLauncher(ctx, launcher)
 	}
+	if execution.ModelAliases != nil && (resume != "" || kind != "claude" || codex) {
+		return nil, refusal("model_aliases_unsupported", "model_aliases require a new Claude Code terminal session", nil)
+	}
 	var launch host.Launcher
 	if codex && kind == "codex" && resume == "" && mode == "" && stockOrcaCodexArgv(launcher, argv) && n.startKind(ctx) == proto.EngineOrca {
 		launch, err = n.launcherFor(n.startKind(ctx))
@@ -334,8 +337,25 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if err != nil {
 		return nil, err
 	}
+	modelArg := n.claudeModelArg(launcher, execution.Model)
+	managed, managedHere := n.managedLauncher(launcher)
+	if resume == "" && (execution.ModelAliases != nil || managedHere && !anthropicEndpoint(managedBaseURL(managed))) {
+		var aliases proto.ModelAliases
+		if execution.ModelAliases != nil {
+			aliases = *execution.ModelAliases
+		}
+		requested := execution.Model
+		if nativeClaudeModel.MatchString(proto.TrimModelWindow(requested)) &&
+			!strings.EqualFold(proto.TrimModelWindow(requested), proto.TrimModelWindow(execution.ExplicitModel)) {
+			requested = ""
+		}
+		settings, modelArg, err = n.claudeModelAliasSettings(ctx, launcher, cwd, settings, aliases, requested)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.
-	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: n.claudeModelArg(launcher, execution.Model), Effort: effort,
+	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: modelArg, Effort: effort,
 		Plugins: n.claudeLoadsPlugins(ctx), TaskInstructionFile: instructionFile}
 	if backend := backendLaunchFrom(ctx); backend != nil && mode != "plan" {
 		for _, repo := range backend.executor.journal.Repositories {

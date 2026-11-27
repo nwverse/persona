@@ -32,13 +32,13 @@ export struct FloatingToastOverlay {
   }
 
   private iconWellFor(kind: string): ResourceColor {
-    if (kind === 'error') return this.env.dark ? '#33FF453A' : '#1ABA1A1A';
-    if (kind === 'success') return this.env.dark ? '#3330D158' : '#1A237337';
-    return this.env.dark ? '#330A84FF' : '#1A007AFF';
+    if (kind === 'error') return Colors.dangerWash;
+    if (kind === 'success') return Colors.unreadWash;
+    return Colors.needsWash;
   }
 
   build() {
-    Column({ space: 8 }) {
+    Column({ space: Tokens.spaceS }) {
       if (this.toasts.current) {
         Row({ space: 10 }) {
           Stack() {
@@ -48,10 +48,11 @@ export struct FloatingToastOverlay {
           }
           .width(28)
           .height(28)
-          .borderRadius(14)
+          .borderRadius(Tokens.radiusCard)
           .backgroundColor(this.iconWellFor(this.toasts.current.kind))
           Text(this.toasts.current.message)
-            .fontSize(Tokens.interfaceFontVp(14, this.env.fontScale))
+            .fontSize(Tokens.typeSecondary)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.ink)
             .maxLines(3)
@@ -61,7 +62,8 @@ export struct FloatingToastOverlay {
             Button(this.toasts.current.actionTitle, { type: ButtonType.Capsule })
               .height(30)
               .padding({ left: 11, right: 11 })
-              .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+              .fontSize(Tokens.typeCaption)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
               .fontWeight(FontWeight.Bold)
               .fontColor(Colors.link)
               .backgroundColor(Colors.selection)
@@ -74,30 +76,31 @@ export struct FloatingToastOverlay {
               .id('toast.action')
           }
         }
-        .padding({ left: 12, right: 16, top: 8, bottom: 8 })
+        .padding({ left: Tokens.spaceM, right: Tokens.spaceL, top: Tokens.spaceS, bottom: Tokens.spaceS })
         .constraintSize({ maxWidth: 420 })
-        .backgroundColor(this.env.dark ? '#EB1C1C1E' : '#F5FFFFFF')
+        .backgroundColor(Colors.toastSurface)
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .borderRadius(Tokens.capsule)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.75), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.capsule })
+        .borderRadius(Tokens.radiusCapsule)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.75), color: PhoneStyle.floatingBorder(this.env.dark), radius: Tokens.radiusCapsule })
         .shadow(PhoneStyle.heroElevation(this.env.dark))
         .onClick(() => this.toasts.dismiss())
         .transition(Motion.slideFade(this.env.reduceMotion, -16))
         .id('floating.toast')
       } else if (this.reconnecting) {
-        Row({ space: 8 }) {
+        Row({ space: Tokens.spaceS }) {
           WorkingArcSpinner({ diameter: 14, tint: Colors.working, surface: Color.Transparent, showCoreDot: false })
           Text(tr('connecting'))
-            .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+            .fontSize(Tokens.typeCaption)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.ink)
             .maxLines(1)
         }
-        .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-        .backgroundColor(this.env.dark ? '#EB1C1C1E' : '#F5FFFFFF')
+        .padding({ left: 14, right: 14, top: Tokens.spaceS, bottom: Tokens.spaceS })
+        .backgroundColor(Colors.toastSurface)
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .borderRadius(Tokens.capsule)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.75), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.capsule })
+        .borderRadius(Tokens.radiusCapsule)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.75), color: PhoneStyle.floatingBorder(this.env.dark), radius: Tokens.radiusCapsule })
         .shadow(PhoneStyle.heroElevation(this.env.dark))
         .hitTestBehavior(HitTestMode.None)
         .transition(Motion.slideFade(this.env.reduceMotion, -14))

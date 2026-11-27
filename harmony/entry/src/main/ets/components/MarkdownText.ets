@@ -219,12 +219,12 @@ export struct MarkdownText {
         .textBackgroundStyle({ color: node.kind === 'code' && !this.chatReply ? this.codeFill : Color.Transparent, radius: Tokens.fine })
         .decoration({ type: TextDecorationType.Underline, color: this.emphasize }).onClick(() => this.onLink(url))
     } else if (node.kind === 'code') {
-      Span(node.text).fontFamily('monospace').fontSize(this.readingFont(this.chatReply ? 15.5 : Tokens.meta))
+      Span(node.text).fontFamily('monospace').fontSize(this.readingFont(this.chatReply ? 15.5 : Tokens.typeCode))
         .fontWeight(weight).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
         .fontColor(this.recapProse ? Colors.inlineCodeInk : this.chatReply ? Colors.inlineCodeInk : this.secondary)
         .textBackgroundStyle({
-          color: this.recapProse ? Color.Transparent : this.chatReply ? (this.environment.dark ? '#26FFFFFF' : '#10000000') : this.codeFill,
-          radius: 5
+          color: this.recapProse ? Color.Transparent : this.chatReply ? Colors.hairlineGlass : this.codeFill,
+          radius: Tokens.radiusBadge - 1
         })
     } else if (readingBody && (this.scaleAgentProse || this.recapProse)) {
       ForEach(markdownProseRuns(node.text), (run: MarkdownProseRun) => {
@@ -250,26 +250,26 @@ export struct MarkdownText {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .padding({ left: 7, right: 7, top: 2.5, bottom: 2.5 })
-          .backgroundColor(this.environment.dark ? '#18FFFFFF' : '#0E000000')
-          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: 6 })
-          .borderRadius(6)
+          .backgroundColor(Colors.pressOverlay)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.radiusBadge })
+          .borderRadius(Tokens.radiusBadge)
         if (countCodeLines(block.text) > 0) {
           Text(formatCodeLineCount(countCodeLines(block.text)))
             .fontFamily('monospace')
-            .fontSize(11)
-            .maxFontScale(Tokens.interfaceScaleFor(11))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
             .fontColor(Colors.secondary)
             .maxLines(1)
         }
         Blank().layoutWeight(1)
         Button({ type: ButtonType.Capsule }) {
-          Row({ space: 4 }) {
+          Row({ space: Tokens.spaceXs }) {
             SymbolGlyph(this.isCodeWrapped(blockKey) ? $r('sys.symbol.arrow_left_arrow_right') : $r('sys.symbol.textformat'))
               .fontSize('12vp')
               .fontColor([this.isCodeWrapped(blockKey) ? Colors.link : Colors.secondary])
             Text(tr(this.isCodeWrapped(blockKey) ? 'code_unwrap_lines' : 'code_wrap_lines'))
-              .fontSize(11.5)
-              .maxFontScale(Tokens.interfaceScaleFor(11.5))
+              .fontSize(Tokens.typeLabel)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
               .fontWeight(FontWeight.Medium)
               .fontColor(this.isCodeWrapped(blockKey) ? Colors.link : Colors.secondary)
               .maxLines(1)
@@ -279,25 +279,25 @@ export struct MarkdownText {
           .padding({ left: 9, right: 9 })
           .backgroundColor(this.isCodeWrapped(blockKey)
             ? Colors.selection
-            : (this.environment.dark ? '#18FFFFFF' : '#0D000000'))
+            : Colors.pressOverlay)
           .border({
             width: PhoneStyle.surfaceEdgeWidth(0.5),
             color: this.isCodeWrapped(blockKey) ? Colors.link : PhoneStyle.cardBorder(this.environment.dark),
-            radius: 13
+            radius: Tokens.radiusCapsule
           })
-          .responseRegion({ x: -4, y: -9, width: 68, height: 44 })
+          .responseRegion({ x: -4, y: -9, width: 68, height: Tokens.controlBar })
           .accessibilityText(tr(this.isCodeWrapped(blockKey) ? 'code_unwrap_lines' : 'code_wrap_lines'))
           .bindTips(tr(this.isCodeWrapped(blockKey) ? 'code_unwrap_lines' : 'code_wrap_lines'))
           .onClick(() => this.toggleCodeWrap(blockKey))
           .id('markdown.code.wrap')
         Button({ type: ButtonType.Capsule }) {
-          Row({ space: 4 }) {
+          Row({ space: Tokens.spaceXs }) {
             SymbolGlyph(this.copiedCodeKey === blockKey ? Symbols.check : IconActions.symbol('copy'))
               .fontSize('12.5vp')
               .fontColor([this.copiedCodeKey === blockKey ? Colors.positive : Colors.secondary])
             Text(this.copiedCodeKey === blockKey ? tr('copied') : tr('copy'))
-              .fontSize(12)
-              .maxFontScale(Tokens.interfaceScaleFor(12))
+              .fontSize(Tokens.typeLabel)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
               .fontWeight(FontWeight.Medium)
               .fontColor(this.copiedCodeKey === blockKey ? Colors.positive : Colors.secondary)
               .maxLines(1)
@@ -306,16 +306,16 @@ export struct MarkdownText {
           .height(26)
           .padding({ left: 10, right: 10 })
           .backgroundColor(this.copiedCodeKey === blockKey
-            ? (this.environment.dark ? '#2830D158' : '#1A237337')
-            : (this.environment.dark ? '#18FFFFFF' : '#0D000000'))
+            ? Colors.unreadWash
+            : Colors.pressOverlay)
           .border({
             width: this.copiedCodeKey === blockKey ? 0.5 : PhoneStyle.surfaceEdgeWidth(0.5),
             color: this.copiedCodeKey === blockKey
               ? Colors.positive
               : PhoneStyle.cardBorder(this.environment.dark),
-            radius: 13
+            radius: Tokens.radiusCapsule
           })
-          .responseRegion({ x: -6, y: -9, width: 76, height: 44 })
+          .responseRegion({ x: -6, y: -9, width: 76, height: Tokens.controlBar })
           .scale({
             x: this.pressedCodeKey === blockKey ? MotionTokens.pressScale : 1,
             y: this.pressedCodeKey === blockKey ? MotionTokens.pressScale : 1
@@ -333,10 +333,10 @@ export struct MarkdownText {
           .id('markdown.code.copy')
       }
         .width('100%')
-        .padding({ left: 12, right: 10, top: 8, bottom: 8 })
+        .padding({ left: Tokens.spaceM, right: 10, top: Tokens.spaceS, bottom: Tokens.spaceS })
         .backgroundColor(Colors.codeHunk)
         .alignItems(VerticalAlign.Center)
-      Divider().strokeWidth(0.5).color(this.environment.dark ? '#16FFFFFF' : Colors.divider)
+      Divider().strokeWidth(Tokens.divider).color(this.environment.dark ? Colors.hairlineGlass : Colors.divider)
       if (this.isCodeWrapped(blockKey)) {
         Text(trimCodeForCopy(block.text))
           .fontFamily('monospace')
@@ -368,12 +368,12 @@ export struct MarkdownText {
       .width('100%')
       .alignItems(HorizontalAlign.Start)
       .backgroundColor(Colors.codeCanvas)
-      .borderRadius(14)
+      .borderRadius(Tokens.radiusCard)
       .clip(true)
       .border({
         width: PhoneStyle.surfaceEdgeWidth(0.5),
         color: PhoneStyle.cardBorder(this.environment.dark),
-        radius: 14
+        radius: Tokens.radiusCard
       })
       .shadow(this.chatReply ? PhoneStyle.cardElevation(this.environment.dark) : { radius: 0, color: Color.Transparent })
   }
@@ -454,8 +454,8 @@ export struct MarkdownText {
     Column({ space: 0 }) {
       if (rowIndex > 0) {
         Divider()
-          .strokeWidth(rowIndex === 1 ? 0.75 : 0.5)
-          .color(this.environment.dark ? '#16FFFFFF' : Colors.divider)
+          .strokeWidth(rowIndex === 1 ? 0.75 : Tokens.divider)
+          .color(this.environment.dark ? Colors.hairlineGlass : Colors.divider)
       }
       Row() {
         ForEach(row.cells, (cell: MarkdownInline[], index: number) => this.tableCell(cell, table, index, row.header),
@@ -463,9 +463,9 @@ export struct MarkdownText {
       }
         .alignItems(VerticalAlign.Top)
         .backgroundColor(row.header
-          ? (this.environment.dark ? '#26272C' : '#F2F4F8')
+          ? Colors.subtle
           : rowIndex % 2 === 0
-            ? (this.environment.dark ? '#0DFFFFFF' : '#F8F9FC')
+            ? (this.environment.dark ? Colors.pressOverlay : Colors.codeSurface)
             : Colors.surface)
     }
   }
@@ -475,9 +475,9 @@ export struct MarkdownText {
       this.inlineText(cell, 0.22, this.chatReply ? 14.5 : Tokens.meta, header ? FontWeight.Bold : FontWeight.Normal, this.tableTextAlign(table, index), true)
     }
       .width(Tokens.markdownTableCell)
-      .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+      .padding({ left: Tokens.spaceM, right: Tokens.spaceM, top: 9, bottom: 9 })
       .alignItems(HorizontalAlign.Start)
-      .border(index > 0 ? { width: { left: 0.5 }, color: this.environment.dark ? '#14FFFFFF' : Colors.divider } : { width: 0 })
+      .border(index > 0 ? { width: { left: Tokens.divider }, color: this.environment.dark ? Colors.hairlineGlass : Colors.divider } : { width: 0 })
   }
 
   build() {

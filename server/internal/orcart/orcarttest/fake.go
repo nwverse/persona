@@ -38,11 +38,16 @@ type Fake struct {
 	keepalive   int
 	ln          net.Listener
 	agentStatus map[string]map[string]any
-	revisions   map[string]int
-	writes      []Write
-	invalid     []string
-	splits      int
-	lacking     map[string]bool
+	// processes are terminal.inspectProcess's answers by handle; nil: the method is unknown (an older Orca).
+	processes map[string]map[string]any
+	revisions map[string]int
+	writes    []Write
+	invalid   []string
+	// splits counts terminal.split's new terminals; lacking are the methods it answers method_not_found to (Lack);
+	// customTitles are tabs' custom names by tab id (terminal.rename, RenameTab).
+	splits       int
+	lacking      map[string]bool
+	customTitles map[string]string
 	// unknown: params each method's schema does not have and refuses (Unknown), as an older, strict Orca's would.
 	unknown map[string][]string
 }
@@ -261,6 +266,25 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 			out["visualLayouts"] = slices.Clone(f.layouts)
 		}
 		return out
+	case "session.tabs.list":
+		// The phone's tab model: a terminal entry per pane, its tab's custom name when it has one.
+		sel, _ := p["worktree"].(string)
+		wt := strings.TrimPrefix(sel, "id:")
+		tabs := []any{}
+		for _, x := range f.terms {
+			if x["worktreeId"] != wt {
+				continue
+			}
+			tab, _ := x["tabId"].(string)
+			leaf, _ := x["leafId"].(string)
+			entry := map[string]any{"type": "terminal", "id": tab + "::" + leaf, "parentTabId": tab, "leafId": leaf,
+				"title": f.layoutTitleLocked(tab), "customTitle": nil}
+			if c, ok := f.customTitles[tab]; ok {
+				entry["title"], entry["customTitle"] = c, c
+			}
+			tabs = append(tabs, entry)
+		}
+		return map[string]any{"worktree": wt, "tabs": tabs}
 	case "worktree.ps":
 		b, _ := json.Marshal(f.trees)
 		id := fmt.Sprintf("snap-%x", fnv32(b))
@@ -297,16 +321,24 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 		out := map[string]any{"handle": h}
 		maps.Copy(out, st)
 		return map[string]any{"agentStatus": out}
+	case "terminal.inspectProcess":
+		if f.processes == nil {
+			return Fail{"method_not_found"}
+		}
+		pr := f.processes[h]
+		if pr == nil {
+			// What Orca says when it cannot read the terminal's processes.
+			pr = map[string]any{"foregroundProcess": nil, "hasChildProcesses": true, "childProcessEvidence": "unverifiable"}
+		}
+		return map[string]any{"process": maps.Clone(pr)}
 	case "terminal.close":
 		f.writes = append(f.writes, Write{Handle: h, Close: true})
 		return map[string]any{"close": map[string]any{"handle": h, "tabId": t["tabId"], "ptyKilled": true}}
 	case "terminal.rename":
 		title, _ := p["title"].(string)
-		if t != nil {
-			t["title"] = title
-			f.retitleTabLocked(t["tabId"], title) // Orca names the terminal's tab so
-		}
-		return map[string]any{"rename": map[string]any{"handle": h, "title": title}}
+		tab, _ := t["tabId"].(string)
+		f.renameTabLocked(tab, title)
+		return map[string]any{"rename": map[string]any{"handle": h, "tabId": tab, "title": title}}
 	case "terminal.setPaneTitle":
 		title, _ := p["title"].(string)
 		return map[string]any{"setPaneTitle": map[string]any{"handle": h, "title": title}}
@@ -380,25 +412,43 @@ func (f *Fake) retabLocked(fn func(tabs []any) []any) {
 	f.layouts = layouts
 }
 
-// retitleTabLocked sets a layout tab's title.
-func (f *Fake) retitleTabLocked(tab any, title string) {
-	f.retabLocked(func(tabs []any) []any {
-		for i, x := range tabs {
-			if m, _ := x.(map[string]any); m["tabId"] == tab {
-				c := maps.Clone(m)
-				c["title"] = title
-				tabs[i] = c
-			}
+// renameTabLocked does what Orca 1.4.277 with no window does for terminal.rename (checked live): the tab gets the
+// custom name (session.tabs.list), every terminal in it that title (terminal.list), and its layout keeps the title it
+// was made with.
+func (f *Fake) renameTabLocked(tab, title string) {
+	if f.customTitles == nil {
+		f.customTitles = map[string]string{}
+	}
+	f.customTitles[tab] = title
+	for _, x := range f.terms {
+		if x["tabId"] == tab {
+			h, _ := x["handle"].(string)
+			f.replaceLocked(h, map[string]any{"title": title})
 		}
-		return tabs
-	})
+	}
 }
 
-// SetTabTitle sets a tab's title in the layouts, as when someone renames it in Orca's window.
-func (f *Fake) SetTabTitle(tab, title string) {
+// RenameTab renames a tab the way someone does in Orca's window or with Orca's own CLI (terminal.rename's effect).
+func (f *Fake) RenameTab(tab, title string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.retitleTabLocked(tab, title)
+	f.renameTabLocked(tab, title)
+}
+
+// layoutTitleLocked is the tab's title in the layouts, "" when no layout has it.
+func (f *Fake) layoutTitleLocked(tab string) string {
+	for _, l := range f.layouts {
+		lm, _ := l.(map[string]any)
+		root, _ := lm["root"].(map[string]any)
+		tabs, _ := root["tabs"].([]any)
+		for _, x := range tabs {
+			if m, _ := x.(map[string]any); m["tabId"] == tab {
+				title, _ := m["title"].(string)
+				return title
+			}
+		}
+	}
+	return ""
 }
 
 func (f *Fake) termLocked(h string) map[string]any {
@@ -490,6 +540,10 @@ func validate(method string, p map[string]any) string {
 			return "direction must be vertical or horizontal"
 		}
 		return first(handle(), str("command", false), str("cwd", false))
+	case "terminal.inspectProcess":
+		return first(handle(), boolean("scanChildProcesses"))
+	case "session.tabs.list":
+		return str("worktree", true)
 	case "terminal.rename", "terminal.setPaneTitle":
 		return first(handle(), str("title", true))
 	case "repo.add":
@@ -675,6 +729,50 @@ func (f *Fake) SetAgentStatus(handle string, running bool, status string) {
 	f.mu.Lock()
 	f.agentStatus[handle] = map[string]any{"isRunningAgent": running, "status": st}
 	f.mu.Unlock()
+}
+
+// SetProcess sets terminal.inspectProcess's answer for a handle (ShellAtRest, ShellWithJobs, Running, Unverifiable);
+// from the first call on the fake knows the method, and a handle with no answer set is one Orca cannot read. nil
+// clears the handle's answer.
+func (f *Fake) SetProcess(handle string, process map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.processes == nil {
+		f.processes = map[string]map[string]any{}
+	}
+	if process == nil {
+		delete(f.processes, handle)
+		return
+	}
+	f.processes[handle] = process
+}
+
+// ShellAtRest is Orca 1.4.277's terminal.inspectProcess answer for a shell at rest with nothing else in its terminal.
+func ShellAtRest(shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": nil, "hasChildProcesses": false, "idleShellProven": true,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID}}}
+}
+
+// ShellWithJobs is its answer for a shell in front with a background or stopped job: in front, not proven idle.
+func ShellWithJobs(shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": nil, "hasChildProcesses": false,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID}}}
+}
+
+// Running is its answer for a program in front of the shell ("sleep", "vi", "python3"…).
+func Running(name string, shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": name, "hasChildProcesses": true,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID + 1}}}
+}
+
+// Unverifiable is its answer when it cannot tell (reason "incarnation_mismatch", "process_table_unreadable"…): the
+// foreground it names then is only its last guess.
+func Unverifiable(reason string) map[string]any {
+	return map[string]any{"foregroundProcess": "bash", "hasChildProcesses": false,
+		"foregroundProcessEvidence": map[string]any{"verdict": "unverifiable", "reason": reason}}
 }
 
 // Orphan does to a terminal what Orca does about 2 s after terminal.create in a worktree its UI is not showing: the

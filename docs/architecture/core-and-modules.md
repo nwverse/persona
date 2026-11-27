@@ -179,7 +179,8 @@ Because a missing flag means off, every flag a client gates on has to be announc
   with it ("How to build and run the core alone" below).
 - **At run time**: the settings row `modules` (the `settings` table, as every other setting; no state file) holds
   `{"disabled": ["<id>", …]}`. `persona_settings` lists and reads this row as the `modules` key. A set rejects unknown
-  or duplicate ids (compiled-in modules and the client-only ones of `modapi.ClientModules`) before showing the existing owner approval card; `null` or an empty disabled list
+  or duplicate ids (known are the compiled-in modules, the client-only ones of `modapi.ClientModules` and the ones
+  installed extensions may supply, `modapi.ExtensionModules`, on any build) before showing the existing owner approval card; `null` or an empty disabled list
   restores the default. The manager reads the row once where it starts (`server/internal/assistant/main.go`,
   `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so the saved change takes effect at the
   next manager start, never as a hot switch in the running process. The manager reads it before it makes the extension
@@ -508,7 +509,39 @@ The daily briefing is a built-in module (#13430, decision 3; #13845). The schedu
 section 2): the program `personad volc` and its stand-in service `volctest` (docs/extensions/volcengine-speech.md). The
 extension host keeps the extension's manifest, its meetings switch and its settings text (`internal/extmgr/volc_extension.go`),
 from what the module provides through `builtinext`; its catalog strings (`hub-volc_extension.*`, `volc-*`) stay in the
-hub's locales.
+hub's locales. `volc` is also the first id of `modapi.ExtensionModules` ("Modules from extensions" below): once the
+official market's `volc` package is installed (handed off from the built-in, or on a build without the module), that
+package decides `module.volc`, on while it is enabled with both `transcription/volc` and `speech/volc` on; until
+then the built-in module's flag stands as before.
+
+### Modules from extensions
+
+An installed extension may supply a module's flag (#16254), so a module can move out of the binary into an
+extension package without its clients noticing. Only the host decides which: `modapi.ExtensionModules`
+(`server/internal/modapi/modapi.go`) lists the module ids an extension may supply and the contributions
+(`<point>/<id>`) each needs; today it is `volc` (`transcription/volc`, `speech/volc`). A package never names the
+module it claims.
+
+- **Who is a provider** (`server/internal/extmgr/module_providers.go`): the registry's record of the listed id, a
+  package installed on the hub's machine (`source: installed`, not a remote plugin installed from `remote:` without a
+  package; an installed package whose program is attached, `Record.AttachedPackage`, still counts), from a market whose spec is the
+  official one (`extension.IsOfficialMarket`), verified with the official signing key or a retired one
+  (`extension.Official.PreviousSigningKeys`). A local upload, a private market's package and another id are not
+  providers. A private market cannot hold an official key, current or retired (`extension.NormalizeMarketKeys`).
+- **Its flag** is on while the extension is enabled, every contribution the module needs is on and the `modules`
+  row leaves the id on. Whether its program is running, or has a problem, does not count.
+- **The channel**: the manager reports each provider with its flag in `extensions.report` (`modules: [{id, on}]`,
+  `extwire.Report.Modules`, [protocol.md](../protocol/protocol.md) "Extensions, connectors and bots (extensions.*, 2026-11-05)"), again on every
+  registry change, when its extensions are loaded and on every reconnection. The hub
+  (`server/internal/hub/extensions_link.go`, `reportedModules`) reads it from the default manager only, while that
+  manager is connected and its hello carries the `modules` marker, beside the built-in modules' flags of the same
+  hello. An installed provider decides its module's flag: one that is on adds `module.<id>`, one that is off removes the
+  built-in module's flag of that id. The hub keeps the report while the manager is away (the flags go with the
+  connection, as the hello's do) and, for the assistant, across a restart. An older manager reports no providers and
+  an older hub ignores them, so both keep today's flags.
+- **Reserved features**: the marker `modules` and any `module.<id>` are never an extension's own feature. The manifest
+  schema cannot declare `module.<id>`, the manager drops both from the `api.features` it reports (logged once), and the
+  hub drops them from every report's features.
 
 ### Voice
 
@@ -882,6 +915,7 @@ debug controls and placeholder demos out of Labs. See `docs/web/web.md` ("Labs")
 **Hub flags.** Every client switches modules on the hub's hello the same way (agreed on #13844): a module's `feature`
 is `module.<id>`; a hub that publishes module flags also announces the marker `modules`; a module with a `feature` is
 off only when the hello has `modules` and lacks the module's flag. No hello yet, or an older hub without `modules`,
-leaves it on.
+leaves it on. An approved installed extension supplies its module's flag the same way ("Modules from extensions"
+above): the clients see only `module.<id>`.
 
 Every client reads the same manifest fields from `schema/module.schema.json`.

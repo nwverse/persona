@@ -67,3 +67,7 @@
   --minutes-ai-accent-ink: color-mix(in srgb, var(--accent-ink) 85%, var(--ink));
 }
 .dark [data-minutes-conclusions] > ul { --accent-ink: var(--minutes-ai-accent-ink); }
+
+/* Disagreements cards (#16728, MinutesDebatesSection): neutral inset cards that reuse .minutes-words, .minutes-mark
+   and .minutes-glyph; the settled outcome row keeps extra breathing room above its hairline. */
+.minutes-debate-outcome { margin-top: 0.5rem; }

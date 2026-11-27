@@ -962,18 +962,19 @@ func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 }
 
 type sessionStartRequest struct {
-	MachineID        string        `json:"machine_id"`
-	Cwd              string        `json:"cwd"`
-	Launcher         string        `json:"launcher"`
-	AgentType        string        `json:"agent_type,omitempty"`
-	WorkSession      bool          `json:"work_session,omitempty"`
-	Model            string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
-	Prompt           string        `json:"prompt"`
-	ClientMsgID      string        `json:"client_msg_id,omitempty"`
-	Images           []proto.Image `json:"images,omitempty"`
-	ResumeSessionID  string        `json:"resume_session_id"`
-	WorkspaceID      string        `json:"workspace_id"`
-	DesktopProjectID string        `json:"desktop_project_id"`
+	ModelAliases     proto.ModelAliases `json:"model_aliases,omitempty"`
+	MachineID        string             `json:"machine_id"`
+	Cwd              string             `json:"cwd"`
+	Launcher         string             `json:"launcher"`
+	AgentType        string             `json:"agent_type,omitempty"`
+	WorkSession      bool               `json:"work_session,omitempty"`
+	Model            string             `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
+	Prompt           string             `json:"prompt"`
+	ClientMsgID      string             `json:"client_msg_id,omitempty"`
+	Images           []proto.Image      `json:"images,omitempty"`
+	ResumeSessionID  string             `json:"resume_session_id"`
+	WorkspaceID      string             `json:"workspace_id"`
+	DesktopProjectID string             `json:"desktop_project_id"`
 	// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
 	// Checked by the node (an older node ignores it and starts in its engine).
 	Host           string `json:"host,omitempty"`
@@ -1020,6 +1021,14 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 // handoff: p carries generated context (context_handoff.go), not words someone typed; indirect: the request was
 // marked "via" (viaMarked). Neither counts as the owner's input.
 func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff, indirect bool) {
+	if err := p.ModelAliases.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(p.ModelAliases) != 0 && p.ResumeSessionID != "" {
+		writeErr(w, http.StatusBadRequest, errors.New("model_aliases require a new Claude Code session"))
+		return
+	}
 	orig := p
 	replay := heldStartReplayOf(r.Context())
 	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) {

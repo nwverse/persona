@@ -105,24 +105,25 @@ export struct AssistantWelcome {
           Stack({ alignContent: Alignment.Center }) {
             SymbolGlyph(this.questionSymbol(item.id)).fontSize('18vp').fontColor([this.questionTint(item.id)])
           }
-            .width(36)
-            .height(36)
-            .borderRadius(11)
+            .width(Tokens.controlCompact)
+            .height(Tokens.controlCompact)
+            .borderRadius(Tokens.radiusControl)
             .backgroundColor(this.questionWell(item.id))
-            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: 11 })
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.radiusControl })
           Blank().layoutWeight(1)
           SymbolGlyph($r('sys.symbol.arrow_up_right')).fontSize('12vp').fontColor([Colors.tertiary]).accessibilityLevel('no')
         }.width('100%').alignItems(VerticalAlign.Top)
-        Text(item.title).fontSize(15.5).lineHeight(21).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+        Text(item.title).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+          .lineHeight(Tokens.lineHeightSecondary).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
           .width('100%').textAlign(TextAlign.Start).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
       }.width('100%').constraintSize({ minHeight: 106 }).alignItems(HorizontalAlign.Start).justifyContent(FlexAlign.SpaceBetween).padding(14)
     }.width('100%').padding(0)
-      .backgroundColor(Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F4F5F7'))
-      .borderRadius(18)
+      .backgroundColor(Colors.styleCard || Colors.codeSurface)
+      .borderRadius(Tokens.radiusCard)
       .border({
         width: PhoneStyle.surfaceEdgeWidth(0.5),
         color: PhoneStyle.cardBorder(this.environment.dark),
-        radius: 18
+        radius: Tokens.radiusCard
       })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .scale({
@@ -148,12 +149,11 @@ export struct AssistantWelcome {
     return Colors.link;
   }
   private questionWell(id: string): ResourceColor {
-    const dark = this.environment.dark;
-    if (id === 'today' || id === 'agenda') return dark ? '#260A84FF' : '#16007AFF';
-    if (id === 'connect_mail' || id === 'mail') return dark ? '#28B0A8FF' : '#165B4FD6';
-    if (id === 'largest_folders') return dark ? '#26FFB224' : '#18E8890C';
-    if (id === 'agents') return dark ? '#2663D3DF' : '#16087F8C';
-    if (id === 'lark') return dark ? '#2630D158' : '#16237337';
+    if (id === 'today' || id === 'agenda') return Colors.needsWash;
+    if (id === 'connect_mail' || id === 'mail') return Colors.aiWash;
+    if (id === 'largest_folders') return Colors.workingWash;
+    if (id === 'agents') return Colors.tealWash;
+    if (id === 'lark') return Colors.unreadWash;
     return Colors.accentWell;
   }
   private placeTint(key: string): ResourceColor {
@@ -187,10 +187,11 @@ export struct AssistantWelcome {
           .border({ width: PhoneStyle.surfaceEdgeWidth(0.75), color: PhoneStyle.cardBorder(this.environment.dark), radius: 16 })
           .shadow(PhoneStyle.cardElevation(this.environment.dark))
           .accessibilityLevel('no')
-        Column({space:6}) {
-          Text(this.greeting()).fontSize(30).fontWeight(FontWeight.Bold).letterSpacing(-0.4).fontColor(Colors.ink).width('100%')
-          Text(tr(this.mainConversation() ? 'phone_chat_intro_main' : 'phone_chat_intro_side')).fontSize(15.5)
-            .lineHeight(22.5).fontColor(Colors.secondary).width('100%')
+        Column({space:Tokens.spaceSm}) {
+          Text(this.greeting()).fontSize(Tokens.typeDisplay).maxFontScale(Tokens.chromeFontMaxScale).lineHeight(Tokens.lineHeightDisplay).fontWeight(FontWeight.Bold).letterSpacing(-0.4).fontColor(Colors.ink).width('100%')
+          Text(tr(this.mainConversation() ? 'phone_chat_intro_main' : 'phone_chat_intro_side')).fontSize(Tokens.typeSecondary)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+            .lineHeight(Tokens.lineHeightSecondary).fontColor(Colors.secondary).width('100%')
         }.width('100%').alignItems(HorizontalAlign.Start)
       }.width('100%').alignItems(HorizontalAlign.Start)
       if (this.suggestions.length) {
@@ -203,16 +204,15 @@ export struct AssistantWelcome {
       Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(8), cross: LengthMetrics.vp(8) } }) {
         ForEach(['projects','inbox','todo'], (key: string) => {
           Button({type:ButtonType.Capsule}) {
-            Row({space:6}) {
+            Row({space:Tokens.spaceSm}) {
               SymbolGlyph(key === 'projects' ? Symbols.folder : key === 'inbox' ? Symbols.inbox : Symbols.check)
                 .fontSize('14vp').fontColor([this.placeTint(key)])
-              Text(tr(key === 'todo' ? 'todos' : key)).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14))
+              Text(tr(key === 'todo' ? 'todos' : key)).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
                 .fontWeight(FontWeight.Medium).fontColor(Colors.ink)
             }
-          }.padding({left:12,right:14,top:8,bottom:8}).constraintSize({minHeight:38})
-            .responseRegion({x:0,y:-3,width:'100%',height:44})
-            .backgroundColor(Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F4F5F7'))
-            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: 19 })
+          }.padding({left:Tokens.spaceM,right:14,top:Tokens.spaceS,bottom:Tokens.spaceS}).constraintSize({minHeight:Tokens.controlBar})
+            .backgroundColor(Colors.styleCard || Colors.codeSurface)
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.radiusCapsule })
             .shadow(PhoneStyle.cardElevation(this.environment.dark))
             .scale({
               x: this.pressedPlace === key ? MotionTokens.pressScale : 1,

@@ -851,3 +851,17 @@ run, one work Agent from each supported launcher and one background helper. Chec
 logging prompts or credentials. Confirm that direct official-vendor requests and an empty allowlist have no source
 headers, and that vendor-bound gateway egress has none. This repository change neither deploys the configuration nor
 changes gateway accounting/enforcement.
+# One-session Claude Code model aliases
+
+`POST /api/v1/sessions` and the `agent_start` tool accept a `model_aliases` object for a new Claude Code terminal session. In `task_plan`, put it on the individual task. For example:
+
+```json
+{"model_aliases":{"sonnet_model":"vendor/standard","haiku_model":"vendor/fast","subagent_model":"vendor/helper"}}
+```
+
+The other keys are `opus_model` and `fable_model`. For these starts and managed Claude gateway terminal starts,
+omitted aliases keep non-Claude launcher values, then use the non-Claude default model (`deepseek-chat` if none
+is configured). Claude Code's own refusal fallback is disabled. A concrete Claude ID can still be named explicitly
+for this start. Overrides cannot set arbitrary environment variables and do not change the shared launcher or
+assistant model. Both the manager and the target node must support this option. To launch a Muster flow directly,
+pass the same object as `muster run --model-aliases '<json>'` instead.

@@ -78,6 +78,9 @@ func fit(v *View, slot UISlot, uiVersion int, unsupported []string, native bool,
 			return dropped, err
 		}
 	}
+	if native || uiVersion < 13 {
+		downgrade13(v)
+	}
 	if uiVersion < 12 || slices.Contains(unsupported, wire.ComponentMap) {
 		downgrade12(v, native, compact, l)
 	}

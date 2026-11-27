@@ -236,8 +236,16 @@ only the prompt and the answer travel.
     `execute_url(*)`, `mcp(*)`, and `unsandboxed(*)`), `--disable-slash-commands`, and `--input-format stream-json --output-format stream-json`
     so the prompt is fed on stdin as a single NDJSON user turn. An isolated `HOME` inside the temporary directory symlinks
     only read-only auth/runtime assets (`antigravity-oauth-token`, `installation_id`, `bin`, `builtin`, plus macOS
-    `Library/Keychains` when present) so global `~/.gemini/config/` hooks/MCP are never loaded and zero session files or
-    SQLite rows are written to the user's real `~/.gemini/antigravity-cli/`.
+    `Library/Keychains` when present; read-only copy fallback on Windows) so global `~/.gemini/config/` hooks/MCP are never
+    loaded and zero session files or SQLite rows are written to the user's real `~/.gemini/antigravity-cli/`.
+    When the installed `agy` advertises native per-session `systemPrompt.append` over `agy acp`, the node reuses at most
+    one on-demand isolated warm `agy acp` worker (`--include-default-customizations=false --disable-telemetry`, `mcpServers: []`,
+    per-session `session/new._meta.antigravity.systemPrompt.append`, immediate per-session cleanup after `session/close`,
+    120s idle eviction, and 50-request rotation), transparently falling back to cold `agy -p` on slash-command prompts,
+    conflicting model/effort arguments, concurrent second requests, missing capabilities, or transient startup failures;
+    unexpected permission, elicitation, or tool requests fail closed and destroy the worker (any error or abnormal
+    `stopReason` such as `cancelled` or unknown also destroys the worker, while normal terminal stops—omitted/empty,
+    `end_turn`, `max_tokens`, `max_turn_requests`, or `refusal`—preserve the answer and warm worker).
 - **Concurrency and time**: at most two runs at a time on one computer; others wait for a slot within their own time.
   The call's deadline goes along as `timeout_ms` (2 minutes without one, at most 10); when the manager stops waiting it
   sends `rpc.cancel` and the node kills the run. Each run pays a CLI start (seconds) on top of the answer, so this suits

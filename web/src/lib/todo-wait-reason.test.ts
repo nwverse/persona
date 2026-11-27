@@ -194,7 +194,7 @@ describe("todoLook for open PRs and concerns without active agents", () => {
     expect(todoLook({ ...prWait, wait: { kind: "pr_merge", waiting_on: "PR #55", pr_blockers: ["changes_requested"] } }, "not_started", undefined, undefined, NOW))
       .toEqual({ label: "需要修改", tone: "amber" });
     expect(todoLook({ ...prWait, wait: { kind: "pr_merge", waiting_on: "PR #55" } }, "not_started", undefined, undefined, NOW))
-      .toEqual({ label: "等合入", tone: "idle" });
+      .toEqual({ label: "待合入", tone: "idle" });
     const concern: Todo = { id: "c1", title: "Concern", kind: "concern", created_at: fresh, updated_at: fresh };
     expect(todoLook(concern, "not_started", undefined, undefined, NOW)).toEqual({ label: "跟进中", tone: "idle" });
   });

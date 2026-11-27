@@ -1115,6 +1115,13 @@ export async function addTodoDecision(
   return r.decision;
 }
 
+export function reportConcern(todoId: string, report: string): Promise<{ todo: Todo; closed: boolean }> {
+  return api(`/todos/${enc(todoId)}/decisions`, {
+    method: "POST",
+    json: { source: "reported", choice: report.trim() },
+  });
+}
+
 /** Marks decision `id` as replacing the earlier `supersedesId` ("" undoes it). */
 export async function setDecisionSupersedes(todoId: string, id: string, supersedesId: string): Promise<TodoDecision> {
   const r = await api<{ decision: TodoDecision }>(`/todos/${enc(todoId)}/decisions/${enc(id)}`, {
