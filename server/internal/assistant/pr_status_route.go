@@ -246,7 +246,9 @@ func extractPREvents(t Todo, cur todoStage, held *TaskReview, status TodoPRStatu
 		return nil
 	}
 	var events []prRoutedEvent
-	if status.URL == cur.PR && status.Conflicts {
+	followed := status.URL == cur.PR || slices.Contains(cur.PRs, status.URL)
+	externalBound := externalParkPRURL(held) != "" && externalParkPRURL(held) == triageNormalizePRURL(status.URL)
+	if (followed || externalBound) && status.Conflicts {
 		events = append(events, prRoutedEvent{
 			TodoID:   t.ID,
 			PRURL:    status.URL,
@@ -445,12 +447,15 @@ func (s *Service) deliverPRFeedback(ctx context.Context, t Todo, ev prRoutedEven
 
 // routePREvents routes actionable PR events directly to the bound Agent when assistant.pr_events_route_to_agent is on.
 // It returns whether conflict and parked-review supervisor wakes were already handled by direct Agent routing.
-func (s *Service) routePREvents(ctx context.Context, t Todo, cur todoStage, held *TaskReview, status TodoPRStatus) (conflictRouted, reviewRouted bool) {
+func (s *Service) routePREvents(ctx context.Context, t Todo, cur todoStage, held *TaskReview, status TodoPRStatus, allowConflict bool) (conflictRouted, reviewRouted bool) {
 	events := extractPREvents(t, cur, held, status)
 	if len(events) == 0 {
 		return false, false
 	}
 	for _, ev := range events {
+		if ev.Kind == prEventKindConflict && !allowConflict {
+			continue
+		}
 		key := prEventDedupeKey(ev)
 		if existing, dup := s.claimPREvent(ctx, key); dup {
 			if existing.Outcome != prRouteOutcomeFallback && existing.Outcome != prRouteOutcomeUncertain {

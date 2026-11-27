@@ -29,12 +29,14 @@ export const LAUNCHER_EXTRA_MODEL_FIELDS = [
   "fable_model",
 ] as const;
 
+export const MAX_MODEL_PROFILES = 20;
 export const MAX_MODEL_TIERS = 12;
 export const MAX_TIER_CANDIDATES = 6;
 export const MAX_PROFILE_NAME = 40;
 export const MAX_PROFILE_DESCRIPTION = 300;
 export const MAX_TIER_DESCRIPTION = 100;
 export const MAX_PROFILE_VALUE = 200;
+export const PROFILE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 export const TIER_NAME_RE = /^[a-z][a-z0-9_-]{0,23}$/;
 export const TIER_SPEEDS = ["", "fast", "ultrafast"] as const;
 
@@ -105,11 +107,20 @@ export interface ModelProfile {
   changes: string[];
 }
 
+export interface ModelProfileRollback {
+  id?: string;
+  to?: string;
+  at?: string;
+  changes: string[];
+  redo?: boolean;
+}
+
 export interface ModelProfiles {
   revision?: number;
   active?: string;
   profiles: ModelProfile[];
-  rollback?: { to?: string; changes: string[] };
+  rollback?: ModelProfileRollback;
+  rollbacks?: ModelProfileRollback[];
 }
 
 export interface ModelProfileSaveInput {
@@ -198,6 +209,27 @@ export const saveModelProfile = (id: string, input: ModelProfileSaveInput, manag
 
 export const switchModelProfile = (id: string, manager?: string, context?: RequestContext) =>
   api<ModelProfiles>(`/model-profiles/${enc(id)}/apply`, { ...context, method: "POST", headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
+
+export const deactivateModelProfile = (manager?: string, context?: RequestContext) =>
+  api<ModelProfiles>("/model-profiles/deactivate", { ...context, method: "POST", headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
+
+export const deleteModelProfile = (id: string, revision?: number, manager?: string, context?: RequestContext) => {
+  const query = revision === undefined ? "" : `?revision=${enc(String(revision))}`;
+  return api<ModelProfiles>(`/model-profiles/${enc(id)}${query}`, {
+    ...context,
+    method: "DELETE",
+    headers: manager ? { [MANAGER_HEADER]: manager } : undefined,
+  });
+};
+
+export const clearModelProfiles = (revision?: number, manager?: string, context?: RequestContext) => {
+  const query = revision === undefined ? "" : `?revision=${enc(String(revision))}`;
+  return api<ModelProfiles>(`/model-profiles${query}`, {
+    ...context,
+    method: "DELETE",
+    headers: manager ? { [MANAGER_HEADER]: manager } : undefined,
+  });
+};
 
 export const rollbackModelProfile = (manager?: string, context?: RequestContext) =>
   api<ModelProfiles>("/model-profiles/rollback", { ...context, method: "POST", headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
