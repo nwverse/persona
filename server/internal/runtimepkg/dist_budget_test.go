@@ -96,9 +96,10 @@ import (
 // Pausing the Antigravity prompt inactivity watchdog once a matched foreground reply is settled and the only open
 // work is a same-turn live background task (six fail-closed predicates, wake re-arm and T1-T5 tests; #17214) adds
 // 1,424 B of gzipped-package budget (302,838 B -> 304,262 B).
+// Persisting the model after the first turn and restoring older Antigravity sessions from their transcript adds 91 B (#16458).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 304_262
+	const budget = 304_353
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
