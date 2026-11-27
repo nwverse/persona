@@ -519,7 +519,8 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		return proto.Session{}, err
 	}
 	var res struct {
-		SessionID string `json:"session_id"`
+		SessionID      string `json:"session_id"`
+		PermissionMode string `json:"permission_mode"`
 	}
 	if p.GuestTools == nil {
 		s.putCacheKeepalive(ctx, machine, "", main, params)
@@ -541,7 +542,8 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		}
 		return proto.Session{}, err
 	}
-	finalMode, _ := params["permission_mode"].(string)
+	requestedMode, _ := params["permission_mode"].(string)
+	finalMode := cmp.Or(res.PermissionMode, requestedMode)
 	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: finalMode,
 		Effort: p.Effort, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
 	sess.MachineID, sess.Assistant, sess.State, sess.Space = machine, true, proto.StateWorking, p.Space
