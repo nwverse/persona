@@ -554,7 +554,7 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
         smoke.write_hub_json(home, port, master, database)
         config_path = home / ".persona/hub.json"
         config = json.loads(config_path.read_text())
-        config["machines"] = [{"id": "assistant", "name": "Fixture Computer", "kind": "local", "icon": "server"}]
+        config["machines"] = [{"id": "assistant", "name": "Fixture Computer", "kind": "link", "icon": "server"}]
         config_path.write_text(json.dumps(config))
         config_path.chmod(0o600)
         base = f"http://127.0.0.1:{port}"

@@ -76,6 +76,11 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         with self.assertRaises(DRIVER.Failed):
             DRIVER.validate_proof(proof, "full", "run", self.shots)
 
+    def test_machine_fixture_never_starts_a_local_node(self):
+        source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()
+        self.assertIn('"kind": "link"', source)
+        self.assertNotIn('"kind": "local"', source)
+
     def test_proof_contains_no_credentials(self):
         encoded = json.dumps(self.proof("core-only"))
         self.assertNotIn("pairing_token", encoded)
