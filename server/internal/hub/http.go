@@ -32,6 +32,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/sessionlist"
@@ -981,6 +982,7 @@ type sessionStartRequest struct {
 	// LauncherDefaultEffort keeps an explicit launcher's effort at its native default.
 	LauncherDefaultEffort bool   `json:"launcher_default_effort,omitempty"`
 	Speed                 string `json:"speed,omitempty"`
+	ServiceTier           string `json:"service_tier,omitempty"`
 	Ultracode             *bool  `json:"ultracode,omitempty"`
 	// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
 	// start it cannot take there answers 409 start_goal_unsupported before anything starts.
@@ -1082,6 +1084,10 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	}
 	if p.AgentType != "" && !agentTypeRe.MatchString(p.AgentType) {
 		writeErr(w, http.StatusBadRequest, errors.New("unsupported agent type"))
+		return
+	}
+	if p.ServiceTier != "" && !m.announces(nodeproto.SessionStartServiceTier) {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("hub-machine.node_no_session_start_speed"))
 		return
 	}
 	opID := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Persona-Op-Id")))

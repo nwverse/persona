@@ -45,6 +45,8 @@ export interface LauncherModels {
   locked?: string;
   /** The node accepts a model when starting the native omp launcher on the queried host (#11964). */
   supports_start_model?: boolean;
+  /** This launcher's Codex start on the queried host accepts a native service tier. */
+  supports_start_service_tier?: boolean;
 }
 
 /** What "Model configuration" runs when a launcher picker is left alone (GET /machines/{mid}/launchers's `default`, #2455):

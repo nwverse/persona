@@ -281,7 +281,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
       (reviewState(todo) === "user_check" ||
         Boolean(taskReviewDecisionAsk(todo) && !input.deferred?.[decisionLaterKey(todo)]));
     // The hub's view decides when there is one, so this tray, the To-dos badge and the hub's needs_you agree.
-    const hub = hubNeedsYou(quietOwnerAskHere ? { ...todo, quiet: false } : todo, openOf);
+    const hub = hubNeedsYou(quietOwnerAskHere ? { ...todo, quiet: false } : todo, (id) => carried.has(todo.id) && openOf(id));
     const item: NeedsYouTask = { kind: "task", key, todo, status, asks, countsOpen };
     // Only the review decision is hidden; a live Agent question still has its home.
     // A user_check round follows the same Later/Dismiss rules as a decision. Its parent may still carry live
@@ -397,10 +397,12 @@ export function needsYouBySupervisor(items: readonly NeedsYouItem[], conversatio
     let supervisor = conversation;
     if (item.kind === "task") {
       const { todo, asks } = item;
-      if (!asks.length && reviewState(todo) === "user_check") {
-        supervisor = isMain ? conversation : todo.supervision?.supervisor || todo.origin || conversation;
+      const shown = !asks.length && !openAsk(todo) && !taskReviewDecisionAsk(todo) && item.steps?.[0] ? item.steps[0] : item;
+      const target = shown.todo;
+      if (!shown.asks.length && reviewState(target) === "user_check") {
+        supervisor = isMain ? conversation : target.supervision?.supervisor || target.origin || conversation;
       } else {
-        supervisor = (!asks.length && taskReviewDecisionAsk(todo) && todo.supervision?.supervisor) || todo.origin || conversation;
+        supervisor = (!shown.asks.length && taskReviewDecisionAsk(target) && target.supervision?.supervisor) || todo.origin || conversation;
       }
     } else if (item.kind === "plan") {
       supervisor = item.plan.conversation || conversation;

@@ -105,6 +105,8 @@
   "assistant_service_tier_refused": "Codex は最初のメッセージの前に Fast を適用できませんでした。メッセージは送信されていません。もう一度試すか、Standard を選んでください。",
   "agent_speed_unsupported": "このランチャーでは指定した速度で Agent を開始できません：{reason}",
   "agent_speed_start_only": "高速モードを指定できるのは新しい Agent の開始時だけです：{reason}",
+  "agent_speed_tier_new": "サービスティアを選ぶには、新しい Codex Agent を開始してください。",
+  "agent_speed_tier_value": "priority または ultrafast を選び、speed フィールドは省略してください。",
   "agent_speed_model": "このモデルでは指定された Codex 速度が提供されていません：{reason}",
   "agent_speed_invalid": "Agent の速度が無効です：{reason}",
   "session_speed_unsupported": "このセッションでは選択した速度を利用できません。",
