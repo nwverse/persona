@@ -248,6 +248,7 @@ func (h *Hub) machineHandedOver(mid, to string) {
 		h.sessionsChanged(m)
 	}
 	h.devicesConfigChanged()
+	h.fleetClientsRefresh()
 }
 
 // releaseMachines gives the machines removed manager id carried back to the carrier. Called under removingManager.

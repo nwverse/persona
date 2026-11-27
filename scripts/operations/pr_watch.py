@@ -935,7 +935,12 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         seen = set()
         for _ in range(1000):
             variables = {"owner": owner, "name": name, "number": number, "pageSize": 100}
-            variables.update({field + "Cursor": value for field, value in cursors.items()})
+            # `False` marks a finished collection here, but the cursor variable is declared String: sending
+            # `false` is rejected ("Could not coerce value false to String") on every second page, which used
+            # to block every PR with more than one page of activity (#16737). The @include directive already
+            # drops a finished collection, so its cursor only has to be a legal value.
+            variables.update({field + "Cursor": None if value is False else value
+                              for field, value in cursors.items()})
             variables.update({"needComments": cursors["comments"] is not False,
                               "needReviews": cursors["reviews"] is not False,
                               "needThreads": cursors["threads"] is not False})

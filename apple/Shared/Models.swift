@@ -670,12 +670,14 @@ extension Machine {
     }
 
     /// An explicit workspace host wins over the machine default, provided the machine enables it.
-    nonisolated func startsInHerdr(host: String?) -> Bool {
+    nonisolated func supportsOmpStartModel(host: String?) -> Bool {
         let herdr = MachineEngine.herdr.rawValue
-        let legacyHerdr = engine == .herdr || engine == .herdrBoth
-        guard engineHosts?.contains(herdr) ?? legacyHerdr else { return false }
-        if let host, !host.isEmpty { return host == herdr }
-        return defaultStartHost == herdr
+        let orca = MachineEngine.orca.rawValue
+        let target: String? = if let host, !host.isEmpty { host } else { defaultStartHost }
+        guard let target, target == herdr || target == orca else { return false }
+        if let engineHosts { return engineHosts.contains(target) }
+        if target == herdr { return engine == .herdr || engine == .herdrBoth }
+        return engine == .orca
     }
 }
 
@@ -716,7 +718,30 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     var title: String {
         let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = trimmed?.isEmpty == false ? trimmed : nil
-        return Self.traeCLITitle(name: name, source: source, agent: runtimeAgent, baseURL: baseURL, displayName: label) ?? label ?? name
+        return Self.traeCLITitle(name: name, source: source, agent: runtimeAgent, baseURL: baseURL, displayName: label)
+            ?? Self.builtinTitle(name: name, displayName: label)
+    }
+    /// Canonical product titles shown for built-in launchers when no explicit custom `display_name` is set.
+    static let builtinTitles: [String: String] = [
+        "claude": "Claude Code",
+        "codex": "Codex",
+        "claude-desktop": "Claude Desktop",
+        "codex-app": "Codex App",
+        "traex": Session.traeCLIName,
+        "traecli": Session.traeCLIName,
+        "trae-cli": Session.traeCLIName,
+        "agy": "Antigravity CLI",
+        "omp": "Oh My Pi",
+        "cursor": "Cursor",
+        "gemini": "Gemini CLI",
+    ]
+    static func builtinTitle(name: String, displayName: String? = nil) -> String {
+        let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = trimmed?.isEmpty == false ? trimmed : nil
+        if let label, label.caseInsensitiveCompare(name) != .orderedSame {
+            return label
+        }
+        return builtinTitles[name.lowercased()] ?? label ?? name
     }
     /// Older hubs and runtime providers can supply a legacy label. Keep other labels chosen by the user.
     static func traeCLITitle(name: String, source: String?, agent: String?, baseURL: String?, displayName: String?) -> String? {
@@ -1120,6 +1145,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var sessionID: String
     var title: String
     var cwd: String
+    /// The node-verified physical directory used for workspace association.
+    var workspaceCWD: String? = nil
     var status: SessionStatus
     var paneID: String?
     var tabID: String?
@@ -1638,6 +1665,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
+        case workspaceCWD = "workspace_cwd"
         case pendingEffort = "pending_effort", effortChangeFailed = "effort_change_failed"
         case hiddenByDirectory = "hidden_by_directory"
         case serviceTier = "service_tier", serviceTiers = "service_tiers"
@@ -1679,6 +1707,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         manager = try c.decodeIfPresent(String.self, forKey: .manager)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+        workspaceCWD = try c.decodeIfPresent(String.self, forKey: .workspaceCWD)
         let rawStatus = try c.decodeIfPresent(String.self, forKey: .status)
         status = rawStatus.flatMap(SessionStatus.init(rawValue:)) ?? .unknown
         wasInterrupted = rawStatus == "interrupted"
@@ -3135,6 +3164,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var ownerProposal: Bool?
     var noExpiry: Bool?
     var ownerApprovalPhrases: [String]?
+    /// True when the card has no interactive computer terminal or UI to hand back to; absent/false keeps hand-back.
+    var noHandBack: Bool?
     var ownerApprovalPhrase: String? {
         guard kind == .permission, ownerProposal == true, let approvalBatchID, !approvalBatchID.isEmpty,
               !machineID.isEmpty, !sessionID.isEmpty,
@@ -3188,7 +3219,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
              agentID = "agent_id", agentType = "agent_type", foldedUnderText = "folded_under",
              foldedUnderMachineIDText = "folded_under_machine_id", foldedAsText = "folded_as",
              foldedSideText = "folded_side", approvalBatchID = "approval_batch_id", approvalItemID = "approval_item_id",
-             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases"
+             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases",
+             noHandBack = "no_hand_back"
     }
 }
 
@@ -3794,7 +3826,7 @@ nonisolated enum DeleteSessionText {
 /// Where an agent was opened (`Session.source`, #2526).
 nonisolated enum SessionSource: String, Sendable {
     case feishu, terminal
-    var label: String { self == .feishu ? String(localized: "Lark Group [Models e86099]") : String(localized: "Terminal") }
+    var label: String { self == .feishu ? String(localized: "Lark Group [Models e86099]") : String(localized: "In a Tab") }
 }
 
 nonisolated extension Int64 {

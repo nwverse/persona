@@ -87,6 +87,9 @@ func (s *Service) resolvePreparedAnswerAt(ctx context.Context, p *pending, r pro
 	case r.UserDenied():
 		a.reportStatus = "denied"
 		text = cmpOr(a.op.Denied, "The user declined the change: nothing changed.")
+		if note := strings.TrimSpace(r.Message); note != "" {
+			text += " Owner note: " + note
+		}
 	case r.UserAllowed():
 		a.reportStatus = "resolved"
 		applyCtx := ctx
@@ -304,7 +307,7 @@ func (s *Service) finishPrepared(p *pending, status string) error {
 	}
 	if kept != nil {
 		s.channelsEnded(p.ix, kept)
-		go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: *kept, Status: status})
+		s.interactionResolvedSoon(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: *kept, Status: status})
 	}
 	if p.resolved != nil {
 		close(p.resolved)

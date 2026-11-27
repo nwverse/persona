@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +19,61 @@ import (
 )
 
 // The interactions as the manager keeps them (fleet_ix.go), moved from the hub's tests with them.
+
+func TestResolveRequiresDecisionForInteractionKind(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, invalid, valid string
+	}{
+		{"approve on permission", proto.IxPermission, `{"approve":true}`, `{"allow":true}`},
+		{"allow on plan", proto.IxPlan, `{"allow":true}`, `{"approve":true}`},
+		{"empty permission decision", proto.IxPermission, `{}`, `{"allow":false}`},
+		{"null plan decision", proto.IxPlan, `{"approve":null}`, `{"approve":false}`},
+		{"cancel is only for questions", proto.IxPermission, `{"cancel":true}`, `{"dismiss":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := newFleetTest(t)
+			ix := proto.Interaction{ID: "ix_decision", MachineID: "mac", SessionID: "s1", Kind: tc.kind}
+			announced := make(chan struct{})
+			done := make(chan proto.Resolution, 1)
+			go func() {
+				r, _ := ft.s.waitInteractionReady(t.Context(), ix, nil, announced)
+				done <- r
+			}()
+			select {
+			case <-announced:
+			case <-time.After(5 * time.Second):
+				t.Fatal("interaction was not announced")
+			}
+			h := ft.s.fleetHandler(http.NotFoundHandler())
+			post := func(body string) *httptest.ResponseRecorder {
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/interactions/"+ix.ID+"/resolve", strings.NewReader(body)))
+				return rec
+			}
+			if rec := post(tc.invalid); rec.Code != http.StatusBadRequest {
+				t.Fatalf("invalid decision: HTTP %d, body %s", rec.Code, rec.Body)
+			}
+			if _, ok := ft.s.pendingIx(ix.ID); !ok {
+				t.Fatal("invalid decision removed the pending card")
+			}
+			if status, answer, err := ft.st.InteractionOutcome(t.Context(), ix.ID); err != nil || status != "pending" || answer != nil {
+				t.Fatalf("invalid decision changed the stored card: %s %+v %v", status, answer, err)
+			}
+			if rec := post(tc.valid); rec.Code != http.StatusOK {
+				t.Fatalf("valid decision: HTTP %d, body %s", rec.Code, rec.Body)
+			}
+			select {
+			case answer := <-done:
+				raw, err := json.Marshal(answer)
+				if err != nil || string(raw) != tc.valid {
+					t.Fatalf("hook got %s, want %s (%v)", raw, tc.valid, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("valid decision did not release the waiter")
+			}
+		})
+	}
+}
 
 func TestWaitInteractionResolved(t *testing.T) {
 	ft := newFleetTestNoStore(t)
@@ -127,17 +184,19 @@ func TestWaitInteractionReplacesScreenGuess(t *testing.T) {
 	s.ixMapLocked()[scr.ID] = &pending{ix: scr, done: make(chan proto.Resolution, 1)}
 	s.fleet.mu.Unlock()
 	ix := proto.Interaction{ID: "ix_hook", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ExpiresAt: time.Now().Add(time.Hour)}
+	announced := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = s.waitInteraction(context.Background(), ix)
+		_, _ = s.waitInteractionReady(t.Context(), ix, nil, announced)
 	}()
-	for {
-		got := ids(s.pendingInteractions())
-		if strings.Join(got, ",") == "ix_hook" {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	select {
+	case <-announced:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hook interaction was not announced")
+	}
+	if got := ids(s.pendingInteractions()); !slices.Equal(got, []string{ix.ID}) {
+		t.Fatalf("pending interactions: %v", got)
 	}
 	if st, _, _ := ft.st.InteractionOutcome(context.Background(), scr.ID); st != "cancelled" {
 		t.Fatalf("screen guess status %q, want cancelled", st)
@@ -156,8 +215,14 @@ func TestWaitInteractionReplacesScreenGuess(t *testing.T) {
 	if !found {
 		t.Fatal("the screen guess was never said to be over (the bot's card for it stays open)")
 	}
-	_ = s.resolve("ix_hook", proto.Resolution{})
-	<-done
+	if err := s.resolve(ix.ID, proto.Resolution{Dismiss: true}); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dismiss did not release the hook")
+	}
 }
 
 func TestScreenInteractionResolveRunsLocally(t *testing.T) {

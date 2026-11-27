@@ -250,7 +250,7 @@ func (s *Service) approvalJournalAborted(ctx context.Context, ix proto.Interacti
 		return
 	}
 	b.list = slices.DeleteFunc(b.list, func(a approvalJournalEntry) bool {
-		return approvalJournalMatches(a, ix) && a.Result == "" && !a.Accepted
+		return approvalJournalMatches(a, ix) && a.Status == "" && a.Result == "" && !a.Accepted
 	})
 	if err := s.saveApprovalJournalLocked(ctx); err != nil {
 		s.logf("abort approval clarification journal: %v", err)

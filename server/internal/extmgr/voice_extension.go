@@ -44,7 +44,9 @@ const voiceConfig = `{
     "default_model": {"type": "string", "title": "默认模型", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},
     "input_rate": {"type": "integer", "title": "麦克风采样率", "description": "不填时 GPT-Live 用 16000，Codex 用 24000", "enum": [16000, 24000]},
     "owner": {"type": "string", "title": "语音里怎么称呼你"},
-    "notes": {"type": "string", "title": "给语音助手的补充说明"}
+    "notes": {"type": "string", "title": "给语音助手的补充说明"},
+    "archive_machine": {"type": "string", "format": "machine", "title": "通话存档到哪台电脑", "description": "选一台电脑：每通电话挂断后，两边说的话按先后、带时间写成一份 Markdown 存到那台电脑上；hub 不落盘。不选不存"},
+    "archive_dir": {"type": "string", "title": "存档目录", "description": "那台电脑上的目录，~/ 开头或绝对路径；空着是 ~/PersonaCalls", "pattern": "^(~/|/)"}
   }
 }`
 
