@@ -6,6 +6,26 @@ XcodeGen source is `apple/project.yml`, generating `apple/Persona.xcodeproj` (ge
 Performance rules, budgets and how to measure: `docs/apple/performance.md` (read before changing `apple/` code).
 Bundle ID comes from configuration (`app.bundle_id`, watch `<id>.watchkitapp`, `docs/operations/config.md`). The UI supports English, Simplified Chinese and Japanese (`en` / `zh-Hans` / `ja`).
 
+
+## Native Agent console templates (#17129)
+
+Settings › **Templates** imports the shared `schema/template.schema.json` link or JSON. The native preview separates
+changes from unsupported parts and never writes on import. Applying the Agent console stores the choice on this iPhone;
+**Default** restores it. The normal shell is unchanged until the owner applies a template.
+
+The console has three native tabs: **Main Chat**, **Agents**, and **Settings**. External conversations are the **External**
+segment inside Agents, not a fourth tab. The Running segment lists live terminal Agents by computer, with the herdr tab
+name above the Agent session name and no redundant terminal source chip. Settings keeps its common categories and
+**More Settings**, and search still finds every category. Main Chat keeps replies, live work and cards waiting on the
+owner while finished supervision rounds and briefing/day/inbox-suggestion feed lines stay out of its timeline.
+
+A shared `/settings?...&template=...` URL is claimed by the app and opens the same preview. Device looks do not sync to
+web or iPad. Hub navigation, extension and assistant-settings parts are explicitly marked Not applied in this native
+preview rather than being reported as successful. `NativeTemplateStore` persists the opt-in in `UserDefaults`.
+
+Checks: `PersonaTests/NativeTemplatesTests.swift`, `PersonaUITests/AgentConsoleUITests.swift`, and the Linux
+`apple-build check --include-tests` / Release build evidence in the change's PR.
+
 ## Side sessions (#7944)
 
 Who it serves: people who use Agents with the Claude desktop app. A desktop app's side chat, /btw question or spawned

@@ -5036,6 +5036,8 @@ final class AppModel {
     /// The shell's Settings sheet is up. Here and not in the shell's state: picking a style in it rebuilds the whole tree
     /// (`look`), and the rebuilt shell puts the sheet back on the same page (`settingsPath`).
     var shellSettings = false
+    /// A shared template link waiting for Settings › Templates' native preview (#17129).
+    var pendingNativeTemplate: String?
 
     /// Add Computer / Confirm Computer over the whole app (AddComputerView.swift): set it from anywhere without a sheet of its own
     /// (`openAddComputer()`, `openConfirmComputer(_:)`, the main conversation's readiness card); nil closes it.

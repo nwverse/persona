@@ -921,6 +921,17 @@ struct ChatView: View {
                                             presentation: presentation)
         let feed = projection.feed(allFeed, for: presentation)
         var lines = backgroundActivity ? projection.activity : projection.timeline
+        if NativeTemplateStore.shared.plainMainChat, style == .assistant, !backgroundActivity {
+            // Questions, replies and work needing the owner. Finished patrols and briefings stay in Background activity;
+            // a live supervision round, plans, tasks, live cards and errors remain in the main timeline (#17129).
+            lines = lines.filter { line in
+                switch line.content {
+                case .supervision(_, _, let live, _): live
+                case .feed(let item): ![FeedItem.Kind.brief, .today, .inboxSuggestion].contains(item.kind)
+                default: true
+                }
+            }
+        }
         lines = ModelChanges.mark(lines)
         #if os(iOS)
         // An Agent's long finished answers as several rows: one row many screens tall stuttered whenever it was on
@@ -2844,9 +2855,11 @@ struct ChatView: View {
         HiddenDuringCall(key: key) {
             // Needs You (always visible), In Progress and neutral Wrap Up in one row (#3393, #16165); Finished opens
             // from the tray header instead of staying persistent on the collapsed bar.
-            AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
-            // When using `ShellComposerBar`, task routing lives in `ComposerTopSlot` fused to the composer's top edge.
-            if !usesShellComposer { RouteChip(conversation: conversation) }
+            if !NativeTemplateStore.shared.plainMainChat {
+                AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
+                // When using `ShellComposerBar`, task routing lives in `ComposerTopSlot` fused to the composer's top edge.
+                if !usesShellComposer { RouteChip(conversation: conversation) }
+            }
         }
     }
 

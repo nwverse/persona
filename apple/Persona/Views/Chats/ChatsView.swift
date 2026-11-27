@@ -924,6 +924,7 @@ private struct AgentsList: View {
     static let emptyNoComputerMessage = String(localized: "Add one and Persona can work on it for you.")
     @Environment(AppModel.self) private var model
     @Environment(\.shell) private var shell
+    @Environment(\.agentConsole) private var agentConsole
     /// The list's own column: regular beside the iPad's split; on a phone's split (iPhone Duo open) the sidebar column
     /// reads compact while the page is regular (#1971). `pushedOver` goes by `ownsTop` instead (#3680).
     @Environment(\.horizontalSizeClass) private var widthClass
@@ -965,7 +966,7 @@ private struct AgentsList: View {
     private var hubFilter: String { HubFilter.shown(storedHubFilter, current: model.hub?.group) }
     @StoredValue("dev.grouping") private var storedGrouping: DevGrouping = .standard // by repository first (#2108)
     /// The grouping in use (`DevGrouping.resolved`).
-    private var grouping: DevGrouping { DevGrouping.resolvedNow(storedGrouping) }
+    private var grouping: DevGrouping { agentConsole ? .machine : DevGrouping.resolvedNow(storedGrouping) }
     @StoredValue("dev.sort") private var sort: AgentSort = .state
     /// Opt-in By Repository toggle (#14607): off by default, aligned with Android and Web.
     @StoredValue("dev.showEmptyWorkspaces") private var showEmptyWorkspaces = false
@@ -1098,7 +1099,7 @@ private struct AgentsList: View {
     private func projectionSettings() -> AgentListProjection.Settings {
         var preferences: [String: AgentListProjection.Preferences] = [:]
         for link in model.links { preferences[link.group] = .init(pins: link.pins.pins, mutes: link.pins.mutes) }
-        return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, query: query,
+        return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, runningTerminalOnly: agentConsole, query: query,
                      searchScope: appliedScope,
                      searchAsCode: searchAsCode,
                      machine: machineFilter, harness: harnessFilter, project: projectFilter, model: modelFilter,

@@ -181,6 +181,10 @@ enum SettingsCatalog {
     /// the iPhone) or whose condition is not met (`SettingsEntry.Shown`) is left out.
     @MainActor static func rows(_ tier: SettingsEntry.Tier, in group: SettingsEntry.Group, _ model: AppModel) -> [SettingsEntry] {
         let all = entries
+        if NativeTemplateStore.shared.shortSettings, tier == .advanced {
+            // The console's More Settings is the complete native Settings home's categories, not a second dead end.
+            return all.filter { $0.shows(in: model) && ($0.group == group || group == .hub) }
+        }
         return (tier == .core ? core : tier == .advanced ? advanced : []).compactMap { id in all.first { $0.id == id } }
             .filter { $0.group == group && $0.shows(in: model) }
     }

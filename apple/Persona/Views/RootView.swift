@@ -135,7 +135,8 @@ struct RootView: View {
                 #if os(visionOS)
                 RootTabs().visionShell()
                 #elseif os(iOS)
-                if usesSidebar { SidebarRoot().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
+                if NativeTemplateStore.shared.enabled { AgentConsoleRoot().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
+                else if usesSidebar { SidebarRoot().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
                 else if usesShell { ShellView().modifier(BuiltTreeRoot()) }
                 else { RootTabs().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
                 #endif

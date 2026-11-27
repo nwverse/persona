@@ -103,6 +103,9 @@ nonisolated enum TodoLineText {
             }
         case TodoLineKey.interrupted:
             said = Said(lead: words("\(run ?? words("An Agent [To-dos Line]")) stopped before it finished [To-dos Line]"), tone: .needs)
+        case TodoLineKey.stoppedUnfinished:
+            // The new wire reason names the same stopped-before-completion state as an interrupted run.
+            said = Said(lead: words("\(run ?? words("An Agent [To-dos Line]")) stopped before it finished [To-dos Line]"), tone: .needs)
         case TodoLineKey.decision:
             said = Said(lead: arg("text") ?? words("A decision for you [To-dos Line]"),
                         rest: arg("recommend").map { words("\($0) recommended [To-dos Line]") }, tone: .needs)
