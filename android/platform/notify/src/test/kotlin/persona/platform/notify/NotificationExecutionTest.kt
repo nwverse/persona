@@ -132,6 +132,18 @@ class NotificationExecutionTest {
         assertEquals(0, center.writes)
     }
 
+    @Test fun staleNotificationChoiceCannotSubmitAfterScreenDialogBecomesMultiSelect() = runBlocking {
+        val single = request.copy(
+            kind = "screen",
+            dialog = ScreenDialog(options = listOf(DialogOption("1", "Alpha"), DialogOption("2", "Beta")), multi = false),
+        )
+        val center = Center(single).apply { remote = single.copy(dialog = single.dialog?.copy(multi = true)) }
+        val executor = NotificationActionExecutor(center, { error("A multi-select screen dialog must not be claimed") }, { now })
+        assertEquals(NotificationActionResult.Invalid, executor.execute(single.id, "option.1", null, { false }))
+        assertEquals(1, center.refreshes)
+        assertEquals(0, center.writes)
+    }
+
     @Test fun refreshExpiryLockAndDurableClaimGuardEveryResolve() = runBlocking {
         val center = Center(request)
         val claims = mutableMapOf<String, String>()

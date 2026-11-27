@@ -130,6 +130,9 @@ type Task struct {
 	// Space is the space of the conversation that set it up (e.g. "health", docs/assistant/health.md): a run that starts a conversation
 	// starts it there. "" is the assistant's own.
 	Space string `json:"space,omitempty"`
+	// Delivery routes a finished run's result into a specific channel thread (e.g. a Feishu group topic)
+	// and binds that thread back to the execution conversation for follow-up replies.
+	Delivery *TaskDelivery `json:"delivery,omitempty"`
 	// StartGrant: the owner let this schedule's own rounds start some kinds of task without the plan card (#8045,
 	// schedule_grant.go). The hub's: only the owner's Start on the card of one of its rounds adds to it; no app body and
 	// no tool sets or widens it, and a change of the prompt or of where it runs drops it.
@@ -801,11 +804,16 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 		Inbox           *string         `json:"inbox"` // left out: a new follow-up puts nothing in the Inbox, one rescheduled keeps its setting
 		Until           json.RawMessage `json:"until"`
 		// The task's own model configuration (schedule_model.go): nil leaves it as it is, "" clears that part.
-		Launcher *string `json:"launcher"`
-		Model    *string `json:"model"`
-		Effort   *string `json:"effort"`
+		Launcher *string         `json:"launcher"`
+		Model    *string         `json:"model"`
+		Effort   *string         `json:"effort"`
+		Delivery json.RawMessage `json:"delivery"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
+		return "", err
+	}
+	delivery, hasDelivery, err := deliveryRaw(a.Delivery)
+	if err != nil {
 		return "", err
 	}
 	if err := s.validateScheduleTodo(ctx, sessionID, a.TodoID); err != nil {
@@ -871,7 +879,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
 	// A one-off ignores until, even a bad one. An interval task takes it; scheduleOwn applies it when this run is
 	// rescheduling its own task (including a one-off this call turns into an interval).
-	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, rule, push, inbox, a.FreshEachRun, a.Until, a.Launcher, a.Model, a.Effort, a.TodoID); ok || err != nil {
+	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, rule, push, inbox, a.FreshEachRun, a.Until, a.Launcher, a.Model, a.Effort, a.TodoID, delivery, hasDelivery); ok || err != nil {
 		if err == nil && id != "" {
 			err = s.setTaskModel(ctx, id, a.Launcher, a.Model, a.Effort)
 		}
@@ -879,7 +887,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	}
 	space, _ := s.selfSpace(ctx, sessionID) // not listed: the assistant's own, as before the health space
 	t := Task{ID: "fu_" + randomHex(4), Title: strings.TrimSpace(a.Title), Prompt: prompt, Repeat: repeatOnce, At: at.UTC(), Enabled: true,
-		MachineID: machine, Space: space, CreatedBy: "assistant", CreatedAt: now.UTC()}
+		MachineID: machine, Space: space, Delivery: delivery, CreatedBy: "assistant", CreatedAt: now.UTC()}
 	if every > 0 || rule.spec != nil {
 		if rule.spec != nil {
 			t.Repeat, t.Cron, t.At = repeatCron, rule.expr, time.Time{}
@@ -953,7 +961,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 // repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
 // told so, nothing is scheduled (#4792), unless this conversation deleted it itself (#9090). A one-off given a cron rule (`cron`, zero spec for none) runs on it from now on. ok is false when this conversation's latest run isn't one of the task's
 // (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
-func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push, inbox *string, freshEachRun *bool, untilRaw json.RawMessage, launcher, model, effort, todoID *string) (string, string, bool, error) {
+func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push, inbox *string, freshEachRun *bool, untilRaw json.RawMessage, launcher, model, effort, todoID *string, delivery *TaskDelivery, hasDelivery bool) (string, string, bool, error) {
 	if sessionID == "" {
 		return "", "", false, nil
 	}
@@ -1021,6 +1029,9 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	}
 	if inbox != nil { // left out: it keeps its setting
 		t.Inbox = *inbox
+	}
+	if hasDelivery { // left out: it keeps its delivery anchor
+		t.Delivery = delivery
 	}
 	var out string
 	switch {
@@ -1270,11 +1281,16 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		Until        json.RawMessage `json:"until"`
 		RunIf        json.RawMessage `json:"run_if"`
 		// The task's own model configuration (schedule_model.go): nil leaves it as it is, "" clears that part.
-		Launcher *string `json:"launcher"`
-		Model    *string `json:"model"`
-		Effort   *string `json:"effort"`
+		Launcher *string         `json:"launcher"`
+		Model    *string         `json:"model"`
+		Effort   *string         `json:"effort"`
+		Delivery json.RawMessage `json:"delivery"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
+		return "", err
+	}
+	delivery, hasDelivery, err := deliveryRaw(a.Delivery)
+	if err != nil {
 		return "", err
 	}
 	if err := s.validateScheduleTodo(ctx, self, a.TodoID); err != nil {
@@ -1350,7 +1366,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 	}
 	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
 	changesRun := needsOwn || a.Time != "" || a.Weekdays != nil || a.Cron != "" || a.Until != nil ||
-		a.FreshEachRun != nil || a.Push != nil || a.Inbox != nil || a.Report != nil || a.RunIf != nil || a.TodoID != nil || a.PageID != nil
+		a.FreshEachRun != nil || a.Push != nil || a.Inbox != nil || a.Report != nil || a.RunIf != nil || a.TodoID != nil || a.PageID != nil || hasDelivery
 	title := strings.TrimSpace(a.Title)
 	requiresOwner := func(t Task) bool {
 		enables := a.Enabled != nil && *a.Enabled && !t.Enabled
@@ -1477,6 +1493,9 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 	}
 	if a.FreshEachRun != nil {
 		t.FreshEachRun = *a.FreshEachRun
+	}
+	if hasDelivery {
+		t.Delivery = delivery
 	}
 	if t.PageID != "" {
 		t.Push = pushAsked
@@ -3444,6 +3463,12 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		delivery, _, err := deliveryIn(raw)
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		delete(raw, "delivery")
 		now := time.Now()
 		end, hasUntil, clearUntil, err := untilIn(raw["until"], now, s.location(r.Context()))
 		if err != nil {
@@ -3476,7 +3501,7 @@ func (s *Service) scheduleRoutes() {
 		if _, rich := raw["structured_prompt"]; rich {
 			t.PromptSelections = true
 		}
-		t.SessionID, t.Push, t.Inbox, t.RunIf = "", push, inbox, runIf
+		t.SessionID, t.Push, t.Inbox, t.RunIf, t.Delivery = "", push, inbox, runIf, delivery
 		if err := editTaskState(&t, in, raw, now); err != nil {
 			writeTaskStateError(w, err)
 			return
@@ -3535,6 +3560,12 @@ func (s *Service) scheduleRoutes() {
 		_, hasRunIf := raw["run_if"]
 		delete(raw, "run_if")
 		delete(raw, "until") // not a time.Time: "30m" and a local clock time would not unmarshal
+		delivery, hasDelivery, err := deliveryIn(raw)
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		delete(raw, "delivery")
 		ignoreTaskStateNote(raw)
 		mayBeMain := s.mayBeMainNow(r.Context())
 		sc, err := s.lockedSchedule(r.Context())
@@ -3596,6 +3627,9 @@ func (s *Service) scheduleRoutes() {
 			return
 		} else if has { // and its inbox setting
 			t.Inbox = mode
+		}
+		if hasDelivery { // and its thread delivery anchor
+			t.Delivery = delivery
 		}
 		if v, ok := raw["facts"]; ok { // and its facts: set only when the body has them
 			if err := json.Unmarshal(v, &t.Facts); err != nil {
