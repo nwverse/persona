@@ -1158,9 +1158,10 @@ Hub: when a computer's connection ends (`connectionEnded` → `terminalsEnded`),
 
 ## 31. Orca terminals: scrolling up, and a quicker plain view (#17048)
 
-Orca has no terminal stream Persona can use on its local socket, so an Orca terminal is the plain view: the web reads
-`GET …/screen` itself. Two things were missing next to herdr: scrolling up showed nothing, the
-top saying **— Beginning of output —** at once, and the view changed once a second.
+Orca has no terminal stream Persona can use on its local socket, so an Orca terminal is the plain view: the apps read
+`GET …/screen` themselves. Two things were missing next to herdr: scrolling up found nothing above the screen (the
+iPhone, reading fewer lines than it asked for, said **— Beginning of output —** at once), and the view changed once a
+second.
 
 ### What is above the screen
 
