@@ -186,6 +186,22 @@ Codex chats not listed in this version. See `docs/plans/plan-orca-support.md` ("
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with Claude not in front, saying "Claude is not in foreground (possibly suspended); nothing sent," or asking to reopen on the computer.
 
+Typing into an Orca terminal (#17040) is decided right before each write, and every write stays fenced to the terminal's
+process (its incarnation), so nothing reaches a process that replaced it. Text and the keys that type it (letters,
+digits, space) go in when a supported Agent is in front (the process scan); when Orca's `terminal.inspectProcess` names
+another program in front (pi, opencode, an editor, a CLI Persona does not recognize), which is what a message to such a
+CLI then types, as on herdr for an agent herdr does not detect (paste, then Enter); and when the owner answers the
+question a failed start's kept tab stopped on (`start.continue`, `start.answer`, `start.keys`: "Answering a start's
+question" in `docs/protocol/protocol.md`), only in a terminal the node opened that still runs the same process. Any
+other shell in front gets nothing (an Agent's tab whose Agent exited would run the text as a command), and neither does
+a terminal Orca can't tell about or an Orca without `terminal.inspectProcess`. Keys that type nothing (Enter, Esc,
+arrows, Ctrl-C) go to whatever is there, so a stuck terminal can still be interrupted. **Run Agent Here** and the
+**launcher switch** (#5035, and Claude Code ↔ Codex, #5054) restart in the same Orca terminal through #17039's guarded
+single-use grant: the start line goes in only if Orca still reads that terminal with just its shell in front. A plain
+shell is typed into from the phone only through the live terminal, which Orca doesn't offer over its local socket
+(#17048); Orca doesn't list pi or opencode in its tabs as Agents (its process scan knows Claude Code, Codex, TRAE
+CLI, omp and agy).
+
 Orca New Agent creates terminals inside already-open Orca workspaces or subdirectories, starting in the selected directory. Unopened Git-repository directories attempt automatic registration; any other directory gets a terminal in the first local Orca workspace that `cd`s there (refused only when Orca has no workspace open). The `cd` is typed into the shell's line editor, so a directory whose name holds a control character (a tab, a line break) is refused before any terminal opens (`directory_untypable`). New Agent never takes over an existing terminal; Run Agent Here and a Resume in the shell an Agent left type into one only through a single-use grant, after Orca reads that terminal again, right before the command goes in, as the same process with only its shell in front (`terminal.inspectProcess` with its incarnation; an Orca without the call refuses with nothing typed). A start's terminal gets the start environment (`terminal.create`'s `env`, "What a start tab's shell starts with"); **New Terminal** / Open Terminal Here for a folder opens a terminal whose shell Orca puts in that folder (`terminal.create`'s `command`, [terminal.md](terminal.md), "New terminal: `panes.new` (optional, explicit action)"), with no start environment and nothing typed by Persona afterwards.
 Resume of a running session returns it. A Claude session whose agent exited is continued like on herdr (#5548): in the shell its Agent left when Persona opened that terminal for it, it is still there and its shell is in front (its session's directory in that terminal's worktree, #17039), else a new terminal in the Orca workspace holding its directory (the same rules as New Agent); `cd` there, the launcher that started it with `--resume`, then the message. Never a second writer: a session a live claude still has open (Claude's desktop app, another terminal, suspended) is refused (`open_elsewhere`), and so is one whose last pane is still open (its agent may be suspended there; close the pane to resume elsewhere). A session an Orca native chat owns is refused too. Codex, TRAE CLI and pi sessions are not resumed in Orca. Orca's own `terminal create --agent claude --resume` is not used: it exists only in some Orca builds' CLI, and it starts Orca's claude command, not the session's launcher.
 
