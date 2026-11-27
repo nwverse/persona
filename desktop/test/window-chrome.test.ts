@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { applyMacSurfaceStyle, liquidGlassVibrancy } from "../src/surface-style.js";
 
 const source = (name: string) => readFile(join(import.meta.dirname, "..", "..", "src", name), "utf8");
 
@@ -10,8 +11,37 @@ test("showMain configures macOS hiddenInset titlebar and publishes window chrome
   const showMain = main.slice(main.indexOf("async function showMain"), main.indexOf("async function showSetup"));
   assert.ok(showMain.includes('titleBarStyle: "hiddenInset"'), "showMain must enable hiddenInset on darwin");
   assert.ok(showMain.includes("trafficLightPosition: { x: 14, y: 19 }"), "showMain must anchor traffic lights inside the 44px bay");
+  assert.ok(showMain.includes('visualEffectState: "active"'), "showMain must keep Liquid Glass vibrancy active");
   assert.ok(showMain.includes('desktop:window-chrome-changed'), "showMain must notify renderer when fullscreen/focus changes");
-  assert.ok(main.includes('setVibrancy("under-window")'), "applySurfaceStyle must toggle macOS vibrancy for Liquid Glass");
+  assert.ok(main.includes("applyMacSurfaceStyle("), "applySurfaceStyle must delegate to applyMacSurfaceStyle");
+});
+
+test("liquidGlassVibrancy and applyMacSurfaceStyle select scheme-aware materials and guard destroyed windows", () => {
+  assert.equal(liquidGlassVibrancy(true), "hud");
+  assert.equal(liquidGlassVibrancy(false), "popover");
+
+  const calls: string[] = [];
+  const win = {
+    destroyed: false,
+    isDestroyed() { return this.destroyed; },
+    setVibrancy(v: string | null) { calls.push(`v:${v}`); },
+    setBackgroundColor(c: string) { calls.push(`bg:${c}`); },
+  };
+
+  applyMacSurfaceStyle(win, "liquid-glass", true, "#0b0b0c");
+  applyMacSurfaceStyle(win, "liquid-glass", false, "#f1f1f4");
+  applyMacSurfaceStyle(win, "default", true, "#0b0b0c");
+  win.destroyed = true;
+  applyMacSurfaceStyle(win, "liquid-glass", true, "#0b0b0c");
+
+  assert.deepEqual(calls, [
+    "v:hud",
+    "bg:#00000000",
+    "v:popover",
+    "bg:#00000000",
+    "v:null",
+    "bg:#0b0b0c",
+  ]);
 });
 
 test("window chrome and surface style IPC handlers validate input and clean up on close", async () => {

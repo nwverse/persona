@@ -1563,12 +1563,16 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if text, ok := params["text"].(string); ok && !p.VerbatimText {
 		text, own = s.fillWorkspaces(ctx, text) // an @-mentioned workspace: where it is and what worked there (workspace_mention.go)
 		if main {
+			// The agent only orders a workflow command and what the old main conversation left (renderHandoff), so an
+			// ordinary message asks no computer for its launchers.
 			agent := ""
 			if currentKnown {
 				agent = current.Agent
 			}
-			if used, _ := params["launcher"].(string); agent == "" && used != "" {
-				agent = s.launcherAgent(withUnhidden(ctx, used), s.logicalExecutionMachine(ctx, p.MachineID, p.SessionID), used)
+			if _, command := agentprompt.WorkflowCommand(text); command {
+				if used, _ := params["launcher"].(string); agent == "" && used != "" {
+					agent = s.launcherAgent(withUnhidden(ctx, used), s.logicalExecutionMachine(ctx, p.MachineID, p.SessionID), used)
+				}
 			}
 			left := s.handoffForAgent(ctx, p.SessionID, agent, text)
 			own = own && left == text // what the old main conversation left is not the sender's words

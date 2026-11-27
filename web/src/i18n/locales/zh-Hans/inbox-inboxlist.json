@@ -4,6 +4,8 @@
   "search_label": "搜索收件箱",
   "clear": "清除",
   "filters": "筛选",
+  "expand_filters": "展开筛选",
+  "collapse_filters": "收起筛选",
   "sections": "分段",
   "bar_count": "{name}，{count}",
   "bar_all": "全部",

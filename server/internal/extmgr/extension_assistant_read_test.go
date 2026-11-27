@@ -100,18 +100,24 @@ func TestExtensionAssistantReadFallsBackForAnOlderAssistant(t *testing.T) {
 	h := newTestManager(t)
 	granted := kbExtensionSpec(t, h, "example-reader", extension.Permissions{Hub: []string{extension.ScopeAssistantRead}})
 	var asked []string
+	const reply = `{"items":[],"total":0,"future":true}`
 	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 		asked = append(asked, method+" "+string(params))
 		if method == assistantwire.MethodAssistantExtensionRead {
 			return nil, &rpc.Error{Code: extension.CodeUnknownMethod, Message: "unknown method " + method}
 		}
-		return json.RawMessage(`{"items":[],"total":0}`), nil
+		return json.RawMessage(reply), nil
 	}
 	params := json.RawMessage(`{"since":"2026-01-02T00:00:00Z"}`)
-	if _, err := granted.Handle(context.Background(), assistantwire.MethodAssistantConversations, params); err != nil {
+	out, err := granted.Handle(context.Background(), assistantwire.MethodAssistantConversations, params)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(asked) != 2 || asked[1] != "assistant.conversations "+string(params) {
+	if raw, err := json.Marshal(out); err != nil || string(raw) != reply {
+		t.Fatalf("legacy reply: %s, %v", raw, err)
+	}
+	wantFirst := `assistant.extension_read {"extension":"example-reader","method":"assistant.conversations","params":` + string(params) + `}`
+	if len(asked) != 2 || asked[0] != wantFirst || asked[1] != "assistant.conversations "+string(params) {
 		t.Fatalf("the manager got %v", asked)
 	}
 }

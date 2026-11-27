@@ -394,10 +394,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		OnEvent: func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
 		// The messages held for a machine's Agents changed (devices held.go): its rows again, nothing else of a list.
 		HeldChanged: func(machine string) { svc.publishSessions(machine) },
-		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers_push.go).
-		// Not one waiting to be confirmed: it gets them when it is (trustChanged, machine_trust.go).
+		// A node's new connection gets its own settings and the launchers added in Persona, with their keys
+		// (models_launchers_push.go). Not one waiting to be confirmed: it gets them when it is (trustChanged,
+		// machine_trust.go).
 		NodeCalls: func(ctx context.Context, machine string) []devicewire.NodeCall {
-			return svc.managedNodeCalls(ctx, machine)
+			return svc.nodeConnectCalls(ctx, machine)
 		},
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)

@@ -35,9 +35,9 @@ func TestExtensionIdentityKeepsModelPurposeWithoutModelCalls(t *testing.T) {
 	if len(calls()) != 0 {
 		t.Fatal("identity preference test called a model")
 	}
-	out, handled, err := s.modelsRequest(context.Background(), assistantwire.MethodExtensionIdentity, json.RawMessage(`{}`))
-	if !handled || err != nil || out.(map[string]bool)["supported"] != true {
-		t.Fatalf("identity capability: %v %v %v", out, handled, err)
+	out, handled, err := s.modelsRequest(t.Context(), assistantwire.MethodExtensionIdentity, json.RawMessage(`{"future":true}`))
+	if data, marshalErr := json.Marshal(out); !handled || err != nil || marshalErr != nil || string(data) != `{"supported":true}` {
+		t.Fatalf("identity capability: %s, handled %v, error %v, marshal error %v", data, handled, err, marshalErr)
 	}
 }
 
@@ -240,6 +240,28 @@ func TestExtensionCompleteRefusesBadParams(t *testing.T) {
 	}
 	if len(calls()) != 0 {
 		t.Fatal("a refused call went out")
+	}
+}
+
+func TestModelRPCDecodingCompatibility(t *testing.T) {
+	s, _, _ := extensionModelService(t, "ok")
+	for _, tc := range []struct{ method, params, message string }{
+		{assistantwire.MethodModelsExtensionComplete, `{"extension":1}`, `no extension`},
+		{assistantwire.MethodModelsExtensionComplete, `{"extension":"kb-curator"}`, `params are required`},
+		{assistantwire.MethodModelsExtensionComplete, `{"extension":"kb-curator","params":{"future":true}}`, `json: unknown field "future"`},
+		{assistantwire.MethodModelsPurposeComplete, ``, `EOF`},
+		{assistantwire.MethodModelsPurposeComplete, `{"purpose":"subscription.recipe","future":true}`, `json: unknown field "future"`},
+	} {
+		out, handled, err := s.modelsRequest(t.Context(), tc.method, json.RawMessage(tc.params))
+		var wireErr *rpc.Error
+		if !handled || out != nil || !errors.As(err, &wireErr) || wireErr.Code != bus.CodeInvalidParams || wireErr.Message != "model.complete: "+tc.message {
+			t.Errorf("%s %s: reply %v, handled %v, error %v", tc.method, tc.params, out, handled, err)
+		}
+	}
+	_, handled, err := s.modelsRequest(t.Context(), assistantwire.MethodModelsExtensionComplete,
+		json.RawMessage(`{"extension":"kb-curator","future":true,"params":{"messages":[{"role":"user","content":"example"}]}}`))
+	if !handled || err != nil {
+		t.Fatalf("extension envelope with an unknown field: handled %v, error %v", handled, err)
 	}
 }
 
