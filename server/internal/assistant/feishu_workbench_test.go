@@ -446,6 +446,9 @@ func TestWorkbenchNoticesGoToAPollingCompanion(t *testing.T) {
 	if len(list) != 1 || !strings.Contains(fmt.Sprint(list[0]), "Morning brief") {
 		t.Fatalf("notices: %v", out)
 	}
+	if notice, _ := list[0].(map[string]any); notice["kind"] != "push" {
+		t.Fatalf("push notice kind = %v, want push", notice["kind"])
+	}
 
 	// A long poll waits for the next one.
 	got := make(chan map[string]any, 1)
@@ -454,9 +457,8 @@ func TestWorkbenchNoticesGoToAPollingCompanion(t *testing.T) {
 		got <- out
 	}()
 	waitFor(t, "the long poll waiting", func() bool {
-		e.s.companions.mu.Lock()
-		defer e.s.companions.mu.Unlock()
-		return e.s.companions.wait != nil
+		_, waiting := e.s.boardProbe(t).NoticesState()
+		return waiting
 	})
 	e.s.feishuPush("", "", "Second", "later")
 	select {
@@ -480,6 +482,37 @@ func TestWorkbenchNoticesGoToAPollingCompanion(t *testing.T) {
 	e.s.feishuPush("", "", "Off again", "to the chat")
 	if after, _, _, _ := e.counts(); after != before+1 {
 		t.Fatal("a push with the workbench off did not go to the chat")
+	}
+}
+
+func TestWorkbenchScheduledTaskNoticeKeepsItsKind(t *testing.T) {
+	needsLarkLayer(t)
+	e := newWorkbenchEnv(t, workbenchOnFeatures)
+	const path = "/api/v1/assistant/feishu/notices?wait=0"
+	if code, out := e.companionsCall("PUT", "/api/v1/assistant/feishu/companions", companionsBody); code != http.StatusOK {
+		t.Fatalf("register companions: %d %v", code, out)
+	}
+	if code, out := e.companionsCall("GET", path, ""); code != http.StatusOK {
+		t.Fatalf("start polling: %d %v", code, out)
+	}
+
+	session := proto.Session{SessionID: "scheduled", Assistant: true}
+	e.d.setSessions("box", []proto.Session{session})
+	e.f.setSessions("box", session)
+	e.f.setItems(proto.Item{ID: "q1", Role: "user", Kind: proto.KindText, Text: "Check status"},
+		proto.Item{ID: "a1", Role: "assistant", Kind: proto.KindText, Text: "Everything is up to date"})
+	setTasks(e.s, Task{ID: "task1", Title: "Status report", RunMachineID: "box", RunSessionID: session.SessionID})
+	before, _, _, _ := e.counts()
+	e.s.feishuMirror(t.Context(), "box", session.SessionID)
+	if after, _, _, _ := e.counts(); after != before {
+		t.Fatal("a scheduled-task result went to the chat while the companion polls")
+	}
+
+	rec := httptest.NewRecorder()
+	e.s.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"kind":"task"`) ||
+		!strings.Contains(rec.Body.String(), "Everything is up to date") {
+		t.Fatalf("scheduled-task notice: %d %s", rec.Code, rec.Body.String())
 	}
 }
 

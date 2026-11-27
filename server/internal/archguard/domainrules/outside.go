@@ -204,10 +204,23 @@ func (c *outsideChecks) declares(p *Pkg, name string) bool {
 // its type parameters, and an instance of the type (peek[fleetcount.Why]), made in any file of the package,
 // implements any core's visitor, so in a package a file of which imports a core or the kit it counts against a core
 // or kit package the package imports: first one that declares an interface method of its name, then a core, then by
-// path; in a core's own test, only another core it imports.
+// path; in a core's own test, only another core it imports. In a core's own test a method is judged by the visitor it
+// implements, not by the packages its parameters name: one of the core's own visitors passes, whatever kit or shared
+// kernel types it takes (VisitHoldUntil(until instant.Instant), VisitAsker(asker agentref.Ref)), and another domain
+// package's visitor counts against that package, even when it takes only the kit's types.
 func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]ref, allowed bool) {
 	if allowed || fd.Recv == nil || !strings.HasPrefix(fd.Name.Name, "Visit") {
 		return
+	}
+	if f.Test && core(c.p.Layer) {
+		if c.implements(c.p, f, fd) {
+			return // the core's own black-box tests visiting it
+		}
+		if r, ok := c.implemented(f, fd, refs); ok {
+			recv, _ := receiverName(fd.Recv.List[0].Type)
+			c.at(f, fd.Name, "out-visitor-impl", r.pkg.Rel, recv+"."+fd.Name.Name+" implements "+r.name+"'s visitor")
+			return
+		}
 	}
 	var named []ref
 	for _, p := range params(fd.Type.Params) {
@@ -254,6 +267,116 @@ func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]r
 		what = generic
 	}
 	c.at(f, fd.Name, "out-visitor-impl", pick.pkg.Rel, recv+"."+fd.Name.Name+what)
+}
+
+// implemented is the domain package other than the file's own whose visitor fd implements (implements), when one of
+// those the file imports declares one: a core before the kit, then by path.
+func (c *outsideChecks) implemented(f *File, fd *ast.FuncDecl, refs map[string]ref) (ref, bool) {
+	var first *ref
+	for _, r := range refs {
+		if r.pkg == c.p || !c.implements(r.pkg, f, fd) {
+			continue
+		}
+		if first == nil || core(r.pkg.Layer) && !core(first.pkg.Layer) ||
+			core(r.pkg.Layer) == core(first.pkg.Layer) && r.pkg.Rel < first.pkg.Rel {
+			first = &r
+		}
+	}
+	if first == nil {
+		return ref{}, false
+	}
+	return *first, true
+}
+
+// implements says whether fd, a method declared in f, implements a method of an interface p declares: the same name,
+// and the same parameter and result types once each type is spelled by the import path of the package that declares
+// it, which reads the same from p's own files and from a test that imports p.
+func (c *outsideChecks) implements(p *Pkg, f *File, fd *ast.FuncDecl) bool {
+	if p.decls == nil {
+		return false
+	}
+	mine := c.idx.imports(f)
+	params, results := typeKeys(fd.Type.Params, mine, nil), typeKeys(fd.Type.Results, mine, nil)
+	for _, t := range p.decls.order {
+		if t.iface == nil {
+			continue
+		}
+		theirs := c.idx.imports(t.file)
+		for _, m := range t.iface.Methods.List {
+			ft, ok := m.Type.(*ast.FuncType)
+			if !ok {
+				continue // an embedded interface: its own declaration is read where it is declared
+			}
+			for _, n := range m.Names {
+				if n.Name == fd.Name.Name && sameKeys(typeKeys(ft.Params, theirs, p), params) &&
+					sameKeys(typeKeys(ft.Results, theirs, p), results) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// sameKeys says whether a and b spell the same types in the same order.
+func sameKeys(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// typeKeys is the type of each parameter in fl, spelled by typeKey.
+func typeKeys(fl *ast.FieldList, imports map[string]Import, own *Pkg) []string {
+	var out []string
+	for _, e := range params(fl) {
+		out = append(out, typeKey(e, imports, own))
+	}
+	return out
+}
+
+// typeKey is a type with each package it names spelled by import path: a name a file imports under is its import's
+// path, and a bare name own declares (when own is the package whose file e is in) is own's path. Two spellings of one
+// type in different files read the same; a bare name own does not declare (a predeclared type, a type parameter, a
+// test's own type) stays as written.
+func typeKey(e ast.Expr, imports map[string]Import, own *Pkg) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		if own != nil && own.decls.types[x.Name] != nil {
+			return own.Path + "." + x.Name
+		}
+		return x.Name
+	case *ast.SelectorExpr:
+		if id, ok := x.X.(*ast.Ident); ok {
+			if imp, ok := imports[id.Name]; ok {
+				return imp.Path + "." + x.Sel.Name
+			}
+		}
+	case *ast.ParenExpr:
+		return typeKey(x.X, imports, own)
+	case *ast.StarExpr:
+		return "*" + typeKey(x.X, imports, own)
+	case *ast.ArrayType:
+		return "[" + exprString(x.Len) + "]" + typeKey(x.Elt, imports, own)
+	case *ast.Ellipsis:
+		return "..." + typeKey(x.Elt, imports, own)
+	case *ast.MapType:
+		return "map[" + typeKey(x.Key, imports, own) + "]" + typeKey(x.Value, imports, own)
+	case *ast.IndexExpr:
+		return typeKey(x.X, imports, own) + "[" + typeKey(x.Index, imports, own) + "]"
+	case *ast.IndexListExpr:
+		args := make([]string, len(x.Indices))
+		for i, a := range x.Indices {
+			args[i] = typeKey(a, imports, own)
+		}
+		return typeKey(x.X, imports, own) + "[" + strings.Join(args, ", ") + "]"
+	}
+	return exprString(e)
 }
 
 // declaresMethod says whether p declares an interface with a method of that name: a visitor a generic type's Visit

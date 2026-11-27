@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/healthhost"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,6 +85,9 @@ func (s *Service) toolView(ctx context.Context, machine, conversation, name stri
 	}
 	if err != nil {
 		return "", err
+	}
+	if name == "view_update" && strings.HasPrefix(in.ID, healthhost.CardPrefix) {
+		return "", errors.New("forbidden: this card belongs to Health; use health_strength")
 	}
 	if row.MachineID != machine {
 		return "", errors.New("forbidden: this card was created by an assistant conversation on another machine")

@@ -339,7 +339,7 @@ func (s *Service) admitFanout(ctx context.Context, sender, target string, now ti
 // scheduled wake time. If an unclaimed deferred wake already exists for the same (sender, target), it is reused.
 func (s *Service) scheduleFanoutWake(ctx context.Context, sender, target, machine string, now time.Time) time.Time {
 	now = now.UTC()
-	if s.store != nil && s.store() != nil {
+	if s.store() != nil {
 		w, err := s.persistFanoutWake(ctx, sender, target, machine, now)
 		if err == nil {
 			s.armFanoutWake(w, true)
@@ -431,7 +431,7 @@ func (s *Service) runFanoutWake(ctx context.Context, w delayedWait, persisted bo
 	if ctx.Err() != nil || w.Fanout == nil {
 		return
 	}
-	durable := persisted || s.store != nil && s.store() != nil
+	durable := persisted || s.store() != nil
 	if durable && !persisted {
 		pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		saved, err := s.persistFanoutWakeExisting(pctx, w)
@@ -587,7 +587,7 @@ func (s *Service) promoteFanoutWake(ctx context.Context, sender, target string, 
 	}
 	// If another delivery into target is in flight right now, it may already have reserved Later[target]. Wait for it
 	// to settle before deciding whether a wake is still needed so we never double-wake.
-	if b.draining[target] || len(b.ownerLater[target]) > 0 {
+	if b.draining[target] || s.hasInFlightOwnerLaterLocked(target, now) {
 		b.mu.Unlock()
 		return false, now.Add(fanoutInFlightDelay), false, true
 	}
@@ -704,7 +704,7 @@ func (s *Service) rearmFanoutWake(ctx context.Context, w delayedWait, persisted 
 	}
 	s.logf("deferred fanout wake %s: %v", w.ID, why)
 	nextAt := delayedWaitRetryAt()
-	if persisted || s.store != nil && s.store() != nil {
+	if persisted || s.store() != nil {
 		rescheduled, err := s.rescheduleDelayedWait(ctx, w, nextAt, !persisted)
 		if err != nil {
 			s.logf("rearm deferred fanout wake %s: %v", w.ID, err)
@@ -740,7 +740,7 @@ func (s *Service) cancelFanoutWakes(ctx context.Context, target string, senders 
 	if target == "" || len(senders) == 0 {
 		return
 	}
-	if s.store != nil && s.store() != nil {
+	if s.store() != nil {
 		for _, sender := range senders {
 			removed, err := s.cancelFanoutWakeWait(ctx, sender, target, func() bool {
 				return s.hasDeferredWakeLater(ctx, target, sender)

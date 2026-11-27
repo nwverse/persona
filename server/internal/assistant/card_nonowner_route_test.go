@@ -21,9 +21,10 @@ func hasRelayFrom(s *Service, to, from, needle string) bool {
 	return false
 }
 
-// Source 1 (agent_permission): non-six-class tool permissions from an unsupervised agent or from the
-// main conversation itself go to the main conversation / background supervisor instead of pushing to
-// the owner, while six-class permissions (secret/form, outward/delete approval) still push to the owner.
+// Source 1 (agent_permission): non-six-class tool permissions from an unsupervised agent go to the main
+// conversation instead of pushing to the owner, while six-class permissions (secret/form, outward/delete
+// approval) still push to the owner. The main conversation's own permission stays the user's even with a
+// background supervisor configured (#15360, TestSupervisingConversationsKeepTheirOwnCards).
 func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
 	setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor = "bg1" })
@@ -36,23 +37,20 @@ func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}
 	uDone := e.raise(unsupervised)
-	waitFor(t, "unsupervised permission routed to main", func() bool {
-		return hasRelayFrom(e.s, "conv1", cardAgentPermission, "interaction_id="+unsupervised.ID)
-	})
+	e.noticeWith("conv1", "interaction_id="+unsupervised.ID)
 	if !e.lastShown(unsupervised.ID).Delegating {
 		t.Fatal("unsupervised permission was not marked delegating")
 	}
 
-	// Main conversation's own non-six-class tool permission -> background supervisor (bg1), no owner push.
+	// Main conversation's own non-six-class tool permission -> still the owner's, not the background
+	// supervisor's (bg1): nothing would wake bg1 for it or let it hand the card up (#15360).
 	mainOwn := proto.Interaction{
 		ID: "ix_perm_main_own", MachineID: "server", SessionID: "conv1",
 		Kind: proto.IxPermission, ToolName: "Read", Summary: "/tmp/report.md",
 		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}
 	mDone := e.raise(mainOwn)
-	waitFor(t, "main permission routed to background supervisor", func() bool {
-		return hasRelayFrom(e.s, "bg1", cardAgentPermission, "interaction_id="+mainOwn.ID)
-	})
+	waitFor(t, "main permission pushed to owner", func() bool { return e.pushesOf(mainOwn.ID) == 1 })
 
 	// Six-class permission (delete/outward action) -> still pushed to the owner.
 	outward := proto.Interaction{
@@ -76,12 +74,17 @@ func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	if n := e.pushesOf(unsupervised.ID); n != 0 {
 		t.Fatalf("unsupervised non-owner permission pushed %d times", n)
 	}
-	if n := e.pushesOf(mainOwn.ID); n != 0 {
-		t.Fatalf("main own non-owner permission pushed %d times", n)
+	if hasRelayFrom(e.s, "bg1", cardAgentPermission, "interaction_id="+mainOwn.ID) {
+		t.Fatal("main own permission was handed to the background supervisor")
 	}
-	if c := cardsToday(t, e.s)[cardAgentPermission]; c.N != 1 { // only outward counted under agent_permission; secret is agent_secret_form
-		t.Fatalf("agent_permission ledger = %+v, want only the 1 six-class outward permission", c)
+	if e.lastShown(mainOwn.ID).Delegating {
+		t.Fatal("main own permission is shown as held by a supervisor")
 	}
+	// The six-class outward permission and the main conversation's own one count under agent_permission; the
+	// unsupervised agent's does not (handed to main), and the secret is agent_secret_form.
+	waitFor(t, "agent_permission ledger recorded", func() bool {
+		return cardsToday(t, e.s)[cardAgentPermission].N == 2
+	})
 
 	allow := true
 	for _, pair := range []struct {
@@ -95,6 +98,321 @@ func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 		}
 		answerOf(t, pair.ch)
 	}
+}
+
+func TestStandalonePermissionWaitsForBusyMain(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	e.supervisorState(proto.StatusWorking, proto.StatusIdle)
+	ix := askPermission("ix_standalone_busy", "standalone-agent")
+	ix.ToolInput = json.RawMessage(`{"command":"git status"}`)
+	worker := proto.Session{SessionID: ix.SessionID, MachineID: ix.MachineID, Cwd: "/code/work", Status: proto.StatusBlocked}
+	e.sessions(ix.MachineID, worker)
+	e.f.setSessions(ix.MachineID, worker)
+
+	done := e.raise(ix)
+	waitFor(t, "permission queued for the busy main conversation", func() bool {
+		return len(queuedRelays(e.s, "conv1")) == 1
+	})
+	if n := len(e.f.noticesTo("conv1")); n != 0 {
+		t.Fatalf("busy conversation received %d messages", n)
+	}
+	e.supervisorState(proto.StatusIdle, proto.StatusIdle)
+	e.noticeWith("conv1", "interaction_id="+ix.ID)
+	args := map[string]any{"machine": ix.MachineID, "session_id": ix.SessionID, "interaction_id": ix.ID,
+		"allow": false, "reason": "The agent can proceed without this tool"}
+	if _, err := runJSON(t, e.s, "lead1", "interaction_answer", args); err == nil {
+		t.Fatal("an unrelated leader could answer the permission")
+	}
+	if _, err := runJSON(t, e.s, "conv1", "interaction_answer", args); err != nil {
+		t.Fatalf("main conversation could not answer its permission: %v", err)
+	}
+	if got := answerOf(t, done); got.Allow == nil || *got.Allow || got.AnsweredBy != proto.AnsweredByAssistant {
+		t.Fatalf("agent received %+v, want denial by the assistant", got)
+	}
+	waitFor(t, "permission relay removed after delivery", func() bool { return len(queuedRelays(e.s, "conv1")) == 0 })
+	e.s.askTick(ix.ExpiresAt)
+	e.s.drainHeldRelays(context.Background(), ix.ExpiresAt)
+	if n := len(e.f.noticesTo("conv1")); n != 1 {
+		t.Fatalf("main conversation received %d messages, want one", n)
+	}
+	if n := e.pushesOf(ix.ID); n != 0 {
+		t.Fatalf("answered permission pushed %d times", n)
+	}
+}
+
+func TestStandalonePermissionReturnsToAppWhenMainIsUnavailable(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	e.sessions("server")
+	e.f.setSessions("server")
+	ix := askPermission("ix_standalone_unavailable", "standalone-agent")
+	ix.ToolInput = json.RawMessage(`{"command":"git status"}`)
+	done := e.raise(ix)
+	waitFor(t, "permission queued for the unavailable main conversation", func() bool {
+		return len(queuedRelays(e.s, "conv1")) == 1
+	})
+	at := ix.CreatedAt.Add(45 * time.Minute)
+	e.s.askTick(at)
+	if e.lastShown(ix.ID).Delegating {
+		t.Fatal("unhandled permission is still held by the unavailable conversation")
+	}
+	if _, ok := e.s.routedTo(ix.ID, "conv1", true); ok {
+		t.Fatal("main conversation can still answer after the app took over")
+	}
+	e.s.drainHeldRelays(context.Background(), at)
+	if q := queuedRelays(e.s, "conv1"); len(q) != 0 {
+		t.Fatalf("unavailable conversation still has %d queued messages", len(q))
+	}
+	e.supervisorState(proto.StatusIdle, proto.StatusIdle)
+	allow := false
+	if err := e.s.resolveApproved(context.Background(), ix.ID, proto.Resolution{Allow: &allow}, nil); err != nil {
+		t.Fatalf("the app could not answer the card: %v", err)
+	}
+	if got := answerOf(t, done); got.Allow == nil || *got.Allow {
+		t.Fatalf("agent received %+v, want denial from the app", got)
+	}
+	if n := len(e.f.noticesTo("conv1")); n != 0 {
+		t.Fatalf("recovered conversation received %d stale messages", n)
+	}
+	if n := e.pushesOf(ix.ID); n != 0 {
+		t.Fatalf("permission fallback pushed %d times", n)
+	}
+}
+
+func TestStandalonePermissionResolvedWhileQueued(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	e.supervisorState(proto.StatusWorking, proto.StatusIdle)
+	ix := askPermission("ix_standalone_resolved", "standalone-agent")
+	ix.ToolInput = json.RawMessage(`{"command":"git status"}`)
+	done := e.raise(ix)
+	waitFor(t, "permission queued before resolution", func() bool { return len(queuedRelays(e.s, "conv1")) == 1 })
+	if err := e.s.resolve(ix.ID, proto.Resolution{Dismiss: true}); err != nil {
+		t.Fatal(err)
+	}
+	answerOf(t, done)
+	e.supervisorState(proto.StatusIdle, proto.StatusIdle)
+	waitFor(t, "resolved permission removed from the queue", func() bool { return len(queuedRelays(e.s, "conv1")) == 0 })
+	if n := len(e.f.noticesTo("conv1")); n != 0 {
+		t.Fatalf("main conversation received %d messages about a resolved permission", n)
+	}
+}
+
+func TestStandalonePermissionGoesStraightToApp(t *testing.T) {
+	for _, private := range []bool{false, true} {
+		name := "short-lived"
+		if private {
+			name = "private"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newRouteEnv(t, nil, true)
+			ix := askPermission("ix_standalone_app", "standalone-agent")
+			ix.ToolInput = json.RawMessage(`{"command":"git status"}`)
+			ix.Private = private
+			if !private {
+				ix.ExpiresAt = ix.CreatedAt.Add(superviseTick)
+			}
+			done := e.raise(ix)
+			waitFor(t, "permission shown in its agent's chat", func() bool {
+				_, shown := e.shown(ix.ID)
+				return shown
+			})
+			if got := e.lastShown(ix.ID); got.Delegating || got.Private != private {
+				t.Fatalf("app received Delegating=%t Private=%t", got.Delegating, got.Private)
+			}
+			if _, ok := e.s.routedTo(ix.ID, "conv1", true); ok {
+				t.Fatal("main conversation can answer a card sent directly to the app")
+			}
+			if n := e.pushesOf(ix.ID); n != 0 {
+				t.Fatalf("card pushed %d times", n)
+			}
+			if err := e.s.resolve(ix.ID, proto.Resolution{Dismiss: true}); err != nil {
+				t.Fatal(err)
+			}
+			answerOf(t, done)
+		})
+	}
+}
+
+// A connector-gate outward-write permission card pushes to the owner with approval behavior unchanged
+// and is recorded in the card ledger as category 3 (outbound_write) rather than category 0 (agent_permission).
+// Non-permission cards ignore any spoofed OutwardWrite flag.
+func TestConnectorGateOutwardWritePushesToOwnerAndCountsAsCategory3(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	now := time.Now().UTC()
+
+	raiseNode := func(ix proto.Interaction) <-chan proto.Resolution {
+		out := make(chan proto.Resolution, 1)
+		go func() {
+			res, _ := e.s.nodeInteraction(context.Background(), ix)
+			out <- res
+		}()
+		e.waitPendingID(ix.ID)
+		return out
+	}
+
+	mainOutward := proto.Interaction{
+		ID: "ix_gate_main", MachineID: "server", SessionID: "conv1", SessionTitle: "Main",
+		Kind: proto.IxPermission, ToolName: "Feishu", Summary: "Send chat message",
+		OutwardWrite: true, CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	mainDone := raiseNode(mainOutward)
+	waitFor(t, "main connector gate outward write pushed", func() bool { return e.pushesOf(mainOutward.ID) == 1 })
+
+	agentOutward := proto.Interaction{
+		ID: "ix_gate_agent", MachineID: "mac", SessionID: "standalone-agent", SessionTitle: "Task Chat",
+		Kind: proto.IxPermission, ToolName: "Feishu", Summary: "Update group settings",
+		OutwardWrite: true, CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	agentDone := raiseNode(agentOutward)
+	waitFor(t, "agent connector gate outward write pushed", func() bool { return e.pushesOf(agentOutward.ID) == 1 })
+
+	spoofedQuestion := askQuestion("ix_spoofed_q", "standalone-q")
+	spoofedQuestion.OutwardWrite = true
+	qDone := raiseNode(spoofedQuestion)
+	waitFor(t, "non-permission card still routed to main", func() bool {
+		return hasRelayFrom(e.s, "conv1", cardAgentQuestion, "interaction_id="+spoofedQuestion.ID)
+	})
+
+	e.settle()
+	if n := e.pushesOf(spoofedQuestion.ID); n != 0 {
+		t.Fatalf("spoofed question pushed %d times", n)
+	}
+	if got := e.lastShown(spoofedQuestion.ID); got.OutwardWrite {
+		t.Fatalf("nodeInteraction did not strip OutwardWrite on non-permission card: %+v", got)
+	}
+	if hasRelayFrom(e.s, "conv1", cardOutboundWrite, "interaction_id="+agentOutward.ID) {
+		t.Fatal("connector gate outward write was diverted from owner")
+	}
+
+	waitFor(t, "outbound_write ledger recorded", func() bool {
+		return cardsToday(t, e.s)[cardOutboundWrite].N == 2
+	})
+	today := cardsToday(t, e.s)
+	if c := today[cardOutboundWrite]; c.Category != cardCatOutward || c.N != 2 {
+		t.Fatalf("outbound_write ledger = %+v, want category %d count 2", c, cardCatOutward)
+	}
+	if c := today[cardAgentPermission]; c.N != 0 {
+		t.Fatalf("agent_permission ledger = %+v, want 0", c)
+	}
+	report := cardLedgerReport(time.Now().In(e.s.location(context.Background())).Format(time.DateOnly),
+		e.s.cardsOn(context.Background(), time.Now().In(e.s.location(context.Background())).Format(time.DateOnly)))
+	if !strings.Contains(report, "3 outward as the owner: 2 — outbound_write×2\n") || !strings.Contains(report, "None of the six (each one a bug): 0.") {
+		t.Fatalf("unexpected ledger report:\n%s", report)
+	}
+
+	allow := true
+	if err := e.s.resolve(mainOutward.ID, proto.Resolution{Allow: &allow}); err != nil {
+		t.Fatal(err)
+	}
+	answerOf(t, mainDone)
+	if err := e.s.resolve(agentOutward.ID, proto.Resolution{Allow: &allow}); err != nil {
+		t.Fatal(err)
+	}
+	answerOf(t, agentDone)
+	if err := e.s.resolve(spoofedQuestion.ID, proto.Resolution{Answers: map[string]string{spoofedQuestion.Questions[0].Question: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	answerOf(t, qDone)
+}
+
+// Antigravity's ACP permission title and Skill instruction arguments are local data, not evidence
+// of an outward action. Their sanitized production shapes take the non-owner route without a push
+// or an agent_permission ledger entry; form/secret/owner-proposal precedence is pinned in TestUserApproval.
+func TestLocalNonActionPermissionsUseNonOwnerRoute(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name string
+		ix   proto.Interaction
+	}{
+		{"antigravity draft mentioning deletion", proto.Interaction{
+			ID: "ix_local_agy_delete", MachineID: "mac", SessionID: "agy-local-draft", Kind: proto.IxPermission,
+			ToolName: "File /work/draft.md", ToolInput: []byte(`{"TargetFile":"/work/draft.md","CodeContent":"删除该字段"}`), // i18n-ignore: synthetic Antigravity file payload
+			CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		}},
+		{"antigravity draft mentioning a comment", proto.Interaction{
+			ID: "ix_local_agy_comment", MachineID: "mac", SessionID: "agy-local-review", Kind: proto.IxPermission,
+			ToolName: "File /work/review.md", ToolInput: []byte(`{"Path":"/work/review.md","Content":"Replay the comment"}`),
+			CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		}},
+		{"Skill instructions with a negated send", proto.Interaction{
+			ID: "ix_local_skill", MachineID: "mac", SessionID: "standalone-skill", Kind: proto.IxPermission,
+			ToolName: "Skill", ToolInput: []byte(`{"skill":"agent-browser","args":"只读检查、不发送邮件、不改设置"}`), // i18n-ignore: synthetic skill arguments
+			CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRouteEnv(t, nil, true)
+			if got := userApproval(tc.ix); got != "" {
+				t.Fatalf("local non-action is owner-only: %s", got)
+			}
+			answered := e.raise(tc.ix)
+			e.noticeWith("conv1", "interaction_id="+tc.ix.ID)
+			e.settle()
+			if n := e.pushesOf(tc.ix.ID); n != 0 {
+				t.Fatalf("local non-action pushed to the owner %d times", n)
+			}
+			if c := cardsToday(t, e.s)[cardAgentPermission]; c.N != 0 {
+				t.Fatalf("agent_permission ledger = %+v, want 0", c)
+			}
+			allow := true
+			if err := e.s.resolve(tc.ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+				t.Fatal(err)
+			}
+			answerOf(t, answered)
+		})
+	}
+}
+
+// The assistant's own supervising conversations keep their cards (#15360). A leader's approval of a gated write that
+// userApproval leaves to a supervisor (the node's Lark gate card for a doc update as the user), a leader's question,
+// and the main conversation's own approval with no background supervisor are the user's: pushed, not shown as held
+// by a supervisor, and not handed on. Handed to the main conversation they were parked there: no turn was started for
+// them, no timeout moved them, ask_escalate could not take them without a task, and the main conversation's own card
+// waited on the main conversation itself.
+func TestSupervisingConversationsKeepTheirOwnCards(t *testing.T) {
+	e := newRouteEnv(t, nil, true) // main conversation conv1 and leader lead1 on server, no background supervisor
+	now := time.Now().UTC()
+	leadWrite := proto.Interaction{
+		ID: "ix_lead_own_write", MachineID: "server", SessionID: "lead1", Kind: proto.IxPermission, ToolName: "Lark",
+		Summary: "Write on Lark as you (complex command, shown in full)\n" +
+			"cd /tmp && timeout 60 lark-cli docs +update --doc <doc> --as user --command append --content @notes.md",
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	if why := userApproval(leadWrite); why != "" {
+		t.Fatalf("the leader's write must be one userApproval leaves to a supervisor, got %q", why)
+	}
+	leadAsk := askQuestion("ix_lead_own_question", "lead1")
+	leadAsk.MachineID = "server"
+	mainOwn := proto.Interaction{
+		ID: "ix_main_own_permission", MachineID: "server", SessionID: "conv1", Kind: proto.IxPermission,
+		ToolName: "Bash", Summary: "go test ./...", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	allow := true
+	for _, c := range []struct {
+		ix  proto.Interaction
+		res proto.Resolution
+	}{
+		{leadWrite, proto.Resolution{Allow: &allow}},
+		{leadAsk, proto.Resolution{Answers: map[string]string{leadAsk.Questions[0].Question: "main"}}},
+		{mainOwn, proto.Resolution{Allow: &allow}},
+	} {
+		done := e.raise(c.ix)
+		waitFor(t, c.ix.ID+" pushed to the owner", func() bool { return e.pushesOf(c.ix.ID) == 1 })
+		if e.lastShown(c.ix.ID).Delegating {
+			t.Errorf("%s is shown as held by a supervisor", c.ix.ID)
+		}
+		for _, to := range []string{"conv1", "lead1"} {
+			for _, src := range []string{cardAgentPermission, cardAgentQuestion} {
+				if hasRelayFrom(e.s, to, src, "interaction_id="+c.ix.ID) {
+					t.Errorf("%s was handed to %s as %s", c.ix.ID, to, src)
+				}
+			}
+		}
+		if err := e.s.resolve(c.ix.ID, c.res); err != nil {
+			t.Fatal(err)
+		}
+		answerOf(t, done)
+	}
+	e.settle()
 }
 
 // Source 2 (agent_question): non-six-class questions and parsed non-user terminal dialogs from an
@@ -262,11 +580,11 @@ func TestExtensionApprovalNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	if n := e.pushesOf(extIx.ID); n != 0 {
 		t.Fatalf("non-owner extension approval pushed %d times", n)
 	}
+	waitFor(t, "outbound_write ledger recorded", func() bool {
+		return cardsToday(t, e.s)[cardOutboundWrite].N == 1
+	})
 	if c := cardsToday(t, e.s)[cardExtensionApproval]; c.N != 0 {
 		t.Fatalf("extension_approval ledger = %+v, want 0", c)
-	}
-	if c := cardsToday(t, e.s)[cardOutboundWrite]; c.N != 1 {
-		t.Fatalf("outbound_write ledger = %+v, want 1", c)
 	}
 
 	allow := true
@@ -322,6 +640,12 @@ func TestScheduleFailedGoesToSupervisorOrMainAndBriefFallbackStillPushes(t *test
 		ScheduleRun{ID: "run_3", RefID: briefTask.ID, Due: now, Error: "machine offline"},
 		false,
 	)
+	if !s.modules.Loaded("briefing") {
+		if c := cardsToday(t, s)[cardBriefFallback]; c.N != 0 || len(f.pushed()) != 0 || s.briefTaskRunCount() != 0 {
+			t.Fatalf("briefing hooks without their module produced a fallback: ledger=%+v pushes=%d runs=%d", c, len(f.pushed()), s.briefTaskRunCount())
+		}
+		return
+	}
 	waitFor(t, "brief_fallback pushed to owner", func() bool {
 		return cardsToday(t, s)[cardBriefFallback].N == 1
 	})

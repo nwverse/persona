@@ -66,6 +66,7 @@ func (h *Manager) Run(ctx context.Context) error {
 	go h.extensionMetricsLoop(ctx)
 	go h.pageLoop(ctx)
 	go h.sentLedgerLoop(ctx)
+	go h.larkSyncLoop(ctx) // the Lark user sync's daily runs (larksync_host.go)
 	h.apiMux = http.NewServeMux()
 	h.registerRoutes(h.apiMux)
 	close(h.started)
@@ -346,7 +347,7 @@ func (h *Manager) Hello(res json.RawMessage) {
 	h.hello.Store(&hl)
 	h.isMemberNow.Store(hl.Assistant.Standby)
 	if was != hl.Assistant.Standby && h.extensions != nil {
-		go h.extensions.roleChanged(context.Background()) // a member's center runs what runs once (mesh_group.go)
+		go h.extensions.roleChanged(h.extensions.runtimeContext(nil)) // a member's center runs what runs once (mesh_group.go)
 		go func() {
 			h.restartBot() // the center's Feishu bot answers for the group
 			h.sendReport()
@@ -748,13 +749,16 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 	case assistant && h.memoryWithheld(name): // memory_sources.go
 		return memoryWithheldResult(name), true
 	case h.connectors.Offers(name) && (assistant || h.connectors.ForAgents(name)):
+		if !assistant {
+			ctx = connector.WithoutOwnerCaller(ctx)
+		}
 		return h.callConnector(ctx, asker{machine, session}, name, args), true
 	case assistant && name == larkImageTool:
 		return h.callLarkImage(ctx, args), true
 	case assistant && isComputerTool(name):
 		return h.callComputerTool(ctx, session, name, args), true
 	case assistant && isBrowserTool(name):
-		return h.callBrowserTool(ctx, session, name, args), true
+		return h.callBrowserTool(ctx, machine, session, name, args), true
 	case assistant && isIPhoneTool(name):
 		return h.callIPhoneTool(ctx, session, name, args), true
 	case assistant && isSubscriptionTool(name):
@@ -766,6 +770,24 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 // ConnectorTool says whether name is a registered connector's tool (not Cua's or ego's).
 func (h *Manager) ConnectorTool(name string) bool {
 	return h.connectors != nil && h.connectors.Offers(name)
+}
+
+// InboxVisibilityPreflight reports the provider's explicit visibility-enforcement declaration without running the tool.
+func (h *Manager) InboxVisibilityPreflight(name string) bool {
+	return h.connectors != nil && h.connectors.InboxVisibilityPreflight(name)
+}
+
+// InboxVisibilitySource resolves any registered connector tool to its source id. The assistant uses this positive
+// registry lookup rather than recognizing one vendor's tool names: an older arbitrary source must fail closed too.
+func (h *Manager) InboxVisibilitySource(name string) (string, bool) {
+	if h.connectors == nil || !h.connectors.Offers(name) {
+		return "", false
+	}
+	c := h.connectors.Owner(name)
+	if c == nil {
+		return "", false
+	}
+	return c.ID(), true
 }
 
 // ToolAccess classifies every tool CallTool can dispatch, without running it. Connector reads are declared by the

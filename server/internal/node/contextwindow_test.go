@@ -422,3 +422,16 @@ func TestRuntimeSessionManagedLauncherContextWindow(t *testing.T) {
 		t.Fatalf("paseo-over overload fallback window=%d, want 200000", s.ContextWindow)
 	}
 }
+
+func TestClaudeDesktopUsesProcessCompactionBudget(t *testing.T) {
+	s := proto.Session{ContextTokens: 180000, ContextWindow: 1000000}
+	env := pickedEnv("CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000")
+	setClaudeProcessWindow(&s, env)
+	if s.ContextWindow != 500000 || s.ContextTokens != 180000 {
+		t.Fatal(s.ContextWindow, s.ContextTokens)
+	}
+	setClaudeProcessWindow(&s, nil)
+	if s.ContextWindow != 500000 {
+		t.Fatal("unknown override erased the budget")
+	}
+}

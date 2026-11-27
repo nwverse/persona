@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"encoding/json"
 	"slices"
 	"sort"
 	"strings"
@@ -33,9 +34,48 @@ func FoldWorkLatest(items []proto.Item) []proto.Item {
 	return foldWork(items, true)
 }
 
+// FoldPage keeps Claude's public paragraphs in order on both initial and older pages.
+// A call spanning one of these paragraphs and its later receipt stay available for pairing.
+func (f *File) FoldPage(items []proto.Item, latest bool) []proto.Item {
+	f.mu.Lock()
+	codex := f.meta.Codex
+	f.mu.Unlock()
+	if codex {
+		// Keep a public opening available when the user steers later in this turn,
+		// including when the steer arrives on a later page.
+		opening := make(map[int]bool)
+		first := true
+		for i, it := range items {
+			if it.Kind == proto.KindText && it.Role == "user" || it.Kind == "turn_duration" {
+				first = true
+			} else if it.Kind == proto.KindText && it.Role == "assistant" && first {
+				opening[i] = it.Narration
+				first = false
+			}
+		}
+		return foldWorkKeeping(items, latest, opening)
+	}
+	var out []proto.Item
+	start := 0
+	for i, item := range items {
+		if item.Kind == proto.KindText && item.Role == "assistant" {
+			if i > start {
+				out = append(out, FoldWork(items[start:i])...)
+			}
+			out = append(out, item)
+			start = i + 1
+		}
+	}
+	return append(out, FoldWork(items[start:])...)
+}
+
 // A call whose result is not in the page (still running) and a result whose call is not (on an older page) are not
 // folded: the app pairs them with what comes later or earlier, and a fold hides them from that.
 func foldWork(items []proto.Item, latestPage bool) []proto.Item {
+	return foldWorkKeeping(items, latestPage, nil)
+}
+
+func foldWorkKeeping(items []proto.Item, latestPage bool, opening map[int]bool) []proto.Item {
 	results, agents := map[string]*proto.Item{}, map[string]bool{}
 	taskUses := map[string]proto.Item{}
 	for i := range items {
@@ -69,14 +109,15 @@ func foldWork(items []proto.Item, latestPage bool) []proto.Item {
 		case proto.KindThinking:
 			return true
 		case proto.KindText:
-			return it.Narration && index != latestNarration
+			return it.Narration && index != latestNarration && !opening[index]
 		case proto.KindToolUse, proto.KindToolResult, proto.KindImage: // a tool's image goes with its call
 			// a subagent's call stays on the page: the chat draws it as a card, which never folds (#5602)
 			use, hasUse := taskUses[it.ToolUseID]
 			result, hasResult := results[it.ToolUseID]
 			// Keep the silent receipt and its call so even a partial history replay can respect the disposition.
 			return it.ToolUseID != "" && hasUse && hasResult && !agents[it.ToolUseID] &&
-				!silentSupervisionFinish(use.ToolName, *result)
+				!silentSupervisionFinish(use.ToolName, *result) && use.ToolName != claudeDesktopWrapUp &&
+				(use.ToolName != claudeDesktopPlan || taskObject(use.ToolInput)["items"] != nil)
 		}
 		return false
 	}
@@ -110,7 +151,13 @@ func foldWork(items []proto.Item, latestPage bool) []proto.Item {
 func fold(run []proto.Item) proto.Item {
 	first, last := run[0], run[len(run)-1]
 	fo := &proto.Fold{Items: len(run), Until: last.TS, ThroughSeq: last.Seq, ThroughID: last.ID, ToolNames: []string{}}
-	latestThought := -1
+	results := map[string]*proto.Item{}
+	for i := range run {
+		if run[i].Kind == proto.KindToolResult && run[i].ToolUseID != "" {
+			results[run[i].ToolUseID] = &run[i]
+		}
+	}
+	latestThought, latestTool := -1, -1
 	var firstTTFT *int64
 	for i, it := range run {
 		if firstTTFT == nil && it.TTFTMS != nil {
@@ -118,9 +165,13 @@ func fold(run []proto.Item) proto.Item {
 		}
 		switch {
 		case it.Kind == proto.KindToolUse:
+			latestTool = i
 			fo.Tools++
 			if it.ToolName != "" && len(fo.ToolNames) < proto.FoldToolNamesMax && !slices.Contains(fo.ToolNames, it.ToolName) {
 				fo.ToolNames = append(fo.ToolNames, it.ToolName)
+			}
+			if it.Botmux != nil && botmuxToolResultSucceeded(results[it.ToolUseID]) {
+				fo.Botmux = append(fo.Botmux, *it.Botmux)
 			}
 		case it.Kind == proto.KindToolResult && it.IsError:
 			fo.Errors++
@@ -138,7 +189,17 @@ func fold(run []proto.Item) proto.Item {
 	fo.Changes = foldChanges(run)
 	fo.Usage = foldUsage(run)
 	fo.Sources = foldSources(run)
-	return proto.Item{ID: "fold:" + first.ID, Seq: first.Seq, TS: first.TS, Role: "assistant", Kind: proto.KindFold, Fold: fo, TTFTMS: proto.CloneTTFTMS(firstTTFT)}
+	item := proto.Item{ID: "fold:" + first.ID, Seq: first.Seq, TS: first.TS, Role: "assistant", Kind: proto.KindFold, Fold: fo, TTFTMS: proto.CloneTTFTMS(firstTTFT)}
+	if latestTool >= 0 && run[latestTool].ToolName == "Bash" {
+		// Keep the same public caption when the client replaces the calls with this range.
+		var input struct {
+			Description string `json:"description"`
+		}
+		if json.Unmarshal(run[latestTool].ToolInput, &input) == nil {
+			item.Text = oneLine(input.Description, 160)
+		}
+	}
+	return item
 }
 
 func thinkingPreview(it proto.Item) *proto.Item {
@@ -167,4 +228,60 @@ func (f *File) Range(fromSeq, throughSeq, limit int) ([]proto.Item, bool) {
 	}
 	more := end < len(f.items) && f.items[end].Seq <= throughSeq
 	return append([]proto.Item(nil), f.items[i:end]...), more
+}
+
+// TurnWindow returns the surrounding items in f needed to evaluate full turn boundaries for a slice spanning
+// [firstSeq, lastSeq] (such as a fold Range, an AfterSeq batch, a live push, or a mid-turn Page):
+//   - prefix: items from the enclosing user text item up to (not including) firstSeq
+//   - suffix: items after lastSeq up to (not including) the next user text item
+//
+// Each side is bounded to avoid unbounded scans on pathological turns.
+func (f *File) TurnWindow(firstSeq, lastSeq int) (prefix, suffix []proto.Item) {
+	if f == nil || firstSeq <= 0 || lastSeq <= 0 {
+		return nil, nil
+	}
+	const maxContextItems = 2000
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureAfter(firstSeq - 1)
+	startIdx := sort.Search(len(f.items), func(k int) bool { return f.items[k].Seq >= firstSeq })
+	// If the slice does not start on a user text item, ensure the enclosing user turn is loaded.
+	if startIdx >= len(f.items) || !isBotmuxUserItem(f.items[startIdx]) {
+		hasUserBefore := false
+		for p := startIdx - 1; p >= 0 && startIdx-p <= maxContextItems; p-- {
+			if isBotmuxUserItem(f.items[p]) {
+				hasUserBefore = true
+				break
+			}
+		}
+		if !hasUserBefore && f.base > 0 {
+			f.ensureTurns(firstSeq, 1, maxContextItems)
+			startIdx = sort.Search(len(f.items), func(k int) bool { return f.items[k].Seq >= firstSeq })
+		}
+		// ensureTurns may parse back far more than maxContextItems (a whole page budget), so the prefix is cut here:
+		// the enclosing user item if it is close enough, else only the newest maxContextItems items before firstSeq.
+		lo := max(0, startIdx-maxContextItems)
+		for p := startIdx - 1; p >= lo; p-- {
+			if isBotmuxUserItem(f.items[p]) {
+				lo = p
+				break
+			}
+		}
+		if lo < startIdx {
+			prefix = append([]proto.Item(nil), f.items[lo:startIdx]...)
+		}
+	}
+	endIdx := sort.Search(len(f.items), func(k int) bool { return f.items[k].Seq > lastSeq })
+	q := endIdx
+	for q < len(f.items) && q-endIdx < maxContextItems && !isBotmuxUserItem(f.items[q]) {
+		q++
+	}
+	if q > endIdx {
+		suffix = append([]proto.Item(nil), f.items[endIdx:q]...)
+	}
+	return prefix, suffix
+}
+
+func isBotmuxUserItem(it proto.Item) bool {
+	return it.Role == "user" && it.Kind == proto.KindText && it.From == ""
 }

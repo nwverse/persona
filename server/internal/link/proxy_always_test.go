@@ -324,6 +324,12 @@ func TestProxyOnlyTurnedOnBeforeAReplacedLinkComesBack(t *testing.T) {
 	if back.Kind != KindProxy {
 		t.Fatalf("after the replaced link: %+v", back)
 	}
+	// The client announces the new socket before the test hub finishes its initial messages.
+	select {
+	case <-hub.links:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hub did not finish starting the replacement link")
+	}
 }
 
 func TestRepairedFollowsProxyAlways(t *testing.T) {

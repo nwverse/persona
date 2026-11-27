@@ -93,6 +93,7 @@ data class ExtensionManifest(
      * executable; writes and arbitrary command lines are not part of this contract.
      */
     @SerialName("host_integrations") val hostIntegrations: List<ExtensionHostIntegrationSpec>? = null,
+    val upgrade: ExtensionUpgradeSpec? = null,
 )
 
 /**
@@ -184,6 +185,28 @@ data class ExtensionAuthSpec(
      * do leave it out of its pages.
      */
     val page: String? = null,
+)
+
+/**
+ * What the extension asks of the hub around an automatic upgrade (docs "Backup before an upgrade"). The hub snapshots
+ * the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse the manifest.
+ */
+@Serializable
+data class ExtensionUpgradeSpec(
+    /**
+     * auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade.
+     */
+    val backup: String? = null,
+    /**
+     * Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the
+     * upgrade.
+     */
+    val prepare: Boolean? = null,
+    /**
+     * Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the
+     * snapshot.
+     */
+    @SerialName("health_check") val healthCheck: Boolean? = null,
 )
 
 @Serializable
@@ -561,6 +584,10 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
 @Serializable
 data class ExtensionSkillItem(
     val id: String = "",
+    /**
+     * What the extension's contributions list calls it; the id when absent.
+     */
+    val title: String? = null,
     /**
      * The directory, relative to the package (or to the data directory with source data).
      */
@@ -1143,6 +1170,10 @@ data class ExtensionAPIReceipt(
 @Serializable
 data class ExtensionAssistantItem(
     val id: String = "",
+    /**
+     * What the extension's contributions list calls it; the id when absent.
+     */
+    val title: String? = null,
     val skills: List<String>? = null,
     val instructions: String? = null,
     val gate: String? = null,
@@ -1159,6 +1190,10 @@ data class ExtensionMCPServerItem(
      * The server's name for the assistant; not persona or persona.
      */
     val id: String = "",
+    /**
+     * What the extension's contributions list calls it; the id when absent.
+     */
+    val title: String? = null,
     /**
      * Looked up on PATH, then in ~/bin.
      */
@@ -1507,6 +1542,11 @@ data class ExtensionInitializeParams(
      * The configuration with the schema's defaults filled in.
      */
     val config: JsonElement? = null,
+    /**
+     * The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+     * authorization input, not extension settings persisted in the extension registry.
+     */
+    @SerialName("inbox_visibility") val inboxVisibility: JsonElement? = null,
     val secrets: Map<String, String>? = null,
     val granted: ExtensionPermissions = ExtensionPermissions(),
     /**
@@ -4030,7 +4070,8 @@ data class ExtensionAction(
      */
     val reply: String? = null,
     /**
-     * Assistant only: an https URL or a validated persona/persona session, task, kb or file target, opened inside the
+     * Assistant only, except that a full extension page may open persona://session/<machine>/<session> or
+     * persona://task/<id>: an https URL or a validated persona session, task, kb or file target, opened inside the
      * app.
      */
     val open: String? = null,

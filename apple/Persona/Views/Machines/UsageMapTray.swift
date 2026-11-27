@@ -184,7 +184,7 @@ struct UsageConfirmations: ViewModifier {
     func body(content: Content) -> some View {
         let shown = Binding(get: { model.confirmation != nil }, set: { if !$0 { model.confirmation = nil } })
         let c = model.confirmation
-        content.confirmationDialog(c.map(title) ?? "", isPresented: shown, titleVisibility: .visible, presenting: c) { c in
+        content.accessibleConfirmationDialog(c.map(title) ?? "", isPresented: shown, titleVisibility: .visible, hasCancel: true, presenting: c) { c in
             Button(confirmLabel(c), role: destructive(c) ? .destructive : nil) { Task { await model.confirm(c) } }
                 .accessibilityIdentifier("usage.confirm")
             Button("Cancel", role: .cancel) { model.confirmation = nil }

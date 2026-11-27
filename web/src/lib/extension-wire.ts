@@ -65,6 +65,7 @@ export interface Manifest {
    * executable; writes and arbitrary command lines are not part of this contract.
    */
   host_integrations?: HostIntegrationSpec[];
+  upgrade?: UpgradeSpec;
 }
 
 /**
@@ -136,6 +137,24 @@ export interface AuthSpec {
    * do leave it out of its pages.
    */
   page?: string;
+}
+
+/**
+ * What the extension asks of the hub around an automatic upgrade (docs "Backup before an upgrade"). The hub snapshots
+ * the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse the manifest.
+ */
+export interface UpgradeSpec {
+  /** auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade. */
+  backup?: string;
+  /**
+   * Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the upgrade.
+   */
+  prepare?: boolean;
+  /**
+   * Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the
+   * snapshot.
+   */
+  health_check?: boolean;
 }
 
 export interface Dependency {
@@ -359,6 +378,8 @@ export interface Contributes {
  */
 export interface SkillItem {
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   /** The directory, relative to the package (or to the data directory with source data). */
   dir: string;
   source?: ContentSource;
@@ -808,6 +829,8 @@ export interface APIReceipt {
 
 export interface AssistantItem {
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   skills?: string[];
   instructions?: string;
   gate?: string;
@@ -821,6 +844,8 @@ export interface AssistantItem {
 export interface MCPServerItem {
   /** The server's name for the assistant; not persona or persona. */
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   /** Looked up on PATH, then in ~/bin. */
   command: string;
   /**
@@ -1069,6 +1094,11 @@ export interface InitializeParams {
   plugin?: ExtensionInfo;
   /** The configuration with the schema's defaults filled in. */
   config?: unknown;
+  /**
+   * The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+   * authorization input, not extension settings persisted in the extension registry.
+   */
+  inbox_visibility?: unknown;
   secrets?: Record<string, string>;
   granted: Permissions;
   /** The contributions this run is for, by extension point. */
@@ -2902,8 +2932,8 @@ export interface Action {
    */
   reply?: string;
   /**
-   * Assistant only: an https URL or a validated persona/persona session, task, kb or file target, opened inside the
-   * app.
+   * Assistant only, except that a full extension page may open persona://session/<machine>/<session> or
+   * persona://task/<id>: an https URL or a validated persona session, task, kb or file target, opened inside the app.
    */
   open?: string;
   /** Assistant only: return one page within the card. */

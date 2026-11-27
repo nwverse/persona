@@ -97,8 +97,8 @@ func init() {
 			h.broadcastMachines()
 		}
 		h.looksReported(before.Looks, after.Looks) // the extensions' looks (looks.go)
-		if r.PushGradingDeclared && h.push != nil {
-			h.push.reconcileGradingLayers(from, r.PushGradingExtensions)
+		if r.PushGradingDeclared {
+			h.reconcilePushGradingLayer(from, r.PushGradingExtensions)
 		}
 		if h.store != nil && from == assistantwire.AssistantID { // kept across a restart: the assistant's
 			h.queueExtReportSave(r)
@@ -241,6 +241,12 @@ func (h *Hub) features() []string {
 			out = append(out, f)
 		}
 	}
+	if h.defaultManagerNames(assistantwire.CapabilityHealthTell) {
+		out = append(out, assistantwire.CapabilityHealthTell)
+	}
+	if h.defaultManagerNames(assistantwire.CapabilityHealthStrength) {
+		out = append(out, assistantwire.CapabilityHealthStrength)
+	}
 	if h.defaultManagerNames(assistantwire.CapabilityHealthItems) {
 		out = append(out, assistantwire.CapabilityHealthItems)
 	}
@@ -270,7 +276,7 @@ func (h *Hub) features() []string {
 			continue // only the default manager's hello can publish module presence
 		}
 		switch f {
-		case assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
+		case assistantwire.CapabilityHealthTell, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentSessionIdleArchive, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
 			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
 			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureAssistantPages, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoRevision, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
 			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, dashboards, direction sessions, start speed, the side-session fold, remote images, the To-dos view, its answers and its history

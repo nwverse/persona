@@ -208,7 +208,7 @@ func TestNotifyUserWithoutCopiesAnswersAsBefore(t *testing.T) {
 // What the answer says for each devices outcome once copies went out, in English and Chinese.
 func TestNotifyUserAnswerWithCopies(t *testing.T) {
 	devices := func(n int) *int { return &n }
-	feishu := func(state string) pushCopy { return pushCopy{channel: channel.Feishu, state: state} }
+	feishu := func(state copyState) pushCopy { return pushCopy{channel: channel.Feishu, state: state} }
 	cases := []struct {
 		lang   i18n.Lang
 		res    NotifyResult

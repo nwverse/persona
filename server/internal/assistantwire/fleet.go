@@ -132,6 +132,9 @@ type FleetLive struct {
 
 // Clients is EventClients' params.
 type Clients struct {
+	// Viewing is the deduplicated set of chat and terminal views from apps with full credentials.
+	// An open page remains a view during a quiet turn.
+	Viewing []SessionRef `json:"viewing,omitempty"`
 	// Elicitation: an app that takes MCP elicitations is connected (without one, or ElicitationPush, an elicitation is
 	// handed back to the terminal at once).
 	Elicitation bool `json:"elicitation"`
@@ -212,7 +215,8 @@ type FleetStats struct {
 	Loads    []FleetLoad `json:"loads,omitempty"`
 }
 
-// FleetLoad is a machine's 1-minute load average over its cores, in percent (rounded to 5).
+// FleetLoad is a machine's 1-minute load average over its cores, in percent (rounded to 10: the tenth of a core the
+// apps print, so 150 is "1.5 per core").
 type FleetLoad struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`

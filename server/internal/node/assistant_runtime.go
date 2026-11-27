@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
@@ -95,19 +96,30 @@ func (n *Node) runtimeAssistantCwd(id, cwd string, st sessionState) string {
 	return identity.AssistantDir(n.home)
 }
 
-// assistantEnvForRuntime returns nil unless the local runtime explicitly accepts dedicated-worker environments.
-func (n *Node) assistantEnvForRuntime(h *runtimeConn, cwd string) map[string]string {
-	if h == nil || !h.assistantEnvironment() {
+// assistantEnvForRuntime returns nil unless the local runtime explicitly accepts dedicated-worker environments and
+// session is known (reusing session-scoped proxy leases idempotently per (session, command)).
+func (n *Node) assistantEnvForRuntime(h *runtimeConn, cwd, session string) map[string]string {
+	if h == nil || !h.assistantEnvironment() || session == "" {
 		return nil
 	}
-	entries := n.assistantRuntimeEnv(cwd)
+	env, _, _ := n.assistantEnvForRuntimeLease(h, cwd, session)
+	return env
+}
+
+// assistantEnvForRuntimeLease builds the runtime assistant environment and returns lifecycle hooks when session is
+// empty (a new session.start): call bind(id) once session.start returns an id, or release() if starting fails.
+func (n *Node) assistantEnvForRuntimeLease(h *runtimeConn, cwd, session string) (map[string]string, func(), func(string)) {
+	if h == nil || !h.assistantEnvironment() {
+		return nil, func() {}, func(string) {}
+	}
+	entries, release, bind := n.assistantRuntimeEnv(cwd, session)
 	env := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		if name, value, ok := strings.Cut(entry, "="); ok {
 			env[name] = value
 		}
 	}
-	return env
+	return env, release, bind
 }
 
 // assistantSendRuntime is assistantSend on a runtime (h, nil when it is not connected): a new conversation is started
@@ -116,7 +128,7 @@ func (n *Node) assistantEnvForRuntime(h *runtimeConn, cwd string) map[string]str
 // instructions only a runtime needs (memory, Feishu). Runtimes that advertise caps.supervision_policy receive manager-owned
 // supervision_instructions as an explicit protocol field on session.start and session.send; non-capable runtimes keep
 // the runtimePolicyDropped boundary (refusing supervision deliveries, dropping policy for owner messages).
-func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public, strict, modeExplicit bool, selected []assistantskills.Entry, modelEffortPolicy ...string) (string, error) {
+func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public, strict, modeExplicit bool, selected []assistantskills.Entry, previousStopAt int64, modelEffortPolicy ...string) (string, error) {
 	hasInput := strings.TrimSpace(text) != "" || len(images) != 0
 	if id != "" && hasInput && n.runtimes.compacting(id) {
 		return "", runtimeCompactingRefusal(ctx)
@@ -154,6 +166,8 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		return "", errRuntimeAway(launcher)
 	}
 	supportsPolicy := h.supervisionPolicy()
+	remote := h.remoteAgent()
+	wasRemote := st.RemoteAgent
 	if !supportsPolicy && policy != "" {
 		if err := n.runtimePolicyDropped(ctx, id); err != nil {
 			return "", err
@@ -163,11 +177,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if supportsPolicy && id != "" && known && st.SupervisionInstructions != policy && n.runtimeStatus(h, id) == proto.StatusWorking {
 		return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
 	}
-	if n.assistantDirectoryPrepared(cwd) {
-		n.assistantRuntimeSkills(cwd)
-	}
+	n.assistantRuntimeSkillsForSend(cwd)
 	memDir := n.memoryForUse(cwd)
-	environment := n.assistantEnvForRuntime(h, cwd)
+	environment, releaseEnv, bindEnv := n.assistantEnvForRuntimeLease(h, cwd, id)
 	turn := map[string]any{"assistant": true, "memory_dir": memDir}
 	if environment != nil {
 		turn["env"] = environment
@@ -198,19 +210,29 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		}
 		s, err := n.runtimeStartWith(ctx, h, startParams)
 		if err != nil {
+			releaseEnv()
 			return "", n.localizeSupervisionRefusal(ctx, err)
 		}
 		id = s.SessionID
+		if id == "" {
+			releaseEnv()
+		} else {
+			bindEnv(id)
+		}
 		st.AwaitingFirstMessage = true
 		if supportsPolicy {
 			st.SupervisionInstructions = policy
 		}
 	}
+	if remote {
+		st.RemoteAgent = true
+		n.gates().markRemote(id)
+	}
 	n.noteModes(id, mode, pickedEffort)
 	if m := n.assistantModeOf(id); m != "" {
 		turn["mode"] = m
 	}
-	if !known || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") {
+	if !known || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") || (remote && !wasRemote) {
 		if st.StartedAt.IsZero() {
 			st.StartedAt = time.Now().UTC()
 		}
@@ -228,8 +250,15 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	// A message that is only a slash command goes on its own: with the context block in front, an agent that runs its own
 	// commands (Antigravity's /compact) takes the line for plain text, records it as `/compact/compact` and runs nothing.
 	// The snapshot is not marked as sent, so the next message carries it. A conversation's first message keeps its block:
-	// it holds the instructions the runtime needs.
-	command := runtimeCommandOnly(text, len(images)) && !st.AwaitingFirstMessage
+	// it holds the instructions the runtime needs. Antigravity's own workflow commands are different: agy still needs
+	// them at byte 0, but they run with Persona context, which its runtime puts after the command body.
+	workflow := false
+	if h.agent() == agentprompt.Antigravity {
+		if ordered, ok := agentprompt.WorkflowCommand(text); ok {
+			text, workflow = ordered, true
+		}
+	}
+	command := runtimeCommandOnly(text, len(images)) && !st.AwaitingFirstMessage && !workflow
 	live, commit := "", func() {}
 	if !command {
 		if !public {
@@ -245,7 +274,8 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 			live = joinInstructionRemainderAndPolicy(remainder, live)
 		}
 		if st.AwaitingFirstMessage {
-			live = strings.TrimSpace(n.runtimeInstructions(cwd, memDir) + "\n" + live)
+			memoryTools := h.remoteAgent() && n.guestOf(id) == nil && cwd != "" && identity.IsAssistantDir(filepath.Clean(cwd))
+			live = strings.TrimSpace(n.runtimeInstructionsWithTools(cwd, memDir, memoryTools) + "\n" + live)
 		}
 	}
 	if len(selected) > 0 {
@@ -297,6 +327,10 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 			return "", n.localizeSupervisionRefusal(ctx, err)
 		}
 		return "", fmt.Errorf("%s: %w", h.label(), err)
+	}
+	n.state.clearStopAfterAssistantInput(id, previousStopAt)
+	if h.agent() == agyAgent {
+		n.clearAgyStopped(id, sentAt)
 	}
 	if runtimeAnswerFlag(said, "queued") {
 		if !command {
@@ -360,11 +394,17 @@ func clientMsgIDFrom(ctx context.Context) string {
 	return id
 }
 
-// assistantModeOf is the permission mode the conversation was last set to (session.modes, or a message's), "" none.
+// assistantModeOf is the permission mode the conversation was last set to (session.modes, or a message's),
+// falling back to the persisted session state after a node restart, "" none.
 func (n *Node) assistantModeOf(id string) string {
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.modes[id].Mode
+	mode := n.modes[id].Mode
+	n.mu.Unlock()
+	if mode != "" || n.state == nil {
+		return mode
+	}
+	st, _ := n.state.get(id)
+	return st.AppMode
 }
 
 // assistantInterruptRuntime stops the turn of an assistant conversation a runtime runs; nothing when it is away.
@@ -398,7 +438,11 @@ func (n *Node) runtimeStartWith(ctx context.Context, h *runtimeConn, params map[
 // runtimeInstructions is the first message's instructions for an assistant on a runtime: the memory it shares with
 // Claude and Codex (memory.go), and the skills' gated commands it runs as tools here.
 func (n *Node) runtimeInstructions(cwd, memDir string) string {
-	r := prompts.RuntimeInstructions{Dir: memDir}
+	return n.runtimeInstructionsWithTools(cwd, memDir, false)
+}
+
+func (n *Node) runtimeInstructionsWithTools(cwd, memDir string, memoryTools bool) string {
+	r := prompts.RuntimeInstructions{Dir: memDir, MemoryTools: memoryTools}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, g := range n.assistantLark(ctx).Gates {
@@ -415,10 +459,49 @@ func (n *Node) runtimeInstructions(cwd, memDir string) string {
 	return prompts.RenderRuntimeInstructions(r)
 }
 
+// assistantRuntimeSkillsForSend refreshes skills only while this process still has the prepare's connector state.
+// After a restart, disk state can prove only the instruction fallback; running a full sync then would treat forgotten
+// connectors as signed out and remove their skills before the manager's next prepare.
+func (n *Node) assistantRuntimeSkillsForSend(cwd string) {
+	if n.assistantDirectoryPrepared(cwd) {
+		n.assistantRuntimeSkills(cwd)
+		return
+	}
+	if n.assistantInstructionDirectoryPrepared(cwd) {
+		n.restoreAssistantInstructionFallback(cwd)
+	}
+}
+
 // assistantRuntimeSkills puts the assistant's skills where agent runtimes look for a project's (<cwd>/.agents/skills),
 // beside Claude's (.claude/skills, assistantLarkEnv).
 func (n *Node) assistantRuntimeSkills(cwd string) {
 	n.syncRuntimeSkillDir(cwd, filepath.Join(cwd, ".agents", "skills"))
+	n.restoreAssistantInstructionFallback(cwd)
+}
+
+func (n *Node) restoreAssistantInstructionFallback(cwd string) {
+	n.assistantSkillsMu.Lock()
+	defer n.assistantSkillsMu.Unlock()
+	if assistantskills.ViewsGuideReady(cwd) {
+		return
+	}
+	mode, err := os.ReadFile(filepath.Join(cwd, assistantInstructionMode))
+	if err != nil || string(mode) != assistantInstructionModeViews {
+		return // compact view instructions were never selected for this directory
+	}
+	full, err := os.ReadFile(filepath.Join(cwd, assistantInstructionFallback))
+	if err != nil {
+		n.logger.Printf("assistant: restore complete instructions: %v", err)
+		return
+	}
+	if err := writeAssistantInstructionFiles(cwd, string(full)); err != nil {
+		n.logger.Printf("assistant: restore complete instructions: %v", err)
+		return
+	}
+	// Stay on the complete form until a later prepare verifies the managed skill again.
+	if err := writeIfChanged(filepath.Join(cwd, assistantInstructionMode), []byte(assistantInstructionModeFull)); err != nil {
+		n.logger.Printf("assistant: record complete-instruction fallback: %v", err)
+	}
 }
 
 // gateScript is a command gate's script in the assistant's directory, "" when its skill is not there.
@@ -530,7 +613,7 @@ const gateOutputNotice = "\n…（输出太长，后面的没有放进来；用 
 func runGateScript(ctx context.Context, name, script string, args []string, cwd string, env []string) proto.ToolResult {
 	cmd := exec.CommandContext(ctx, "bash", append([]string{script}, args...)...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(withoutEnv(os.Environ(), []string{categoriesEnv}), env...)
 	killGroupOnCancel(cmd)
 	out := &cappedBuffer{max: gateOutputCap}
 	cmd.Stdout, cmd.Stderr = out, out // the same comparable writer: exec calls it from one goroutine at a time

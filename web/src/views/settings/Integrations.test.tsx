@@ -2,6 +2,7 @@
 // Unit & integration tests for the lazy-loaded unified Integrations & Extensions list view,
 // object deduplication, capability filter chips, Extension Market entry, IntegrationDetail mounting,
 // bidirectional legacy route redirects, and Settings navigation collapse under integrations_v2 (#14874).
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,7 @@ const state = vi.hoisted(() => ({
   integrationsV2: true,
   features: ["channels", "extension_manager", "connectors", "lark"] as string[],
   loaded: true,
+  assistant: "assistant",
 }));
 
 vi.hoisted(() => {
@@ -34,6 +36,7 @@ vi.mock("../../lib/store", async (original) => ({
   useStore: (select: (s: Record<string, unknown>) => unknown) =>
     select({
       features: state.features,
+      todos: [],
       machines: [],
       sessions: {},
       interactions: [],
@@ -43,7 +46,7 @@ vi.mock("../../lib/store", async (original) => ({
       hubName: "",
       mesh: [],
       loaded: state.loaded,
-      assistant: state.loaded ? { manager: "assistant", integrations_v2: state.integrationsV2 } : null,
+      assistant: state.loaded ? { manager: state.assistant, integrations_v2: state.integrationsV2 } : null,
     }),
   useLarkOn: () => state.features.includes("lark"),
   onHubEvent: () => () => {},
@@ -55,11 +58,13 @@ vi.mock("./IntegrationDetail", () => ({
     onBack,
     onUpgrade,
     onPage,
+    onSettings,
   }: {
     target: { kind: string; id: string; channelId?: string; connectorId?: string | null; manager?: string };
     onBack?: () => void;
     onUpgrade?: (market: string, id: string, manager?: string) => void;
     onPage?: (extId: string, uiId: string, manager?: string) => void;
+    onSettings?: (url: string) => void;
   }) => (
     <div
       data-mock-integration-detail
@@ -83,6 +88,16 @@ vi.mock("./IntegrationDetail", () => ({
         <button type="button" data-mock-detail-page onClick={() => onPage(target.id, "dashboard", target.manager)}>
           Open page
         </button>
+      )}
+      {onSettings && (
+        <>
+          <button type="button" data-mock-detail-repos onClick={() => onSettings("settings/persona#repositories")}>
+            Repos
+          </button>
+          <button type="button" data-mock-detail-kb onClick={() => onSettings("settings/knowledge#knowledge-items")}>
+            Knowledge
+          </button>
+        </>
       )}
     </div>
   ),
@@ -128,12 +143,23 @@ vi.mock("./SentSettings", () => ({
   SentSettings: () => <div data-mock-sent-settings />,
 }));
 
-vi.mock("./ExtensionView", () => ({
-  ExtensionUI: ({ extension, ui }: { extension: string; ui: string }) => (
-    <div data-mock-extension-ui data-extension={extension} data-ui={ui} />
-  ),
-  LauncherExtensionSections: () => null,
-}));
+const extViewMock = vi.hoisted(() => ({ onWide: undefined as ((wide: boolean) => void) | undefined }));
+vi.mock("./ExtensionView", async (original) => {
+  const { ExtensionUI } = await original<typeof import("./ExtensionView")>();
+  return {
+    ExtensionUI: (props: Parameters<typeof ExtensionUI>[0]) => {
+      const { extension, ui, state: uiState, onWide } = props;
+      extViewMock.onWide = onWide;
+      return (
+        <div data-mock-extension-ui data-extension={extension} data-ui={ui} data-state={uiState ?? ""}>
+          {extension === "-subscriptions" && <ExtensionUI {...props} />}
+        </div>
+      );
+    },
+    askAssistant: vi.fn(),
+    LauncherExtensionSections: () => null,
+  };
+});
 
 vi.mock("./ShortcutSettings", () => ({ ShortcutSettings: () => <div data-page="shortcuts" /> }));
 vi.mock("./NotificationSettings", () => ({ NotificationSettings: () => <div data-page="notifications" /> }));
@@ -164,8 +190,10 @@ import { initI18n, t } from "../../i18n";
 import type { Channel } from "../../lib/channels";
 import type { HubConnector } from "../../lib/connectors";
 import type { HubExtension } from "../../lib/extensions";
-import { loadPages } from "../../lib/lazy-page";
-import { resetManagerChoice } from "../../lib/manager-choice";
+import type { SourcesGraph } from "../../lib/sources-graph";
+import { subscriptionSourceState, type HubSubscription } from "../../lib/subscriptions";
+import { navigate } from "../../lib/router";
+import { chooseManager, chosenManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
 import { resetRoster } from "../../lib/managers";
 import { Settings } from "../Settings";
 import { Integrations } from "./Integrations";
@@ -290,7 +318,6 @@ let root: Root;
 
 beforeAll(async () => {
   await initI18n("zh-Hans");
-  await loadPages();
 });
 
 beforeEach(() => {
@@ -299,6 +326,8 @@ beforeEach(() => {
   state.integrationsV2 = true;
   state.features = ["channels", "extension_manager", "connectors", "lark"];
   state.loaded = true;
+  state.assistant = "assistant";
+  history.replaceState(null, "", "/settings?tab=integrations");
   localStorage.clear();
   resetManagerChoice();
   resetRoster();
@@ -315,11 +344,108 @@ afterEach(() => {
 });
 
 const flush = async () => {
+  await act(async () => vi.dynamicImportSettled());
   for (let i = 0; i < 8; i++) {
     await act(async () => {
       await Promise.resolve();
     });
   }
+};
+
+const SAMPLE_SUBSCRIPTIONS: HubSubscription[] = [
+  {
+    id: "sub_gh_fail",
+    connector: "github",
+    extension: "",
+    source: "issues",
+    source_name: "GitHub Issues",
+    label: "Assigned Issues",
+    recipe_origin: "extension",
+    to_inbox: true,
+    to_kb: false,
+    state: "failing",
+    error: { code: "call_failed", message: "API 502 Bad Gateway" },
+    fail_count: 3,
+  },
+  {
+    id: "sub_larkx_rate",
+    connector: "larkx",
+    extension: "larkx",
+    source: "docs",
+    source_name: "LarkX Docs",
+    label: "Team Wiki Updates",
+    recipe_origin: "extension",
+    to_inbox: true,
+    to_kb: true,
+    state: "rate_limited",
+  },
+  {
+    id: "sub_mail_ok",
+    connector: "mail",
+    extension: "",
+    source: "inbox",
+    source_name: "Mail",
+    label: "Important Mail",
+    recipe_origin: "persona",
+    to_inbox: true,
+    to_kb: false,
+    state: "ok",
+  },
+  {
+    id: "sub_push_iphone",
+    connector: "-shortcuts",
+    extension: "",
+    source: "dev_iphone_1",
+    source_name: "My iPhone",
+    icon: "bell",
+    label: "My iPhone Notifications",
+    recipe_origin: "push",
+    to_inbox: true,
+    to_kb: false,
+    state: "ok",
+  },
+];
+
+const SAMPLE_GRAPH: SourcesGraph = {
+  extensions: [
+    { id: "persona", name: "Persona", line: "1 source" },
+    { id: "larkx", extension: "larkx", name: "LarkX Suite", line: "1 source" },
+  ],
+  reads: [
+    { id: "push", extension: "persona", title: "Pushed", push: true },
+    { id: "t.larkx/docs/list", extension: "larkx", title: "List docs" },
+  ],
+  sources: [
+    {
+      id: "s.sub_push_iphone",
+      read: "push",
+      kind: "subscription",
+      name: "My iPhone Notifications",
+      icon: "bell",
+      color: "orange",
+      line: "Receiving",
+      reading: true,
+      to: ["inbox"],
+      state: subscriptionSourceState("sub_push_iphone"),
+    },
+    {
+      id: "s.sub_larkx_rate",
+      read: "t.larkx/docs/list",
+      kind: "subscription",
+      name: "Team Wiki Updates",
+      icon: "doc",
+      color: "blue",
+      line: "Rate limited",
+      badge: { text: "Slowed down", tone: "caution" },
+      reading: true,
+      to: ["inbox", "kb"],
+      state: subscriptionSourceState("sub_larkx_rate"),
+    },
+  ],
+  destinations: [
+    { id: "inbox", name: "Inbox", line: "2 sources · 2 reading", sources: 2, reading: 2 },
+    { id: "kb", name: "Knowledge", line: "1 source · 1 reading", sources: 1, reading: 1 },
+  ],
 };
 
 function stubFullHubFetch(overrides?: {
@@ -329,10 +455,14 @@ function stubFullHubFetch(overrides?: {
   extensions?: HubExtension[];
   channels?: Channel[];
   connectors?: HubConnector[];
+  subscriptions?: HubSubscription[];
+  graph?: SourcesGraph;
+  inboxTodoForward?: boolean;
 }) {
+  const forwarding = new Map<string | null, boolean>();
   vi.stubGlobal(
     "fetch",
-    vi.fn((input: RequestInfo | URL) => {
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), "http://hub.example.com").pathname;
       if (path === "/api/v1/extensions" || path === "/api/v1/plugins") {
         return Promise.resolve(json({ extensions: overrides?.extensions ?? SAMPLE_EXTENSIONS, markets: overrides?.markets ?? true }));
@@ -342,6 +472,24 @@ function stubFullHubFetch(overrides?: {
       }
       if (path === "/api/v1/connectors") {
         return Promise.resolve(json({ connectors: overrides?.connectors ?? SAMPLE_CONNECTORS }));
+      }
+      if (path === "/api/v1/subscriptions") {
+        return Promise.resolve(json({ subscriptions: overrides?.subscriptions ?? [], features: { deliver: true, generate: true } }));
+      }
+      if (path === "/api/v1/subscriptions/-/graph") {
+        return Promise.resolve(json(overrides?.graph ?? SAMPLE_GRAPH));
+      }
+      if (path === "/api/v1/subscriptions/-/ui") {
+        const owner = new Headers(init?.headers).get("X-Persona-Manager") ?? "default";
+        return Promise.resolve(json({ view: { sections: [{ items: [{ type: "text", text: `Sources for ${owner}` }] }] } }));
+      }
+      if (path === "/api/v1/assistant") {
+        const manager = new Headers(init?.headers).get("X-Persona-Manager");
+        if (init?.method === "PUT" && init.body) {
+          const parsed = JSON.parse(String(init.body)) as { inbox_todo_forward?: boolean };
+          if (typeof parsed.inbox_todo_forward === "boolean") forwarding.set(manager, parsed.inbox_todo_forward);
+        }
+        return Promise.resolve(json({ inbox_todo_forward: forwarding.get(manager) ?? overrides?.inboxTodoForward ?? false }));
       }
       if (path === "/api/v1/mail/accounts") {
         return overrides?.failMail
@@ -357,12 +505,14 @@ function stubFullHubFetch(overrides?: {
           : Promise.resolve(json({ enabled: true, has_secret: true, connected: true, bot_name: "Feishu Bot" }));
       }
       if (path === "/api/v1/managers") {
-        return Promise.resolve(json({ default: "assistant", managers: [{ id: "assistant", name: "助手", online: true, builtin: true }] }));
+        return Promise.resolve(json({ default: "assistant", managers: [{ id: "assistant", name: "助手", online: true, builtin: true }, { id: "work", name: "Work", online: true }] }));
       }
       return Promise.resolve(json({}));
     }),
   );
 }
+
+registerTestMailbox();
 
 describe("buildIntegrationCatalog deduplication and capability classification", () => {
   it("deduplicates multi-capability extensions and built-in services into single canonical rows", () => {
@@ -413,6 +563,99 @@ describe("buildIntegrationCatalog deduplication and capability classification", 
     expect(resolveIntegrationTarget(parseIntegrationsSub("connector:larkx"), items, null)).toEqual(larkxMatches[0]!.target);
     expect(isIntegrationRowSelected("channel:larkx-bot", larkxMatches[0]!, null)).toBe(true);
     expect(isIntegrationRowSelected("connector:larkx", larkxMatches[0]!, null)).toBe(true);
+  });
+
+  it("attaches deduplicated subscription alerts to owning integrations and adds standalone push sources under data", () => {
+    const extraSubs: HubSubscription[] = [
+      ...SAMPLE_SUBSCRIPTIONS,
+      {
+        id: "sub_larkx_recipe",
+        connector: "larkx",
+        extension: "larkx",
+        source: "tasks",
+        source_name: "LarkX Tasks",
+        label: "Team Tasks",
+        recipe_origin: "model",
+        to_inbox: true,
+        to_kb: false,
+        state: "needs_recipe",
+      },
+      {
+        id: "sub_lark_disc",
+        connector: "lark",
+        extension: "",
+        source: "messages",
+        source_name: "Lark Messages",
+        label: "Lark Messages",
+        recipe_origin: "persona",
+        to_inbox: true,
+        to_kb: false,
+        state: "not_connected",
+      },
+    ];
+    const items = buildIntegrationCatalog({
+      extensions: SAMPLE_EXTENSIONS,
+      channels: SAMPLE_CHANNELS,
+      connectors: SAMPLE_CONNECTORS,
+      subscriptions: extraSubs,
+      hasMail: true,
+      hasLark: true,
+      hasFeishuBot: true,
+      mailAccounts: [{ id: "m1", email: "me@example.com", status: "ok" }],
+      larkStatus: { configured: true, connected: true, name: "Workspace" },
+      feishuBotStatus: { enabled: true, has_secret: true, connected: true, bot_name: "Feishu Bot" } as never,
+    });
+
+    // No duplicate rows for github, larkx, mail, or lark.
+    expect(items.filter((it) => it.id === "github")).toHaveLength(1);
+    expect(items.filter((it) => it.id === "larkx")).toHaveLength(1);
+    expect(items.filter((it) => it.id === "mail")).toHaveLength(1);
+    expect(items.filter((it) => it.id === "lark")).toHaveLength(1);
+
+    // GitHub carries red failing alert with error detail.
+    const github = items.find((it) => it.id === "github")!;
+    expect(github.tone).toBe("red");
+    expect(github.alertTone).toBe("red");
+    expect(github.subscriptionAlert).toMatchObject({
+      count: 1,
+      tone: "red",
+      state: "failing",
+      badgeText: t("settings-integrations.sub_alert_failing"),
+    });
+    expect(github.subtitle).toContain("API 502 Bad Gateway");
+
+    // LarkX carries orange alert prioritizing needs_recipe over rate_limited and reporting count 2.
+    const larkx = items.find((it) => it.id === "larkx")!;
+    expect(larkx.tone).toBe("orange");
+    expect(larkx.alertTone).toBe("orange");
+    expect(larkx.subscriptionAlert).toMatchObject({
+      count: 2,
+      tone: "orange",
+      state: "needs_recipe",
+      badgeText: t("settings-integrations.sub_alert_count", { count: 2 }),
+    });
+
+    // Lark carries orange not_connected alert.
+    const lark = items.find((it) => it.id === "lark")!;
+    expect(lark.tone).toBe("orange");
+    expect(lark.subscriptionAlert?.state).toBe("not_connected");
+
+    // Mail has only an "ok" subscription: normal visual untouched (no alert).
+    const mail = items.find((it) => it.id === "mail")!;
+    expect(mail.tone).toBe("green");
+    expect(mail.alertTone).toBeUndefined();
+    expect(mail.subscriptionAlert).toBeUndefined();
+
+    // Standalone push source appears once under "data" with canonical -sources/<state> route.
+    const pushItem = items.find((it) => it.id === "sub_push_iphone")!;
+    expect(pushItem).toBeDefined();
+    expect(pushItem.kind).toBe("source");
+    expect(pushItem.capabilities).toEqual(["data"]);
+    expect(pushItem.tone).toBe("green");
+    expect(pushItem.sourceState).toBe(subscriptionSourceState("sub_push_iphone"));
+    expect(filterIntegrationItems(items, "data").map((it) => it.id)).toContain("sub_push_iphone");
+    expect(filterIntegrationItems(items, "channels").map((it) => it.id)).not.toContain("sub_push_iphone");
+    expect(isIntegrationRowSelected(pushItem.sub, pushItem, null)).toBe(true);
   });
 });
 
@@ -498,7 +741,7 @@ describe("Integrations unified list view", () => {
     expect(compactFilters.classList.contains("flex-nowrap")).toBe(true);
     expect(compactFilters.classList.contains("flex-wrap")).toBe(false);
     expect(compactFilters.classList.contains("overflow-x-auto")).toBe(true);
-    expect(compactFilters.classList.contains("scrollbar-none")).toBe(true);
+    expect(compactFilters.classList.contains("integrations-chip-scroll")).toBe(true);
     for (const btn of compactFilters.querySelectorAll<HTMLButtonElement>("button")) {
       expect(btn.classList.contains("shrink-0")).toBe(true);
       expect(btn.classList.contains("whitespace-nowrap")).toBe(true);
@@ -600,6 +843,26 @@ describe("Integrations unified list view", () => {
     await flush();
     expect(currentSub).toBe("-market");
     expect(host.querySelector("[data-mock-market-catalog]")).not.toBeNull();
+  });
+
+  it("shows extensions while channels are pending and ignores a previous assistant's late response", async () => {
+    stubFullHubFetch();
+    const fetchNow = fetch;
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/channels")) {
+        return new Headers(init?.headers).has("X-Persona-Manager") ? Promise.resolve(json({ channels: [] })) : pending;
+      }
+      return fetchNow(input, init);
+    });
+    await act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    expect(host.querySelector('[data-integration-id="apps"]')).toBeNull();
+    expect(host.querySelector('[data-integration-id="nord-theme"]')).not.toBeNull();
+    expect(host.querySelector('[data-integrations-empty]')).toBeNull();
+    await act(async () => chooseManager("work"));
+    await act(async () => finish(json({ channels: SAMPLE_CHANNELS })));
+    expect(host.querySelector('[data-integration-id="apps"]')).toBeNull();
   });
 
   it("degrades gracefully on older hubs without extension_manager, channels, or connectors", async () => {
@@ -715,11 +978,70 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(region.classList.contains("overflow-y-auto")).toBe(true);
   });
 
+  it("keeps chip selection, reloads and legacy in-app navigation in sync with the URL", async () => {
+    stubFullHubFetch();
+    history.replaceState({ example: true }, "", "/settings?tab=connectors&manager=work");
+    const render = () => act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    const chip = (id: string) => host.querySelector<HTMLButtonElement>(`[data-integration-filter="${id}"]`)!;
+    await render();
+    expect(chip("data").getAttribute("aria-pressed")).toBe("true");
+    const length = history.length;
+    await act(async () => chip("all").click());
+    expect(location.search).toContain("manager=work");
+    expect(location.search).not.toContain("filter=");
+    expect(history.state).toEqual({ example: true });
+    expect(history.length).toBe(length);
+    await act(async () => root.render(null));
+    await render();
+    expect(chip("all").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => chip("tools").click());
+    expect(location.search).toContain("filter=tools");
+    await act(async () => navigate("/settings?tab=connectors"));
+    expect(chip("data").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => navigate("/settings?tab=extensions"));
+    expect(chip("all").getAttribute("aria-pressed")).toBe("true");
+    expect(location.search).toBe("?tab=integrations");
+  });
+
+  it("uses one view picker on phone and returns from a graph source through the Settings header", async () => {
+    state.phone = true;
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(350);
+    state.features.push("source_subscriptions", "inbox_sources", "inbox_sources_graph");
+    stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS });
+    history.replaceState(null, "", "/settings?tab=integrations&integration=-sources");
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    const byText = (text: string) => [...document.querySelectorAll("button")].find(b => b.textContent?.includes(text))!;
+    expect(host.querySelector("[data-integrations-view-switch]")).toBeNull();
+    expect(host.querySelectorAll(`[role="radiogroup"][aria-label="${t("subscriptions.view")}"]`)).toHaveLength(1);
+    await act(async () => vi.dynamicImportSettled());
+    await act(async () => byText("Team Wiki Updates").click());
+    await act(async () => byText(t("subscriptions.graph_open")).click());
+    expect(host.querySelector("[data-mock-extension-ui]")?.getAttribute("data-state")).toBe(subscriptionSourceState("sub_larkx_rate"));
+    expect(byText(t("subscriptions.view_graph"))).toBeUndefined();
+    await act(async () => {
+      const back = new Promise(resolve => addEventListener("popstate", resolve, { once: true }));
+      host.querySelector<HTMLButtonElement>("header button")!.click();
+      await back;
+    });
+    expect(location.search).toBe("?tab=integrations&integration=-sources");
+    expect(byText("Team Wiki Updates")).toBeDefined();
+  });
+
   it("locks the Settings content host to viewport height only in desktop integrations_v2 split-pane detail state", async () => {
     state.integrationsV2 = true;
     state.twoCol = true;
     state.phone = false;
     stubFullHubFetch();
+
+    let hostWidth = 920;
+    let resized!: () => void;
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(() => hostWidth);
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private notify: () => void) {}
+      observe(el: Element) { if (el.matches('[role="region"]')) resized = this.notify; }
+      disconnect() {}
+    });
 
     // 1. Desktop list-only view: single natural scroll container (not viewport-locked split host).
     history.replaceState(null, "", "/settings?tab=integrations");
@@ -748,6 +1070,15 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(host.querySelector("[data-integrations-list-scroll]")).not.toBeNull();
     expect(host.querySelector("[data-integrations-detail-scroll]")).not.toBeNull();
     expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
+
+    // Both sidebars are outside the measured host. The 1080px, 1200px and 1280px layouts leave 552px, 672px and 752px.
+    for (const width of [552, 672, 739, 740, 752, 912]) {
+      hostWidth = width;
+      await act(async () => resized());
+      expect(splitRegion.hasAttribute("data-integrations-split-host")).toBe(width >= 740);
+      expect(!!host.querySelector("[data-integrations-detail-scroll]")).toBe(width >= 740);
+    }
+    hostWidth = 560;
 
     // 3. Narrow desktop (< 900px, twoCol=false, phone=false): single natural scroller, Back button kept.
     state.twoCol = false;
@@ -779,5 +1110,322 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(host.querySelector("[data-integrations-detail-scroll]")).toBeNull();
     expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
     expect(host.querySelector("header button:first-child")).not.toBeNull();
+  });
+
+  it("surfaces subscription alerts, standalone push sources, and the lazy Data Flow view with SourcesGraph + InboxForwardSetting", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = true;
+    state.phone = false;
+    state.features = ["channels", "extension_manager", "connectors", "lark", "source_subscriptions", "inbox_sources", "inbox_sources_graph"];
+    stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS, inboxTodoForward: false });
+
+    const origClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 960 });
+
+    try {
+      history.replaceState(null, "", "/settings?tab=integrations");
+      await act(async () => {
+        root.render(<Settings onToggleSidebar={() => {}} />);
+      });
+      await flush();
+
+      // Sidebar folds channels/connectors/extensions/sources 4-in-1 into Integrations & Extensions (#15424).
+      const navButtons = [...host.querySelectorAll<HTMLButtonElement>("nav button")].map((b) => b.textContent ?? "");
+      expect(navButtons).toContain(t("settings-nav.tab_integrations"));
+      expect(navButtons).not.toContain(t("settings-nav.tab_channels"));
+      expect(navButtons).not.toContain(t("settings-nav.tab_connectors"));
+      expect(navButtons).not.toContain(t("settings-nav.tab_extensions"));
+      expect(navButtons).not.toContain(t("settings-nav.tab_sources"));
+
+      // Top view switch ("Integrations / Data flow") and persistent Market button both visible.
+      const viewSwitch = host.querySelector<HTMLElement>("[data-integrations-view-switch]")!;
+      expect(viewSwitch).not.toBeNull();
+      expect(host.querySelector('[data-testid="integrations-market-entry"]')).not.toBeNull();
+
+      // Deduplicated subscription alerts shown on github (red failing) and larkx (orange rate_limited); mail (ok) untouched.
+      const githubRow = host.querySelector<HTMLButtonElement>('[data-integration-id="github"]')!;
+      expect(githubRow.getAttribute("data-integration-sub-alert")).toBe("failing");
+      expect(githubRow.querySelector('[data-subscription-alert-badge="failing"]')).not.toBeNull();
+      expect(githubRow.textContent).toContain("API 502 Bad Gateway");
+
+      const larkxRow = host.querySelector<HTMLButtonElement>('[data-integration-id="larkx"]')!;
+      expect(larkxRow.getAttribute("data-integration-sub-alert")).toBe("rate_limited");
+      expect(larkxRow.querySelector('[data-subscription-alert-badge="rate_limited"]')).not.toBeNull();
+
+      const mailRow = host.querySelector<HTMLButtonElement>('[data-integration-id="mail"]')!;
+      expect(mailRow.getAttribute("data-integration-sub-alert")).toBeNull();
+      expect(mailRow.querySelector("[data-subscription-alert-badge]")).toBeNull();
+
+      // Standalone push source is listed under Push sources and included in the Data sources filter.
+      const pushRow = host.querySelector<HTMLButtonElement>('[data-integration-id="sub_push_iphone"]')!;
+      expect(pushRow).not.toBeNull();
+      expect(pushRow.dataset.integrationKind).toBe("source");
+
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-integration-filter="data"]')!.click());
+      await flush();
+      expect(host.querySelector('[data-integration-id="sub_push_iphone"]')).not.toBeNull();
+
+      // Clicking the standalone push source opens its detail pane in desktop split-pane via lazy SourcesUI with exact state.
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-integration-id="sub_push_iphone"]')!.click());
+      await flush();
+      expect(host.querySelector("[data-integrations-split]")).not.toBeNull();
+      const pushDetail = host.querySelector<HTMLElement>('[data-integration-detail="sub_push_iphone"]')!;
+      expect(pushDetail).not.toBeNull();
+      const pushExtUI = pushDetail.querySelector<HTMLElement>('[data-mock-extension-ui][data-extension="-subscriptions"]')!;
+      expect(pushExtUI).not.toBeNull();
+      expect(pushExtUI.dataset.state).toBe(subscriptionSourceState("sub_push_iphone"));
+      expect(host.querySelector('[data-integration-id="sub_push_iphone"]')?.getAttribute("aria-current")).toBe("true");
+      // Split-pane compact header still keeps both view switch and Market button.
+      expect(host.querySelector("[data-integrations-list-header] [data-integrations-view-switch]")).not.toBeNull();
+      expect(host.querySelector('[data-integrations-list-header] [data-testid="integrations-market-entry"]')).not.toBeNull();
+
+      // Switching to the Data Flow view exits split-pane into wide single scroll, keeps Market button,
+      // and lazily renders SourcesGraph + untouched InboxForwardSetting.
+      const dataFlowBtn = [...host.querySelectorAll<HTMLButtonElement>('[data-integrations-view-switch] [role="radio"]')].find(
+        (b) => b.textContent?.includes(t("settings-integrations.view_sources")),
+      )!;
+      await act(async () => dataFlowBtn.click());
+      await flush();
+      expect(location.search).toContain("integration=-sources");
+      expect(host.querySelector("[data-integrations-sources-view]")).not.toBeNull();
+      const dataFlowRegion = host.querySelector<HTMLElement>('[role="region"]')!;
+      expect(dataFlowRegion.hasAttribute("data-integrations-split-host")).toBe(false);
+      expect(dataFlowRegion.classList.contains("overflow-y-auto")).toBe(true);
+      expect(host.querySelector('[data-testid="integrations-market-entry"]')).not.toBeNull();
+
+      // SourcesGraph renders source nodes AND InboxForwardSetting switch is mounted untouched.
+      expect(host.textContent).toContain("My iPhone Notifications");
+      expect(host.textContent).toContain("Team Wiki Updates");
+      const forwardSwitch = host.querySelector<HTMLButtonElement>(
+        `[role="switch"][aria-label="${t("settings-assistantsettings.inbox_todo_forward")}"]`,
+      )!;
+      expect(forwardSwitch).not.toBeNull();
+      expect(forwardSwitch.getAttribute("aria-checked")).toBe("false");
+      await act(async () => forwardSwitch.click());
+      await flush();
+      expect(forwardSwitch.getAttribute("aria-checked")).toBe("true");
+
+      // Clicking a source node in SourcesGraph -> "Open Settings" drills into that source's page and returns smoothly.
+      const sourceNodeBtn = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+        b.textContent?.includes("Team Wiki Updates"),
+      )!;
+      await act(async () => sourceNodeBtn.click());
+      await flush();
+      const openSettingsBtn = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+        b.textContent?.includes(t("subscriptions.graph_open")),
+      )!;
+      expect(openSettingsBtn).not.toBeNull();
+      await act(async () => openSettingsBtn.click());
+      await flush();
+      const drilledExtUI = host.querySelector<HTMLElement>('[data-mock-extension-ui][data-extension="-subscriptions"]')!;
+      expect(drilledExtUI.dataset.state).toBe(subscriptionSourceState("sub_larkx_rate"));
+
+      const backToGraphBtn = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+        b.textContent?.includes(t("subscriptions.view_graph")),
+      )!;
+      await act(async () => backToGraphBtn.click());
+      await flush();
+      expect(host.textContent).toContain("My iPhone Notifications");
+
+      // Switching back to "Integrations" returns to the list view cleanly.
+      const listViewBtn = [...host.querySelectorAll<HTMLButtonElement>('[data-integrations-view-switch] [role="radio"]')].find(
+        (b) => b.textContent?.includes(t("settings-integrations.view_list")),
+      )!;
+      await act(async () => listViewBtn.click());
+      await flush();
+      expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
+      expect(host.querySelector("[data-integrations-sources-view]")).toBeNull();
+    } finally {
+      if (origClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", origClientWidth);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+    }
+  });
+
+  it("hides the Data Flow view switcher when hub lacks inbox_sources and redirects -sources to legacy sources when integrations_v2 is off", async () => {
+    state.integrationsV2 = true;
+    state.features = ["channels", "extension_manager", "connectors", "lark"];
+    stubFullHubFetch();
+    history.replaceState(null, "", "/settings?tab=integrations");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    expect(host.querySelector("[data-integrations-view-switch]")).toBeNull();
+
+    // Flip integrations_v2 off while at -sources: redirects cleanly to legacy ?tab=sources and restores standalone nav.
+    state.integrationsV2 = false;
+    state.features = ["channels", "extension_manager", "connectors", "lark", "inbox_sources"];
+    history.replaceState(null, "", "/settings?tab=integrations&integration=-sources");
+    await act(async () => root.render(null));
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    expect(location.pathname + location.search).toBe("/settings?tab=sources");
+    const restoredNav = [...host.querySelectorAll<HTMLButtonElement>("nav button")].map((b) => b.textContent ?? "");
+    expect(restoredNav).toContain(t("settings-nav.tab_sources"));
+    expect(restoredNav).not.toContain(t("settings-nav.tab_integrations"));
+
+    // Flip back to integrations_v2=true from /settings?tab=sources: redirects straight into Data Flow view.
+    state.integrationsV2 = true;
+    state.features = ["channels", "extension_manager", "connectors", "lark", "source_subscriptions", "inbox_sources", "inbox_sources_graph"];
+    stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS, inboxTodoForward: false });
+    history.replaceState(null, "", "/settings?tab=sources");
+    await act(async () => root.render(null));
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    expect(location.pathname + location.search).toBe("/settings?tab=integrations&integration=-sources");
+    expect(host.querySelector("[data-integrations-sources-view]")).not.toBeNull();
+    const foldedNav = [...host.querySelectorAll<HTMLButtonElement>("nav button")].map((b) => b.textContent ?? "");
+    expect(foldedNav).toContain(t("settings-nav.tab_integrations"));
+    expect(foldedNav).not.toContain(t("settings-nav.tab_sources"));
+
+    // Deep link /settings/sources/<encodedState> redirects into push-source detail inside Integrations.
+    const pushState = subscriptionSourceState("sub_push_iphone");
+    const encodedPushState = encodeURIComponent(pushState);
+    history.replaceState(null, "", `/settings/sources/${encodedPushState}`);
+    await act(async () => root.render(null));
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    expect(location.pathname + location.search).toBe(
+      `/settings?tab=integrations&integration=${encodeURIComponent(`-sources/${encodedPushState}`)}`,
+    );
+    const pushExtUI = host.querySelector<HTMLElement>('[data-mock-extension-ui][data-extension="-subscriptions"]')!;
+    expect(pushExtUI).not.toBeNull();
+    expect(pushExtUI.dataset.state).toBe(pushState);
+  });
+
+  it("widens the Settings container to 1680px when an extension plugin_page requests wide mode and restores 1120px on exit", async () => {
+    state.integrationsV2 = true;
+    state.features = ["channels", "extension_manager", "connectors", "lark"];
+    stubFullHubFetch();
+    extViewMock.onWide = undefined;
+    history.replaceState(null, "", "/settings?tab=integrations&integration=demo-ext%2Fui%2Ftopology");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+
+    const extUI = host.querySelector<HTMLElement>('[data-mock-extension-ui][data-extension="demo-ext"][data-ui="topology"]')!;
+    expect(extUI).not.toBeNull();
+    const container = () => host.querySelector<HTMLElement>('[role="region"] > div')!;
+    expect(container().className).toContain("max-w-[1120px]");
+
+    await act(async () => extViewMock.onWide?.(true));
+    expect(container().className).toContain("max-w-[1680px]");
+
+    await act(async () => extViewMock.onWide?.(false));
+    expect(container().className).toContain("max-w-[1120px]");
+  });
+
+  it("forwards IntegrationDetail crosslinks through Settings to Assistant repositories and Knowledge items", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = true;
+    state.phone = false;
+    state.features = ["channels", "extension_manager", "connectors", "lark"];
+    stubFullHubFetch();
+
+    history.replaceState(null, "", "/settings?tab=integrations&integration=builtin%3Agithub");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+
+    const reposBtn = host.querySelector<HTMLButtonElement>("[data-mock-detail-repos]")!;
+    expect(reposBtn).not.toBeNull();
+    await act(async () => reposBtn.click());
+    await flush();
+    expect(location.pathname + location.search).toBe("/settings?tab=persona");
+    expect(host.querySelector('[data-page="persona"]')).not.toBeNull();
+
+    history.replaceState(null, "", "/settings?tab=integrations&integration=builtin%3Amail");
+    await act(async () => root.render(null));
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+
+    const kbBtn = host.querySelector<HTMLButtonElement>("[data-mock-detail-kb]")!;
+    expect(kbBtn).not.toBeNull();
+    await act(async () => kbBtn.click());
+    await flush();
+    expect(location.pathname + location.search).toBe("/settings?tab=knowledge");
+    expect(host.querySelector('[data-page="knowledge-selection"]')).not.toBeNull();
+  });
+});
+
+describe("assistant isolation across integration routes", () => {
+  function headersFor(path: string, method: string) {
+    return vi.mocked(fetch).mock.calls
+      .filter(([url, init]) => String(url).split("?")[0] === `/api/v1${path}` && (init?.method ?? "GET") === method)
+      .map(([, init]) => new Headers(init?.headers).get("X-Persona-Manager"));
+  }
+
+  async function clickOption(group: string, label: string) {
+    await flush();
+    const button = [...host.querySelectorAll<HTMLButtonElement>(`${group} [role="radio"]`)].find((el) => el.textContent === label);
+    expect(button).toBeDefined();
+    await act(async () => button!.click());
+    await flush();
+  }
+
+  beforeEach(() => {
+    state.features.push("source_subscriptions", "inbox_sources", "inbox_sources_graph");
+    stubFullHubFetch();
+  });
+
+  it("retains the chosen assistant when switching list → data flow → list", async () => {
+    chooseManager("work");
+    state.assistant = "work";
+    history.replaceState(null, "", "/settings?tab=integrations");
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await clickOption("[data-integrations-view-switch]", t("settings-integrations.view_sources"));
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-sources@work");
+    expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
+    await clickOption("[data-integrations-view-switch]", t("settings-integrations.view_list"));
+    expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
+    expect(chosenManager()).toBe("work");
+    expect(managerHeaderFor("/subscriptions/-/graph")).toBeUndefined();
+  });
+
+  it("uses the chosen assistant for an unqualified Data flow link and a market install", async () => {
+    chooseManager("work");
+    const onOpen = vi.fn();
+    await act(async () => root.render(<Integrations open="-sources" onOpen={onOpen} />));
+    await flush();
+    expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
+    await act(async () => root.render(<Integrations open="-market/official/demo-ext" onOpen={onOpen} />));
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-install]")!.click());
+    expect(onOpen).toHaveBeenCalledWith("ext:demo-ext@work");
+  });
+
+  it.each([true, false])("reads and saves forwarding for the linked assistant with Labs enabled=%s", async (v2) => {
+    state.integrationsV2 = v2;
+    history.replaceState(null, "", v2 ? "/settings?tab=integrations&integration=-sources%40work" : "/settings?tab=sources&manager=work");
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    expect(headersFor("/assistant", "GET")).toEqual(["work"]);
+    const toggle = host.querySelector<HTMLButtonElement>('[data-settings-group="inbox-todo-forward"] [role="switch"]')!;
+    await act(async () => toggle.click());
+    expect(headersFor("/assistant", "PUT")).toEqual(["work"]);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    if (v2) await clickOption('[data-settings-group="inbox-sources"]', t("subscriptions.view_list"));
+    expect(headersFor("/subscriptions/-/ui", "POST")).toEqual(["work"]);
+    expect(host.textContent).toContain("Sources for work");
+    if (!v2) await clickOption('[data-settings-group="inbox-sources"]', t("subscriptions.view_graph"));
+    expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
+    expect(chosenManager()).toBeNull();
+  });
+
+  it("reloads the same push source page when only the route owner changes", async () => {
+    const onOpen = vi.fn();
+    await act(async () => root.render(<Integrations open="-sources@work/source" onOpen={onOpen} />));
+    await act(async () => root.render(<Integrations open="-sources/source" onOpen={onOpen} />));
+    expect(headersFor("/subscriptions/-/ui", "POST")).toEqual(["work", null]);
   });
 });

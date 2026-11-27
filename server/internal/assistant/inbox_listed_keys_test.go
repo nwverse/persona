@@ -21,6 +21,8 @@ var listedDrops = map[string]string{
 	// The item's bookkeeping, persisted, not listed (inbox.go: InboxItem).
 	"context":                 "the conversation as text, for triage and Hand to AI; GET /api/v1/inbox/{id} returns it",
 	"last":                    "bookkeeping: the newest message position or mail uid",
+	"external_asked":          "bookkeeping: the source receipt that owns the to-do confirmation",
+	"external_route_of":       "bookkeeping: the source version reserved for scoped routing",
 	"triaged_at":              "bookkeeping: Last when it was triaged",
 	"body_of":                 "bookkeeping: Last when a mail's full text was read",
 	"judged_at":               "bookkeeping: Last when model 2 looked at it",
@@ -93,8 +95,18 @@ var listedDrops = map[string]string{
 // listedDropsOpenPRs are paths open PRs add to the item and leave out of the list: listed here so those PRs merge
 // without touching this file. Move an entry to listedDrops when its PR lands; drop it when the PR closes.
 var listedDropsOpenPRs = map[string]string{
-	"tier_was":       "#4512: what the item had before the user moved it, for Undo",
-	"reply_approval": "#9790, #10580, #10587: the overdue reply reminder's receipt",
+	"visibility_content_refs":              "#11902: internal visibility provenance for merged and undone content, not client content",
+	"tier_was":                             "#4512: what the item had before the user moved it, for Undo",
+	"reply_approval":                       "#9790, #10580, #10587: the overdue reply reminder's receipt",
+	"reply_content_sources":                "#11901: internal member-text provenance for reply-policy scope after merge and Undo",
+	"reply_context_truncated":              "#11901: internal incomplete-classification-input marker, not client content",
+	"reply_instruction":                    "#11901: durable owner rewrite provenance, not another client-visible chain entry",
+	"rejected_reply_draft":                 "#11901: rejected on-demand exact-text provenance, not a client draft",
+	"rejected_reply_drafts":                "#11901: every rejected on-demand exact text, not client drafts",
+	"suggestion.on_demand":                 "#11901: distinguishes an on-demand generated draft from owner-authored text",
+	"suggestion.reply_publication_pending": "#11901: internal two-phase durable-publication marker",
+	"suggestion.reply_instruction":         "#11901: binds authorization to the exact instructed generated text",
+	"suggestion.reply_publication_failed":  "#11901: fail-closed unpublished-model-text tombstone, not client content",
 }
 
 // listed() lists every key of a filled item but listedDrops, adds none, and computes the keys it owns (status, now,
@@ -159,6 +171,18 @@ func TestListedKeys(t *testing.T) {
 		if !slices.Contains(jsonPaths(t, open.listed()), key) {
 			t.Errorf("listed() does not write %s for the open item", key)
 		}
+	}
+}
+
+func TestInboxVisibilityReview12ListedRedactsVisibilityContentRefs(t *testing.T) {
+	refs := []InboxMergeRef{{ID: "synthetic-private-member", Source: "synthetic-private", Title: "SYNTHETIC-PRIVATE-TITLE"}}
+	it := &InboxItem{ID: "synthetic-survivor", VisibilityContentRefs: refs}
+	listed := it.listed()
+	if listed.VisibilityContentRefs != nil {
+		t.Errorf("listed() exposed visibility content refs: %+v", listed.VisibilityContentRefs)
+	}
+	if len(it.VisibilityContentRefs) != 1 || it.VisibilityContentRefs[0] != refs[0] {
+		t.Errorf("listed() changed the stored item's visibility content refs: %+v", it.VisibilityContentRefs)
 	}
 }
 

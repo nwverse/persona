@@ -96,7 +96,7 @@ describe("splitting and running an agent", () => {
     const agent = by(nodeActions(tab, d), "node-agent");
     expect(typeof agent.children).toBe("function");
     const list = await (agent.children as () => Promise<MenuItem[]>)();
-    expect(list.map((i) => i.label)).toEqual(["claude", "work"]); // a Codex launcher needs a first message
+    expect(list.map((i) => i.label)).toEqual(["Claude Code", "work"]); // a Codex launcher needs a first message
     expect(list[1].hint).toBe("m1");
     await list[1].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "work" });
@@ -117,7 +117,7 @@ describe("splitting and running an agent", () => {
       ]),
     });
     const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
-    expect(list.map((i) => i.label)).toEqual(["claude", "codex"]);
+    expect(list.map((i) => i.label)).toEqual(["Claude Code", "Codex"]);
     await list[1].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "codex" });
     // its waiting row opens, where the first message goes (docs/integrations/codex.md "Starting without a first message")
@@ -133,7 +133,7 @@ describe("splitting and running an agent", () => {
       ]),
     });
     const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
-    expect(list.map((i) => i.label)).toEqual(["claude"]);
+    expect(list.map((i) => i.label)).toEqual(["Claude Code"]);
   });
 
   it("names a provider by its display name, its ID before the model at the row's end; an rc alias by its ID (#5029)", async () => {
@@ -142,7 +142,7 @@ describe("splitting and running an agent", () => {
     expect(list.map((i) => [i.label, i.hint])).toEqual([["我的中转 站", "relay-example-com · glm-5"], ["cc_glm", undefined]]);
     await list[0].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "relay-example-com" });
-    expect(d.notify).toHaveBeenCalledWith("已在窗格里启动 我的中转 站", "ok");
+    expect(d.notify).toHaveBeenCalledWith("已在此终端启动 我的中转 站", "ok");
   });
 
   it("stays where it is when the answer names no session", async () => {
@@ -172,7 +172,7 @@ describe("splitting and running an agent", () => {
     });
     const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
     // usable first (still being retried by the hub counts: offered as before), the blocked one after a line, with why
-    expect(list.map((i) => i.label)).toEqual(["claude", "slow", "work"]);
+    expect(list.map((i) => i.label)).toEqual(["Claude Code", "slow", "work"]);
     expect(list[2].detail).toBe("这台电脑的终端里用不了");
     expect(list[2].divider).toBe(true);
     expect(list[0].detail).toBeUndefined();
@@ -253,7 +253,7 @@ describe("read-only items", () => {
     const d = deps();
     const space: MenuNode = { kind: "workspace", mid: "m1", host: "herdr", label: "proj", workspaceId: "w1", cwd: "/home/me/proj" };
     const labels = (node: MenuNode) => nodeActions(node, d).filter((i) => i.icon === "copy").map((i) => i.label);
-    expect(labels(pane)).toEqual(["复制目录路径", "复制会话 ID", "复制窗格 ID"]);
+    expect(labels(pane)).toEqual(["复制目录路径", "复制会话 ID", "复制终端 ID"]);
     expect(labels(tab)).toEqual(["复制目录路径", "复制标签页 ID"]);
     expect(labels(space)).toEqual(["复制目录路径", "复制空间 ID"]);
     expect(labels({ kind: "machine", mid: "m1" })).toEqual(["复制机器 ID"]);
