@@ -257,6 +257,8 @@ type Item struct {
 	// Wake marks a background task's notice that started new work after the agent had finished its turn
 	// (not one absorbed mid-turn): the exchange before it is over and its last words are an answer.
 	Wake bool `json:"wake,omitempty"`
+	// NativeLoopID identifies the runtime schedule that fired on a wake item.
+	NativeLoopID string `json:"native_loop_id,omitempty"`
 	// Narration marks public progress text (Claude narration or Codex commentary), including on unfolded pages.
 	Narration bool `json:"narration,omitempty"`
 	// From names the Claude session that sent this message (cross-session messaging), not the user.

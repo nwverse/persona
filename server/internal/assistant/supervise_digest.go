@@ -1035,6 +1035,10 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 				g.Detail = note
 			}
 		}
+	case sigLoopNoop:
+		if current, ok := s.nativeLoopNoopSignal(ctx, t); !ok || current.Key != g.Key {
+			return prompts.SuperviseEntry{}, false
+		}
 	case sigNoProgress:
 		if st != "" || !s.noProgressHolds(g) {
 			return prompts.SuperviseEntry{}, false // progress came, or it was parked or reviewed, meanwhile
