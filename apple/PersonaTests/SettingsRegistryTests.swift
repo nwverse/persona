@@ -71,6 +71,30 @@ struct SettingsRegistryTests {
         for (id, row) in expected { #expect(ids[id] == row, "\(id)") }
     }
 
+    @Test func moduleRowsAndSearchFollowThePublishingHub() throws {
+        let hub = FakeHub()
+        let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "settings-modules-" + UUID().uuidString))
+        model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
+        model.connectOnly(ServerConfig(url: URL(string: "http://127.0.0.1:1")!, token: "synthetic"))
+        let meetings = try #require(SettingsCatalog.entries.first { $0.id == "meetings" })
+        let health = try #require(SettingsCatalog.entries.first { $0.id == "health" })
+        // No hello yet, and an older hub without the modules marker, keep today's entries.
+        #expect(meetings.shows(in: model) && health.shows(in: model))
+        for (features, expected) in [
+            (["modules", "module.recording", "module.health"], true),
+            (["modules"], false),
+            (["file_upload"], true),
+        ] {
+            model.handle(.hello(HubHello(features: features)), group: "")
+            #expect(meetings.shows(in: model) == expected)
+            #expect(health.shows(in: model) == expected)
+            #expect(SettingsCatalog.rows(.advanced, in: .assistant, model).contains { $0.id == "meetings" } == expected)
+            #expect(SettingsCatalog.rows(.advanced, in: .device, model).contains { $0.id == "health" } == expected)
+            #expect(SettingsCatalog.search(meetings.title, for: model).contains { $0.id == "meetings" } == expected)
+            #expect(SettingsCatalog.search(health.title, for: model).contains { $0.id == "health" } == expected)
+        }
+    }
+
     /// In demo mode no hub is paired: its connection, version and assistants are left out; Avatar and Devices & Pairing stay.
     @Test func demoModeLeavesOutTheRowsThatNeedAPairedHub() throws {
         let hub = FakeHub()
