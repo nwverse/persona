@@ -37,7 +37,7 @@ func putRcLaunchers(t *testing.T, s *Service, seen map[string][]proto.Launcher) 
 	}
 }
 
-// 1. An rc-file or companion launcher names its agent; one named after an agent runs it.
+// Defect 1: an rc-file or companion launcher names its agent; one named after an agent runs it.
 func TestLauncherProviderReadsRcFileLaunchers(t *testing.T) {
 	s, _ := routingRig(t)
 	ctx := context.Background()
@@ -64,7 +64,7 @@ func TestLauncherProviderReadsRcFileLaunchers(t *testing.T) {
 	}
 }
 
-// 1 end to end: an rc-file agy launcher reads the antigravity account's windows.
+// Defect 1 end to end: an rc-file agy launcher reads the antigravity account's windows.
 func TestAgyCandidateReadsAntigravityHeadroom(t *testing.T) {
 	s, d := routingRig(t)
 	ctx := context.Background()
@@ -96,7 +96,7 @@ func antigravityAccount(now time.Time) proto.UsageAccount {
 // gemini7dHeadroom is that reading's binding window, the weekly one: 5/7 × 90 − 54.5 points.
 var gemini7dHeadroom = 5.0/7*90 - 54.5
 
-// 2. An unused window with no reset time is one that has just reset; a used one without a reset stays unknown.
+// Defect 2: an unused window with no reset time is one that has just reset; a used one without a reset stays unknown.
 func TestWindowHeadroomUnusedWithoutReset(t *testing.T) {
 	now := time.Date(2026, 11, 26, 7, 35, 0, 0, time.UTC)
 	for _, c := range []struct {
@@ -119,7 +119,7 @@ func TestWindowHeadroomUnusedWithoutReset(t *testing.T) {
 	}
 }
 
-// 3. A quota_pool launcher counts only its gateway's accounts, never a computer's own subscription of the provider.
+// Defect 3: a quota_pool launcher counts only its gateway's accounts, never a computer's own subscription of the provider.
 func TestPoolHeadroomReadsOnlyThePoolsAccounts(t *testing.T) {
 	s, d := routingRig(t)
 	ctx := context.Background()
@@ -144,7 +144,7 @@ func TestPoolHeadroomReadsOnlyThePoolsAccounts(t *testing.T) {
 	}
 }
 
-// 3. A pool whose accounts carry no window numbers is judged from the gateway's account list.
+// Defect 3: a pool whose accounts carry no window numbers is judged from the gateway's account list.
 func TestPoolHeadroomFallsBackToTheInventory(t *testing.T) {
 	s, d := routingRig(t)
 	ctx := context.Background()
@@ -181,7 +181,7 @@ func TestPoolHeadroomFallsBackToTheInventory(t *testing.T) {
 	}
 }
 
-// 3. A launcher with no pool whose provider has no window reading is judged from the provider's capacity.
+// Defect 3: a launcher with no pool whose provider has no window reading is judged from the provider's capacity.
 func TestHeadroomFallsBackToCapacity(t *testing.T) {
 	s, d := routingRig(t)
 	ctx := context.Background()
@@ -209,7 +209,7 @@ func TestHeadroomFallsBackToCapacity(t *testing.T) {
 	}
 }
 
-// 4. One sample on another candidate no longer locks an untried one out.
+// Defect 4: one sample on another candidate no longer locks an untried one out.
 func TestUntriedCandidateIsNotLockedOut(t *testing.T) {
 	tried := candidateStats{N: 1, MinutesP50: 110, FirstPass: 1}
 	in := []scoreInput{
