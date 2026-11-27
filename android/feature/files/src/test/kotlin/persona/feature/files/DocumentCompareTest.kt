@@ -132,6 +132,47 @@ class DocumentCompareTest {
             DocumentText.units("pptx", deck, Names))
     }
 
+    @Test fun pptxOutOfRangeIndentLevelsClampSafelyWithoutCrashOrTruncation() {
+        val p = "xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+        val rel = "xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\""
+        val slideXml = """<p:sld $p><p:cSld><p:spTree><p:sp><p:txBody>
+            <a:p><a:pPr lvl="-3"/><a:r><a:t>Negative</a:t></a:r></a:p>
+            <a:p><a:pPr lvl="2"/><a:r><a:t>Normal</a:t></a:r></a:p>
+            <a:p><a:pPr lvl="2000000000"/><a:r><a:t>Huge</a:t></a:r></a:p>
+            <a:p><a:r><a:t>After</a:t></a:r></a:p>
+        </p:txBody></p:sp></p:spTree></p:cSld></p:sld>"""
+        val deck = zip(
+            "ppt/presentation.xml" to "<p:presentation $p><p:sldIdLst><p:sldId id=\"256\" r:id=\"rId1\"/></p:sldIdLst></p:presentation>",
+            "ppt/_rels/presentation.xml.rels" to "<Relationships $rel><Relationship Id=\"rId1\" Target=\"slides/slide1.xml\"/></Relationships>",
+            "ppt/slides/slide1.xml" to slideXml,
+        )
+        assertEquals(
+            listOf(DocUnit("S1", listOf("Negative", "    Normal", "  ".repeat(8) + "Huge", "After"))),
+            DocumentText.units("pptx", deck, Names),
+        )
+    }
+
+    @Test fun docxTableCellParagraphsJoinWithSpacesAndHandleNonPrefixedPageBreak() {
+        val doc = zip("word/document.xml" to """<document xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><body>
+            <tbl><tr ><tc>
+                <p><r><t>Line 1</t></r></p>
+                <p/>
+                <p><r><t>Line 2</t></r></p>
+            </tc><tc>
+                <p><r><t>Single</t></r></p>
+            </tc></tr></tbl>
+            <p><r><t>Page one</t><br type="page"/><t>Page two</t></r></p>
+        </body></document>""")
+        assertEquals(
+            listOf(
+                DocUnit("P1", listOf("Line 1 Line 2 | Single", "Page one")),
+                DocUnit("P2", listOf("Page two")),
+            ),
+            DocumentText.units("docx", doc, Names),
+        )
+    }
+
     @Test fun aWorkbookSheetBySheet() {
         val units = DocumentText.units("xlsx", SheetsTest.workbook(), Names)
         assertTrue(units.isNotEmpty())

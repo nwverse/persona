@@ -40,14 +40,16 @@ internal object DocumentText {
         Xml.parse(xml, object : DefaultHandler() {
             var tables = 0
             var paragraphs = 0 // nested: a text box's paragraphs are inside their paragraph
+            var cellParagraphs = 0 // separate counter inside table cells so paragraphs stay space-joined
             var runs = 0
             var skipped = 0 // inside w:del / w:instrText / mc:Fallback (a copy of the text box above it)
             val text = StringBuilder()
             var row: MutableList<String>? = null
             val cell = StringBuilder()
+            val cellPara = StringBuilder()
             var inText = false
 
-            fun here() = if (tables > 0) cell else text
+            fun here() = if (tables > 0) cellPara else text
 
             /** A page break inside a paragraph: what came before it stays on this page. */
             fun breakPage() {
@@ -57,18 +59,33 @@ internal object DocumentText {
                 newPage = true
             }
 
+            fun flushCellParagraph() {
+                val part = cellPara.toString().trim()
+                if (part.isNotEmpty()) {
+                    if (cell.isNotEmpty()) cell.append(' ')
+                    cell.append(part)
+                }
+                cellPara.clear()
+            }
+
             override fun startElement(uri: String?, localName: String?, qName: String, attributes: Attributes) {
                 when (Xml.local(qName)) {
                     "tbl" -> tables++
                     "tr" -> if (tables == 1) row = mutableListOf()
-                    "tc" -> if (tables == 1) cell.clear()
-                    "p" -> { paragraphs++; if (tables == 0 && paragraphs == 1) text.clear() }
+                    "tc" -> if (tables == 1) { cell.clear(); cellPara.clear(); cellParagraphs = 0 }
+                    "p" -> if (tables == 0) {
+                        paragraphs++
+                        if (paragraphs == 1) text.clear()
+                    } else {
+                        cellParagraphs++
+                        if (cellParagraphs == 1) cellPara.clear()
+                    }
                     "r" -> runs++
                     "del", "instrText", "Fallback" -> skipped++
                     "t" -> inText = skipped == 0
                     // w:tab in a run is a tab; in w:pPr/w:tabs it is a tab stop's definition.
                     "tab" -> if (skipped == 0 && runs > 0) here().append('\t')
-                    "br" -> if (attributes.getValue("w:type") == "page") breakPage()
+                    "br" -> if (attributes.localValue("type") == "page") breakPage()
                     "lastRenderedPageBreak" -> breakPage()
                 }
             }
@@ -80,14 +97,23 @@ internal object DocumentText {
             override fun endElement(uri: String?, localName: String?, qName: String) {
                 when (Xml.local(qName)) {
                     "t" -> inText = false
-                    "r" -> runs--
-                    "del", "instrText", "Fallback" -> skipped--
-                    "tc" -> if (tables == 1) row?.add(cell.toString().trim())
-                    "tr" -> if (tables == 1) row?.takeIf { cells -> cells.any { it.isNotEmpty() } }?.let { add(it.joinToString(DocumentCompare.ROW_SEP)) }
-                    "tbl" -> tables--
-                    "p" -> {
-                        paragraphs--
-                        if (tables == 0 && paragraphs == 0 && text.isNotBlank()) add(text.toString().trimEnd())
+                    "r" -> if (runs > 0) runs--
+                    "del", "instrText", "Fallback" -> if (skipped > 0) skipped--
+                    "tc" -> if (tables == 1) {
+                        flushCellParagraph()
+                        row?.add(cell.toString().trim())
+                    }
+                    "tr" -> if (tables == 1) {
+                        row?.takeIf { cells -> cells.any { it.isNotEmpty() } }?.let { add(it.joinToString(DocumentCompare.ROW_SEP)) }
+                        row = null
+                    }
+                    "tbl" -> if (tables > 0) tables--
+                    "p" -> if (tables == 0) {
+                        if (paragraphs > 0) paragraphs--
+                        if (paragraphs == 0 && text.isNotBlank()) add(text.toString().trimEnd())
+                    } else {
+                        if (cellParagraphs > 0) cellParagraphs--
+                        if (cellParagraphs == 0) flushCellParagraph()
                     }
                 }
             }
@@ -109,6 +135,12 @@ internal object DocumentText {
         }
     }
 
+    /** OOXML `ST_TextIndentLevelType` restricts paragraph indentation levels to 0..8. */
+    private const val MAX_INDENT_LEVEL = 8
+
+    private fun Attributes.localValue(localName: String): String? =
+        (0 until length).firstOrNull { Xml.local(getQName(it)) == localName }?.let(::getValue)
+
     /** A slide's (or its notes') text: each paragraph's lines, indented by level; a table row one line. */
     private fun slideLines(xml: ByteArray): List<String> {
         val out = ArrayList<String>()
@@ -122,7 +154,7 @@ internal object DocumentText {
             override fun startElement(uri: String?, localName: String?, qName: String, attributes: Attributes) {
                 when (Xml.local(qName)) {
                     "p" -> { para.clear(); level = 0 }
-                    "pPr" -> level = attributes.getValue("lvl")?.toIntOrNull() ?: 0
+                    "pPr" -> level = (attributes.getValue("lvl")?.toIntOrNull() ?: 0).coerceIn(0, MAX_INDENT_LEVEL)
                     "t" -> inText = true
                     "br" -> para.append('\n')
                     "tr" -> row = mutableListOf()
