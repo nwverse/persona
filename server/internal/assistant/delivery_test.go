@@ -221,7 +221,7 @@ func TestHistoricalDefaultOffWithoutFeatureEvidenceIsNeutral(t *testing.T) {
 }
 
 func TestDefaultOffGateDoesNotTreatNegationAsEvidence(t *testing.T) {
-	for _, gate := range []string{"The feature is not off by default", "The feature is not disabled by default", "并非默认关闭", "没有默认关闭", "既定でオフではない"} {
+	for _, gate := range []string{"The feature is not off by default", "The feature is not disabled by default", "the new flag isn't off by default", "the new flag aren't off by default", "the new flag wasn't off by default", "the new flag won't off by default", "the new flag doesn't off by default", "the new flag hasn't off by default", "并非默认关闭", "没有默认关闭", "既定でオフではない"} {
 		if hasDefaultOffGate(gate) {
 			t.Fatalf("negation accepted: %q", gate)
 		}
@@ -245,6 +245,10 @@ func TestDefaultOffGateSeparatorsAndWordBoundaries(t *testing.T) {
 		{"The default office location needs review", false},
 		{"The default.offset needs review", false},
 		{"The nodefault.off value needs review", false},
+		{"The new flag won't be off-by-default", false},
+		{"The new flag hasn't been disabled-by-default", false},
+		{"The new flag doesn't default-off", false},
+		{"The new flag isn’t off by default", false},
 	}
 	for _, first := range []string{"-", ".", "_", " "} {
 		phrases := []string{"default" + first + "off"}
@@ -258,8 +262,19 @@ func TestDefaultOffGateSeparatorsAndWordBoundaries(t *testing.T) {
 				gateCase{"prefix" + phrase, false},
 				gateCase{phrase + "suffix", false},
 			)
-			for _, negation := range []string{"not", "never", "no longer"} {
-				cases = append(cases, gateCase{"Feature is " + negation + " " + phrase, false})
+			for _, negation := range []string{
+				"not", "never", "no longer", "cannot",
+				"isn't", "aren't", "wasn't", "weren't", "don't", "doesn't", "didn't",
+				"won't", "wouldn't", "can't", "couldn't", "shouldn't", "mustn't",
+				"needn't", "shan't", "hasn't", "haven't", "hadn't", "mightn't", "oughtn't",
+			} {
+				cases = append(cases, gateCase{"The new flag " + negation + " " + phrase, false})
+				if strings.Contains(negation, "'") {
+					cases = append(cases,
+						gateCase{"The new flag " + strings.ReplaceAll(negation, "'", "’") + " " + phrase, false},
+						gateCase{"The new flag " + strings.ReplaceAll(negation, "'", "") + " " + phrase, false},
+					)
+				}
 			}
 		}
 	}
@@ -274,6 +289,15 @@ func TestDefaultOffGateSeparatorsAndWordBoundaries(t *testing.T) {
 			title := verdictText(i18n.ZhHans, &acceptAsk{}, &TodoDelivery{State: deliveryOff, Gate: test.gate})
 			if got := strings.Contains(title, "默认关着"); got != test.want {
 				t.Errorf("default-off claim in title %q = %v, want %v", title, got, test.want)
+			}
+			reply := "<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\ndelivery: off\nmissing: " + test.gate + "\n</closeout>"
+			delivery := judgedDelivery(deliveryOff, test.gate, unblockUser, []prompts.TaskDoneReply{{Text: reply}})
+			wantState := deliveryLive
+			if test.want {
+				wantState = deliveryOff
+			}
+			if delivery.State != wantState {
+				t.Errorf("judgedDelivery(%q) = %q, want %q", test.gate, delivery.State, wantState)
 			}
 		})
 	}
