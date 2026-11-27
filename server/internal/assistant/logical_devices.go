@@ -618,17 +618,17 @@ func (s *Service) isZeroTurnPreparedSegment(ctx context.Context, c *db.LogicalCo
 		return false
 	}
 	var state struct {
-		Awaiting bool `json:"awaiting_first_message"`
+		Awaiting *bool `json:"awaiting_first_message"`
 		Inputs []string `json:"segment_inputs"`
 	}
 	_, err = s.store().Setting(ctx, "node_model."+seg.MachineID+"."+seg.SessionID, &state)
-	if err != nil || len(state.Inputs) != 0 {
+	if err != nil || len(state.Inputs) != 0 || state.Awaiting != nil && !*state.Awaiting {
 		return false
 	}
 	if h != nil {
 		// A read of agy items creates revision 1/history even before a turn.
 		// Revision alone is never sufficient evidence for rebuilding a segment.
-		if !state.Awaiting || h.TailSeq == nil || *h.TailSeq != 0 || h.Summary != "" || seg.SourceRevision > h.Revision || seg.SourceHistory != "" && seg.SourceHistory != h.History {
+		if state.Awaiting == nil || !*state.Awaiting || h.TailSeq == nil || *h.TailSeq != 0 || h.Summary != "" || seg.SourceRevision > h.Revision || seg.SourceHistory != "" && seg.SourceHistory != h.History {
 			return false
 		}
 		for _, r := range h.Coverage {
