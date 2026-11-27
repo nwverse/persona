@@ -13,6 +13,15 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func TestTraexAssistantCommandUsesShellFlag(t *testing.T) {
+	const shell = "/bin/zsh" // On macOS a login shell loads PATH from .zprofile.
+	n := codexTestNode(t)
+	cmd := n.traexAssistantCommand(shell, traexAgent, nil)
+	if got, want := cmd.Args[1], shellFlag(shell); got != want {
+		t.Fatalf("shell argument = %q, want %q", got, want)
+	}
+}
+
 func TestTraexAssistantStartAndResumeWire(t *testing.T) {
 	for _, perm := range []struct {
 		mode, wantApproval, wantSandbox string

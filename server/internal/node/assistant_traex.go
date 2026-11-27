@@ -30,7 +30,7 @@ func (n *Node) traexAssistantArgs(key, effort string) ([]string, bool) {
 func (n *Node) traexAssistantCommand(shell, launcher string, args []string) *exec.Cmd {
 	// app-server accepts -c and --stdio. Model and effort are also set in the RPC;
 	// the terminal-only -m flag cannot follow this subcommand.
-	return exec.Command(shell, append([]string{"-ic", n.launcherForScript(launcher) + ` app-server --stdio "$@"`, "persona"}, args...)...)
+	return exec.Command(shell, append([]string{shellFlag(shell), n.launcherForScript(launcher) + ` app-server --stdio "$@"`, "persona"}, args...)...)
 }
 
 func (c *codexConn) traexMCPNames() []string {
