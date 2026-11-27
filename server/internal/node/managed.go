@@ -280,7 +280,7 @@ func managedEnv(l proto.ManagedLauncher) []string {
 		if l.APIKey != "" {
 			env = append(env, "OPENAI_API_KEY="+l.APIKey)
 		}
-		env = withLauncherEnv(env, l.Env)
+		env = withLauncherEnv(env, l)
 		env = withCodexHeaders(env, l.Headers)
 		if effectiveBase := envValue(env, "OPENAI_BASE_URL"); modelhttp.OpenCodeGo(effectiveBase) && envValue(env, openCodeSessionEnv) == "" {
 			session := cmp.Or(modelhttp.OpenCodeSessionHeaderValue(l.Headers), modelhttp.OpenCodeSessionID("launcher:"+cmp.Or(l.Name, effectiveBase)))
@@ -295,15 +295,17 @@ func managedEnv(l proto.ManagedLauncher) []string {
 		if l.APIKey != "" {
 			env = append(env, "GEMINI_API_KEY="+l.APIKey)
 		}
-		return withLauncherEnv(env, l.Env)
+		return withLauncherEnv(env, l)
 	}
 	return envList(providerEnv(l, "", "", false))
 }
 
-// withLauncherEnv is env (KEY=value entries) with a launcher's own environment over it (#5953), for an agent that is no
-// Claude Code (providerEnv does that for one).
-func withLauncherEnv(env []string, raw string) []string {
-	for _, kv := range launcherEnvVars(raw) {
+// withLauncherEnv adds the proxy fields and then the launcher's explicit environment (#5953).
+func withLauncherEnv(env []string, l proto.ManagedLauncher) []string {
+	for _, kv := range launcherProxyVars(l) {
+		env = append(env, kv[0]+"="+kv[1])
+	}
+	for _, kv := range launcherEnvOverrides(l.Env) {
 		env = slices.DeleteFunc(env, func(e string) bool { return strings.HasPrefix(e, kv[0]+"=") })
 		env = append(env, kv[0]+"="+kv[1])
 	}
