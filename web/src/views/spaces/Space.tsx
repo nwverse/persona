@@ -5,7 +5,7 @@
 // keeps its own page (modules/health/Health.tsx).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
-import { NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel, pickedServiceTier, pickEffort, pickLauncher, pickServiceTier } from "../../lib/assistant-chat";
+import { NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel, pickedFast, pickEffort, pickLauncher, pickFast } from "../../lib/assistant-chat";
 import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../../lib/assistant-models";
 import { ago } from "../../lib/format";
 import { noteConversation } from "../../lib/manager-choice";
@@ -160,13 +160,13 @@ function SpaceHome({ track, readOnly, onToggleSidebar }: { track: Track; readOnl
         launcher,
         model: launcher ? pickedModel(NEW_CONVERSATION) : undefined,
         effort: pickedEffort(NEW_CONVERSATION),
-        service_tier: startServiceTier ? pickedServiceTier() : undefined,
+        service_tier: startServiceTier && pickedFast() ? "priority" : undefined,
       });
       noteConversation(r.session.session_id, undefined);
       noteSent(r.session.machine_id, r.session.session_id, out);
       if (launcher) pickLauncher(NEW_CONVERSATION, undefined);
       pickEffort(NEW_CONVERSATION, undefined);
-      pickServiceTier(undefined);
+      pickFast(false);
       navigate({ name: "track", slug, sid: r.session.session_id });
       return true;
     } catch (e) {

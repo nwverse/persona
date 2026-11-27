@@ -50,7 +50,7 @@ vi.mock("../chat/Composer", () => ({
   },
 }));
 
-import { NEW_CONVERSATION, pickEffort, pickLauncher, pickModel, pickServiceTier } from "../../lib/assistant-chat";
+import { NEW_CONVERSATION, pickEffort, pickLauncher, pickModel, pickFast } from "../../lib/assistant-chat";
 import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../../lib/assistant-models";
 import { getState, reset } from "../../lib/store";
 import { resetTracksForTest } from "../../lib/tracks";
@@ -91,7 +91,7 @@ afterEach(() => {
   reset();
   pickLauncher(NEW_CONVERSATION, undefined);
   pickEffort(NEW_CONVERSATION, undefined);
-  pickServiceTier(undefined);
+  pickFast(false);
 });
 
 describe("a space's home", () => {
@@ -136,7 +136,7 @@ describe("a space's home", () => {
     pickLauncher(NEW_CONVERSATION, "codex");
     pickModel(NEW_CONVERSATION, "gpt-5.4");
     pickEffort(NEW_CONVERSATION, "high");
-    pickServiceTier("fast");
+    pickFast(true);
 
     act(() => root.render(<Space slug="money" fresh onToggleSidebar={() => {}} />));
     await flush();
@@ -153,7 +153,7 @@ describe("a space's home", () => {
       launcher: "codex",
       model: "gpt-5.4",
       effort: "high",
-      service_tier: "fast",
+      service_tier: "priority",
       space: "money",
     });
   });
