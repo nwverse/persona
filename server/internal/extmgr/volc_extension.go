@@ -143,14 +143,18 @@ func (h *Manager) addVolcExtension(ctx context.Context, reg *extension.Registry,
 			return
 		}
 		if slices.ContainsFunc(rows, func(r extension.Record) bool {
-			return r.ID == volc.ExtensionID && r.Source == extension.SourceInstalled
+			return r.ID == volc.ExtensionID && r.Source == extension.SourceInstalled && !r.BuiltinPredecessor
 		}) {
 			return
 		}
 	}
 	if err := reg.AddBuiltinTranslated(volcManifest(h, volc), "", false, volcTranslations(volc)); err != nil {
 		h.logf("plugin %s: %v", volc.ExtensionID, err)
+		return
 	}
+	// Both implementations use the same extension process, transcription and speech
+	// dispatch. apply stops its predecessor before publishing the replacement.
+	reg.AllowBuiltinHandoff(volc.ExtensionID)
 }
 
 // isVolc says whether p is the built-in Volcengine speech extension.
