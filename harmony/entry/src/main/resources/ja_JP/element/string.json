@@ -9123,6 +9123,30 @@
     {
       "name": "agents_use_herdr_tab_name_hint",
       "value": "タブ名を優先して表示します。この設定は同じハブのデバイス間で同期されます。"
+    },
+    {
+      "name": "composer_queued_count",
+      "value": "{count} 件待機中"
+    },
+    {
+      "name": "composer_queue_send_now",
+      "value": "今すぐ送信"
+    },
+    {
+      "name": "composer_queue_relayed",
+      "value": "転送済み"
+    },
+    {
+      "name": "code_wrap_lines",
+      "value": "折り返し"
+    },
+    {
+      "name": "code_unwrap_lines",
+      "value": "横スクロール"
+    },
+    {
+      "name": "copied",
+      "value": "コピーしました"
     }
   ]
 }

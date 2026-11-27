@@ -826,7 +826,10 @@ with their description and arguments (#10756). A companion loaded from `<store>/
 each new or resumed session, preferring `<store>/current/antigravity/mcp-proxy.mjs` whenever it exists. Consecutive
 upgrades therefore do not leave later sessions pointing into a deleted generation; source checkouts without `current`
 keep using their own `mcp-proxy.mjs`. The proxy entry is self-contained (its schema projection is inlined), so after
-Node loads it, pruning its generation cannot break a later relative import. For non-assistant Agent sessions (`--agent`),
+Node loads it, pruning its generation cannot break a later relative import. For assistant sessions, when the upstream catalog marks core tools with `_meta["anthropic/alwaysLoad"] === true`,
+the proxy declares only those always-load tools (larger than `persona_call`) and keeps deferred tools reachable through
+`persona_call`; when all tools carry `alwaysLoad` (e.g. `assistant.load_all_tools = true`) or none do (older servers),
+it falls back to declaring every tool larger than `persona_call`. For non-assistant Agent sessions (`--agent`),
 the proxy prioritizes core task, leader and supervision tools and caps secondary declarations within the eager budget so
 `agy` does not evict leader or supervision tools while keeping secondary tools reachable through `persona_call` (#15822);
 `persona_a2a` stays on its separate scoped server.

@@ -290,7 +290,9 @@ func (s *Service) publishSessions(machine string) {
 // The list is decorated and told under sentMu: two publishers (FleetUp's lists, a snapshot's changed machines) would
 // otherwise each decorate, then tell in either order, and an older list could land last on the hub and stay there.
 func (s *Service) publishList(machine string) []proto.Session {
-	return s.publishListAtArchiveMark(machine)
+	list := s.publishListAtArchiveMark(machine)
+	s.syncPendingInteractionsToNode(machine)
+	return list
 }
 
 // publishListAtArchiveMark publishes with a fixed archive read marker when an operation supplies one. Otherwise it
