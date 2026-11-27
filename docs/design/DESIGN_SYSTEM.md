@@ -4210,10 +4210,28 @@ what was decided, and the transcript stays one tap away (principle 2) instead of
   off square by the row's edges. First a header card (the minutes' title
   when it differs from the recording's, in `Theme.Font.heading`; when · where and the attendees as secondary lines with
   `ThemedIcon`), then one card per group with something in it: Key Points (`Theme.Icon.keyPoint`), Decisions
-  (`Theme.Icon.decision`), Open Questions (`Theme.Icon.openQuestion`), Action Items (`Theme.Icon.todo`). A card's header
+  (`Theme.Icon.decision`), **Disagreements** when present (`MinutesDebatesSections`, #16728, after Decisions and before
+  Open Questions — omitted completely when there is no disagreement), Open Questions (`Theme.Icon.openQuestion`), Action
+  Items (`Theme.Icon.todo`). A card's header
   is its icon in the accent, its title in `Theme.Font.heading` and its count as a neutral `Chip`, read as one heading. Its
   items follow with a hairline between them: the words in `Theme.Font.body`, for an action "who · by" in
   `Theme.Font.caption`, secondary.
+- **Disagreements card** (#16728, `MinutesDebatesSections` / `MinutesDebateCard` in
+  `apple/Persona/Recording/RecordingMinutesSummary.swift`): shown only when cleaned `detail.minutes.debates` has at
+  least one disagreement; absent otherwise, so meetings without disagreements are unchanged. Why a dedicated card rather
+  than reusing the summary card's topic bullets: topic bullets are strictly the minutes' `points` and `decisions` (one
+  line each), whereas a disagreement groups a question, a status label, 2–4 opposing positions each with its own
+  citation and optional speaker, and an optional settled outcome linked to a kept decision. The section heading uses
+  `Theme.Icon.disagreement` (hidden from VoiceOver) in `Theme.accent` and "Disagreements" in `Theme.Font.heading`
+  without a count chip (principle 3). Each disagreement is one `.minutesCard()` (supporting both List sections and
+  `MeetingPage`'s boxed after-meeting mode `minutesBoxed`): its question in `Theme.Font.heading` as a VoiceOver heading,
+  its status as a compact `Chip` ("still disagreed" on `Theme.softTint(Theme.caution)` with `Theme.cautionText`;
+  "settled" on `Theme.positive`; omitted when unknown — never color alone, never reusing "Open Questions"), each
+  position rendered with `MinutesItemRow` (stance, optional speaker, time chip jumping to the transcript, inline
+  context disclosure) separated by hairlines, and for a settled disagreement with a valid `outcome`, an inset well
+  (`Theme.Fill.well`, `Theme.Radius.control`) headed by `Theme.Icon.decided` + "Outcome", with the outcome's
+  `MinutesItemRow` and a link to the kept decision shown only when the hub provides a valid `outcome.decision` index
+  (never matched by timestamp on the client).
 - **A cited photo** (#3862 phase 3): an item that cites a meeting photo shows it under its words as in the minutes'
   sections ("A cited photo in the minutes" above): the same `MinutesPhoto` thumbnail, a tap opens the viewer, **Photo
   removed** once the hub's list no longer has it. Copy and Share keep "(photo 3)".
@@ -4333,7 +4351,9 @@ the four cards pixel for pixel. Which layout is settled in `RecordingMinutesCard
 while drawing. Who it serves: everyone who opens a meeting to see where it landed (principle 2): the headline and the
 conclusions first, the details by topic, the transcript one tap away.
 
-- **Order** (`RecordingMinutesOverview`, `apple/Persona/Recording/RecordingMinutesOverview.swift`): the summary card, the
+- **Order** (`RecordingMinutesOverview`, `apple/Persona/Recording/RecordingMinutesOverview.swift`): the summary card,
+  **Disagreements** (`MinutesDebatesSections`, #16728, only when present; see "Disagreements card" above — topic bullets
+  hold only `points` and `decisions` and cannot represent multi-side stances and outcomes), the
   topic cards under their group headings, Action Items, Open Questions, then the AI note. Points and decisions get no
   cards of their own. Every card is a section of the page's List as the four cards are (`minutesCard()`), never a
   `.surface`. One column on every iPhone; iPad and landscape grids come later.
@@ -4383,14 +4403,19 @@ conclusions first, the details by topic, the transcript one tap away.
   contract's sketch draws a bullet. The words are reading content and grow to AX5 while the interface stops at
   xxxLarge (#6813), so their room decides, with no accessibility-size branch. Conclusions, bullets, and the Action Items'
   and Open Questions' items in this layout all follow it; the four cards' items keep theirs. The headline and the
-  titles are interface text; group headings wrap. VoiceOver headings, in order: the headline, Core Conclusions, each
+  titles are interface text; group headings wrap. VoiceOver headings, in order: the headline, Core Conclusions,
+  Disagreements (section heading, then each disagreement's question heading in order, when present), each
   group, each topic, Action Items, Open Questions.
 - Identifiers: `minutes-card-summary`, `minutes-headline`, `minutes-conclusions`, `minutes-conclusion`,
+  `minutes-debates-heading`, `minutes-debate-<d>`, `minutes-debate-question`, `minutes-debate-status`,
+  `minutes-debate-position`, `minutes-debate-outcome`, `minutes-debate-decision`,
   `minutes-group-<g>`, `minutes-topic-<g>-<t>`, `minutes-point`, `minutes-decision`, `minutes-topic-more`,
   `minutes-topic-less`, `minutes-todo-open`, `minutes-todo-done`, `minutes-ai-note`; the items' own (`minutes-time`,
   `minutes-item-context`, `minutes-item-lines`, `minutes-photo`) and the Action Items' and Open Questions' cards
   (`minutes-card-actions`, `minutes-card-open`) keep their names. UI tests: `MinutesOverviewUITests` (the mock's
-  `shape: overview`, `malformed` and `legacy`; light and dark, the default and the largest text size) beside
+  `shape: overview`, `malformed` and `legacy`; light and dark, the default and the largest text size),
+  `MinutesDebatesUITests` (the mock's `recording_minutes_debates` `on` and `malformed` across overview, legacy and
+  after-meeting boxed mode), beside
   `MinutesCardsUITests` (the four cards' baseline under `legacy`).
 
 ## File page (#5827)
