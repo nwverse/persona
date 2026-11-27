@@ -1157,6 +1157,9 @@ permissions and questions go to its supervising conversation (the main conversat
   conversation's own internal cards use an independent background reviewer; if none is registered, the manager starts
   that reviewer through the existing audited conversation lifecycle. Failure to obtain a reviewer closes the request
   unanswered. This does not grant a new task supervisor or authorize the source to answer its own card.
+  An extension source label is not maintenance authority: routing and execution use the same explicit operation
+  predicate. Unknown operations retain their owner gate. Before Assistant setup, manual node questions keep their
+  existing interaction; manager-owned internal questions never use that fallback.
   `handNonOwnerCard` uses the active durable relay queue for internal questions, permissions and maintenance approvals:
   a busy or offline recipient is retried, delivery and failure are work events, and `interaction_answer` attributes the
   decision to the assistant. The interaction's expiry is never extended. Restart rebuilds its route and wake-up;

@@ -50,6 +50,11 @@ func (s *Service) internalCard(ix proto.Interaction) bool {
 	if ix.ToolName == "ask_user" {
 		return questionOwnerSource(ix) == ""
 	}
+	if src == cardExtensionApproval {
+		// The source label alone does not prove authority: an unknown extension
+		// operation may charge money or change data. Match the execution gate.
+		return proto.InternalMaintenanceApproval(ix)
+	}
 	if src == cardConfirmOutbound {
 		// Only the owned-Agent path opts in, after the track boundary was checked.
 		return ix.ToolName == "agent_send"
@@ -60,7 +65,7 @@ func (s *Service) internalCard(ix proto.Interaction) bool {
 	if ix.Kind == proto.IxPermission && userApproval(ix) != "" {
 		return false
 	}
-	return src == cardAgentPermission || src == cardAgentQuestion || src == cardExtensionApproval ||
+	return src == cardAgentPermission || src == cardAgentQuestion ||
 		src == cardToolPermission && proto.InternalMaintenanceApproval(ix)
 }
 

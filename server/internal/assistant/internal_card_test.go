@@ -398,3 +398,17 @@ func TestPreparedMaintenanceRequiresFreshDecision(t *testing.T) {
 		})
 	}
 }
+
+// A generic extension source is not an authorization claim. Only the explicit
+// maintenance operation can share the supervisor execution gate.
+func TestExtensionOwnerOperationCannotEnterMaintenanceRoute(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	for _, tool := range []string{"enkeep_delete", "enkeep_unknown", "subscription_purchase", "agent_autoname"} {
+		ix := askPermission("ix_extension_owner", "lead1")
+		ix.MachineID, ix.SessionTitle, ix.ToolName = "server", "Persona", tool
+		ix.ToolInput = json.RawMessage(`{"force":true}`)
+		if e.s.internalCard(ix) {
+			t.Fatalf("extension label authorized %s for the supervisor", tool)
+		}
+	}
+}
