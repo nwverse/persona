@@ -1242,10 +1242,10 @@ func (s *Service) userSpokeMessage(ctx context.Context, r SessionRef, text, clie
 
 // TurnStarted: one of a task's agents is working; what was going to be done about an agent's last turn is off.
 func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
-	s.approvalAnswerTurnStarted(r)
 	if s.meetingTurnStarted(r.MachineID, r.SessionID, true) {
 		return // a meeting's batch started it: a side exchange (meeting_turns.go)
 	}
+	s.approvalAnswerTurnStarted(r)
 	s.turnStartedObserved(ctx, r, true, startRow{})
 }
 
@@ -1262,7 +1262,9 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 // triaged; a new conversation is named after its first turn.
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
 	s.a2aRecipientIdle(ctx, a2aRef{r.MachineID, r.SessionID})
-	s.approvalAnswerTurnEnded(r)
+	if ctx.Value(approvalEndHandledKey{}) == nil {
+		s.approvalAnswerTurnEnded(r)
+	}
 	meeting := s.meetingTurnEnded(r.MachineID, r.SessionID)
 	if !meeting && ctx.Value(supervisionEndKey{}) == nil {
 		end := s.remedyTurnEnded(ctx, r.SessionID)

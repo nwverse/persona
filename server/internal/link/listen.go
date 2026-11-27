@@ -78,6 +78,12 @@ type passive struct {
 	// logged, suppressed: refusals are logged at most every refusalLog.
 	logged     time.Time
 	suppressed int
+
+	// testAfterKeepNameUpdate, when non-nil in tests, runs in keepMachineName
+	// after Update releases the file lock and before acquiring s.mu.
+	testAfterKeepNameUpdate func()
+	// testDialNode, when non-nil in tests, overrides dialing the resident node socket in stream.
+	testDialNode func() (net.Conn, error)
 }
 
 // pstream is a stream from the hub to the resident node.
@@ -319,12 +325,20 @@ func (s *passive) seen(r *http.Request) {
 	from := remoteHost(r)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.seenLocked(from)
+}
+
+// seenLocked updates lastSeen/from under s.mu and reports status when the source
+// changed or it has not reported lately, returning whether it reported.
+func (s *passive) seenLocked(from string) bool {
 	now := time.Now()
 	changed := from != s.from
 	s.lastSeen, s.from = now, from
 	if changed || now.Sub(s.seenSaid) > 30*time.Second {
 		s.reportLocked()
+		return true
 	}
+	return false
 }
 
 func (s *passive) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -525,12 +539,29 @@ func (s *passive) info(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.seen(r)
-	s.keepMachineName(p, r.Header.Get(MachineNameHeader))
+	keptName, err := s.keepMachineName(p, r.Header.Get(MachineNameHeader))
+	if errors.Is(err, errPairedAgain) {
+		writeError(w, http.StatusUnauthorized, "unauthorized", wrongCredential)
+		return
+	}
 	info := ConnectorInfo{Machine: p.Machine, Version: s.o.Version, Features: []string{FeatureAttention}}
+	from := remoteHost(r)
 	s.mu.Lock()
+	if !s.cfg.Paired() || s.cfg.TokenSHA256 != p.TokenSHA256 {
+		// Another hub paired (or pairing was cleared) while keepMachineName ran.
+		s.mu.Unlock()
+		writeError(w, http.StatusUnauthorized, "unauthorized", wrongCredential)
+		return
+	}
+	nameChanged := keptName != "" && s.cfg.MachineName != keptName
+	if nameChanged {
+		s.cfg.MachineName = keptName
+	}
 	if s.attention != nil {
 		info.AttentionRev = s.attention.Rev
+	}
+	if !s.seenLocked(from) && nameChanged {
+		s.reportLocked()
 	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, info)
@@ -574,7 +605,7 @@ func (s *passive) takeAttention(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "want one attention object with its rev, at most 64 KiB")
 		return
 	}
-	s.seen(r)
+	from := remoteHost(r)
 	s.mu.Lock()
 	if !s.cfg.Paired() || s.cfg.TokenSHA256 != p.TokenSHA256 {
 		// Another hub paired while the body came in: this summary went with the old credential (setConfig).
@@ -582,8 +613,11 @@ func (s *passive) takeAttention(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", wrongCredential)
 		return
 	}
-	if s.attention == nil || s.attention.Rev != a.Rev {
+	attnChanged := s.attention == nil || s.attention.Rev != a.Rev
+	if attnChanged {
 		s.attention = &a
+	}
+	if !s.seenLocked(from) && attnChanged {
 		s.reportLocked()
 	}
 	s.mu.Unlock()
@@ -601,29 +635,27 @@ func (s *passive) dropStaleAttention(now time.Time) {
 }
 
 // keepMachineName keeps what the paired hub calls this computer (MachineNameHeader, escaped) in link.json, when it
-// changed.
-func (s *passive) keepMachineName(p Passive, escaped string) {
+// changed. It returns the persisted name when updated, or errPairedAgain if link.json no longer holds p's credential.
+func (s *passive) keepMachineName(p Passive, escaped string) (string, error) {
 	raw, err := url.QueryUnescape(escaped)
 	name := clipName(raw)
 	if err != nil || name == "" || name == p.MachineName {
-		return
+		return "", nil
 	}
-	var kept Passive
 	err = Update(s.o.Path, func(c *Config) error {
 		if c.Passive == nil || c.Passive.TokenSHA256 != p.TokenSHA256 {
 			return errPairedAgain
 		}
 		c.Passive.MachineName = name
-		kept = *c.Passive
 		return nil
 	})
 	if err != nil {
-		return
+		return "", err
 	}
-	s.mu.Lock()
-	s.cfg = kept
-	s.mu.Unlock()
-	s.report()
+	if s.testAfterKeepNameUpdate != nil {
+		s.testAfterKeepNameUpdate()
+	}
+	return name, nil
 }
 
 func isUpgrade(r *http.Request) bool {
@@ -651,12 +683,25 @@ func (s *passive) stream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", defaultText("link-peer.websocket_required"))
 		return
 	}
-	s.seen(r)
-	node, err := net.DialTimeout("unix", s.o.Target, 2*time.Second)
+	from := remoteHost(r)
+	var node net.Conn
+	var err error
+	if s.testDialNode != nil {
+		node, err = s.testDialNode()
+	} else {
+		node, err = net.DialTimeout("unix", s.o.Target, 2*time.Second)
+	}
 	if err != nil {
 		msg := nodeMissing(runtime.GOOS, s.o.Target).Error() // how this OS runs it, as in active mode (#3723)
 		s.mu.Lock()
+		if !s.cfg.Paired() || s.cfg.TokenSHA256 != p.TokenSHA256 {
+			// Another hub paired (or pairing was cleared) while dialing the resident node.
+			s.mu.Unlock()
+			writeError(w, http.StatusUnauthorized, "unauthorized", wrongCredential)
+			return
+		}
 		s.node, s.nodeErr = "offline", msg
+		s.lastSeen, s.from = time.Now(), from
 		s.reportLocked()
 		s.mu.Unlock()
 		writeError(w, http.StatusServiceUnavailable, "node_unavailable", msg)
@@ -675,7 +720,7 @@ func (s *passive) stream(w http.ResponseWriter, r *http.Request) {
 	defer nc.Close()
 	var once sync.Once
 	finished := make(chan struct{})
-	st := &pstream{token: p.TokenSHA256, since: time.Now(), from: remoteHost(r)}
+	st := &pstream{token: p.TokenSHA256, since: time.Now(), from: from}
 	st.end = func(code websocket.StatusCode, reason string) {
 		once.Do(func() {
 			go func() {
@@ -701,6 +746,7 @@ func (s *passive) stream(w http.ResponseWriter, r *http.Request) {
 	s.handlers.Add(1)
 	defer s.handlers.Done()
 	s.node, s.nodeErr = "online", ""
+	s.lastSeen, s.from = time.Now(), from
 	s.reportLocked()
 	s.mu.Unlock()
 	s.o.Logf("passive: stream from %s", maskSource(remoteIP(r)))

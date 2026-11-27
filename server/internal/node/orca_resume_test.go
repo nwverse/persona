@@ -43,7 +43,8 @@ func orcaCodexNode(t *testing.T, launcher string) (*Node, *orcarttest.Fake, *fak
 	fixtureCodexIndex(n.codices)
 	n.configureCodex(proto.CodexConfig{})
 	o.SetWorktrees(orcarttest.Worktree("wt-proj", cwd, "refs/heads/main"))
-	// The terminal the stopped Codex ran in, its shell in front again: a resume does not stop at it (stopped.go).
+	// The terminal the stopped Codex ran in, its shell in front again. It does not stop a resume, as it stops a message
+	// (notRunningRefusal); the node has no record of opening it, so the resume opens a new terminal (keptPane).
 	o.SetTerminals(orcarttest.Terminal("term_old", "tabOld", "leafOld", "wt-proj", cwd, "refs/heads/main", "zsh", ""))
 	n.state.put(startThread, sessionState{Launcher: launcher, Cwd: cwd, Pane: "orca:tabOld:leafOld", StartedAt: time.Now().Add(-time.Hour)})
 	n.mu.Lock()
@@ -140,6 +141,61 @@ func TestOrcaResumesAStoppedCodex(t *testing.T) {
 	}
 }
 
+// A stopped Codex whose terminal Persona opened for it, its shell at rest there again, resumes in that shell, as a
+// Claude session does (stopped.go inKeptTerminal): no new terminal, typed once through the single-use grant Orca
+// checks again right before the line goes in. A shell something else runs in front of gets a new terminal instead.
+func TestOrcaResumesAStoppedCodexInItsKeptShell(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "at rest", true: "busy"}[busy], func(t *testing.T) {
+			withOrcaShell(t, "-zsh")
+			withCodexLaunchers(t, map[string][]string{"cx": {"codex"}})
+			n, o, procs, cwd := orcaCodexNode(t, "cx")
+			if err := n.refreshHosts(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			h := n.hosts.Get(host.Orca).(*orcaHost)
+			n.agentTerminalOpened(h, host.PaneRef{Kind: host.Orca, ID: "tabOld:leafOld"}, startThread)
+			if busy {
+				o.SetProcess("term_old", orcarttest.Running("npm", orcaShellPID))
+			} else {
+				o.SetProcess("term_old", orcarttest.ShellAtRest(orcaShellPID))
+			}
+			files := orcaStartFiles(t, o, procs)
+			o.Reset()
+			res, err := request(t, n, "session.start", map[string]any{"resume_session_id": startThread})
+			if err != nil {
+				t.Fatalf("resume: %v (calls %v)", err, o.Trace("terminal.create", "terminal.send"))
+			}
+			want, terminal := "orca:tabOld:leafOld", "term_old"
+			if busy {
+				want, terminal = "orca:tab_2:leaf_2", "term_fake_2"
+			}
+			if s, _ := res["session"].(map[string]any); s == nil || s["session_id"] != startThread || s["pane_id"] != want {
+				t.Errorf("session = %v", res["session"])
+			}
+			if c := o.Trace("terminal.create"); busy != (len(c) == 1) || len(c) > 1 {
+				t.Errorf("terminal.create %v", c)
+			}
+			sends := o.Params("terminal.send")
+			if len(sends) != 1 || sends[0]["terminal"] != terminal {
+				t.Fatalf("sends %v", sends)
+			}
+			if text, _ := sends[0]["text"].(string); !strings.HasPrefix(text, "cd -- "+shellQuote(cwd)+" && ") {
+				t.Errorf("not started in the thread's folder: %q", text)
+			}
+			if !busy && sends[0]["expectedIncarnationId"] != "inc-term_old" {
+				t.Errorf("typed without the kept shell's incarnation: %v", sends[0])
+			}
+			if got := files(); len(got) != 1 || strings.Join(got[0].Argv, " ") != "codex resume "+startThread || !got[0].IsolateHooks {
+				t.Fatalf("codex-start files %+v", got)
+			}
+			if inv := o.Invalid(); len(inv) != 0 {
+				t.Errorf("params Orca would refuse: %v", inv)
+			}
+		})
+	}
+}
+
 // The stock codex launcher resumes on Orca with Orca's own Codex launch arguments, as a new start of it there runs
 // them (codex_orca_launch_defaults.go); Orca preferences it cannot follow refuse before a terminal opens.
 func TestOrcaResumesAStockCodexWithOrcasArguments(t *testing.T) {
@@ -233,6 +289,9 @@ func TestCodexTakeoverHostIncludesOrca(t *testing.T) {
 
 // orcaFakePane is the pane key of the fake runtime's terminal handle (term_fake_<n>: tab_<n>:leaf_<n>), "" for another.
 func orcaFakePane(handle string) string {
+	if handle == "term_old" { // orcaCodexNode's terminal of the stopped Codex
+		return "tabOld:leafOld"
+	}
 	var idx int
 	if _, err := fmt.Sscanf(handle, "term_fake_%d", &idx); err != nil {
 		return ""

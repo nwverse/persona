@@ -9199,6 +9199,478 @@
     {
       "name": "machine_cpu_load",
       "value": "CPU と負荷"
+    },
+    {
+      "name": "composer_queue_edit",
+      "value": "入力欄に戻して編集"
+    },
+    {
+      "name": "composer_queue_move_up",
+      "value": "上へ移動"
+    },
+    {
+      "name": "composer_queue_move_down",
+      "value": "下へ移動"
+    },
+    {
+      "name": "composer_queue_taken_back",
+      "value": "入力欄に戻しました"
+    },
+    {
+      "name": "composer_queue_deleted",
+      "value": "キューから削除しました"
+    },
+    {
+      "name": "composer_queue_arrives_turn_end",
+      "value": "このターン終了時に届きます"
+    },
+    {
+      "name": "composer_queue_arrives_next",
+      "value": "次のメッセージと一緒に届きます"
+    },
+    {
+      "name": "starred_messages",
+      "value": "スター付きメッセージ"
+    },
+    {
+      "name": "star_message",
+      "value": "スターを付ける"
+    },
+    {
+      "name": "unstar_message",
+      "value": "スターを外す"
+    },
+    {
+      "name": "starred_badge",
+      "value": "スター付き"
+    },
+    {
+      "name": "starred_saved_toast",
+      "value": "メッセージをスターに追加しました"
+    },
+    {
+      "name": "starred_removed_toast",
+      "value": "スターを外しました"
+    },
+    {
+      "name": "starred_search_placeholder",
+      "value": "スター付きメッセージを検索"
+    },
+    {
+      "name": "starred_empty_title",
+      "value": "スター付きメッセージはありません"
+    },
+    {
+      "name": "starred_empty_message",
+      "value": "メッセージを長押ししてスターを付けられます。"
+    },
+    {
+      "name": "starred_unavailable_title",
+      "value": "スター付きメッセージは利用できません"
+    },
+    {
+      "name": "starred_unavailable_message",
+      "value": "このアシスタントでスター付きメッセージを使うにはハブを更新してください。"
+    },
+    {
+      "name": "starred_load_failed",
+      "value": "スター付きメッセージを読み込めませんでした"
+    },
+    {
+      "name": "starred_search_empty",
+      "value": "一致するスター付きメッセージがありません"
+    },
+    {
+      "name": "starred_open_original",
+      "value": "元のメッセージを開く"
+    },
+    {
+      "name": "starred_original_unavailable",
+      "value": "元のメッセージは利用できません。"
+    },
+    {
+      "name": "starred_original_check_failed",
+      "value": "元のメッセージを確認できませんでした。もう一度お試しください。"
+    },
+    {
+      "name": "starred_omitted_chars",
+      "value": "ほか {count} 文字"
+    },
+    {
+      "name": "export_chat",
+      "value": "チャットを書き出す"
+    },
+    {
+      "name": "export_include_timestamps",
+      "value": "タイムスタンプを含める"
+    },
+    {
+      "name": "export_include_work_steps",
+      "value": "作業ステップを含める"
+    },
+    {
+      "name": "export_preview_count",
+      "value": "{count} 件のメッセージ"
+    },
+    {
+      "name": "export_truncated_badge",
+      "value": "{count} 件が省略されました"
+    },
+    {
+      "name": "export_truncated_notice",
+      "value": "{omitted} 文字が省略されました"
+    },
+    {
+      "name": "export_copy_markdown",
+      "value": "Markdown をコピー"
+    },
+    {
+      "name": "export_save_share",
+      "value": "保存 / 共有"
+    },
+    {
+      "name": "export_copied_toast",
+      "value": "Markdown をコピーしました"
+    },
+    {
+      "name": "archived_chats",
+      "value": "アーカイブ済み"
+    },
+    {
+      "name": "unarchive",
+      "value": "アーカイブ解除"
+    },
+    {
+      "name": "unarchived_toast",
+      "value": "アーカイブを解除しました"
+    },
+    {
+      "name": "archived_search_placeholder",
+      "value": "アーカイブ済みチャットを検索"
+    },
+    {
+      "name": "archived_empty_title",
+      "value": "アーカイブされたチャットはありません"
+    },
+    {
+      "name": "archived_empty_message",
+      "value": "アーカイブされた会話がここに表示されます。タップして開くか解除できます。"
+    },
+    {
+      "name": "archived_search_empty",
+      "value": "一致するアーカイブ済みチャットがありません"
+    },
+    {
+      "name": "fork_continue_new_chat",
+      "value": "新しいチャットで続ける"
+    },
+    {
+      "name": "fork_chat_done_toast",
+      "value": "新しいチャットに分岐しました"
+    },
+    {
+      "name": "undo",
+      "value": "元に戻す"
+    },
+    {
+      "name": "assistant",
+      "value": "アシスタント"
+    },
+    {
+      "name": "token_usage_title",
+      "value": "トークン使用量"
+    },
+    {
+      "name": "token_usage_quick_subtitle",
+      "value": "12週間ヒートマップ・プロジェクト別"
+    },
+    {
+      "name": "token_usage_unsupported",
+      "value": "トークン使用量を表示するには Hub を更新してください"
+    },
+    {
+      "name": "token_usage_total_12w",
+      "value": "直近12週間"
+    },
+    {
+      "name": "token_usage_hit_rate",
+      "value": "キャッシュヒット"
+    },
+    {
+      "name": "token_usage_input",
+      "value": "入力"
+    },
+    {
+      "name": "token_usage_output",
+      "value": "出力"
+    },
+    {
+      "name": "token_usage_cache_read",
+      "value": "キャッシュ読込"
+    },
+    {
+      "name": "token_usage_cache_write",
+      "value": "キャッシュ書込"
+    },
+    {
+      "name": "token_usage_heatmap_title",
+      "value": "トークンアクティビティ"
+    },
+    {
+      "name": "token_usage_heatmap_tap_hint",
+      "value": "日付をタップして詳細表示"
+    },
+    {
+      "name": "token_usage_less",
+      "value": "少"
+    },
+    {
+      "name": "token_usage_more",
+      "value": "多"
+    },
+    {
+      "name": "token_usage_by_project",
+      "value": "プロジェクト別使用量"
+    },
+    {
+      "name": "token_usage_no_projects",
+      "value": "この期間にプロジェクトの使用量はありません"
+    },
+    {
+      "name": "token_usage_range_today",
+      "value": "今日"
+    },
+    {
+      "name": "token_usage_range_3d",
+      "value": "3日"
+    },
+    {
+      "name": "token_usage_range_7d",
+      "value": "7日"
+    },
+    {
+      "name": "token_usage_by_machine",
+      "value": "コンピュータ別"
+    },
+    {
+      "name": "token_usage_by_model",
+      "value": "モデル別"
+    },
+    {
+      "name": "token_usage_share",
+      "value": "割合"
+    },
+    {
+      "name": "token_usage_project_home",
+      "value": "ホームフォルダ"
+    },
+    {
+      "name": "token_usage_project_temp",
+      "value": "一時フォルダ"
+    },
+    {
+      "name": "token_usage_project_assistant",
+      "value": "アシスタント"
+    },
+    {
+      "name": "token_usage_project_unknown",
+      "value": "不明なフォルダ"
+    },
+    {
+      "name": "todo_wait_heading",
+      "value": "待機中"
+    },
+    {
+      "name": "todo_wait_from_step",
+      "value": "ステップより: {step}"
+    },
+    {
+      "name": "todo_wait_waiting_on",
+      "value": "待機対象"
+    },
+    {
+      "name": "todo_wait_blocked_by",
+      "value": "ブロック要因"
+    },
+    {
+      "name": "todo_wait_details",
+      "value": "詳細"
+    },
+    {
+      "name": "todo_wait_wakes_when",
+      "value": "再開条件"
+    },
+    {
+      "name": "todo_wait_scheduled_wake",
+      "value": "予定再開時刻"
+    },
+    {
+      "name": "todo_wait_check_in_due_label",
+      "value": "確認期限超過"
+    },
+    {
+      "name": "todo_wait_until_label",
+      "value": "期限"
+    },
+    {
+      "name": "todo_wait_sent_via",
+      "value": "{channel} 経由で送信"
+    },
+    {
+      "name": "todo_wait_open_message",
+      "value": "メッセージを開く"
+    },
+    {
+      "name": "todo_wait_view_pr",
+      "value": "PR を表示"
+    },
+    {
+      "name": "todo_wait_open_source",
+      "value": "ソースを開く"
+    },
+    {
+      "name": "todo_wait_waiting_since",
+      "value": "{time} から待機中"
+    },
+    {
+      "name": "todo_wait_kind_person_reply",
+      "value": "返信待ち"
+    },
+    {
+      "name": "todo_wait_kind_merge_review",
+      "value": "レビュー待ち"
+    },
+    {
+      "name": "todo_wait_kind_pr_merge",
+      "value": "マージ待ち"
+    },
+    {
+      "name": "todo_wait_kind_external_event",
+      "value": "外部イベント待ち"
+    },
+    {
+      "name": "todo_wait_kind_date",
+      "value": "指定日まで待機"
+    },
+    {
+      "name": "todo_wait_kind_todo_handoff",
+      "value": "他のタスク待ち"
+    },
+    {
+      "name": "todo_wait_kind_agent",
+      "value": "別のエージェント待ち"
+    },
+    {
+      "name": "todo_wait_kind_usage_limit",
+      "value": "使用上限に到達"
+    },
+    {
+      "name": "todo_wait_kind_computer_offline",
+      "value": "コンピュータがオフライン"
+    },
+    {
+      "name": "todo_wait_kind_scheduled_report",
+      "value": "定期レポート"
+    },
+    {
+      "name": "todo_wait_kind_parked",
+      "value": "保留中"
+    },
+    {
+      "name": "todo_wait_blocker_review_required",
+      "value": "レビューが必要"
+    },
+    {
+      "name": "todo_wait_blocker_changes_requested",
+      "value": "変更リクエストあり"
+    },
+    {
+      "name": "todo_wait_blocker_checks_pending",
+      "value": "チェック実行中"
+    },
+    {
+      "name": "todo_wait_blocker_checks_failing",
+      "value": "チェック失敗"
+    },
+    {
+      "name": "todo_wait_blocker_conflicts",
+      "value": "マージコンフリクト"
+    },
+    {
+      "name": "todo_wait_usage_limit_target",
+      "value": "{target} が使用上限に達しました"
+    },
+    {
+      "name": "todo_wait_waiting_to_merge_target",
+      "value": "{target} のマージ待ち"
+    },
+    {
+      "name": "todo_wait_waiting_on_target",
+      "value": "{target} の待機中"
+    },
+    {
+      "name": "todo_wait_back_at",
+      "value": "{time} に再開"
+    },
+    {
+      "name": "todo_wait_wakes_at",
+      "value": "{time} に再開"
+    },
+    {
+      "name": "todo_wait_check_in_due",
+      "value": "確認期限超過 ({time})"
+    },
+    {
+      "name": "todo_wait_until_at",
+      "value": "{time} まで"
+    },
+    {
+      "name": "todo_wait_since_at",
+      "value": "{time} から"
+    },
+    {
+      "name": "personal_agents",
+      "value": "パーソナルエージェント"
+    },
+    {
+      "name": "personal_agents_hide",
+      "value": "非表示"
+    },
+    {
+      "name": "personal_agents_restore",
+      "value": "復元"
+    },
+    {
+      "name": "personal_agents_removed",
+      "value": "非表示 ({count})"
+    },
+    {
+      "name": "knowledge_minutes_debates",
+      "value": "意見の相違"
+    },
+    {
+      "name": "knowledge_minutes_debate_open",
+      "value": "未決"
+    },
+    {
+      "name": "knowledge_minutes_debate_settled",
+      "value": "解決済み"
+    },
+    {
+      "name": "knowledge_minutes_debate_outcome",
+      "value": "結論"
+    },
+    {
+      "name": "kb_chat_in_inbox",
+      "value": "受信トレイの項目"
+    },
+    {
+      "name": "kb_chat_inbox_done_count",
+      "value": "{count} 件完了"
+    },
+    {
+      "name": "kb_chat_knowledge_page",
+      "value": "ナレッジページ"
     }
   ]
 }

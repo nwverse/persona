@@ -432,7 +432,7 @@ describe("an Agent's pill", () => {
     expect(provider("gateway").models!.some((m) => m.id === "vendor/model-x")).toBe(false);
     await flush();
     expect(provider("gateway").models!.some((m) => m.id === "vendor/model-x")).toBe(true);
-    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/没能忘记「vendor\/model-x」：.*只读设备不能改/), "error");
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/无法移除「vendor\/model-x」：.*只读设备不能改/), "error");
   });
 
   it("is busy while the agent works, and says why a launcher that fixes its model can't take a pick", async () => {

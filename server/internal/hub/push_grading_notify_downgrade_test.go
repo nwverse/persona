@@ -160,9 +160,13 @@ func gradingNotifyBusCall(t *testing.T, h *Hub, n assistantwire.Notification) ma
 	if err != nil {
 		t.Fatalf("notify.request: %v", err)
 	}
-	res, ok := out.(map[string]any)
-	if !ok {
-		t.Fatalf("notify.request answered %#v, want a JSON object", out)
+	reply, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res map[string]any
+	if err := json.Unmarshal(reply, &res); err != nil {
+		t.Fatal(err)
 	}
 	return res
 }

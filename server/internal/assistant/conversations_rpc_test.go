@@ -223,6 +223,24 @@ func TestExtensionMessagesRefuse(t *testing.T) {
 	}
 }
 
+func TestExtensionReadRPCRejectsUnknownParams(t *testing.T) {
+	s, _ := conversationsService(t)
+	for _, method := range []string{
+		assistantwire.MethodExtensionTrustForget,
+		assistantwire.MethodAssistantConversations,
+		assistantwire.MethodAssistantMessages,
+		assistantwire.MethodAssistantEntriesList,
+		assistantwire.MethodAssistantMemory,
+	} {
+		var out json.RawMessage
+		err := askConversations(t, s, method, `{"unsupported":true}`, &out)
+		var wireErr *rpc.Error
+		if !errors.As(err, &wireErr) || wireErr.Code != bus.CodeInvalidParams || wireErr.Message != method+`: json: unknown field "unsupported"` {
+			t.Errorf("%s: %v", method, err)
+		}
+	}
+}
+
 // A long stretch without words (an agent's tool calls) ends a call with no messages but next_seq, until the words.
 func TestExtensionMessagesScanOnPastToolWork(t *testing.T) {
 	s, f := conversationsService(t)

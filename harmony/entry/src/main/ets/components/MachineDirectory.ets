@@ -350,11 +350,11 @@ export struct MachineDirectory {
     }.constraintSize({minWidth:'30%'}).flexGrow(1).flexShrink(0)
   }
   @Builder tag(a:MachineAlert) {
-    Row({space:4}) {
+    Row({space:Tokens.spaceXs}) {
       SymbolGlyph(a.severity === 2 ? $r('sys.symbol.exclamationmark_circle_fill') : $r('sys.symbol.exclamationmark_triangle_fill')).fontSize('12vp').fontColor([a.severity === 2 ? Colors.danger : Colors.working])
-      Text(tr(a.key)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
-    }.padding({left:8,right:8,top:4,bottom:4}).borderRadius(16)
-      .backgroundColor(a.severity === 2 ? '#21FF3B30' : '#24FFAA22')
+      Text(tr(a.key)).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+    }.padding({left:Tokens.spaceS,right:Tokens.spaceS,top:Tokens.spaceXs,bottom:Tokens.spaceXs}).borderRadius(Tokens.radiusCapsule)
+      .backgroundColor(a.severity === 2 ? Colors.dangerWash : Colors.workingWash)
   }
   @Builder summary(c:ComputerCard, selected:boolean) {
     Column({space:Tokens.inset}) {
