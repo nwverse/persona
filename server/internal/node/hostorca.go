@@ -158,8 +158,15 @@ func orcaErr(err error) error {
 // the layout's tabs (read again only when something changed). A list that failed a moment ago fails again at once:
 // the node asks for Agents right after a failed Snapshot, and a wedged Orca must not cost it twice.
 func (h *orcaHost) terminals(ctx context.Context) ([]orcart.Terminal, []orcart.Tab, error) {
+	return h.listTerminals(ctx, false)
+}
+
+// listTerminals is terminals. fresh (the update inventory's read, hostorca_update.go) takes no failure from a moment
+// ago and keeps none of its own, reads the layouts in the same call instead of reusing them, and fails on a list Orca
+// cut short.
+func (h *orcaHost) listTerminals(ctx context.Context, fresh bool) ([]orcart.Terminal, []orcart.Tab, error) {
 	h.mu.Lock()
-	if h.failErr != nil && time.Since(h.failedAt) < time.Second {
+	if !fresh && h.failErr != nil && time.Since(h.failedAt) < time.Second {
 		err := h.failErr
 		h.mu.Unlock()
 		return nil, nil, err
@@ -167,27 +174,36 @@ func (h *orcaHost) terminals(ctx context.Context) ([]orcart.Terminal, []orcart.T
 	// Taken before the list: a terminal created while it is asked for is not taken for gone.
 	made := maps.Clone(h.made)
 	h.mu.Unlock()
-	l, err := h.c.Terminals(ctx, false)
-	if err == nil {
+	layouts := fresh
+	l, err := h.c.Terminals(ctx, layouts)
+	if err == nil && !layouts {
 		key := orcaTopology(l)
 		h.mu.Lock()
 		stale := key != h.topology || time.Since(h.tabsAt) > orcaLayoutMaxAge
 		h.mu.Unlock()
 		if stale {
-			if l, err = h.c.Terminals(ctx, true); err == nil {
-				h.mu.Lock()
-				h.tabs, h.tabsAt, h.topology = l.Tabs, time.Now(), orcaTopology(l)
-				h.mu.Unlock()
-			}
+			layouts = true
+			l, err = h.c.Terminals(ctx, true)
 		}
 	}
 	if err != nil {
 		err = orcaErr(err)
-		h.mu.Lock()
-		h.failedAt, h.failErr = time.Now(), err
-		h.mu.Unlock()
+		if !fresh {
+			h.mu.Lock()
+			h.failedAt, h.failErr = time.Now(), err
+			h.mu.Unlock()
+		}
 		return nil, nil, err
 	}
+	if fresh && l.Truncated {
+		return nil, nil, orcart.ErrPartial // a terminal left out could be an agent's
+	}
+	h.mu.Lock()
+	if layouts {
+		h.tabs, h.tabsAt, h.topology = l.Tabs, time.Now(), orcaTopology(l)
+	}
+	tabs := h.tabs
+	h.mu.Unlock()
 	var terms []orcart.Terminal
 	byPane := map[string]orcart.Terminal{}
 	rekeyed := map[string]string{}
@@ -219,7 +235,7 @@ func (h *orcaHost) terminals(ctx context.Context) ([]orcart.Terminal, []orcart.T
 		}
 	}
 	h.failErr, h.terms, h.rekeyed = nil, byPane, rekeyed
-	return terms, h.tabs, nil
+	return terms, tabs, nil
 }
 
 // orcaTopology is what decides whether the layouts must be read again: the terminals (by pane) and each worktree's
@@ -340,6 +356,11 @@ func (h *orcaHost) Snapshot(ctx context.Context) (*host.Layout, error) {
 	if err != nil {
 		return nil, err
 	}
+	return v.layout(), nil
+}
+
+// layout is the view as the node's layout: spaces (worktrees), slots (tabs), panes and the agent panes among them.
+func (v *orcaView) layout() *host.Layout {
 	l := &host.Layout{}
 	spaces := map[string]bool{}
 	addSpace := func(id, path, branch, parent string) {
@@ -378,7 +399,7 @@ func (h *orcaHost) Snapshot(ctx context.Context) (*host.Layout, error) {
 			l.Agents = append(l.Agents, a)
 		}
 	}
-	return l, nil
+	return l
 }
 
 // Spaces reads the complete worktree catalog, including worktrees with no terminal.

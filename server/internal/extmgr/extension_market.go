@@ -60,7 +60,7 @@ type marketState struct {
 var errMarketSignature = errors.New("market signature")
 
 // signedIndex enforces official identity independently of stored signature state.
-func signedIndex(rec extension.MarketRecord, f *extension.Fetched, now time.Time) (extension.MarketRecord, *extension.MarketIndex, error) {
+func signedIndex(rec extension.MarketRecord, f *extension.Fetched, now time.Time, build int64) (extension.MarketRecord, *extension.MarketIndex, error) {
 	key := ""
 	rec.FetchedAt = &now
 	if extension.IsOfficialMarket(rec.Spec) {
@@ -91,7 +91,7 @@ func signedIndex(rec extension.MarketRecord, f *extension.Fetched, now time.Time
 		}
 		keys = normalized
 	}
-	verified, err := extension.ParseCatalogKeys(f.Raw, keys)
+	verified, err := extension.ParseCatalogKeysForBuild(f.Raw, keys, build)
 	if err != nil {
 		rec.Signature = extension.MarketSignature{State: extension.SigInvalid}
 		rec.Error = err.Error()
@@ -140,7 +140,7 @@ func (h *Manager) marketsLoad(ctx context.Context) error {
 		if len(r.Index) > 0 {
 			// Never trust a cached state flag: the complete envelope is verified again.
 			f := &extension.Fetched{Raw: r.Index}
-			rec, ix, verifyErr := signedIndex(r, f, time.Now())
+			rec, ix, verifyErr := signedIndex(r, f, time.Now(), h.build.Number)
 			rec.FetchedAt = r.FetchedAt
 			if r.Signature.Bad() && requiresSignature(r) {
 				rec.Signature, rec.Error = r.Signature, r.Error
@@ -270,7 +270,7 @@ func (h *Manager) market(rec extension.MarketRecord) (*extension.Market, error) 
 	if err != nil {
 		return nil, err
 	}
-	mk := &extension.Market{Spec: spec, TrustedKey: rec.SigningKey, Client: client, GitHubAPI: h.extensions.markets.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
+	mk := &extension.Market{Spec: spec, HubBuild: h.build.Number, TrustedKey: rec.SigningKey, Client: client, GitHubAPI: h.extensions.markets.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
 	if extension.IsOfficialMarket(rec.Spec) {
 		mk.TrustedKey = extension.Official.SigningKey
 	} else {
@@ -335,7 +335,7 @@ func (h *Manager) marketRead(ctx context.Context, id string) (MarketView, error)
 		}
 	} else {
 		var ix *extension.MarketIndex
-		if rec, ix, err = signedIndex(rec, f, now); ix != nil {
+		if rec, ix, err = signedIndex(rec, f, now, h.build.Number); ix != nil {
 			nextIndex = ix
 		} else {
 			h.logf("extension market %s: %v", id, err)

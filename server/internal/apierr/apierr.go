@@ -484,6 +484,17 @@ var notFoundKeys = map[string]string{
 	proto.NotFoundUnknownSession: "apierr-apierr.session_unknown",
 }
 
+// bridgeReasonKeys word the refusals of the node's Orca chat bridge by their reason (node/orcabridge.go): Orca is not
+// running, turned the request down, may or may not have done it, or no longer has the chat; a chat it closed takes no
+// mode change.
+var bridgeReasonKeys = map[string]string{
+	"orca_away":         "rpc-errors.orca_away",
+	"orca_refused":      "rpc-errors.orca_refused",
+	"orca_unknown":      "rpc-errors.orca_unknown",
+	"orca_session_gone": "rpc-errors.orca_session_gone",
+	"orca_closed":       "rpc-errors.orca_closed",
+}
+
 // openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
 // whereOpen). One without a known where (an older node, an Agent runtime's own refusal) keeps its words.
 var openElsewhereKeys = map[string]string{
@@ -585,6 +596,13 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 				args["dialog"], args["retry_code"] = dialog, retryCode
 			}
 		}
+	}
+	// A bridge's refusal under a generic code (runtime_away, refused, unknown, session_gone) words its reason; Orca's own
+	// words, when it gave any, are the detail (node/orcabridge.go orcaChatErr).
+	if reason, _ := body["reason"].(string); bridgeReasonKeys[reason] != "" {
+		key = bridgeReasonKeys[reason]
+		detail, _ := body["detail"].(string)
+		args["detail"] = detail
 	}
 	if errors.Is(err, ErrOffline) {
 		key = "rpc-errors.offline"
