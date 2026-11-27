@@ -19,6 +19,9 @@ import (
 type orcaLaunch struct {
 	terminal orcart.Terminal
 	cwd      string
+	// adopted: a terminal the node did not open but was told to start in (AdoptPane); Run types into it only after
+	// Orca reads it with just its shell in front.
+	adopted bool
 }
 
 // Orca owns the project's worktrees: opening a space means opening a new terminal in the registered directory,
@@ -238,9 +241,11 @@ func orcaLaunchPath(path string) string {
 	return filepath.Clean(path)
 }
 
-// Run may write shell commands only to a pane created by this host instance, once. Consuming the grant before the
-// send prevents a timeout or duplicate call from launching twice. Unlike normal sends it never refreshes a stale
-// handle: replacing that shell revokes the grant rather than redirecting the command to a different process.
+// Run may write shell commands only to a pane created by this host instance, once, or to one the node adopted for a
+// start (AdoptPane), once. Consuming the grant before the send prevents a timeout or duplicate call from launching
+// twice. Unlike normal sends it never refreshes a stale handle: replacing that shell revokes the grant rather than
+// redirecting the command to a different process. An adopted terminal is read again right before the send: only its
+// shell may be in front (Orca keeps an exited agent's identity on the terminal, so that is not asked there).
 func (h *orcaHost) Run(ctx context.Context, pane host.PaneRef, command string) error {
 	h.mu.Lock()
 	launch, ok := h.launches[pane.ID]
@@ -260,21 +265,54 @@ func (h *orcaHost) Run(ctx context.Context, pane host.PaneRef, command string) e
 		if t.Handle != launch.terminal.Handle {
 			continue
 		}
-		if t.IncarnationID != launch.terminal.IncarnationID || !t.IsLocal() || !t.Writable || t.AgentIdentity != "" ||
-			t.Orphaned && t.PaneKey() == launch.terminal.PaneKey() {
+		if t.IncarnationID != launch.terminal.IncarnationID || !t.IsLocal() || !t.Writable ||
+			t.AgentIdentity != "" && !launch.adopted || t.Orphaned && t.PaneKey() == launch.terminal.PaneKey() {
 			break
+		}
+		if launch.adopted {
+			if err := h.shellInFront(ctx, launch.terminal); err != nil {
+				return err
+			}
 		}
 		return orcaInputErr(h.c.Send(ctx, launch.terminal.Target(), "cd -- "+shellQuote(launch.cwd)+" && "+command+"\r"))
 	}
 	return host.Mark(fmt.Errorf("orca: the newly created shell was replaced or is no longer writable"), host.ErrNotDelivered)
 }
 
+// AdoptPane grants one Run into a terminal the node did not open, picked for a start (Run Agent Here, a Resume in the
+// shell its Agent left): the pane's terminal as Orca lists it now, its process fenced (incarnation). The start's
+// command then goes in with a `cd` to cwd, as in a terminal the node opened, and only if Orca still reads the same
+// process with just its shell in front. A terminal on another machine, not writable, or one Orca's UI orphaned that is
+// not one this host made gets no grant.
+func (h *orcaHost) AdoptPane(ctx context.Context, pane host.PaneRef, cwd string) error {
+	if pane.Kind != host.Orca {
+		return host.Mark(fmt.Errorf("orca: %s is not an Orca terminal", pane), host.ErrNotDelivered)
+	}
+	if strings.ContainsFunc(cwd, unicode.IsControl) {
+		return host.Mark(refusal(proto.CodeDirectoryUntypable, i18n.T(i18n.Default, "rpc-errors.directory_untypable"), nil), host.ErrNotDelivered)
+	}
+	t, err := h.terminal(ctx, pane.ID, true)
+	if err != nil {
+		return orcaInputErr(err)
+	}
+	if !t.IsLocal() || !t.Writable || t.IncarnationID == "" || t.Orphaned && !h.rekeyedKey(pane.ID) {
+		return host.Mark(fmt.Errorf("orca: the terminal in %s cannot take a start", pane.ID), host.ErrNotDelivered)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.launches == nil {
+		h.launches = map[string]orcaLaunch{}
+	}
+	h.launches[pane.ID] = orcaLaunch{terminal: t, cwd: cwd, adopted: true}
+	return nil
+}
+
 // launchable: Run would still take a command in pane, a terminal this host made whose one launch is unused.
 func (h *orcaHost) launchable(pane host.PaneRef) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	_, ok := h.launches[pane.ID]
-	return ok
+	l, ok := h.launches[pane.ID]
+	return ok && !l.adopted
 }
 
 func (h *orcaHost) NameAgent(ctx context.Context, pane host.PaneRef, name string) error {

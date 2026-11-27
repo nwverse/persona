@@ -298,6 +298,75 @@ func (c *Client) AgentStatus(ctx context.Context, t Target) (*AgentStatus, error
 	return res.AgentStatus, nil
 }
 
+// Process is terminal.inspectProcess: what runs in a terminal, as Orca reads its process table. Foreground is the
+// program in front of the terminal's shell ("" when Orca names none: the shell itself is in front, or it could not
+// tell); HasChildren says something other than the shell is in front. Orca 1.4.277 answers a shell at rest with
+// Foreground "", HasChildren false and IdleShell true.
+type Process struct {
+	Foreground  string
+	HasChildren bool
+	// ChildEvidence is how Orca knows HasChildren ("no-children", "children", "unverifiable"; "" when it does not say).
+	ChildEvidence string
+	// Verdict is Orca's own verdict on its evidence ("live" when it read the terminal's process as it is now;
+	// "unverifiable" when it could not, as for an incarnation that is not the terminal's any more; "" when the answer
+	// carries no evidence, as from older runtimes).
+	Verdict string
+	// Reason is why Orca could not verify ("incarnation_mismatch", "process_table_unreadable"…).
+	Reason string
+	// IdleShell: Orca proved the shell idle — in front, alone in its process group, no child, no stopped or background
+	// job on its terminal, no output since it looked (idleShellProven).
+	IdleShell bool
+	// ShellPID is the terminal's shell process (the evidence's fence), 0 when not given.
+	ShellPID int
+}
+
+// Known: Orca could tell what runs in the terminal; an answer it marks unverifiable says nothing.
+func (p Process) Known() bool {
+	return p.ChildEvidence != "unverifiable" && (p.Verdict == "" || p.Verdict == "live")
+}
+
+// InspectProcess is terminal.inspectProcess, fenced to the terminal's incarnation: Orca answers for another process
+// behind the handle with an unverifiable verdict (Process.Known false). Orca runtimes without the method answer
+// method_not_found.
+func (c *Client) InspectProcess(ctx context.Context, t Target) (*Process, error) {
+	var res struct {
+		Process *struct {
+			ForegroundProcess *string `json:"foregroundProcess"`
+			HasChildProcesses bool    `json:"hasChildProcesses"`
+			ChildEvidence     string  `json:"childProcessEvidence"`
+			IdleShellProven   bool    `json:"idleShellProven"`
+			Evidence          *struct {
+				Verdict string `json:"verdict"`
+				Reason  string `json:"reason"`
+				Fence   *struct {
+					ShellPID int `json:"shellPid"`
+				} `json:"fence"`
+			} `json:"foregroundProcessEvidence"`
+		} `json:"process"`
+	}
+	if err := c.Call(ctx, CallTimeout, "terminal.inspectProcess", t.params(), &res); err != nil {
+		return nil, err
+	}
+	if res.Process == nil {
+		return nil, fmt.Errorf("orca terminal.inspectProcess: no process in the answer")
+	}
+	r := res.Process
+	p := &Process{HasChildren: r.HasChildProcesses, ChildEvidence: r.ChildEvidence, IdleShell: r.IdleShellProven}
+	if r.ForegroundProcess != nil {
+		p.Foreground = *r.ForegroundProcess
+	}
+	if e := r.Evidence; e != nil {
+		p.Verdict, p.Reason = e.Verdict, e.Reason
+		if p.Verdict == "" {
+			p.Verdict = "unverifiable" // evidence without a verdict proves nothing
+		}
+		if e.Fence != nil {
+			p.ShellPID = e.Fence.ShellPID
+		}
+	}
+	return p, nil
+}
+
 // ClientID is how Persona names itself to Orca as the driver of its input (terminal.send's client.id, required).
 const ClientID = "persona"
 

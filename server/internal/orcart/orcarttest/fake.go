@@ -38,9 +38,11 @@ type Fake struct {
 	keepalive   int
 	ln          net.Listener
 	agentStatus map[string]map[string]any
-	revisions   map[string]int
-	writes      []Write
-	invalid     []string
+	// processes are terminal.inspectProcess's answers by handle; nil: the method is unknown (an older Orca).
+	processes map[string]map[string]any
+	revisions map[string]int
+	writes    []Write
+	invalid   []string
 }
 
 // Call is one request the fake got (status.get included).
@@ -288,6 +290,16 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 		out := map[string]any{"handle": h}
 		maps.Copy(out, st)
 		return map[string]any{"agentStatus": out}
+	case "terminal.inspectProcess":
+		if f.processes == nil {
+			return Fail{"method_not_found"}
+		}
+		pr := f.processes[h]
+		if pr == nil {
+			// What Orca says when it cannot read the terminal's processes.
+			pr = map[string]any{"foregroundProcess": nil, "hasChildProcesses": true, "childProcessEvidence": "unverifiable"}
+		}
+		return map[string]any{"process": maps.Clone(pr)}
 	case "terminal.close":
 		f.writes = append(f.writes, Write{Handle: h, Close: true})
 		return map[string]any{"close": map[string]any{"handle": h, "tabId": t["tabId"], "ptyKilled": true}}
@@ -407,6 +419,8 @@ func validate(method string, p map[string]any) string {
 		return first(handle(), literalTrue("screen"))
 	case "terminal.agentStatus", "terminal.close":
 		return handle()
+	case "terminal.inspectProcess":
+		return first(handle(), boolean("scanChildProcesses"))
 	case "terminal.rename", "terminal.setPaneTitle":
 		return first(handle(), str("title", true))
 	case "repo.add":
@@ -543,6 +557,50 @@ func (f *Fake) SetAgentStatus(handle string, running bool, status string) {
 	f.mu.Lock()
 	f.agentStatus[handle] = map[string]any{"isRunningAgent": running, "status": st}
 	f.mu.Unlock()
+}
+
+// SetProcess sets terminal.inspectProcess's answer for a handle (ShellAtRest, ShellWithJobs, Running, Unverifiable);
+// from the first call on the fake knows the method, and a handle with no answer set is one Orca cannot read. nil
+// clears the handle's answer.
+func (f *Fake) SetProcess(handle string, process map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.processes == nil {
+		f.processes = map[string]map[string]any{}
+	}
+	if process == nil {
+		delete(f.processes, handle)
+		return
+	}
+	f.processes[handle] = process
+}
+
+// ShellAtRest is Orca 1.4.277's terminal.inspectProcess answer for a shell at rest with nothing else in its terminal.
+func ShellAtRest(shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": nil, "hasChildProcesses": false, "idleShellProven": true,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID}}}
+}
+
+// ShellWithJobs is its answer for a shell in front with a background or stopped job: in front, not proven idle.
+func ShellWithJobs(shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": nil, "hasChildProcesses": false,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID}}}
+}
+
+// Running is its answer for a program in front of the shell ("sleep", "vi", "python3"…).
+func Running(name string, shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": name, "hasChildProcesses": true,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID + 1}}}
+}
+
+// Unverifiable is its answer when it cannot tell (reason "incarnation_mismatch", "process_table_unreadable"…): the
+// foreground it names then is only its last guess.
+func Unverifiable(reason string) map[string]any {
+	return map[string]any{"foregroundProcess": "bash", "hasChildProcesses": false,
+		"foregroundProcessEvidence": map[string]any{"verdict": "unverifiable", "reason": reason}}
 }
 
 // Orphan does to a terminal what Orca does about 2 s after terminal.create in a worktree its UI is not showing: the
