@@ -466,6 +466,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// i18n-ignore: original MCP refusal for the model, not API error, push or approval-card copy; keep the source reason verbatim.
 			return "", fmt.Errorf("这个 Agent 仅支持查看：%s", c.ReadOnlyReason)
 		}
+		if err := s.externalSessionRefusal(ctx, self, am, c); err != nil {
+			return "", err
+		}
 		if strings.TrimSpace(a.Text) == "" {
 			return "", fmt.Errorf("text is empty")
 		}
@@ -548,6 +551,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
 			}
 			return outboundNotDone(outcome, "The user declined on the phone: nothing was sent to that agent.", "nothing was sent to that agent"), nil
+		}
+		if err := s.externalSessionRefusal(ctx, self, am, c); err != nil {
+			return "", err
 		}
 		var task *handedTask
 		if a.Task != nil {
@@ -1787,6 +1793,9 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 			what = "要授权 " + ix.ToolName + "：" + ix.Summary
 		} else if ix.Kind == proto.IxScreen {
 			what = "终端对话框等你处理"
+			if safeScreenDialog(ix) {
+				what = "终端对话框：" + terminalQuestionText(ix) // i18n-ignore: agents_list output for the model
+			}
 		}
 		session := ix.SessionID
 		source := [2]string{ix.MachineID, session}
@@ -1849,7 +1858,8 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 					continue
 				}
 			case "active":
-				if st := agentsListState(c); st != proto.StateNeedsYou && st != proto.StateWorking && st != proto.StateUnread && !c.AwaitsReply {
+				if st := agentsListState(c); st != proto.StateNeedsYou && st != proto.StateWorking && st != proto.StateUnread &&
+					!unverifiedAgyTurn(c) && !c.AwaitsReply {
 					continue // a seen one still asking the user is active too (#5096)
 				}
 			case "done":
@@ -2019,7 +2029,12 @@ func (s *Service) toolAgentRead(ctx context.Context, machine, id string, turns i
 	if err := s.call(ctx, m.ID, DeviceSessionItems, map[string]any{"session_id": c.SessionID, "turns": min(turns, 10)}, &res); err != nil {
 		return "", err
 	}
-	head := fmt.Sprintf("%s on %s (%s, %s)", agentLabel(c), m.Name, stateNames[c.State], c.Cwd)
+	state := stateNames[c.State]
+	if agyTerminalSession(c) {
+		c.State = c.FoldedState()
+		state = agentsListLabel(c)
+	}
+	head := fmt.Sprintf("%s on %s (%s, %s)", agentLabel(c), m.Name, state, c.Cwd)
 	return transcriptText(head, sessionLink(s.webBase(ctx), m.ID, c.SessionID, false), res.Items), nil
 }
 
@@ -2065,6 +2080,9 @@ func agentsListState(c proto.Session) string {
 	if silentRow(c) || upstreamRow(c) {
 		return proto.StateNeedsYou
 	}
+	if unverifiedAgyTurn(c) {
+		return proto.StateUnknown
+	}
 	return c.State
 }
 
@@ -2074,11 +2092,19 @@ func agentsListLabel(c proto.Session) string {
 	case upstreamRow(c):
 		return "上游不可用" // i18n-ignore: agents_list output for the model, as the lines around it
 	case !silentRow(c):
-		return stateNames[c.State]
+		return stateNames[agentsListState(c)]
 	case c.TurnErrorKind == proto.TurnErrorStopped:
 		return "被停下了，没做完" // i18n-ignore: agents_list output for the model, as the lines around it
 	}
 	return "中断了，没做完" // i18n-ignore: agents_list output for the model, as the lines around it
+}
+
+func agyTerminalSession(c proto.Session) bool {
+	return c.Agent == "agy" && c.PaneID != "" && c.SourceKind != "runtime"
+}
+
+func unverifiedAgyTurn(c proto.Session) bool {
+	return agyTerminalSession(c) && !c.NativeTurnVerified && (c.State == proto.StateWorking || c.State == proto.StateUnread)
 }
 
 // kbUpdateText is the words a kb_update writes (names, notes, summaries, log lines, profile items), not its ids, links

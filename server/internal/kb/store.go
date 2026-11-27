@@ -138,8 +138,12 @@ type Project struct {
 	SourceURLs         []string                      `json:"source_urls,omitempty"`
 	FieldCoverage      map[string]projectFieldRecord `json:"field_coverage,omitempty"`
 	OneLineNeedsReview bool                          `json:"one_line_needs_summary_review,omitempty"`
-	Created            time.Time                     `json:"created"`
-	Updated            time.Time                     `json:"updated"`
+	// Parent: the project it sits under (a slug; project_tree.go), set only by the user and locked; "" at the top.
+	Parent string `json:"parent,omitempty"`
+	// Milestones: the user's milestone flags on it (project_tree.go).
+	Milestones []Milestone `json:"milestones,omitempty"`
+	Created    time.Time   `json:"created"`
+	Updated    time.Time   `json:"updated"`
 	Tagging
 }
 
@@ -176,6 +180,9 @@ type ProjectMerge struct {
 	// Excluded: the links the user had removed from this project that the merge kept off the kept project too, by
 	// list (exclude.go); an unmerge lets them back there.
 	Excluded map[string][]string `json:"excluded,omitempty"`
+	// Children: the projects under this one that the merge moved under the kept project (or beside it); an unmerge
+	// moves those still there back (project_tree.go).
+	Children []TreeMove `json:"children,omitempty"`
 }
 
 // exclude records that the merge kept id out of the kept project's list.

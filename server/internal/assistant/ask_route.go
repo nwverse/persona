@@ -126,17 +126,21 @@ func terminalQuestion(ix proto.Interaction) bool {
 // on its own screen (a safety check its hooks never see, "Dangerous rmdir operation…") among them. Unparsed screens,
 // typed values, secrets and forms are not: the supervisor could not read them, so they stay with the user.
 func supervisedScreen(ix proto.Interaction) bool {
-	d := ix.Dialog
-	if ix.Kind != proto.IxScreen || ix.Private || ix.Secret || len(ix.Fields) > 0 || d == nil || strings.TrimSpace(d.Question) == "" {
+	if !safeScreenDialog(ix) {
 		return false
 	}
-	return slices.ContainsFunc(d.Options, func(o screen.Option) bool { return o.Kind == "" && o.Label != "" })
+	return slices.ContainsFunc(ix.Dialog.Options, func(o screen.Option) bool { return o.Kind == "" && o.Label != "" })
+}
+
+func safeScreenDialog(ix proto.Interaction) bool {
+	return ix.Kind == proto.IxScreen && !ix.Private && !ix.Secret && len(ix.Fields) == 0 &&
+		ix.Dialog != nil && strings.TrimSpace(ix.Dialog.Question) != ""
 }
 
 // userScreen says why supervised terminal dialog ix is the user's to decide, not its supervisor's ("" when the
-// supervisor may pick its option): Claude's startup trust and Bypass Permissions confirmations, which have ordinary
-// option rows though they authorize access, and a command that would send, reply or comment in the user's name,
-// spend money or delete (userApprovalWords). The supervisor hands those to the user with ask_escalate.
+// supervisor may pick its option): Claude's startup trust, external imports and Bypass Permissions confirmations,
+// and a command that would send, reply or comment in the user's name, spend money or delete (userApprovalWords).
+// The supervisor hands those to the user with ask_escalate.
 func userScreen(ix proto.Interaction) string {
 	d := ix.Dialog
 	if d == nil {
@@ -144,7 +148,9 @@ func userScreen(ix proto.Interaction) string {
 	}
 	for _, o := range d.Options {
 		label := strings.ToLower(strings.TrimSpace(o.Label))
-		if label == "yes, i trust this folder" || label == "yes, i accept" && strings.Contains(d.Detail+" "+d.Question, "Bypass Permissions mode") {
+		trust := label == "yes, i trust this folder" || label == "yes, allow external imports"
+		bypass := label == "yes, i accept" && strings.Contains(d.Detail+" "+d.Question, "Bypass Permissions mode")
+		if trust || bypass {
 			return "authorizes the agent's access, which only the user grants"
 		}
 	}

@@ -259,7 +259,12 @@ func compactable(c proto.Session) bool {
 	case "", "claude":
 		return c.SourceKind == ""
 	case "codex":
-		return c.SpaceKind != codexAppSpace && (c.SourceKind == "" || c.SourceKind == "codex_history" || c.SourceKind == "codex_app_server")
+		if c.SpaceKind == codexAppSpace {
+			// An idle, unowned Codex App thread explicitly advertised as resumable into a Persona terminal can be
+			// compacted there like any terminal Codex; live or non-takeover Codex App chats stay non-compactable.
+			return stoppedAgent(c) && c.Capabilities != nil && c.Capabilities.Takeover != nil && c.Capabilities.Takeover.CanResume
+		}
+		return c.SourceKind == "" || c.SourceKind == "codex_history" || c.SourceKind == "codex_app_server"
 	}
 	return false
 }

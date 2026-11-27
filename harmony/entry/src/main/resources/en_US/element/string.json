@@ -9087,6 +9087,38 @@
     {
       "name": "xiaoyi_failed",
       "value": "Unable to complete the request. Open Persona to check details."
+    },
+    {
+      "name": "fold_urgent_review",
+      "value": "Review"
+    },
+    {
+      "name": "fold_hover_deck_title",
+      "value": "Tabletop Deck"
+    },
+    {
+      "name": "fold_interrupt_agent",
+      "value": "Interrupt"
+    },
+    {
+      "name": "knowledge_minutes_checking",
+      "value": "Checking the whole recording…"
+    },
+    {
+      "name": "knowledge_minutes_checking_progress",
+      "value": "Checking the whole recording ({done} of {total} min)…"
+    },
+    {
+      "name": "knowledge_minutes_writing",
+      "value": "Writing the minutes…"
+    },
+    {
+      "name": "agents_use_herdr_tab_name",
+      "value": "Use the herdr tab name as the session name"
+    },
+    {
+      "name": "agents_use_herdr_tab_name_hint",
+      "value": "Shows the tab name first and syncs this preference across devices on this hub."
     }
   ]
 }
