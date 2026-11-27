@@ -104,7 +104,7 @@ export struct ComposerTopStrip {
         .onClick(() => this.toggleExpanded())
         .id('composer.queue.toggle')
 
-        if (this.queue.steersQueue) {
+        if (this.queue.steersQueue && this.queue.ownCount > 0) {
           Button({ type: ButtonType.Capsule }) {
             Row({ space: 4 }) {
               if (this.busy) {

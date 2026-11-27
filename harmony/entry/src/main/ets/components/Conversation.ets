@@ -75,6 +75,7 @@ import { ChatEdgeScrubOverlay } from './ChatEdgeScrubOverlay';
 import { extractComposerQueue } from '../core/ComposerQueue';
 import type { ComposerQueueState } from '../core/ComposerQueue';
 import { ComposerTopStrip } from './ComposerTopStrip';
+import { toastCenter } from '../models/ToastCenter';
 
 class ConversationFrame extends FrameCallback {
   private action: () => void;
@@ -859,7 +860,7 @@ export struct Conversation {
   @Local composerWidth: number = 360;
   @Local composerFrameWidth: number = 0;
   @Local composerFrameHeight: number = 0;
-  @Local private queueSendNowBusy: boolean = false;
+  @Local private queueSendNowTarget: string = '';
   @Local decisionPager: DecisionPager = new DecisionPager();
   @Local questions: QuestionWorkspace = new QuestionWorkspace();
   @Local questionInset: number = 0;
@@ -1251,7 +1252,7 @@ export struct Conversation {
     }));
   }
   private syncFeed(): void {
-    if (!this.active || !this.model.connected || this.model.demo || this.model.selected.kind !== 'conversation') {
+    if (!this.active || !this.model.connected || this.model.selected.kind !== 'conversation') {
       if (this.feedTimer !== -1) clearTimeout(this.feedTimer); this.feedTimer = -1;
       this.feed.close(); this.feedKey = ''; this.syncTimeline(); return;
     }
@@ -2281,33 +2282,52 @@ export struct Conversation {
   @Computed get composerQueueState(): ComposerQueueState {
     const selected = this.model.selected;
     if (!selected || !selected.id) return extractComposerQueue({});
-    const matched = selected.kind === 'session'
-      ? this.model.sessions.find((row: ResourceRow) => row.id === selected.id && row.machine === selected.machine)
-      : undefined;
+    const targetSession = selected.session || selected.id;
+    const pool = selected.kind === 'conversation' ? this.model.conversations : this.model.sessions;
+    const matched = pool.find((row: ResourceRow) =>
+      (row.session || row.id) === targetSession &&
+      (!selected.machine || row.machine === selected.machine) &&
+      (!selected.manager || row.manager === selected.manager)
+    );
     const source = matched || selected;
     return extractComposerQueue(source.data());
   }
+  private queueSendNowKey(owner: ClientModel = this.model, row: ResourceRow = this.model.selected): string {
+    if (!row || !row.id) return '';
+    return JSON.stringify([owner.scope(), row.machine, row.session || row.id]);
+  }
   private async sendQueuedNow(): Promise<void> {
-    if (!this.sendCurrent() || this.queueSendNowBusy) return;
-    const row = this.model.selected;
+    if (!this.sendCurrent()) return;
+    const owner = this.model, row = owner.selected;
     if (!row || !row.machine || !(row.session || row.id)) return;
-    const owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target();
-    this.queueSendNowBusy = true;
+    const busyKey = this.queueSendNowKey(owner, row);
+    if (!busyKey || this.queueSendNowTarget === busyKey) return;
+    const generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target();
+    const admit = (): boolean => this.active && owner === this.model && owner.owns(generation, scope) && owner.target() === target;
+    this.queueSendNowTarget = busyKey;
+    let sent = false;
     try {
       await owner.repo().call(
         '/api/v1/sessions/' + encodeURIComponent(row.machine) + '/' + encodeURIComponent(row.session || row.id) + '/queue/send-now',
         'POST',
-        {}
+        {},
+        '',
+        admit,
+        false,
+        undefined,
+        true
       );
-      if (this.sendCurrent() && this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
-        await owner.refresh();
-      }
-    } catch (_) {
+      sent = true;
+    } catch (error) {
       if (this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
-        owner.error = 'failed';
+        owner.reportError(error as Error);
+        toastCenter.error(tr(owner.error || 'failed'));
       }
     } finally {
-      this.queueSendNowBusy = false;
+      if (this.queueSendNowTarget === busyKey) this.queueSendNowTarget = '';
+    }
+    if (sent && this.active && this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+      try { await owner.refresh(); } catch (_) {}
     }
   }
   @Computed get quoteRemoveSize(): number { return Math.min(68,44*this.environment.fontScale); }
@@ -2325,7 +2345,7 @@ export struct Conversation {
       if (this.composerQueueState.items.length > 0) {
         ComposerTopStrip({
           queue: this.composerQueueState,
-          busy: this.queueSendNowBusy,
+          busy: this.queueSendNowTarget !== '' && this.queueSendNowTarget === this.queueSendNowKey(),
           onSendNow: () => { void this.sendQueuedNow(); }
         })
       }

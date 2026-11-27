@@ -176,10 +176,11 @@ export class DemoRepository extends HubRepository {
       [id, id, DEMO_MACHINE, DEMO_MANAGER, title, state, status, cwd, '/demo/ReleaseDesk', cwd, branch, branch, 'ReleaseDesk', 'live',
         cloneRecord(capabilities), 'demo:pane-' + id, title, launcher, model, lastText, false, false, false, '2026-11-27T09:00:00Z']);
     const changelog = session('demo-agent-changelog', 'Prepare the changelog', 'working', 'working', '/demo/ReleaseDesk', 'docs', 'codex', 'gpt-5.3-codex', 'Drafting v2.4 changelog & verifying diffs...');
+    const changelogCaps = Wire.object(changelog, 'capabilities');
+    changelogCaps['queue_send_now'] = true;
+    changelog['capabilities'] = changelogCaps;
     changelog['queued'] = ['Include Mate XT 2 tri-fold notes', 'Double-check zh_CN strings'];
-    changelog['own_queued_count'] = 2;
-    changelog['steers_queue'] = true;
-    changelog['can_send'] = true;
+    changelog['queued_relayed'] = 0;
     this.sessionsData = [
       session('demo-agent-review', 'Review release checks', 'needs_you', 'idle', '/demo/ReleaseDesk', 'main', 'claude', 'claude-sonnet-4-6', 'Release audit ready · Awaiting plan approval'),
       changelog,
@@ -418,7 +419,7 @@ export class DemoRepository extends HubRepository {
     const raw = record['queued'];
     if (!Array.isArray(raw) || raw.length === 0) {
       record['queued'] = [];
-      record['own_queued_count'] = 0;
+      record['queued_relayed'] = 0;
       return 0;
     }
     const items: DemoRecord[] = [];
@@ -437,7 +438,7 @@ export class DemoRepository extends HubRepository {
       this.appendTranscript(machine, session, items);
     }
     record['queued'] = [];
-    record['own_queued_count'] = 0;
+    record['queued_relayed'] = 0;
     return items.length;
   }
 
@@ -729,7 +730,8 @@ export class DemoRepository extends HubRepository {
       return demoRecord(['deleted'], [true]);
     }
     if (parts.length === 5 && parts[3] === 'queue' && parts[4] === 'send-now' && method === 'POST') {
-      this.dequeueSessionQueue(record, DEMO_MACHINE, sessionId, true);
+      const dequeued = this.dequeueSessionQueue(record, DEMO_MACHINE, sessionId, true);
+      if (dequeued === 0) throw new HttpFailure(409, 'nothing_queued');
       return demoRecord(['session', 'state'], [cloneRecord(record), 'done']);
     }
     if (action === 'interrupt' && method === 'POST') {

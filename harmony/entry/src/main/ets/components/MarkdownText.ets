@@ -46,6 +46,7 @@ export struct MarkdownText {
   @Local private pressedCodeKey: string = '';
   @Local private wrappedCodeKeys: string[] = [];
   private copyResetTimer: number = -1;
+  private disposed: boolean = false;
   @Local foreground: ResourceColor = $r('sys.color.font_primary');
   @Local secondary: ResourceColor = $r('sys.color.font_secondary');
   @Local emphasize: ResourceColor = $r('sys.color.font_emphasize');
@@ -55,14 +56,26 @@ export struct MarkdownText {
     this.emphasize = theme.colors.fontEmphasize; this.codeFill = theme.colors.compBackgroundTertiary;
   }
 
-  aboutToAppear(): void { this.entries = this.cache.update(this.text); }
+  aboutToAppear(): void {
+    this.disposed = false;
+    this.entries = this.cache.update(this.text);
+  }
   aboutToDisappear(): void {
+    this.disposed = true;
+    this.wrappedCodeKeys = [];
     if (this.copyResetTimer !== -1) {
       clearTimeout(this.copyResetTimer);
       this.copyResetTimer = -1;
     }
   }
-  @Monitor('text') textChanged(): void { this.entries = this.cache.update(this.text); }
+  @Monitor('text') textChanged(): void {
+    this.entries = this.cache.update(this.text);
+    if (this.wrappedCodeKeys.length > 0) {
+      this.wrappedCodeKeys = this.wrappedCodeKeys.filter((key: string) =>
+        this.entries.some((entry: KeyedMarkdownBlock) => key === entry.key || key.startsWith(entry.key + '.'))
+      );
+    }
+  }
 
   @Computed get scaleAgentProse(): boolean { return Math.abs(this.agentFontScale - 1) > 0.001; }
   @Computed get recapProse(): boolean { return this.recapReading && this.chatReply && !this.dockPlan; }
@@ -150,18 +163,20 @@ export struct MarkdownText {
     });
   }
 
-  private async copyCode(text: string, key: string): Promise<void> {
+  private copyCode(text: string, key: string): void {
     try {
-      await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, trimCodeForCopy(text)));
+      pasteboard.getSystemPasteboard().setDataSync(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, trimCodeForCopy(text)));
+      if (this.disposed) return;
       Haptics.selection();
       this.copiedCodeKey = key;
       if (this.copyResetTimer !== -1) clearTimeout(this.copyResetTimer);
       this.copyResetTimer = setTimeout(() => {
-        if (this.copiedCodeKey === key) this.copiedCodeKey = '';
+        if (!this.disposed && this.copiedCodeKey === key) this.copiedCodeKey = '';
         this.copyResetTimer = -1;
       }, 1600);
       toastCenter.show(tr('copied'));
     } catch (_) {
+      if (this.disposed) return;
       Haptics.error();
       toastCenter.error(tr('failed'));
     }

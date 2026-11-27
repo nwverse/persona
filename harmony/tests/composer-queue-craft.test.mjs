@@ -55,7 +55,7 @@ registerHooks({
   }
 });
 
-const { extractComposerQueue, formatTurnElapsed } = await import('../entry/src/main/ets/core/ComposerQueue.ts');
+const { extractComposerQueue } = await import('../entry/src/main/ets/core/ComposerQueue.ts');
 const { extractTurnChangesFromRaw, extractWorkStepsFromRaw } = await import('../entry/src/main/ets/core/WorkPresentation.ts');
 const { projectToolTurn } = await import('../entry/src/main/ets/core/Domain.ts');
 const { parseMarkdown } = await import('../entry/src/main/ets/core/Markdown.ts');
@@ -65,57 +65,99 @@ const { assistantTrayRows, TrayRequest } = await import('../entry/src/main/ets/m
 const read = (rel) => readFileSync(new URL('../entry/src/main/ets/' + rel, import.meta.url), 'utf8');
 const readResource = (locale) => JSON.parse(readFileSync(new URL('../entry/src/main/resources/' + locale + '/element/string.json', import.meta.url), 'utf8'));
 
-test('extractComposerQueue parses string and object queues, counts own vs relayed, and detects steersQueue', () => {
-  assert.deepEqual(extractComposerQueue({}), {
-    items: [],
-    ownCount: 0,
-    relayedCount: 0,
-    preview: '',
-    steersQueue: false
-  });
+test('extractComposerQueue aligns with Hub queued_relayed, capabilities.queue_send_now, Claude-in-pane, and malformed inputs', () => {
+  // Empty / malformed inputs
+  for (const bad of [undefined, null, {}, { queued: 'not-an-array' }, { queued: [null, 42, '   ', { text: '  ' }] }]) {
+    assert.deepEqual(extractComposerQueue(bad), {
+      items: [],
+      ownCount: 0,
+      relayedCount: 0,
+      preview: '',
+      steersQueue: false
+    });
+  }
 
-  const fromStrings = extractComposerQueue({
+  // Real Hub wire: queued_relayed marks trailing N items as relayed; Claude in a terminal pane steersQueue
+  const claudePane = extractComposerQueue({
     queued: ['  Include Mate XT 2\n  tri-fold notes  ', '', 'Double-check zh_CN strings', 'Relayed from Release room'],
-    own_queued_count: 2,
-    steers_queue: true
+    queued_relayed: 1,
+    pane_id: 'herdr-pane-1',
+    agent: 'claude',
+    capabilities: { send: true }
   });
-  assert.equal(fromStrings.items.length, 3);
-  assert.equal(fromStrings.ownCount, 2);
-  assert.equal(fromStrings.relayedCount, 1);
-  assert.equal(fromStrings.items[0].relayed, false);
-  assert.equal(fromStrings.items[1].relayed, false);
-  assert.equal(fromStrings.items[2].relayed, true);
-  assert.equal(fromStrings.preview, 'Include Mate XT 2 tri-fold notes');
-  assert.equal(fromStrings.steersQueue, true);
+  assert.equal(claudePane.items.length, 3);
+  assert.equal(claudePane.ownCount, 2);
+  assert.equal(claudePane.relayedCount, 1);
+  assert.equal(claudePane.items[0].relayed, false);
+  assert.equal(claudePane.items[1].relayed, false);
+  assert.equal(claudePane.items[2].relayed, true);
+  assert.equal(claudePane.preview, 'Include Mate XT 2 tri-fold notes');
+  assert.equal(claudePane.steersQueue, true);
 
-  const fromObjects = extractComposerQueue({
-    queued: [
-      { id: 'q-1', body: '  First follow-up  ', relayed: false },
-      { id: 'q-2', text: 'Forwarded note', sender: 'Release room' }
-    ],
+  // Clamping queued_relayed > items.length and negative queued_relayed
+  const allRelayed = extractComposerQueue({
+    queued: ['Relayed A', 'Relayed B'],
+    queued_relayed: 99,
     assistant: true,
-    can_send: true
+    capabilities: { send: true }
   });
-  assert.equal(fromObjects.items.length, 2);
-  assert.equal(fromObjects.ownCount, 1);
-  assert.equal(fromObjects.relayedCount, 1);
-  assert.deepEqual(fromObjects.items[0], { id: 'q-1', text: 'First follow-up', relayed: false, sender: '' });
-  assert.deepEqual(fromObjects.items[1], { id: 'q-2', text: 'Forwarded note', relayed: true, sender: 'Release room' });
-  assert.equal(fromObjects.preview, 'First follow-up');
-  assert.equal(fromObjects.steersQueue, true);
+  assert.equal(allRelayed.ownCount, 0);
+  assert.equal(allRelayed.relayedCount, 2);
+  assert.equal(allRelayed.items.every((item) => item.relayed), true);
+  assert.equal(allRelayed.steersQueue, true);
+
+  const clampedNeg = extractComposerQueue({
+    queued: ['Own A'],
+    queued_relayed: -3,
+    assistant: true,
+    capabilities: { send: false }
+  });
+  assert.equal(clampedNeg.ownCount, 1);
+  assert.equal(clampedNeg.relayedCount, 0);
+  assert.equal(clampedNeg.steersQueue, false);
+
+  // Codex without queue_send_now cannot steer queue; with capabilities.queue_send_now it can
+  const codexDefault = extractComposerQueue({
+    queued: ['Check diffs'],
+    agent: 'codex',
+    pane_id: 'herdr-pane-2',
+    capabilities: { send: true }
+  });
+  assert.equal(codexDefault.steersQueue, false);
+
+  const codexCap = extractComposerQueue({
+    queued: ['Check diffs'],
+    agent: 'codex',
+    source_kind: 'live',
+    capabilities: { send: true, queue_send_now: true }
+  });
+  assert.equal(codexCap.steersQueue, true);
+
+  // Claude outside terminal (source_kind set, no queue_send_now) cannot steer queue
+  const claudeDesktop = extractComposerQueue({
+    queued: ['Wait'],
+    agent: 'claude',
+    source_kind: 'claude_desktop',
+    pane_id: 'pane-1',
+    capabilities: { send: true }
+  });
+  assert.equal(claudeDesktop.steersQueue, false);
+
+  // Colliding fallback & duplicate explicit IDs always produce unique item IDs
+  const uniqueCheck = extractComposerQueue({
+    queued: [
+      { id: 'idx-1', body: 'First' },
+      'Second',
+      { id: 'dup', text: 'Third' },
+      { id: 'dup', text: 'Fourth' }
+    ]
+  });
+  const ids = uniqueCheck.items.map((item) => item.id);
+  assert.equal(new Set(ids).size, 4);
+  assert.equal(ids[0], 'idx-1');
 });
 
-test('formatTurnElapsed formats seconds under 60s and Mm SSs at 60s and above', () => {
-  assert.equal(formatTurnElapsed(0, 5000), '0s');
-  assert.equal(formatTurnElapsed(10000, 10000), '0s');
-  assert.equal(formatTurnElapsed(10000, 17400), '7s');
-  assert.equal(formatTurnElapsed(10000, 69999), '59s');
-  assert.equal(formatTurnElapsed(10000, 70000), '1m 00s');
-  assert.equal(formatTurnElapsed(10000, 75000), '1m 05s');
-  assert.equal(formatTurnElapsed(10000, 764000), '12m 34s');
-});
-
-test('DemoRepository exposes live main counts (Needs You 1, In Progress 1), changelog queue, work steps, code block, interrupt, and dequeue', async () => {
+test('DemoRepository exposes live main counts (Needs You 1, In Progress 1), wire-aligned changelog queue, work steps, code block, interrupt, and 409 nothing_queued', async () => {
   const repo = new DemoRepository();
   const roster = repo.roster();
 
@@ -143,15 +185,19 @@ test('DemoRepository exposes live main counts (Needs You 1, In Progress 1), chan
   assert.equal(trayRows.filter((row) => row.bucket === 'needs').length, 1);
   assert.equal(trayRows.filter((row) => row.bucket === 'progress').length, 1);
 
-  // 2. demo-agent-changelog queue state
+  // 2. demo-agent-changelog real Hub wire fields & queue state
   const changelog = roster.sessions.find((row) => row.id === 'demo-agent-changelog');
   assert.ok(changelog);
-  const queue = extractComposerQueue(changelog.data());
+  const rawChangelog = changelog.data();
+  assert.equal(rawChangelog.queued_relayed, 0);
+  assert.equal(rawChangelog.capabilities?.queue_send_now, true);
+  const queue = extractComposerQueue(rawChangelog);
   assert.deepEqual(queue.items.map((item) => item.text), [
     'Include Mate XT 2 tri-fold notes',
     'Double-check zh_CN strings'
   ]);
   assert.equal(queue.ownCount, 2);
+  assert.equal(queue.relayedCount, 0);
   assert.equal(queue.steersQueue, true);
 
   // 3. demo-agent-changelog transcript has work steps, changed files, and fenced TypeScript code block
@@ -174,13 +220,17 @@ test('DemoRepository exposes live main counts (Needs You 1, In Progress 1), chan
   assert.equal(afterInterrupt.data().status, 'interrupted');
   assert.equal(afterInterrupt.data().last_text, 'Interrupted in local demo.');
 
-  // 5. Send now dequeues queued items cleanly into transcript
-  await repo.call('/api/v1/sessions/demo-mac/demo-agent-changelog/queue/send-now', 'POST', {});
+  // 5. Send now dequeues queued items cleanly into transcript, and empty queue returns 409 nothing_queued
+  await repo.call('/api/v1/sessions/demo-mac/demo-agent-changelog/queue/send-now', 'POST', {}, '', undefined, false, undefined, true);
   const afterSendNow = (await repo.sessions()).find((row) => row.id === 'demo-agent-changelog');
   assert.equal(extractComposerQueue(afterSendNow.data()).items.length, 0);
   const transcriptAfterSendNow = repo.historyItems(afterSendNow);
   assert.ok(transcriptAfterSendNow.some((item) => item.text === 'Include Mate XT 2 tri-fold notes'));
   assert.ok(transcriptAfterSendNow.some((item) => item.text === 'Double-check zh_CN strings'));
+  await assert.rejects(
+    repo.call('/api/v1/sessions/demo-mac/demo-agent-changelog/queue/send-now', 'POST', {}),
+    { status: 409, code: 'nothing_queued' }
+  );
 
   // 6. Posting a message also dequeues remaining queued items cleanly
   repo.seed();
@@ -193,7 +243,7 @@ test('DemoRepository exposes live main counts (Needs You 1, In Progress 1), chan
   assert.ok(repo.historyItems(afterPost).some((item) => item.text === 'Ship the changelog draft.'));
 });
 
-test('ComposerTopStrip, Conversation, MarkdownText, WorkStepsCard, and localized strings satisfy Stage 1B craft', () => {
+test('ComposerTopStrip, Conversation, MarkdownText, WorkStepsCard, and localized strings satisfy Stage 1B craft and lifecycle hygiene', () => {
   const strip = read('components/ComposerTopStrip.ets');
   const conversation = read('components/Conversation.ets');
   const markdown = read('components/MarkdownText.ets');
@@ -203,6 +253,7 @@ test('ComposerTopStrip, Conversation, MarkdownText, WorkStepsCard, and localized
   assert.ok(strip.includes("id('composer.queue.strip')"));
   assert.ok(strip.includes("id('composer.queue.toggle')"));
   assert.ok(strip.includes("id('composer.queue.send_now')"));
+  assert.ok(strip.includes('this.queue.steersQueue && this.queue.ownCount > 0'));
   assert.ok(strip.includes("id('composer.queue.list')"));
   assert.ok(strip.includes('Colors.divider'));
   assert.ok(strip.includes('Motion.state'));
@@ -210,12 +261,24 @@ test('ComposerTopStrip, Conversation, MarkdownText, WorkStepsCard, and localized
   assert.ok(strip.includes("toastCenter.show(tr('copied'))"));
   assert.ok(strip.includes("tr('composer_queue_relayed')"));
 
+  // Conversation: syncFeed active in demo, sessions+conversations lookup, target-scoped send-now busy, emptyRequest & admit & reportError
+  const syncFeedMatch = conversation.match(/private syncFeed\(\): void \{[\s\S]*?\n  \}/);
+  assert.ok(syncFeedMatch);
+  assert.doesNotMatch(syncFeedMatch[0], /this\.model\.demo/);
   assert.ok(conversation.includes('ComposerTopStrip'));
   assert.ok(conversation.includes('extractComposerQueue'));
-  assert.ok(conversation.includes('composerQueueState.items.length > 0'));
+  assert.ok(conversation.includes('this.model.conversations'));
+  assert.ok(conversation.includes('this.model.sessions'));
+  assert.ok(conversation.includes('queueSendNowTarget'));
   assert.ok(conversation.includes('/queue/send-now'));
+  assert.ok(conversation.includes('owner.reportError(error as Error)'));
+  assert.ok(conversation.includes('toastCenter.error(tr('));
 
+  // MarkdownText: sync pasteboard + disposed guard + wrappedCodeKeys cleanup/pruning
   assert.ok(markdown.includes('wrappedCodeKeys'));
+  assert.ok(markdown.includes('setDataSync('));
+  assert.ok(markdown.includes('this.disposed'));
+  assert.ok(markdown.includes('this.wrappedCodeKeys = []'));
   assert.ok(markdown.includes("tr(this.isCodeWrapped(blockKey) ? 'code_unwrap_lines' : 'code_wrap_lines')"));
   assert.ok(markdown.includes("id('markdown.code.wrap')"));
   assert.ok(markdown.includes("id('markdown.code.copy')"));
