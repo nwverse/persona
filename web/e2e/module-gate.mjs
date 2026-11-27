@@ -8,7 +8,10 @@
 // spec: { base, token, phase, hub: "test" | "mock", expect: { <id>: true | false }, modules: { <id>: { entries, chunks } },
 //         shots, out, schemes: ["light", "dark"] }
 // An entry (scripts/ci/module-e2e.py MODULES): { name, hubs, page, ready, selector | text, opens?: { selector | text | url },
-// off_page?: { path, text } }. Writes { checks: [{ module, check, scheme, ok, detail }], hello, requested } to `out`.
+// off_page?: { path, text }, off?: { kept: [{ name, selector | text, shows: [{ name, selector | text }] }],
+// hides: [{ name, selector | text }] } }. `off` is for data the user already has (#13430): with the module off each
+// kept item is still listed on the entry's page, opens, shows what it stored and none of the module's controls.
+// Writes { checks: [{ module, check, scheme, ok, detail }], hello, requested } to `out`.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
@@ -95,8 +98,9 @@ try {
         await go(e.page);
         const ready = await visible(page, e.ready, 30000);
         record(id, `${e.name}: its page renders`, scheme, ready, e.page);
-        const there = await visible(page, e, on ? 15000 : 4000);
-        record(id, `${e.name} ${on ? "present" : "absent"}`, scheme, there === on, `${e.selector ?? e.text} on ${e.page}`);
+        const there = await visible(page, e, on || e.off ? 15000 : 4000);
+        // An entry with `off` is the user's data: it stays while the module is off (checked item by item below).
+        if (on || !e.off) record(id, `${e.name} ${on ? "present" : "absent"}`, scheme, there === on, `${e.selector ?? e.text} on ${e.page}`);
         await shot(`${id}-${e.name.replace(/\W+/g, "-")}`);
         if (on && there && e.opens) {
           await locate(page, e).first().click();
@@ -108,11 +112,34 @@ try {
           record(id, `${e.name} opens`, scheme, opened, page.url());
           await shot(`${id}-${e.name.replace(/\W+/g, "-")}-opened`);
         }
+        if (!on && e.off) {
+          for (const k of e.off.kept) {
+            if (k.needs_on && !spec.phases.includes("on")) continue;  // only data the on phase made exists
+            await go(e.page);
+            const listed = await visible(page, k, 15000);
+            record(id, `${e.name}: ${k.name} still listed while off`, scheme, listed, `${k.selector ?? k.text} on ${e.page}`);
+            if (!listed) continue;
+            await locate(page, k).first().click();
+            for (const s of k.shows) record(id, `${k.name}, read-only: shows ${s.name}`, scheme, await visible(page, s, 15000), page.url());
+            await page.waitForTimeout(1200);
+            for (const h of e.off.hides) record(id, `${k.name}, read-only: no ${h.name}`, scheme, !(await visible(page, h, 1500)), `${h.selector ?? h.text} on ${page.url()}`);
+            await shot(`${id}-${k.name.replace(/\W+/g, "-")}-off-read-only`);
+          }
+        }
         if (!on && e.off_page) {
           await go(e.off_page.path);
           const gone = await visible(page, { text: e.off_page.text }, 15000);
           record(id, `${e.off_page.path} answers like a removed page`, scheme, gone, page.url());
           await shot(`${id}-${e.off_page.path.replace(/\W+/g, "-")}-off`);
+        }
+        // A page the default panel keeps for existing data (#13430): it stays, read-only, and none of the module's
+        // write entries is on it.
+        if (!on && e.off_stays) {
+          const p = e.off_stays;
+          await go(p.path);
+          for (const s of p.shows) record(id, `${p.path} stays, read-only: shows ${s.name}`, scheme, await visible(page, s, 20000), page.url());
+          for (const h of p.hides) record(id, `${p.path}, read-only: no ${h.name}`, scheme, !(await visible(page, h, 1500)), `${h.selector ?? h.text} on ${page.url()}`);
+          await shot(`${id}-${p.path.replace(/\W+/g, "-")}-off-readonly`);
         }
       }
     }
@@ -120,7 +147,7 @@ try {
     // the app (history, no reload), as a person clicking about does. Nothing of an off module may be fetched here.
     await go("/");
     steady = true;
-    for (const m of Object.values(spec.modules)) {
+    for (const [id, m] of Object.entries(spec.modules)) {
       for (const e of m.entries.filter((e) => e.hubs.includes(spec.hub))) {
         for (const path of [e.page, e.off_page?.path].filter(Boolean)) {
           await page.evaluate((p) => {
@@ -128,6 +155,18 @@ try {
             dispatchEvent(new PopStateEvent("popstate"));
           }, path);
           await page.waitForTimeout(2000);
+        }
+        // Kept data opened inside the app while its module is off: the read-only page must fetch none of the module.
+        if (!spec.expect[id] && e.off) {
+          for (const k of e.off.kept) {
+            if (k.needs_on && !spec.phases.includes("on")) continue;
+            await page.evaluate((p) => {
+              history.pushState(null, "", p);
+              dispatchEvent(new PopStateEvent("popstate"));
+            }, e.page);
+            if (await visible(page, k, 10000)) await locate(page, k).first().click();
+            await page.waitForTimeout(2000);
+          }
         }
       }
     }

@@ -48,7 +48,6 @@ internal/cliport
 internal/clitext
 internal/cliwire
 internal/closeout
-internal/compat
 internal/compatprobe
 internal/configuration
 internal/connector
@@ -58,7 +57,6 @@ internal/connector/serve
 internal/connectorwire
 internal/db
 internal/db/dbtest
-internal/deeplink
 internal/depguard
 internal/devices
 internal/devicewire
@@ -89,7 +87,6 @@ internal/hub
 internal/hubcli
 internal/hubclient
 internal/hubedge
-internal/i18n
 internal/identity
 internal/imageorient
 internal/imessagewire
@@ -99,7 +96,6 @@ internal/kbwire
 internal/knowledgeuihost
 internal/lark
 internal/larkhost
-internal/lazyre
 internal/lcuconfirm
 internal/link
 internal/linktray
@@ -215,12 +211,10 @@ internal/teamdocs
 internal/terminalmaintenance
 internal/terncli
 internal/testhome
-internal/textfmt
 internal/tmux
 internal/toolcli
 internal/toolschema
 internal/transcribejob
-internal/transcribelive
 internal/transcript
 internal/tunnel
 internal/tzguard
@@ -236,6 +230,7 @@ internal/workspacenaming
 plugins
 scripts/fleetsoak
 scripts/pushrec
+scripts/transcribelive
 
 # Pending: the names the PRs open when this freeze landed were adding, each with its PRs
 # (python3 scripts/test/name_freezes.py pending --write, 2026-11-25; drafts idle more than 14 days left out).

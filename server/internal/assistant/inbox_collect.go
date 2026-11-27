@@ -68,7 +68,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		}
 	}
 	b.srcMu.Unlock()
+	captureExternal := s.externalInboxDB() != nil
 	b.mu.Lock()
+	b.externalCapture = captureExternal
 	b.larkAccount = cfg.LarkAccount
 	b.batch = newInboxBatch()
 	if r.Replay {
@@ -123,6 +125,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		// Normal merge maintenance may change rows outside an explicit recovery's selection.
 		changed = b.followMerged(append(changed, b.releaseMembers()...), now)
 	}
+	b.mu.Unlock()
+	s.prepareExternalInbox(ctx, changed)
+	b.mu.Lock()
 	changed, todo := b.sortBatch(batch, changed, now)
 	b.applyRuledPolicies(changed)
 	b.settleRound()

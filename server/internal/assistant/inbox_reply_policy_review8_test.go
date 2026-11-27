@@ -246,7 +246,7 @@ func TestInboxReplyPolicyFailedPublicationMarkerSurvivesConcurrentMetadataReload
 		h.inbox.touched(it.ID)
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	h.inbox.onDemandDraftSaveHook = func() {
 		h.inbox.onDemandDraftSaveHook = nil
 		if _, err := suggestTool(t, h, `{"recap":"Concurrent metadata persisted before the failure tombstone"}`); err != nil {
@@ -621,7 +621,7 @@ func TestInboxReplyPolicyFailedPublicationMarkerSurvivesConcurrentMetadataReload
 		h.inbox.touched(it.ID)
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	h.inbox.onDemandDraftSaveHook = func() {
 		h.inbox.onDemandDraftSaveHook = nil
 		if _, err := suggestTool(t, h, `{"recap":"Concurrent metadata persisted before the failure tombstone"}`); err != nil {

@@ -4,14 +4,14 @@
 // task's card quotes as its title (and todo id, on the block's first line) and what its agent said last.
 import { useLayoutEffect, useRef, useState } from "react";
 import { openSpot } from "../../lib/comments";
-import { parseQuote, parseQuotes, useQuotes, type DraftQuote } from "../../lib/drafts";
+import { parseQuote, parseQuotes, type CommentImagePicker, type DraftQuote } from "../../lib/drafts";
 import { getSession } from "../../lib/store";
 import { clock } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { cx, EASE } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { CommentBlock, goToComment, CommentCard } from "./CommentCard";
+import { CommentBlock, CommentsChip, fileCommentPanel, goToComment } from "./CommentCard";
 import { t } from "../../i18n";
 
 /** "Quoting Persona · 16:45" / "Quoting task "…" · 16:45": who said it, or which task, and when, as far as is known. */
@@ -51,37 +51,24 @@ export function QuoteBar({ quote, onRemove }: { quote: DraftQuote; onRemove: () 
   );
 }
 
-/** Everything waiting above the input: the message quote (at most one), then the comments numbered in order. */
-export function QuoteBars({ draftKey, quotes, onRemove }: { draftKey: string; quotes: readonly DraftQuote[]; onRemove: (id: string) => void }) {
-  const { editing } = useQuotes(draftKey);
-  const list = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const scroller = list.current;
-    const note = scroller?.querySelector("textarea");
-    if (!scroller || !note) return;
-    // CommentCard focuses without scrolling the page; reveal its note only within this bounded list.
-    let top = 0;
-    for (let el: HTMLElement | null = note; el && el !== scroller; el = el.offsetParent as HTMLElement | null) top += el.offsetTop;
-    const bottom = top + note.offsetHeight;
-    if (bottom > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = bottom - scroller.clientHeight;
-    else if (top < scroller.scrollTop) scroller.scrollTop = top;
-  }, [editing]);
-  let n = 0;
+/** Everything waiting above the input: the message quote (at most one), then a single compact chip for all comments. */
+export function QuoteBars({ draftKey, quotes, onRemove, onAddCommentImages }: {
+  draftKey?: string; quotes: readonly DraftQuote[]; onRemove: (id: string) => void; onAddCommentImages?: CommentImagePicker;
+}) {
+  const messageQuotes = quotes.filter((q) => !q.comment);
+  const comments = quotes.filter((q) => q.comment);
   return (
-    <div ref={list} className="relative flex max-h-[25dvh] flex-col gap-1.5 overflow-y-auto overscroll-contain px-0.5 pt-0.5 [&>div]:shrink-0" data-quotes data-scroll-box>
-      {quotes.map((q) =>
-        q.comment ? (
-          <CommentCard key={q.id} draftKey={draftKey} quote={q} n={++n} editing={editing === q.id} onRemove={() => onRemove(q.id!)} />
-        ) : (
-          <QuoteBar key={q.id} quote={q} onRemove={() => onRemove(q.id!)} />
-        ),
-      )}
+    <div className="relative flex flex-col gap-1.5 px-0.5 pt-0.5" data-quotes>
+      {messageQuotes.map((q) => (
+        <QuoteBar key={q.id} quote={q} onRemove={() => onRemove(q.id!)} />
+      ))}
+      {comments.length > 0 && <CommentsChip draftKey={draftKey} comments={comments} onRemove={onRemove} onAddImages={onAddCommentImages} />}
     </div>
   );
 }
 
 /** A sent message's leading quote blocks (splitQuotes): the quote card, and a comment card for each comment. `mid`/`sid`
- *  let a code comment open its file or diff again. */
+ *  let a file or code comment open its source again. */
 export function QuoteStack({ blocks, mid, sid }: { blocks: readonly string[]; mid?: string; sid?: string }) {
   const quotes = parseQuotes(blocks);
   let n = 0;
@@ -93,6 +80,7 @@ export function QuoteStack({ blocks, mid, sid }: { blocks: readonly string[]; mi
         const cwd = mid && sid ? getSession(mid, sid)?.cwd : undefined;
         // the path the agent read is relative to the session's folder; with the folder known it opens again
         let open = spot && mid && cwd ? () => openSpot({ ...spot, mid, sid, cwd, path: spot.diff || spot.file.startsWith("/") ? spot.path : `${cwd.replace(/\/+$/, "")}/${spot.file}` }) : undefined;
+        if (fileCommentPanel(q.comment.file, mid, sid)) open = () => goToComment(q, { mid, sid });
         // an element of a preview: that session's preview, at the page it was on (the port is the page's)
         const el = q.comment.element;
         const port = el ? Number(new URL(el.url, "http://localhost").port) : 0;

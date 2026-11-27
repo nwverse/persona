@@ -123,8 +123,10 @@ func waitingForCard(t *testing.T, s *Service, id string) *acceptAsk {
 	if got, total := s.snapshotUnaccepted(ctx, s.location(ctx)); total != 1 || len(got) != 1 || got[0].Changed != a.Changed {
 		t.Fatalf("snapshot: %+v total=%d", got, total)
 	}
-	if facts := s.briefFactsAt(ctx, time.Now(), ""); len(facts.Accept) != 1 || facts.Accept[0].id != id {
-		t.Fatalf("briefing: %+v", facts.Accept)
+	if s.briefingOn() {
+		if facts := s.briefFactsAt(ctx, time.Now(), ""); len(facts.Accept) != 1 || facts.Accept[0].ID != id {
+			t.Fatalf("briefing: %+v", facts.Accept)
+		}
 	}
 	return a
 }

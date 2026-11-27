@@ -132,6 +132,7 @@ func (s *Service) nudgeLoop(ctx context.Context) {
 		case <-t.C:
 			cctx, cancel := context.WithTimeout(ctx, time.Minute)
 			s.larkModule().NudgeTick(cctx)
+			s.larkModule().HandoffTick(cctx)
 			cancel()
 		}
 	}
@@ -235,6 +236,10 @@ func (h larkHost) AcceptReply(ctx context.Context, messageID, text string, media
 
 func (h larkHost) ApproveOwnerAction(ctx context.Context, ev botcard.MessageEvent, text, action string) bool {
 	return h.s.botApproveOwnerAction(ctx, ev, text, action)
+}
+
+func (h larkHost) ProjectReviewOwnerInput(ctx context.Context, ref, machine, session string) error {
+	return h.s.projectReviewFeishuInput(ctx, ref, SessionRef{MachineID: machine, SessionID: session})
 }
 
 // ---- the commands ----
@@ -412,7 +417,7 @@ func (h larkHost) LaterHandled(ctx context.Context, id string) (bool, error) {
 	return h.s.laterHandled(ctx, id, time.Now())
 }
 
-func (h larkHost) TabName(ctx context.Context, prompt string) string { return h.s.tabName(ctx, prompt) }
+func (h larkHost) TabName(ctx context.Context, prompt string) string { return localTabName(prompt) }
 
 func (h larkHost) ApplyModel(ctx context.Context, kind string, params map[string]any) error {
 	return h.s.applyModel(ctx, kind, params)
@@ -428,6 +433,11 @@ func (s *Service) startChatAgent(ctx context.Context, machine string, params map
 		Session proto.Session `json:"session"`
 	}
 	err := s.call(ctx, machine, DeviceSessionStart, params, &res)
+	if err == nil {
+		nameFrom, _ := params["prompt"].(string)
+		requested, _ := params["tab_name"].(string)
+		s.nameAgentTabLater(agentTabNameStart(machine, res.Session, requested, nameFrom))
+	}
 	return res.Session, err
 }
 
@@ -589,4 +599,19 @@ func (h larkHost) OpenTodo(ctx context.Context, o assistantwire.ChatOpenTodo) (s
 		s.logf("task %s: feed: %v", todo.ID, err)
 	}
 	return todo.ID, nil
+}
+
+// StartHandoffGuest starts the guest that answers a proxy reply (bot_handoff.go).
+func (h larkHost) StartHandoffGuest(ctx context.Context, handoff, text, launcher string) (string, string, error) {
+	return h.s.StartHandoffGuest(ctx, handoff, text, launcher)
+}
+
+// RaiseHandoffDecision asks the owner to approve one draft before the bot posts it.
+func (h larkHost) RaiseHandoffDecision(ctx context.Context, handoff string, req assistantwire.OutsideDecisionRequest) (string, error) {
+	return h.s.RaiseHandoffDecision(ctx, handoff, req)
+}
+
+// WithdrawHandoffDecision takes back a confirmation nobody answered.
+func (h larkHost) WithdrawHandoffDecision(ctx context.Context, id string) {
+	h.s.WithdrawHandoffDecision(ctx, id)
 }

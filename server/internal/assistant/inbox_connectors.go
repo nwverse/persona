@@ -180,6 +180,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 				b.roundWrite(open)
 				open.Count += moveCount(t)
 				fillConnectorItem(open, t)
+				b.setConnectorExternalPath(open, t)
 				b.replaceContextKeepingMergedMembers(open, open.Context)
 				index.note(open)
 				b.noteReceived(open, prev, nil)
@@ -233,6 +234,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		it := &InboxItem{ID: itemID, Source: id, Account: id, AccountName: name, StartedAt: t.At, Count: moveCount(t)}
 		fillConnectorItem(it, t)
 		it.Connector.Replay = scoped
+		b.setConnectorExternalPath(it, t)
 		b.noteReceived(it, inboxSeen{}, nil)
 		if t.Tier != "" {
 			b.noteTriaged(it)
@@ -355,7 +357,9 @@ func (s *Service) replyConnectorItem(ctx context.Context, r inboxReplyReq) (alre
 	if !c.Connector.CanReply {
 		return false, errCannotReply
 	}
-	if err = s.connectorReply(ctx, c.Source, connector.InboxReply{Thread: c.Connector.Thread, ItemID: c.ID, Last: c.Last, Text: r.text}, r.sendID); err != nil {
+	// A transport duplicate may be this manager's first delivered receipt.
+	// Only the local repeat above can skip sent/waiting bookkeeping.
+	if _, err = s.connectorReply(ctx, c.Source, connector.InboxReply{Thread: c.Connector.Thread, ItemID: c.ID, Last: c.Last, Text: r.text}, r.sendID); err != nil {
 		return false, err
 	}
 	r.once.clientID = r.text

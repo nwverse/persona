@@ -8,6 +8,10 @@ The host renders every extension's settings page, including built-in, configured
 
 Lifecycle writes use the extension's owning manager and extension ID together. Two managers may have an extension with the same ID; selecting one must never read or change the other.
 
+On the web, an installed extension can need configuration before it can draw its page. Opening a link to that page
+shows the missing settings reported by its manager and an action to open that installation's settings. After saving,
+use the browser's Back button to reopen the original page.
+
 ## Sections, in order
 
 1. **Enabled** — the first control, before setup and configuration.
@@ -51,10 +55,13 @@ Show rows in this order:
 | **Version** | Current installed version; **Not provided** when missing. Do not infer a version from a repository URL. |
 | **Extension ID** | Stable machine-readable extension ID, selectable for support. |
 | **Source** | **Built-in**, **Configured (manager.json)**, **Attached**, **Development**, or **Installed** according to manager-owned metadata. |
+| **Extension type** | The extension's contribution category in plain words, such as **Connector** or **Voice chat**. The hub's internal category key is never shown. |
 | **Runtime** | Declared runtime kind, or **Not provided**. Runtime connectivity is a separate status, not Enabled. |
 | **Installed from** | Host-provided installation provenance when available; **Not provided** otherwise. Never expose local installation directories or credentials as provenance. |
 
 The page title and description come from the localized extension manifest; the information labels and source classifications come from the host. Manager identity, when needed to disambiguate copies, is host chrome, not extension content. Optional **Publisher**, **Command-line tools**, **Homepage** and **Warning** rows follow the required identity rows when that metadata is present. Homepages must be valid HTTPS links; warnings retain the manager's explanation.
+
+An extension installed outside an extension market gets one plain sentence here saying that Persona will not update it automatically and where to update, remove, or configure it. Updates and Danger zone then state only their own consequence (“Check its source for a new version.” / “Remove it at its source.”), so the same source notice is not repeated down the page.
 
 Keep the host's existing contribution switches, isolation status, declared permissions, dependencies and pack-member details. These form an advanced, host-owned part of Information after the identity rows; extensions cannot supply or override their controls. They must not interrupt the extension configuration form or appear after the Danger zone. Disclosure sections may reduce visual noise, but do not hide a failed isolation state or a dependency blocker.
 
@@ -86,15 +93,21 @@ Keep the host's existing contribution switches, isolation status, declared permi
 
 ## Web implementation and API boundary
 
-`web/src/views/settings/ExtensionSettingsPage.tsx` owns the five standard sections and lifecycle controls. Every extension-detail route in `web/src/views/settings/Extensions.tsx` renders it; authentication, schema fields, secrets and custom-page links are passed only into its configuration area. Host-rendered contribution, isolation and permission details follow the identity summary. The market's package-preview page is an installation/consent workflow, not another extension settings page; connector and channel settings retain their separate business switches.
+`web/src/views/settings/ExtensionSettingsPage.tsx` owns the five standard sections and lifecycle controls. Every extension-detail route in `web/src/views/settings/Extensions.tsx` renders it; authentication, schema fields, secrets and custom-page links are passed only into its configuration area. Host-rendered contribution, isolation and permission details follow the identity summary. The Web page maps the hub's contribution-category `kind` to **Extension type** and shows **Runtime** as **Not provided**, rather than presenting an internal category key as a runtime. Network permissions lead with plain words and say that the listed hosts are the services the extension declared; the personal agent-runtime permission explains what it reaches without exposing `runtime.sock`. The market's package-preview page is an installation/consent workflow, not another extension settings page; connector and channel settings retain their separate business switches.
 
 No new server fields are needed for this web implementation: the established `source`, `origin`, `read_only`, `attached`, `auto_upgrade`, `auto_upgrade_paused`, `upgrade` and `previous_version` responses already distinguish the supported full-rights market operations. `origin` is manager-owned installation metadata, not a manifest setting. Web does not offer owner-only local/attached management actions or infer privileges from an arbitrary source URL. Global automatic-upgrade state and manual catalog refresh explicitly target the same manager as the extension. Actual authorization remains enforced by the existing manager endpoints.
 
-Entry-list editing (#9504) is an explicit later addition to this boundary. Web and Android send `entry_lists=1` on the initial detail read and every detail-returning configuration, secret, lifecycle or contribution write. Without that query the hub leaves raw configuration intact but filters the entry-list form and dynamic secret rows; non-opted configuration writes preserve the saved entry arrays, including when an old draft omitted them or held a stale copy. An immediate fixed-field save from a capable page (the machine switches) adds `preserve_entries=1` alongside `entry_lists=1`, selecting the same preserving write without losing the opted-in response. A stale immediate save therefore cannot delete entries or secrets added elsewhere. Apple keeps its existing fixed-field editor and cannot delete entries by saving an unrelated setting until its part of #12325 lands; entry-list editing is never a hidden raw-JSON fallback.
+An extension page's action may ask Web to open its own settings with proposed ordinary values
+(`persona://settings/extensions/<id>?set=<url-encoded JSON object>`). The existing form overlays only known non-secret,
+non-entry-list fields from that object onto its draft; the saved configuration remains the base, and Save is still the
+only write. The hub bounds and validates the object before the link reaches Web. Apple and Android do not apply this
+prefill slice yet.
+
+Entry-list editing (#9504) is an explicit later addition to this boundary. Web, Android and Apple send `entry_lists=1` on the initial detail read and every detail-returning configuration, secret, lifecycle or contribution write. Without that query the hub leaves raw configuration intact but filters the entry-list form and dynamic secret rows; non-opted configuration writes preserve the saved entry arrays, including when an old draft omitted them or held a stale copy. An immediate fixed-field save from a capable page (the machine switches) adds `preserve_entries=1` alongside `entry_lists=1`, selecting the same preserving write without losing the opted-in response. A stale immediate save therefore cannot delete entries or secrets added elsewhere. Entry-list editing is never a hidden raw-JSON fallback.
 
 ## Apple implementation and API boundary
 
-Both iOS and macOS route extension details through `apple/Persona/Views/Settings/ExtensionsViews.swift`. Its `ExtensionDetailView` supplies only authentication, custom-page links, connector configuration, schema fields, secrets and the configuration Save action to `ExtensionSettingsView`. The same SwiftUI shell renders Enabled, Information, Updates, Auto-upgrade and Danger zone on both platforms; there is no per-extension opt-in or separate Mac lifecycle implementation. Contribution switches, dependencies, pack members and permissions remain host-owned advanced information, after the required identity rows and before Updates.
+Both iOS and macOS route extension details through `apple/Persona/Views/Settings/ExtensionsViews.swift`. Its `ExtensionDetailView` supplies only authentication, custom-page links, connector configuration, schema fields (including declared entry lists via `ExtensionEntryListSection`), secrets and the configuration Save action to `ExtensionSettingsView`. All detail reads and detail-returning writes opt in with `entry_lists=1`, and immediate fixed-field saves (`saveNow`) add `preserve_entries=1`; dynamic entry secrets open the shared write-only `ExtensionSecretSheet` (`SecretField`) titled with both entry and secret only after the entry is saved, and are omitted from the fixed Secrets group. The same SwiftUI shell renders Enabled, Information, Updates, Auto-upgrade and Danger zone on both platforms; there is no per-extension opt-in or separate Mac lifecycle implementation. Contribution switches, dependencies, pack members and permissions remain host-owned advanced information, after the required identity rows and before Updates.
 
 The shared route covers built-in, market-installed, locally installed, configured, development and attached extensions, including extensions added later. Connector/channel/bot business settings and market installation/consent pages are not substitute extension settings pages; their own business switches are unchanged.
 

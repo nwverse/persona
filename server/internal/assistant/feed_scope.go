@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -26,10 +27,23 @@ var errNoSuchConversation = i18n.Err("hub-deleted_sessions.unknown")
 // todoFeedKinds are the feed's kinds about one to-do, by its id in ref (tasks.go). feedAnswered is one too, never shown.
 var todoFeedKinds = []string{feedTask, feedReceipt, feedRouted, feedReport, feedReview, feedStartRemedy}
 
-// extensionConversations are those of list (GET /api/v1/assistant) an extension's token is shown: none of a space, by
-// its space or its directory (without the registry here, any space is left out).
-func extensionConversations(list []proto.Session) []proto.Session {
-	return slices.DeleteFunc(list, func(c proto.Session) bool { return runSpace(c) != "" })
+// extensionViewConversations are those of list (GET /api/v1/assistant) an extension's token is shown:
+// none of a space, by its space or its directory (without the registry here, any space is left out),
+// and never a LogicalPlaceholder whose space is not affirmatively known to be the default empty space.
+// The one route that lists a space's conversations to an extension is GET
+// /api/v1/assistant/tracks/{slug}/conversations, behind the spaces scope and row by row
+// (trackConversations, track_conversations.go).
+func (s *Service) extensionViewConversations(ctx context.Context, list []proto.Session) []proto.Session {
+	return slices.DeleteFunc(list, func(c proto.Session) bool {
+		if runSpace(c) != "" {
+			return true
+		}
+		if s.isLogicalOfflineRow(c) {
+			sp, known := s.logicalRowSpace(ctx, c)
+			return !known || sp != ""
+		}
+		return false
+	})
 }
 
 // feedHiddenFromExtension: an extension's token is not shown conversation id's feed: one of a space hidden from
@@ -45,8 +59,11 @@ func (s *Service) feedHiddenFromExtension(ctx context.Context, id string) bool {
 			return true
 		}
 		if c, ok := s.session(ctx, s.conversationMachine(ctx, id, ""), id); ok {
-			if hidden := s.extensionHides(ctx, runSpace(c)); hidden || s.isAssistantRow(c) {
-				return hidden
+			if hidden := s.extensionHides(ctx, runSpace(c)); hidden {
+				return true
+			}
+			if s.isAssistantRow(c) && !(s.isLogicalOfflineRow(c) && c.Space == "" && c.Cwd == "") {
+				return false
 			}
 		}
 	}
@@ -58,6 +75,9 @@ func (s *Service) feedHiddenFromExtension(ctx context.Context, id string) bool {
 // which of the task cards worked out from them (above). One read (todosHidden) decides every to-do the items, their
 // message cards and the plans name; a plan is judged as it is now and as its item keeps it.
 func (s *Service) extensionFeed(ctx context.Context, items []FeedItem, plans map[string]*TaskPlan) ([]FeedItem, map[string]*TaskPlan, func(TaskCard) bool) {
+	aboutTodo := func(it FeedItem) bool {
+		return slices.Contains(todoFeedKinds, it.Kind) || it.Kind == feedNotice && it.Ref != ""
+	}
 	messageTodo := func(it FeedItem) string {
 		var c MessageCard
 		_ = json.Unmarshal(it.Body, &c)
@@ -78,7 +98,7 @@ func (s *Service) extensionFeed(ctx context.Context, items []FeedItem, plans map
 	}
 	for _, it := range items {
 		switch {
-		case slices.Contains(todoFeedKinds, it.Kind):
+		case aboutTodo(it):
 			ids = append(ids, it.Ref)
 		case it.Kind == feedMessage:
 			ids = append(ids, messageTodo(it))
@@ -117,9 +137,14 @@ func (s *Service) extensionFeed(ctx context.Context, items []FeedItem, plans map
 	planItems := map[string]bool{} // the plans whose items it is shown
 	out := make([]FeedItem, 0, len(items))
 	for _, it := range items {
+		// A report-only routine stores its provider digest as an ordinary notice for older
+		// clients. Give it the same extension visibility as the structured brief item.
+		if it.Kind == feedNotice && strings.HasPrefix(it.ID, routineContributionNoticePrefix) {
+			continue
+		}
 		var shown bool
 		switch {
-		case slices.Contains(todoFeedKinds, it.Kind):
+		case aboutTodo(it):
 			shown = todoShown(it.Ref)
 		case it.Kind == feedMessage:
 			shown = todoShown(messageTodo(it))

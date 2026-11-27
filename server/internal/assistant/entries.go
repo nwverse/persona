@@ -24,9 +24,6 @@ type entriesStore interface {
 }
 
 func (s *Service) entriesDB() entriesStore {
-	if s.store == nil {
-		return nil
-	}
 	st, _ := s.store().(entriesStore)
 	return st
 }

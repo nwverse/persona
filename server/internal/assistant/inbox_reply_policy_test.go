@@ -594,7 +594,7 @@ func TestInboxReplySuggestionSendGateLegacySchema(t *testing.T) {
 			defer h.inbox.mu.Unlock()
 			it.ReplyCategory, it.ReplyMode = "approval_permission", "owner_only"
 		}}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		if _, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true); err == nil {
 			t.Fatal("reply was confirmed after its policy became forbidden during persistence")
 		}
@@ -612,7 +612,7 @@ func TestInboxReplySuggestionSendGateLegacySchema(t *testing.T) {
 			h.in.cfg.ReplyPolicy = cfg
 			h.in.mu.Unlock()
 		}}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		if _, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true); err == nil {
 			t.Fatal("reply was confirmed against a superseded policy revision during persistence")
 		}
@@ -627,7 +627,7 @@ func TestInboxReplySuggestionSendGateLegacySchema(t *testing.T) {
 			h.in.configErr = errors.New("synthetic configuration outage")
 			h.in.mu.Unlock()
 		}}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		_, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true)
 		var rpcErr *rpc.Error
 		if !errors.As(err, &rpcErr) || rpcErr.Code != assistantwire.CodeInboxSendFailed {
@@ -656,7 +656,7 @@ func TestInboxReplySuggestionSendGateLegacySchema(t *testing.T) {
 					h.in.configRaw = tc.raw
 					h.in.mu.Unlock()
 				}}
-				h.store = func() Store { return st }
+				h.setStore(func() Store { return st })
 				_, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true)
 				var rpcErr *rpc.Error
 				if !errors.As(err, &rpcErr) || rpcErr.Code != assistantwire.CodeInboxSendFailed {
@@ -688,7 +688,7 @@ func TestInboxReplySuggestionSendGateLegacySchema(t *testing.T) {
 					h.in.configQueue = []assistantwire.InboxConfig{tc.before, tc.after}
 					h.in.mu.Unlock()
 				}}
-				h.store = func() Store { return st }
+				h.setStore(func() Store { return st })
 				if _, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true); err != nil {
 					t.Fatalf("inert disabled configuration rejected a legacy send: %v", err)
 				}
@@ -708,7 +708,7 @@ func TestInboxReplySuggestionSendGateLegacySchema(t *testing.T) {
 			h.in.configQueue = []assistantwire.InboxConfig{oldCfg, newCfg}
 			h.in.mu.Unlock()
 		}}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		if _, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true); err == nil {
 			t.Fatal("reply used the pre-veto policy after the final fresh read changed")
 		}
@@ -1173,7 +1173,7 @@ func TestInboxReplyPolicyDraftDoesNotReturnUnpersistedTextLegacySchema(t *testin
 		it.Agent.State, it.Agent.Draft = AgentSkipped, ""
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	text, err := h.draftReply(t.Context(), it.ID, "")
 	if err == nil || text != "" {
 		t.Fatalf("failed publication returned sendable obsolete text: text=%q err=%v", text, err)
@@ -1195,7 +1195,7 @@ func TestInboxReplyPolicyDraftFailedWriteWithoutRollbackDoesNotReturnTextLegacyS
 		h.inbox.touched(it.ID)
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	text, err := h.draftReply(t.Context(), it.ID, "")
 	if err == nil || text != "" {
 		t.Fatalf("unpersisted intact mirror returned a successful draft: text=%q err=%v", text, err)
@@ -1218,7 +1218,7 @@ func TestInboxReplyPolicyDraftDoesNotReturnReplacedTextLegacySchema(t *testing.T
 		it.Agent.State, it.Agent.Draft = AgentSkipped, ""
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	text, err := h.draftReply(t.Context(), it.ID, "")
 	if !errors.Is(err, errSuggestionStale) || text != "" {
 		t.Fatalf("successful write returned text whose mirror was replaced: text=%q err=%v", text, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,7 +41,7 @@ func simulateSupervisionRestart(t *testing.T, s *Service) {
 	}
 	b.timer, b.timerAt = nil, time.Time{}
 	b.pending, b.pendingLoaded, b.sent, b.dedup = nil, false, nil, nil
-	b.queued, b.last, b.asks, b.hold, b.visible = nil, time.Time{}, nil, nil, nil
+	b.queued, b.last, b.asks = nil, time.Time{}, nil
 	b.legacyBackground, b.failSeen = nil, nil
 	b.mu.Unlock()
 	b.dedupMu.Unlock()
@@ -616,6 +617,8 @@ func TestUnreachableLeaderWithoutUpperRetriesInCurrentProcess(t *testing.T) {
 	}
 	kept := storedSupervisePending(t, s)[g.id()].Key == g.Key
 
+	// putTodo stored a copy of leader that shares this Agents array, and the digest timer reads it: change a copy.
+	leader.Agents = slices.Clone(leader.Agents)
 	leader.Agents[0].ReleasedAt = nil // the same leader task has an active agent again; no hub restart
 	putTodo(s, leader)
 	setMain("conv1")

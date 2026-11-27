@@ -163,9 +163,17 @@ func (s *Service) fitNewLauncher(ctx context.Context, m Device, own startPick, p
 	return note, agent, err
 }
 
+func ompStartModelTaskHost(m Device, params map[string]any) bool {
+	host, _ := params["host"].(string)
+	if host == "" {
+		host = proto.EngineHostsOf(m.Engine).Default
+	}
+	return host == "" || host == proto.EngineHerdr || host == proto.EngineOrca
+}
+
 func (s *Service) applyOmpStartDefaults(ctx context.Context, m Device, own startPick, agent startAgent, params map[string]any) error {
 	declared, _ := params["agent_type"].(string)
-	if params["launcher"] != "omp" || agent.agent != "omp" || (declared != "" && declared != "omp") || !herdrTaskHost(m, params) {
+	if params["launcher"] != "omp" || agent.agent != "omp" || (declared != "" && declared != "omp") || !ompStartModelTaskHost(m, params) {
 		return nil
 	}
 	if source := compat.Source(agent.source); source != "" && source != "builtin" && !machineSource(source) {
@@ -213,7 +221,7 @@ func launcherKindSnapshot(discovered, overrides []ConfiguredLauncher, name strin
 	}
 	if kind == "" {
 		switch name {
-		case "claude", "codex", "traex":
+		case "claude", "codex", "traex", "agy":
 			kind = name
 		}
 	}
@@ -257,12 +265,20 @@ func (a startAgent) allowAllOver(mode string) bool {
 // one m has (launcherInstead), with that launcher's own default model unless the caller named a model, and with the
 // caller's effort; note says so in the
 // user's language, for the task's why and the tool's answer. A list that can't be read (m offline, a timeout) counts
-// as having it, as mainChatFit does: nothing is refused or replaced on a guess. What the launcher runs comes from the
-// same list, so a caller changing permissions by it does not have to ask for it again.
+// as having it, as mainChatFit does: nothing is refused or replaced on a guess. A default of Claude's desktop app gives
+// way the same on every start but a person's New Agent, list or not (models_desktop.go). What the launcher runs comes
+// from the same list, so a caller changing permissions by it does not have to ask for it again.
 func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, params map[string]any) (note string, agent startAgent, err error) {
 	name, _ := params["launcher"].(string)
 	if proto.IsExternalLauncher(name) {
 		return "", startAgent{}, i18n.Err("external-adapter.purpose_unsupported")
+	}
+	withoutList, scopeErr := s.launcherWithoutInventory(ctx, m.ID, name)
+	if scopeErr != nil {
+		placementOf(ctx).hit(m.ID, "launcher_missing", i18n.Args{"launcher": name})
+		if own.explicitLauncher() {
+			return "", startAgent{}, scopeErr
+		}
 	}
 	asked, _ := params["host"].(string)
 	if host := agentStartHost(m, asked); host != "" {
@@ -271,31 +287,30 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 			return note, agent, err
 		}
 	}
-	if s.launcherEverywhere(ctx, name) {
-		if name == "" || name == "claude" {
-			return "", startAgent{agent: "claude", snapshot: "claude"}, nil
-		}
-		for _, l := range s.storedLaunchers(ctx) {
-			if l.Name == name {
-				return "", startAgent{agent: l.AgentType(), snapshot: l.AgentType(), source: "persona"}, nil
-			}
-		}
-		return "", startAgent{}, nil
+	if withoutList.agent != "" {
+		return "", withoutList, nil
 	}
+	// The desktop app's launcher as a default opens only a person's New Agent start in the app: any other start gives
+	// way as on a computer without it, whatever its list says (models_desktop.go).
+	appDefault := !own.explicitLauncher() && !personStart(ctx) && s.desktopAppProvider(ctx, launcherProvider(name))
 	list, known := s.launchersHere(withUnhidden(ctx, name), m.ID) // a hidden default still runs (#4659)
-	if !known {
+	if !known && !appDefault && scopeErr == nil {
 		return "", s.lastSeenAgent(ctx, m.ID, name), nil
 	}
+	list = s.launchersWithinScope(ctx, m.ID, list)
 	discovered := make([]ConfiguredLauncher, 0, len(list))
 	for _, l := range list {
 		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
 	}
 	overrides := s.hello(ctx).Models.Launchers[m.ID]
 	agentOf := configuredStartAgentLookup(discovered, overrides)
-	if slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name }) {
+	here := slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name })
+	if here && !appDefault {
 		return "", agentOf(name), nil
 	}
-	placementOf(ctx).hit(m.ID, "launcher_missing", i18n.Args{"launcher": name})
+	if known && !here {
+		placementOf(ctx).hit(m.ID, "launcher_missing", i18n.Args{"launcher": name})
+	}
 	if own.explicitLauncher() {
 		return "", startAgent{}, i18n.Err("assistant-tasks.launcher_not_on_machine", i18n.Args{
 			"machine": firstNonEmpty(m.Name, m.ID), "launcher": name, "launchers": strings.Join(launcherNamesOn(m, list), ", "),
@@ -321,12 +336,23 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 	if err := s.applyModel(ctx, "agent.new", params); err != nil {
 		return "", startAgent{}, err
 	}
-	s.logf("start on %s: launcher %s is not there, using %s", m.ID, name, to)
-	key := "assistant-tasks.launcher_swapped"
 	args := i18n.Args{"launcher": name, "machine": firstNonEmpty(m.Name, m.ID), "to": to}
 	if own.model != "" {
-		key = "assistant-tasks.launcher_swapped_model"
 		args["model"] = own.model
+	}
+	key := "assistant-tasks.launcher_swapped"
+	switch {
+	case appDefault && own.model != "":
+		key = "assistant-tasks.launcher_desktop_default_model"
+	case appDefault:
+		key = "assistant-tasks.launcher_desktop_default"
+	case own.model != "":
+		key = "assistant-tasks.launcher_swapped_model"
+	}
+	if appDefault {
+		s.logf("start on %s: launcher %s opens only a person's New Agent start, using %s", m.ID, name, to)
+	} else {
+		s.logf("start on %s: launcher %s is not there, using %s", m.ID, name, to)
 	}
 	note = i18n.T(s.lang(ctx), key, args)
 	current, _ := params["launcher"].(string)
@@ -355,7 +381,7 @@ func (s *Service) lastSeenAgent(ctx context.Context, machine, name string) start
 			}
 		}
 		if len(configured) == 0 {
-			return startAgent{}
+			break
 		}
 		for _, l := range sessionLaunchers(configured, overrides) {
 			if l.Name == name {
@@ -364,6 +390,9 @@ func (s *Service) lastSeenAgent(ctx context.Context, machine, name string) start
 				return a
 			}
 		}
+	}
+	if name == "agy" {
+		return startAgent{agent: "agy", snapshot: "agy"}
 	}
 	return startAgent{}
 }
@@ -391,10 +420,32 @@ func (s *Service) launchersHere(ctx context.Context, machine string) (list []pro
 	return list, true
 }
 
-// launcherEverywhere: every machine has name (plain claude; a managed launcher, which the node runs through personad
-// launch), so its list need not be asked.
-func (s *Service) launcherEverywhere(ctx context.Context, name string) bool {
-	return !proto.IsExternalLauncher(name) && (name == "" || name == "claude" || slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == name }))
+// launcherWithoutInventory recognizes built-ins and managed launchers whose scope permits the destination.
+// Other launchers need the destination's inventory to establish what they run.
+func (s *Service) launcherWithoutInventory(ctx context.Context, machine, name string) (startAgent, error) {
+	if name == "" || name == "claude" {
+		return startAgent{agent: "claude", snapshot: "claude"}, nil
+	}
+	if proto.IsExternalLauncher(name) {
+		return startAgent{}, nil
+	}
+	l, ok := s.managedNamed(ctx, name)
+	if !ok {
+		return startAgent{}, nil
+	}
+	if err := s.managedLauncherScopeErr(ctx, machine, l); err != nil {
+		return startAgent{}, err
+	}
+	agent := l.AgentType()
+	return startAgent{agent: agent, snapshot: agent, source: "persona"}, nil
+}
+
+// launchersWithinScope removes stale or colliding inventory names that a start would refuse.
+func (s *Service) launchersWithinScope(ctx context.Context, machine string, list []proto.Launcher) []proto.Launcher {
+	ctx = withManagedSnapshot(ctx, s.storedLaunchers(ctx))
+	return slices.DeleteFunc(list, func(l proto.Launcher) bool {
+		return s.launcherScopeErr(ctx, machine, l.Name) != nil
+	})
 }
 
 // launcherInstead is the launcher a default m does not have gives way to: plain claude when m has Claude Code (its

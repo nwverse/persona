@@ -51,7 +51,7 @@ func (s *Service) triageInbox(ctx context.Context) {
 	b.mu.Lock()
 	var todo, stale, ruled []*InboxItem
 	for _, it := range b.items {
-		if it.VisibilityExcluded {
+		if it.VisibilityExcluded || it.externallyRouted() {
 			continue
 		}
 		if it.open() && it.TriagedAt != it.Last && it.Context != "" {

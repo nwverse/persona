@@ -75,8 +75,10 @@ def ordered(packages, i):
 
 
 def cold_start_ms(text):
-    """TotalTime of an `am start -W`, or None when the phone says the start was not cold (the process was still alive, or
-    something else, such as a permission prompt, came to the front instead)."""
+    """TotalTime for a successful cold start. Older shells may omit status or launch state."""
+    status = re.search(r"^Status:[ \t]*(.*)$", text, re.MULTILINE)
+    if status and status.group(1).strip() != "ok":
+        return None
     state = re.search(r"LaunchState: (\w+)", text)
     total = re.search(r"TotalTime: (\d+)", text)
     if not total or (state and state.group(1) != "COLD"):

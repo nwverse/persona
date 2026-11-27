@@ -89,19 +89,18 @@ afterEach(() => {
 });
 
 describe("NavRail", () => {
-  it("keeps global ordinals while moving a 28-tick window over 50 positions", async () => {
-    const ticks = Array.from({ length: 50 }, (_, i) => ({ ...tick(i), ordinal: 629 + i }));
+  it("renders a dense viewport of a 678-input history and keeps global ordinals", async () => {
+    const ticks = Array.from({ length: 678 }, (_, i) => ({ ...tick(i), ordinal: i + 1 }));
     act(() => root.render(<NavRail ticks={ticks} total={678} scroller={scrollerWith(1000, 800)} onJump={() => {}} reset="example/global" />));
     await settle();
-    const marks = host.querySelectorAll("button[data-tick]");
-    expect(marks).toHaveLength(28);
-    expect(marks[0].getAttribute("aria-label")).toContain("651");
-    expect(marks[27].getAttribute("aria-label")).toContain("678");
-    expect((marks[0] as HTMLElement).style.height).toBe("15px");
+    const marks = [...host.querySelectorAll<HTMLElement>("button[data-tick]")];
+    expect(marks.length).toBeGreaterThan(28);
+    expect(marks.length).toBeLessThan(120);
+    expect(marks.at(-1)?.getAttribute("aria-label")).toContain("678");
+    expect(marks[0].style.height).toBe("7px");
     const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
     act(() => rail.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
-    expect(host.querySelector('[data-tick="0"]')?.getAttribute("aria-label")).toContain("629");
-    expect(host.querySelector('[aria-live="polite"]')?.textContent).toContain("629");
+    expect(host.querySelector('[data-tick="0"]')?.getAttribute("aria-label")).toContain("1");
     expect(host.querySelector('[aria-live="polite"]')?.textContent).toContain("678");
   });
 
@@ -391,12 +390,14 @@ describe("NavRail", () => {
     await settle();
     const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
     const button = host.querySelector("button")!;
-    rail.setPointerCapture = vi.fn();
-    rail.releasePointerCapture = vi.fn();
+    const track = rail.querySelector<HTMLElement>("[data-nav-track]")!;
+    track.setPointerCapture = vi.fn();
+    track.releasePointerCapture = vi.fn();
+    track.getBoundingClientRect = () => ({ top: 288 } as DOMRect);
     const pointer = (type: string) => {
       const e = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientY: 300 });
       Object.defineProperty(e, "pointerId", { value: 7 });
-      act(() => rail.dispatchEvent(e));
+      act(() => track.dispatchEvent(e));
     };
     act(() => button.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })));
     pointer("pointerdown");
@@ -424,27 +425,54 @@ describe("NavRail", () => {
     expect(host.querySelector("[data-nav-preview]")).toBeNull();
   });
 
-  it("pages the tick window in both wheel directions without scrolling the transcript", async () => {
+  it("scrolls the 240-input track by native pixels and keeps it independent of the transcript", async () => {
     const sc = scrollerWith(700, 600);
-    const scrollBy = vi.fn();
-    sc.scrollBy = scrollBy;
-    act(() => root.render(<NavRail ticks={Array.from({ length: 80 }, (_, i) => tick(i))} scroller={sc} onJump={() => {}} reset="example/wheel" />));
+    sc.scrollBy = vi.fn();
+    act(() => root.render(<NavRail ticks={Array.from({ length: 240 }, (_, i) => tick(i))} scroller={sc} onJump={() => {}} reset="example/wheel" />));
     await settle();
-    const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
-    const wheel = (deltaY: number) => act(() => rail.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true })));
-    const first = () => Number(rail.querySelector("button")?.dataset.tick);
-    expect(first()).toBe(52);
-    wheel(-100);
-    expect(first()).toBeLessThan(52);
-    wheel(-100);
-    wheel(-100);
+    const el = host.querySelector<HTMLElement>("[data-nav-track]")!;
+    const first = () => Number(el.querySelector("button")?.dataset.tick);
+    const tail = first();
+    expect(tail).toBeGreaterThan(100);
+    const wheel = (deltaY: number) => act(() => {
+      el.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true }));
+      // jsdom dispatches the wheel event without applying the browser's default scrolling.
+      el.scrollTop += deltaY;
+      el.dispatchEvent(new Event("scroll"));
+    });
+    wheel(-14);
+    expect(first()).toBe(tail - 2);
+    wheel(-el.scrollTop);
     expect(first()).toBe(0);
-    expect(rail.querySelectorAll("button")).toHaveLength(28);
-    wheel(100);
-    wheel(100);
-    wheel(100);
-    expect(first()).toBe(52);
-    expect(scrollBy).not.toHaveBeenCalled();
+    wheel(800);
+    expect(first()).toBe(110);
+    expect(el.querySelectorAll("button").length).toBeLessThan(100);
+    expect(sc.scrollBy).not.toHaveBeenCalled();
+    expect(sc.scrollTop).toBe(0);
+  });
+
+  it("follows the reading position only when the rail is idle", async () => {
+    const sc = scrollerWith(700, 156);
+    const ticks = Array.from({ length: 240 }, (_, i) => tick(i));
+    for (const [id, top] of [[0, 0], [200, 1800]]) {
+      const line = sc.firstElementChild!.appendChild(document.createElement("div"));
+      line.dataset.line = `seg:${id}`;
+      const row = line.appendChild(document.createElement("div"));
+      row.getBoundingClientRect = () => ({ top: top - sc.scrollTop } as DOMRect);
+    }
+    act(() => root.render(<NavRail ticks={ticks} scroller={sc} onJump={() => {}} reset="example/active" />));
+    await settle();
+    const first = host.querySelector('[data-tick="0"]')!;
+    const track = host.querySelector<HTMLElement>("[data-nav-track]")!;
+    act(() => first.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })));
+    act(() => { sc.scrollTop = 1800; sc.dispatchEvent(new Event("scroll")); });
+    await settle();
+    expect(track.scrollTop).toBe(0);
+    act(() => first.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body })));
+    act(() => sc.dispatchEvent(new Event("scroll")));
+    await settle();
+    expect(track.scrollTop).toBeGreaterThan(1000);
+    expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-tick")).toBe("200");
   });
 
   it("selects every loaded input with the keyboard in a bounded window without jumping until Enter", async () => {
@@ -493,12 +521,14 @@ describe("NavRail", () => {
     render([tick(2), tick(3), tick(4)]);
     await settle();
     const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
-    rail.setPointerCapture = vi.fn();
-    rail.releasePointerCapture = vi.fn();
+    const track = rail.querySelector<HTMLElement>("[data-nav-track]")!;
+    track.setPointerCapture = vi.fn();
+    track.releasePointerCapture = vi.fn();
+    track.getBoundingClientRect = () => ({ top: 288 } as DOMRect);
     const pointer = (type: string, y: number) => {
       const e = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientY: y });
       Object.defineProperty(e, "pointerId", { value: 7 });
-      act(() => rail.dispatchEvent(e));
+      act(() => track.dispatchEvent(e));
     };
     pointer("pointerdown", 291);
     render([tick(0), tick(1), tick(2), tick(3), tick(4)]);
@@ -507,7 +537,7 @@ describe("NavRail", () => {
     expect(host.querySelector("[data-nav-preview]")?.textContent).toBe("question 3");
     expect(jump).not.toHaveBeenCalled();
     pointer("pointerup", 300);
-    act(() => host.querySelector('[data-tick="3"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    act(() => host.querySelector('[data-tick="3"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
     expect(jump).toHaveBeenCalledTimes(1);
     expect(jump).toHaveBeenLastCalledWith("seg:3");
     pointer("pointerdown", 291);
@@ -578,7 +608,7 @@ describe("NavRail", () => {
       expect(host.querySelector('[aria-live="polite"]')?.textContent).toContain(t("chat-navrail.state_pending"));
     });
 
-    it("keeps touch navigation with states in a wide pane and hides it in a narrow pane", async () => {
+    it("keeps touch navigation with states in wide and compact long chats", async () => {
       finePointer.matches = false;
       const jumps: string[] = [];
       act(() => root.render(<NavRail ticks={five()} scroller={scrollerWith(390, 700)} onJump={(id) => { jumps.push(id); }} reset="example/touch" />));
@@ -591,9 +621,19 @@ describe("NavRail", () => {
       await settle();
       const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
       expect(rail.dataset.navTouch).toBe("true");
-      expect(rail.style.touchAction).toBe("none");
+      expect(rail.querySelector<HTMLElement>("[data-nav-track]")?.style.touchAction).toBe("none");
       act(() => host.querySelectorAll<HTMLElement>("button[data-tick]")[1].click());
       expect(jumps).toEqual(["seg:2"]);
+
+      const compact = scrollerWith(390, 700);
+      const long = Array.from({ length: 120 }, (_, i) => tick(i + 1));
+      act(() => root.render(<NavRail ticks={long} scroller={compact} onJump={(id) => { jumps.push(id); }} reset="example/touch" marks={marks} />));
+      await settle();
+      expect(compact.hasAttribute("data-nav-compact")).toBe(true);
+      const strip = host.querySelector<HTMLElement>("[data-nav-track]")!;
+      expect(strip.style.touchAction).toBe("none");
+      act(() => strip.querySelector<HTMLElement>('[data-tick="119"]')!.click());
+      expect(jumps).toEqual(["seg:2", "seg:120"]);
     });
   });
 

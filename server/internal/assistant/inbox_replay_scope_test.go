@@ -133,8 +133,10 @@ func TestInboxReplayOnlyHandsSelectedLarkBotMentionToMain(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
 	for len(toMain(h.f)) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+		<-tick.C
 	}
 	if sent := toMain(h.f); len(sent) != 1 || sent[0] == "" || sent[0] == unrelated.Context {
 		t.Fatalf("main sends = %v", sent)
@@ -204,6 +206,8 @@ func TestRecoveredReplayQueuesOnlySelectedOldActionWithOriginalDate(t *testing.T
 	t.Cleanup(func() { h.inbox.handing.Unlock() })
 	h.Service.handleRecoveredInbox(ctx, []inboxMove{{selected.ID, selected.Last}})
 	deadline := time.Now().Add(time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
 	for time.Now().Before(deadline) {
 		h.inbox.mu.Lock()
 		queued := selected.Agent != nil && selected.Agent.State == AgentQueued && selected.Agent.Of == selected.Last
@@ -211,7 +215,7 @@ func TestRecoveredReplayQueuesOnlySelectedOldActionWithOriginalDate(t *testing.T
 		if queued {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		<-tick.C
 	}
 	h.inbox.mu.Lock()
 	defer h.inbox.mu.Unlock()
