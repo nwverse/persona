@@ -196,6 +196,7 @@ const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => (
 // a conversation that holds one (#10357). Until they are in it shows as the owner's bubble alone, so it never blinks out.
 const SessionReviewMenuItem = lazyPage(() => import("./SessionReviewMenuItem").then((m) => m.SessionReviewMenuItem));
 const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
+const DeliveryBanner = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.DeliveryBanner));
 const BackgroundActivity = lazyDialog(() => import("./BackgroundActivity").then((m) => m.default));
 
 const NO_FEED: FeedItem[] = [];
@@ -3013,6 +3014,13 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
             compactingToResend={compactingToResend || Boolean(isAssistant && session?.compaction?.state === "running")}
             onDismiss={dismissBanner}
           />
+        )}
+        {/* a logical conversation's input that has not gone in (#17431): which one waits for its receipt and how long,
+            what waits behind it, and the expired ones with Resend / Ignore. Never an idle chat that swallowed a message */}
+        {!detached && keptUndelivered.some((m) => m.reason) && (
+          <PageBoundary page="undelivered">
+            <Suspense fallback={null}><DeliveryBanner mid={mid} sid={sid} list={keptUndelivered} /></Suspense>
+          </PageBoundary>
         )}
         {/* the goal it works toward, right over the composer as cindy's goal indicator (#5421) */}
         {session?.goal && !assistant && <Suspense fallback={null}><GoalBar goal={session.goal} /></Suspense>}
