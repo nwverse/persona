@@ -99,7 +99,8 @@ func (h *orcaHost) front(ctx context.Context, paneKey string, prompt bool) (orca
 }
 
 // Read is terminal.read of the visible screen as plain text: Orca reads no colors here, and the screen read is the one
-// that never switches source, so "recent" is the screen too. Lines cuts it to its last rows.
+// that never switches source, so "recent" is the screen too. The input box's text, which Orca lifts out of the rows,
+// is back in its row (orcart.Screen.Text). Lines cuts it to its last rows.
 func (h *orcaHost) Read(ctx context.Context, pane host.PaneRef, o host.ReadOpts) (string, error) {
 	if o.ANSI {
 		return "", fmt.Errorf("%w: Orca reads screens as plain text only", host.ErrUnsupported)
@@ -311,6 +312,7 @@ func (h *orcaHost) guardedClose(ctx context.Context, pane host.PaneRef, beforeCl
 	if err == nil {
 		h.mu.Lock()
 		delete(h.made, pane.ID)
+		delete(h.agentTabs, pane.ID)
 		h.mu.Unlock()
 	}
 	if errors.Is(err, errNoOrcaTerminal) || orcart.IsCode(err, "terminal_handle_stale") ||

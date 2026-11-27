@@ -9,8 +9,80 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+var nativeClaudeModel = lazyre.New(`(?i)(?:^|[/:.@_-])claude(?:[-_]|$)`)
+
+func nonClaudeDispatchModel(models ...string) string {
+	for _, model := range models {
+		if proto.ValidModelID(model) && !isTierAlias(model) && !nativeClaudeModel.MatchString(proto.TrimModelWindow(model)) {
+			return model
+		}
+	}
+	return "deepseek-chat"
+}
+
+func dispatchClaudeEnv(env map[string]any, aliases proto.ModelAliases, model string) string {
+	get := func(key string) string {
+		value, _ := env[key].(string)
+		return value
+	}
+	configured := nonClaudeDispatchModel(get("ANTHROPIC_MODEL"), model)
+	for _, key := range tierModelVars {
+		env[key] = nonClaudeDispatchModel(get(key), configured)
+	}
+	for key, value := range aliases.Env() {
+		env[key] = value
+	}
+	if aliases["subagent_model"] == "" {
+		env["CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL"] = get("CLAUDE_CODE_SUBAGENT_MODEL")
+	}
+	env["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] = "1"
+	return configured
+}
+
+func (n *Node) claudeModelAliasSettings(ctx context.Context, launcher, cwd, settings string, aliases proto.ModelAliases, requested string) (string, string, error) {
+	if err := aliases.Validate(); err != nil {
+		return "", "", err
+	}
+	if settings == "" {
+		if _, managed := n.managedLauncher(launcher); managed {
+			return "", "", errors.New("cannot prepare managed Claude dispatch settings")
+		}
+		settings = n.launcherOwnSettings(ctx, launcher)
+	}
+	merged := map[string]any{}
+	if settings != "" {
+		var err error
+		merged, err = readLauncherSettings(settings, cwd, n.home)
+		if err != nil {
+			return "", "", errors.New("cannot read Claude settings for model_aliases")
+		}
+	}
+	env, _ := merged["env"].(map[string]any)
+	if env == nil {
+		env = map[string]any{}
+	}
+	model, _ := merged["model"].(string)
+	configured := dispatchClaudeEnv(env, aliases, model)
+	selected := resolveTier(planTier(requested), func(key string) string {
+		value, _ := env[key].(string)
+		return value
+	})
+	if selected == "" || isTierAlias(selected) || strings.EqualFold(proto.TrimModelWindow(selected), "claude") {
+		selected = withMarker(requested, configured)
+	}
+	env["ANTHROPIC_MODEL"] = selected
+	merged["model"], merged["env"] = selected, env
+	raw, err := json.Marshal(merged)
+	if err != nil {
+		return "", "", errors.New("cannot encode Claude settings for model_aliases")
+	}
+	path, err := writeSettings(n.dir, "model-aliases-"+newUUID()+".json", raw)
+	return path, selected, err
+}
 
 // A launcher alias can bring its own settings (`alias work="claude --settings ~/.claude/settings.work.json …"`, with
 // the gateway, its token and the model in that file's env). Every claude start Persona makes adds its own --settings

@@ -62,6 +62,9 @@ type clarifyAttempt struct {
 	clientMsgID string
 	text        string
 	originKey   string
+	sending     bool
+	turnStarted bool
+	turnEnded   bool
 }
 
 type clarifyDelivery struct {
@@ -157,7 +160,7 @@ func (s *Service) awaitPrepared(ctx context.Context, p *pending, auxiliary bool)
 		s.fleet.mu.Lock()
 		r := p.prepared.result
 		s.fleet.mu.Unlock()
-		s.finishInteraction(p.ix.ID)
+		s.finishPending(p)
 		return r, nil
 	}
 	// Prefer an already published terminal result over a clarification release
@@ -336,7 +339,7 @@ func (s *Service) detachPreparedGen(p *pending, gen uint64, expireOnError bool) 
 			if err != nil {
 				// approvalJournalStarted succeeded, so balance its new entry before
 				// this card expires. A failed start already removed that entry.
-				s.approvalJournalAborted(context.Background(), ix.ID)
+				s.approvalJournalAborted(context.Background(), ix)
 			}
 		}
 		s.fleet.mu.Lock()
@@ -358,7 +361,7 @@ func (s *Service) detachPreparedGen(p *pending, gen uint64, expireOnError bool) 
 			// waiting resolvePreparedAnswer cannot race approvalJournalApplying with
 			// approvalJournalAborted.
 			s.fleet.mu.Unlock()
-			s.approvalJournalAborted(context.Background(), ix.ID)
+			s.approvalJournalAborted(context.Background(), ix)
 			s.fleet.mu.Lock()
 			a.attempt = nil
 			close(attempt.done)
@@ -383,6 +386,13 @@ func (s *Service) detachPreparedGen(p *pending, gen uint64, expireOnError bool) 
 		close(a.release)
 		return true
 	}
+}
+
+// detachedApprovalWaitingLocked reports whether the original terminal call has
+// already received its non-final waiting result. Its later tool result and a
+// late node dismissal are not new decisions on the retained card. fleet.mu is held.
+func detachedApprovalWaitingLocked(p *pending) bool {
+	return p != nil && p.ix.Detachable && p.prepared != nil && p.prepared.waiting && !p.prepared.terminal
 }
 
 type clarifyingCardKey struct{}
@@ -560,7 +570,14 @@ func (s *Service) clarificationTurnStarted(machine, session string) {
 	defer s.fleet.mu.Unlock()
 	for _, p := range s.fleet.interactions {
 		a := p.prepared
-		if a == nil || !a.clarified || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session {
+		if a == nil || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session {
+			continue
+		}
+		if a.attempt != nil && a.attempt.sending && a.answeredSeq == a.acceptedSeq {
+			a.attempt.turnStarted = true
+			a.attempt.turnEnded = false
+		}
+		if !a.clarified || a.acceptedSeq == a.answeredSeq {
 			continue
 		}
 		a.turnActive = true
@@ -568,12 +585,18 @@ func (s *Service) clarificationTurnStarted(machine, session string) {
 	}
 }
 
-func (s *Service) clarificationTurnEnded(machine, session string) {
+func (s *Service) clarificationTurnEndedSync(machine, session string) []proto.Interaction {
 	s.fleet.mu.Lock()
 	var tells []proto.Interaction
 	for _, p := range s.fleet.interactions {
 		a := p.prepared
-		if a == nil || !a.clarified || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session || !a.turnActive {
+		if a == nil || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session {
+			continue
+		}
+		if a.attempt != nil && a.attempt.sending && a.attempt.turnStarted {
+			a.attempt.turnEnded = true
+		}
+		if !a.clarified || !a.turnActive {
 			continue
 		}
 		a.turnActive = false
@@ -583,7 +606,11 @@ func (s *Service) clarificationTurnEnded(machine, session string) {
 		}
 	}
 	s.fleet.mu.Unlock()
-	for _, ix := range tells {
+	return tells
+}
+
+func (s *Service) clarificationTurnEnded(machine, session string) {
+	for _, ix := range s.clarificationTurnEndedSync(machine, session) {
 		s.show(ix)
 	}
 }
@@ -612,6 +639,10 @@ func validateClarifyQuestion(text string) error {
 // state. Different questions submitted concurrently are processed in order;
 // only a replay of the same delivery is deduplicated.
 func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, origin *clarificationOrigin) error {
+	return s.clarifyAt(ctx, id, text, clientMsgID, origin, nil)
+}
+
+func (s *Service) clarifyAt(ctx context.Context, id, text, clientMsgID string, origin *clarificationOrigin, expected *time.Time) error {
 	if err := validateClarifyQuestion(text); err != nil {
 		return err
 	}
@@ -622,6 +653,10 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[id]
+	if p != nil && expected != nil && !p.ix.CreatedAt.Equal(*expected) {
+		s.fleet.mu.Unlock()
+		return errClarifyUnavailable
+	}
 	if p == nil || p.prepared == nil || !p.ix.CanClarify {
 		s.fleet.mu.Unlock()
 		return errClarifyUnavailable
@@ -647,7 +682,7 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 			}
 			return running.err
 		}
-		return s.clarify(ctx, id, text, clientMsgID, origin)
+		return s.clarifyAt(ctx, id, text, clientMsgID, origin, expected)
 	}
 	attempt := &clarifyAttempt{done: make(chan struct{}), first: !a.clarified,
 		clientMsgID: clientMsgID, text: text, originKey: originKey}
@@ -686,6 +721,9 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 		// may have ended. Mark that answer turn before dispatch, not at its end.
 		s.justMeSent(p.ix.MachineID, p.ix.SessionID)
 	}
+	s.fleet.mu.Lock()
+	attempt.sending = true
+	s.fleet.mu.Unlock()
 	err = s.sendOnce(ctx, p.ix.MachineID, params)
 	if err != nil && !relayInDoubt(err) {
 		return s.finishClarifyAttempt(p, attempt, nil, err)
@@ -709,10 +747,27 @@ func (s *Service) finishClarifyAttempt(p *pending, attempt *clarifyAttempt, run 
 	var tell proto.Interaction
 	tellDeadline := false
 	if err == nil && !a.terminal && !p.claimed && s.fleet.interactions[p.ix.ID] == p {
+		prevAccepted := a.acceptedSeq
 		release = attempt.first && !a.clarified
 		a.clarified = true
 		a.questionSeq++
 		a.acceptedSeq = a.questionSeq
+		prev := s.fleet.prev[p.ix.MachineID][p.ix.SessionID]
+		working := prev.Status == proto.StatusWorking || prev.WorkingBeforeUnknown
+		if attempt.turnEnded {
+			a.turnActive = false
+			a.answeredSeq = max(a.answeredSeq, a.acceptedSeq)
+		} else if attempt.turnStarted {
+			a.turnActive = true
+			a.turnSeq = a.acceptedSeq
+		} else if working && !a.turnActive && a.answeredSeq == prevAccepted {
+			// Headless assistant sessions remain StatusWorking through waitPreparedCard/waitDetachedCard
+			// and either steer the owner's question into the running turn (Codex) or coalesce the
+			// tool-turn end and answer-turn start inside notifySessionsSoon (Claude), emitting only
+			// StatusWorking -> StatusDone with no intermediate stopped edge.
+			a.turnActive = true
+			a.turnSeq = a.acceptedSeq
+		}
 		a.deliveries[attempt.clientMsgID] = clarifyDelivery{text: attempt.text, originKey: attempt.originKey}
 		if run != nil {
 			if a.channelRuns == nil {
@@ -740,7 +795,7 @@ func (s *Service) finishClarifyAttempt(p *pending, attempt *clarifyAttempt, run 
 		s.show(tell)
 	}
 	if finalErr != nil && attempt.first {
-		s.approvalJournalAborted(context.Background(), p.ix.ID)
+		s.approvalJournalAborted(context.Background(), p.ix)
 	}
 	if run != nil && finalErr == nil {
 		s.startChannelRun(run)
@@ -772,10 +827,15 @@ func (s *Service) clarificationChannelEnded(id, runID string) {
 	}
 }
 
+type approvalEndHandledKey struct{}
+
 // approvalAnswerTurnStarted/Ended are small indirections used by Service's turn
 // events and tests.
 func (s *Service) approvalAnswerTurnStarted(r SessionRef) {
 	s.clarificationTurnStarted(r.MachineID, r.SessionID)
+}
+func (s *Service) approvalAnswerTurnEndedSync(r SessionRef) []proto.Interaction {
+	return s.clarificationTurnEndedSync(r.MachineID, r.SessionID)
 }
 func (s *Service) approvalAnswerTurnEnded(r SessionRef) {
 	s.clarificationTurnEnded(r.MachineID, r.SessionID)
@@ -784,12 +844,16 @@ func (s *Service) approvalAnswerTurnEnded(r SessionRef) {
 // approvalBook is defined here; its durable journal implementation is in
 // approval_journal.go.
 type approvalBook struct {
-	mu         sync.Mutex
-	loaded     bool
-	list       []approvalJournalEntry
-	handled    map[string]bool
-	delivering bool
-	again      bool
-	retry      bool
-	retryDelay time.Duration // 0: approvalResultRetryDelay; tests shorten it
+	mu            sync.Mutex
+	loaded        bool
+	list          []approvalJournalEntry
+	handled       map[string]bool
+	delivering    bool
+	again         bool
+	retry         bool
+	retryDelay    time.Duration // 0: approvalResultRetryDelay; tests shorten it
+	recovering    bool
+	recoveryDone  bool
+	recoveryRetry bool
+	recoverySeq   uint64
 }

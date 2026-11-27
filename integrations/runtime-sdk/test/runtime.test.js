@@ -1510,3 +1510,21 @@ test('hello carries codex_claims only when codexClaims names an app-server insta
     if (typeof codexClaims === 'function') assert.ok(logged.some((line) => line.includes('codexClaims: not yet')), 'a failing function is logged')
   }
 })
+
+test('compactionSettled notifies the node with session_id and optional error', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal(), { runtime: 'toy', socketPath: n.path, retryMs: 20, refreshMs: 0 })
+  t.after(() => rt.stop())
+  assert.equal(rt.compactionSettled('s1'), false)
+  assert.equal(rt.compactionSettled(''), false)
+  assert.equal(rt.compactionSettled(null), false)
+  await rt.start()
+  await n.ready
+  assert.equal(rt.compactionSettled('s1'), true)
+  assert.equal(rt.compactionSettled('s1', 'boom'), true)
+  await until('both compaction settlement events received', () => n.all('session.compaction.settled').length === 2)
+  assert.deepEqual(n.all('session.compaction.settled'), [
+    { session_id: 's1' },
+    { session_id: 's1', error: 'boom' },
+  ])
+})

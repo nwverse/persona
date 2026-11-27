@@ -847,6 +847,36 @@ describe("Feishu bot dialog", () => {
     await act(async () => calls.update[1].resolve(saved({ features })));
     expect(nativeProcess()!.getAttribute("aria-checked")).toBe("true");
   });
+
+  // The private-chat native process and the unified answer switches show only when the hub sends their keys;
+  // "cot_answer" waits disabled while neither a DM nor a topic native agent message is on.
+  it("hides the DM native process and the unified answer switches when the hub leaves the keys out", async () => {
+    const dmCot = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_dm_cot_title")}"]`);
+    const cotAnswer = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_cot_answer_title")}"]`);
+    await open(saved());
+    expect(dmCot()).toBeNull();
+    expect(cotAnswer()).toBeNull();
+  });
+
+  it("toggles the DM native process and enables the unified answer switch once a DM or topic native process is on", async () => {
+    const dmCot = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_dm_cot_title")}"]`);
+    const cotAnswer = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_cot_answer_title")}"]`);
+    const features = { ...saved().features, topic_cot: true, dm_cot: false, cot_answer: false };
+    await open(saved({ features }));
+    expect(dmCot()!.getAttribute("aria-checked")).toBe("false");
+    expect(cotAnswer()!.disabled).toBe(false);
+
+    await act(async () => dmCot()!.click());
+    expect(calls.update[0].body).toEqual({ features: { dm_cot: true } });
+    await act(async () => calls.update[0].resolve(saved({ features: { ...features, dm_cot: true } })));
+    expect(dmCot()!.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("dims cot_answer while neither a DM nor a topic native agent message is on", async () => {
+    const cotAnswer = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_cot_answer_title")}"]`);
+    await open(saved({ features: { ...saved().features, topic_cot: false, dm_cot: false, cot_answer: true } }));
+    expect(cotAnswer()!.disabled).toBe(true);
+  });
 });
 
 describe("topic group policies", () => {

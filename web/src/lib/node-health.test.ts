@@ -40,7 +40,7 @@ describe("deriveFeatures", () => {
   it("is all ready for a healthy node", () => {
     const f = deriveFeatures(report());
     expect(f.map((x) => x.id)).toEqual(["approvals", "status", "terminal", "mcp", "skills", "runtimes"]);
-    expect(f.every((x) => x.state === "ready" && x.note === "")).toBe(true);
+    expect(f.every((x) => x.state === "ready" && x.finding === "" && x.note === "")).toBe(true);
     expect(summarize(f)).toEqual({ attention: 0, title: "一切正常", off: "" });
   });
 
@@ -78,7 +78,7 @@ describe("deriveFeatures", () => {
   it("turns a warning on something optional into 未启用, a failure into 有问题", () => {
     const r = report({ "runtime.sock": { status: "warn", detail: "不存在" } });
     expect(state(r, "runtimes")).toBe("off");
-    expect(summarize(deriveFeatures(r))).toEqual({ attention: 0, title: "一切正常", off: "没有设置：运行时接入" });
+    expect(summarize(deriveFeatures(r))).toEqual({ attention: 0, title: "一切正常", off: "未配置：运行时接入" });
     expect(state(report({ "runtime.sock": { status: "fail", detail: "连不上" } }), "runtimes")).toBe("broken");
   });
 
@@ -89,7 +89,7 @@ describe("deriveFeatures", () => {
     expect(state(r, "terminal", {})).toBe("broken"); // never chosen: herdr
     expect(state(r, "terminal", { engine: "orca" })).toBe("off");
     expect(state(r, "terminal", { engine: "paseo" })).toBe("off");
-    expect(summarize(deriveFeatures(r, { engine: "orca" })).off).toBe("没有设置：终端与引擎");
+    expect(summarize(deriveFeatures(r, { engine: "orca" })).off).toBe("未配置：终端与引擎");
   });
 
   it("leaves a feature out when an older node does not report its checks, and shows an unknown bad check", () => {
@@ -98,7 +98,18 @@ describe("deriveFeatures", () => {
     const next = report();
     next.checks.push({ name: "disk-space", status: "warn", detail: "剩 200 MB", hint: "清理磁盘" });
     const other = deriveFeatures(next).find((f) => f.id === "other");
-    expect(other).toMatchObject({ state: "partial", note: "清理磁盘" });
+    expect(other).toMatchObject({ state: "partial", finding: "剩 200 MB", note: "清理磁盘" });
+    // a broken check without a separate hint keeps finding empty so the detail is not repeated twice
+    const detailOnly = report();
+    detailOnly.checks.push({ name: "path-access", status: "fail", detail: "读不了 /tmp/link", hint: "" });
+    expect(deriveFeatures(detailOnly).find((f) => f.id === "other")).toMatchObject({ state: "broken", finding: "", note: "读不了 /tmp/link" });
+    // stale / missing generated files and optional "off" features keep finding empty
+    const staleAndOff = report({
+      "mcp.json": { status: "warn", state: "stale", detail: "过期", hint: "重启 node" },
+      "runtime.sock": { status: "warn", detail: "不存在", hint: "没有 node 在监听" },
+    });
+    expect(deriveFeatures(staleAndOff).find((f) => f.id === "mcp")?.finding).toBe("");
+    expect(deriveFeatures(staleAndOff).find((f) => f.id === "runtimes")?.finding).toBe("");
     // a fine unknown check hides nothing and adds nothing
     const fine = report();
     fine.checks.push({ name: "disk-space", status: "ok", detail: "" });
@@ -126,7 +137,7 @@ describe("fix", () => {
   });
 
   it("says what it did", () => {
-    expect(fixResult({ ok: true, checks: [], fixed: ["a", "b"] })).toEqual({ text: "已重新生成 2 项", tone: "ok" });
+    expect(fixResult({ ok: true, checks: [], fixed: ["a", "b"] })).toEqual({ text: "已重新生成 2 个文件", tone: "ok" });
     expect(fixResult({ ok: true, checks: [] })).toEqual({ text: "没有需要重新生成的文件", tone: "ok" });
     expect(fixResult({ ok: false, checks: [{ name: "fix", status: "fail", detail: "重新生成失败：磁盘已满" }] })).toEqual({ text: "重新生成失败：磁盘已满", tone: "error" });
   });

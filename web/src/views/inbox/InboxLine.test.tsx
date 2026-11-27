@@ -102,7 +102,7 @@ describe("收件箱：线索", () => {
       children: [],
     });
     expect(rows[0]).toMatchObject({ label: "Agent 会话", route: { name: "session", mid: "m1", sid: "s1" } });
-    expect(rows[1]).toMatchObject({ title: "已不在收件箱里", route: undefined });
+    expect(rows[1]).toMatchObject({ title: "已不在收件箱中", route: undefined });
   });
   it("draws nothing without a line, one-line relationship actions with one", () => {
     expect(renderToStaticMarkup(<LineList rows={[]} />)).toBe("");
@@ -116,7 +116,7 @@ describe("收件箱：线索", () => {
     expect(html).toContain("whitespace-nowrap");
     expect(html).toContain("示例 A");
     expect(html).toContain("不是同一件事");
-    expect(html).toContain("是同一件事…");
+    expect(html).toContain("关联为同一件事…");
   });
   it("asks the tree route with the id kept readable and a session's slash kept", async () => {
     apiCalls.length = 0;

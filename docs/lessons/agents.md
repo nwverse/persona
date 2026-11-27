@@ -1,5 +1,21 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A delivery label does not prove a disabled feature (#16936)
+
+- A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require
+  an explicit default-off statement in its missing or waiting gate before presenting that claim to the owner.
+- Apply the same guard to historical acceptance cards and model judgments. Preserve a deployed report when it gives
+  deployment evidence; without that evidence, keep an unverified delivery hold instead of inventing a disabled switch.
+- Exercise the closeout-to-title path and the judge's criterion checks together; a second assignment of the raw model
+  delivery can otherwise restore the unsupported state after normalization.
+
+## Inbox handoffs are not task ownership (#17119)
+
+- A conversation's historical handoff does not identify the source of every later task. Omitted sources must not
+  claim unrelated handoffs, and continuations skip source inference. A strongly matching handoff is still inferred:
+  retain its matching snapshot and recheck competing task ownership before admission. Explicit source selection is
+  a separate contract.
+
 ## Persona's own agy hooks: report only, own one key, prove the pane (#13729)
 
 - agy's global `hooks.json` is shared: herdr, Moshi and Orca each own a top-level group. Write only the `persona` key through the ordered-object editor (`editSettings`), never rewrite the others, and treat a changed command (moved binary) as stale, not as foreign.
@@ -73,6 +89,13 @@
 - A session id outlives its Claude Code process: the owner quits and resumes, Persona's Resume starts a new one, a crash is resumed. A queued restart into Full access, keyed by session id alone for a day, quit a claude that resumed the conversation later in Default and restarted it in Full access.
 - Bind anything that waits to act on "the agent" to the process it was decided for: pid plus start mark (`hookTurns.process`, else `sessions/<pid>.json` via `liveClaudes`), checked with `processAlive` at every look and again right before acting. Drop it once that process is gone or the hooks report another one; refuse it where the process cannot be told.
 - Keep the wait short. "Once this turn ends" is not "whenever this conversation next runs".
+
+## Approval occurrences must survive every asynchronous handoff (#11310)
+
+- A runtime interaction ID is not an occurrence. Carry its creation time (and the exact-call fingerprint for detached commands) through live announcements, delayed terminal events (including the public `interaction_resolved.created_at`), reconnect catch-up, text asks, Feishu posting placeholders and persisted ledgers, callbacks, and finalization. A stale A event must neither close nor suppress same-ID B; zero-time legacy records keep their ID-only behavior. Clients compare the original RFC3339 text or an exact instant, not a millisecond `Date`.
+- Restart-generated delivery text is not execution truth. If a live owner claim wins, its honest outcome replaces the unfinalized recovery result. Recovery must not write a competing terminal status while that claim runs; reload the journal after finalization before revoking a grant or delivering a result, and reconcile an already-durable terminal record rather than retrying a conflicting cancellation forever. An interrupted apply is different: its execution-uncertain `failed` outcome must not become a confident `cancelled` / "not started" when the restored owner claim reaches the journal's terminal-result guard.
+- A fresh retry interaction is not the original approval. Keep `ApprovalID` when retiring an edited command's original grant and when reporting the edited execution. Generate fallback delivery IDs from the durable operation identity: random per-attempt clarification IDs defeat receipt retry, while a pre-upgrade continuation's legacy queue identity must still deduplicate its journal redelivery after text rewriting.
+- A journal's terminal `Result` is complete delivery text, but `finishPrepared` accepts a detail and adds the standard prefix. Strip exactly that entry's own prefix when closing a restored live card, or recovery delivers the prefix twice. When a test backdates an occurrence, update the SQL `created_at`, JSON payload, owner book and Feishu ledger to the same instant and precision; otherwise the occurrence guards correctly reject the fixture as different operations.
 
 ## Create an agy ACP session before its role-scoped MCP (#15327)
 
@@ -480,7 +503,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   `worktree.ps` row `state` includes sub-Agents (working when the main turn has ended but background sub-Agents run); pane-local state is `mainAgent.state`;
   `agentIdentity` may remain after the Agent exits; decide "is an Agent" from claude / codex processes matching `ORCA_PANE_KEY`. node tests point `ORCA_USER_DATA_PATH`
   to an empty directory; never touch the live Orca (its socket fully controls Orca).
-  New Orca terminals (#924): omit `presentation: "background"` in `terminal.create` to avoid an orphan PTY; after creation, check identity and generation via `terminal.list` using the exact handle; ordinary creation explicitly `cd`s to the target directory. Permission to create sessions isn't permission to resume ones still open elsewhere: since #5548 Orca resumes an exited Claude session like herdr, after `openElsewhereRefusal` (a live claude on the session, including a suspended one) and a check that its last pane is closed; `orca_resume` (which also kept `openElsewhereRefusal` from ever running on Orca) now refuses only non-Claude agents. Send and retire share `orcaContinues`: retire must not close what a message cannot bring back. Orca's `terminal create --agent --resume` is a CLI of some builds only and drops the session's launcher.
+  New Orca terminals (#924): omit `presentation: "background"` in `terminal.create` to avoid an orphan PTY; after creation, check identity and generation via `terminal.list` using the exact handle; ordinary creation explicitly `cd`s to the target directory. Permission to create sessions isn't permission to resume ones still open elsewhere: since #5548 Orca resumes an exited Claude session like herdr, after `openElsewhereRefusal` (a live claude on the session, including a suspended one), and since #17044 Codex, TRAE CLI and pi sessions too, each kept from a second writer by its own check (a Codex holding the rollout, a TRAE CLI a pane still runs, the pi runtime); `orca_resume` refuses only omp. A stopped Agent leaves its shell in its last pane (`docs/integrations/engines.md`, "Agents run in a terminal"), so a resume must not take an open last pane for a suspended agent: only a message still checks it (`notRunningRefusal`), a resume checks the engine (`resumeEngineRefusal`). A bare Resume (the web sends only the id) of a TRAE CLI session needs its launcher from the node's record, or it starts Claude Code on that id (`traexResumeWith`). Orca's `terminal create --agent --resume` is a CLI of some builds only and drops the session's launcher.
   An Orca pane key is not a terminal's identity (#5547): a terminal made in a worktree Orca's window is not showing is not adopted by the UI, and about 2 s after `terminal.create` it turns `orphaned` with `tabId` / `leafId` rewritten to `pty:<worktreeId>@@…`, the same handle and incarnation. Starts from a directory in no worktree went to the first worktree listed, so the node lost the pane it had just typed into: `Run` said "replaced", the readiness wait said "is the machine busy?" for 3 minutes while claude had started in 2 s, and the empty tab was never closed. Fall back to the active worktree, and find a terminal the host made by handle + incarnation under the key creation gave (`orcaHost.made`); the opposite case, a new handle under the same key (#972), stays refused. `orcarttest.Fake.Orphan` reproduces it.
   Claude with background tasks (#5463): Orca's `terminal.agentStatus` says `isRunningAgent: false` while Claude Code has background Bash tasks, though its input box takes text; requiring it refused every send to such a session with nothing logged. The process scan is the foreground gate. A `tmux new-session -d` an agent runs inherits the pane's `ORCA_PANE_KEY`, and each process in it is "in front" of tmux's own pty: a `claude -p` worker with a lower pid took the pane and its manager dropped to interrupted. Without Orca's check, "in front" must mean in front of the pane's own pty: a candidate whose pty owner (first ancestor on another terminal) carries the same pane key is nested (tmux, zellij, script…) and not the pane's. Not by `TMUX=`: Orca's agent teams set it in a real pane. A refusal and a pane changing sessions are logged since.
   A pane variable is not ownership (2026-11-08): a claude whose environment carried `ORCA_PANE_KEY` was skipped as "its engine lists it" even on a node that did not enable Orca, or when the macOS scan missed it, so every running claude in Orca's terminals showed as offline. The outside-claude list now defers to an engine only when an engine in use lists that pane with a claude in it.
@@ -801,6 +824,11 @@ an input box but herdr doesn't know claude is present (`agent_not_found` or empt
 then explain process-name / `HERDR_AGENT=claude` recognition and cases where the prefix doesn't reach claude. Foreground process name comes from herdr `pane.process_info`. With no input box, retain the shell-not-started error;
 other engines' panes (Orca) keep their original error.
 
+`pane.process_info` in herdr 0.9.5 names each foreground process by `name`, `argv` and `cmdline`, with no `argv0`, and Claude Code's `name` is its version
+(`2.1.330`). Its list starts with the foreground group's leader: a launcher's wrapper when claude runs under one. Code that takes the first process for
+claude itself must pick Claude Code out first (`herdr.Client.PaneProcesses`): matching `argv0` found nothing, and the port scan reported Claude Code's own
+loopback listener as a server the Agent runs, which kept every idle Agent behind a wrapper from Close (#14681).
+
 - A Claude Code turn ending with a model API error ("API Error: Connection lost mid-response…", overload, rate limit, expired login) is done in herdr just like normal completion, so hub counts it unread:
   task_plan tasks once showed green "Done" cards with the raw error as summary and "finished" in snapshots (#1516). Only the last text distinguishes this: when a session is stopped and `last_text` begins with these errors, hub sets `turn_error` (prefix only;
   mentioning "API Error" in an answer doesn't count), marks the task interrupted, doesn't auto-close it, and writes an `interrupted` receipt. Ordinary Agent pushes also stop using a success marker.
@@ -972,6 +1000,19 @@ grouping looks fine and the bug shows only in the other one. Hosts set it (herdr
 need the node to set one: the Codex App's always had one, the Claude desktop app's had none until #8521. A new source of
 sessions outside the engines should set a space too. On the list path, take the repository from the list's Git places
 (`fillGitPlace`, read in the background) rather than running git per row: it runs every second.
+
+## One folder was a project for each way its Agents ran (2026-11-23, #13533)
+
+Every way an Agent runs names its space its own way: herdr by its workspace id (`w1`), the desktop apps by
+`codex-project:<root>`, a runtime without workspaces by its directory. A folder worked in more than one way was a project
+for each in every client's **Project** list, all with the folder's name, and one CLI split too: Claude Code in herdr
+against the Claude desktop app, an agy pane in herdr against an agy runtime conversation. Pins, mutes and to-do space
+links go by `machine/space name`, so nothing there showed it. The node's last pass now gives every session whose space
+only stands for a folder that folder's space (`server/internal/node/folderspace.go`); a new source that names its space by
+a folder needs nothing more, and should not invent another path-keyed id. Compare folders by their physical paths: the
+same folder reaches the list as written by a runtime and resolved by herdr or a desktop app, and a home directory on
+Linux is often a link to another volume. A joined space holds several `space_kind`s, and a client may name its host by
+any of its sessions' kinds, so a space action takes a kind that is no host's to mean the workspace's host.
 
 ## The session list runs every second: per-row lookups add up (2026-11-09, #2538)
 

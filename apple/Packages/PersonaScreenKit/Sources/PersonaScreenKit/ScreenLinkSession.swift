@@ -836,14 +836,16 @@ extension ScreenLinkSession {
         }
     }
 
-    private func sendFlow(_ route: String, _ m: ScreenUDPMessage) {
-        guard var f = flows[route], let socket = f.socket else { return }
+    @discardableResult
+    private func sendFlow(_ route: String, _ m: ScreenUDPMessage) -> Bool {
+        guard var f = flows[route], let socket = f.socket else { return false }
         guard let p = f.sealer.seal(m.encoded()) else {
             leaveFlow(route, .lost) // the packet numbers ran out: never reuse a nonce
-            return
+            return false
         }
         flows[route] = f
         socket.send(p)
+        return true
     }
 
     private func sendHello(_ route: String) {
@@ -996,7 +998,11 @@ extension ScreenLinkSession {
                 }
                 continue
             }
-            if t - f.lastPing >= 1 { pingFlow(route); f = flows[route]! }
+            if t - f.lastPing >= 1 {
+                pingFlow(route)
+                guard let refreshed = flows[route] else { continue }
+                f = refreshed
+            }
             if let since = f.unanswered, t - since >= Self.flowSilent {
                 leaveFlow(route, .lost)
                 continue
@@ -1004,7 +1010,8 @@ extension ScreenLinkSession {
             if f.carrying == nil, f.meter.lastPongAt != nil, let v = currentVideo, let c = chans[v], c.active == f.parent,
                !c.waitingResume, c.flow == nil {
                 startCarrying(route, v)
-                f = flows[route]!
+                guard let refreshed = flows[route] else { continue }
+                f = refreshed
             }
             guard let ch = f.carrying, var rx = f.receiver else { continue }
             if f.waitingResume {
@@ -1015,27 +1022,32 @@ extension ScreenLinkSession {
                 if t - f.lastUse >= 0.1 {
                     f.lastUse = t
                     flows[route] = f
-                    sendFlow(route, .use([ScreenLinkOffset(ch, rx.expected)]))
+                    guard sendFlow(route, .use([ScreenLinkOffset(ch, rx.expected)])), let refreshed = flows[route] else { continue }
+                    f = refreshed
                 }
             }
+            let givenUpBefore = rx.givenUp
             let req = rx.requests(at: t, rtt: (f.meter.srttMs ?? 20) / 1000, jitter: (f.meter.jitterMs ?? 0) / 1000)
             f.receiver = rx
-            if req.skip != nil {
+            let newGiveUp = rx.givenUp > givenUpBefore
+            if newGiveUp {
                 f.giveUps.append(t)
                 f.giveUps.removeAll { t - $0 > Self.flowGiveUpWindow }
             }
             flows[route] = f
             if let off = req.skip {
-                if f.giveUps.count > Self.flowGiveUps {
+                if newGiveUp, f.giveUps.count > Self.flowGiveUps {
                     leaveFlow(route, .degraded)
                     continue
                 }
-                sendFlow(route, .skip(channel: ch, offset: off))
+                guard sendFlow(route, .skip(channel: ch, offset: off)) else { continue }
             }
-            if let w = req.want { sendFlow(route, .want(channel: ch, from: w.from, to: w.to)) }
+            if let w = req.want {
+                guard sendFlow(route, .want(channel: ch, from: w.from, to: w.to)) else { continue }
+            }
             var nack = req.nack[...]
             while !nack.isEmpty {
-                sendFlow(route, .nack(channel: ch, Array(nack.prefix(80))))
+                guard sendFlow(route, .nack(channel: ch, Array(nack.prefix(80)))) else { break }
                 nack = nack.dropFirst(80)
             }
         }
@@ -1072,7 +1084,7 @@ extension ScreenLinkSession {
         f.useAt = t
         f.lastUse = t
         flows[route] = f
-        sendFlow(route, .use([ScreenLinkOffset(ch, boundary)]))
+        guard sendFlow(route, .use([ScreenLinkOffset(ch, boundary)])) else { return }
         emit.yield(.moved(PathChange(from: flowStats(f, .tcp), to: flowStats(f, .udp), reason: .faster)))
     }
 
