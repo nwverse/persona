@@ -6079,6 +6079,7 @@ An old MCP process here means the actual old binary, not a new process whose ups
 | `mail_accounts` / `mail_search` / `mail_read` | hub | read-only |
 | `mail_save_attachment` | node on the agent's machine | writes a file under `<data dir>/attachments/mail`; the bytes come from the manager over `mail.attachment` (at most 25 MB, only while the mail connector offers the tool to that caller); `mail_read` lists the attachment ids |
 | `mail_send` | hub (mail connector) | write: goes through `connector_gate`; by default a `permission` interaction is created before sending, and it sends only after approval on the phone. Bad params are refused directly without a card |
+| `mail_move` | hub (mail connector) | write: requires owner approval on the phone for each move, even if a connector rule allows it. Use the `uid_validity` from a search for the source account and mailbox. The result matches the move route below |
 | `github_search` / `github_read` / `github_diff` / `github_checks` | hub (GitHub connector) | read-only, see the next row |
 | `github_comment` / `github_review` | hub (GitHub connector) | write: goes through `connector_gate`; by default each one is confirmed on the phone. The card states repo#number "title", the full text and who will see it; approvals start with [Approve] |
 | `<connector id>_*` | hub (connector) | only for the assistant, and only for connectors whose status is `ok`. Read-only tools run directly; writes first go through `connector_gate` in the manager's manager.json, which by default creates a `permission` interaction (the card states who will see it), and run only after approval on the phone (`server/internal/connector`) |
@@ -6228,7 +6229,25 @@ When `kind` is `qr`, likewise no fields and the same polling: `url` is the conte
 | GET | `/api/v1/mail/messages/{aid}/{uid}?mailbox=INBOX` | `{"message":MailMessage}` |
 | GET | `/api/v1/mail/messages/{aid}/{uid}/attachments/{attachment_id}?mailbox=INBOX` | download by account, mailbox, UID and the stable attachment ID from the details; same Bearer authentication as mail reads; supports `Range` / `If-Range`, returning `Accept-Ranges` / `Content-Range`, 206 or 416 |
 | POST | `/api/v1/mail/messages/{aid}/{uid}/flags` | `{"mailbox","seen"?,"flagged"?}` |
+| POST | `/api/v1/mail/messages/{aid}/{uid}/move` | `{"mailbox","uid_validity","to"?,"to_mailbox"?}`. Returns `{"mailbox","uid"?,"uid_validity"?}` for the destination |
 | POST | `/api/v1/mail/send` | `{"account_id","to":[],"cc":[],"bcc":[],"subject","text","html"?,"in_reply_to"?,"references"?}`; `references` is a space-separated Message-ID string, but a string array is also accepted (old iOS sends this; the hub joins it with spaces) |
+
+A move requires a nonzero source UID and UIDVALIDITY and exactly one target: `to` (`archive`, `junk`, `trash` or `inbox`)
+or an existing `to_mailbox`. Use names from the mailbox list for both source and explicit destination (INBOX is case-insensitive). The server prefers a selectable SPECIAL-USE
+match over a name guess and sends plain `LIST` when extended options are unavailable. An identical source and target
+is invalid. The move checks UIDVALIDITY on the connection it writes to. A changed value returns HTTP 409 with
+`mail_uid_validity_changed`; refresh the source and select the message again. Providers without MOVE or UIDPLUS and
+Gmail's `archive` role return HTTP 422 with `unsupported`.
+
+A successful result includes the destination UID and UIDVALIDITY only when a `COPYUID` response identifies the moved
+message. Use those fields as the source identity and pass the old mailbox as `to_mailbox` to undo. Without them,
+automatic undo is unavailable. A tagged `BAD` rejecting a native `UID MOVE` returns HTTP 502 with `mail_move_failed`.
+HTTP 409 with `mail_move_unknown` means the outcome could not be confirmed. This includes a lost reply or a native
+`UID MOVE` ending in tagged `NO`, which does not guarantee that the message was left unchanged (RFC 6851 §3.3).
+`mail_move_partial` means the destination copy was acknowledged, but the final source state needs checking. In both
+cases, refresh both mailboxes before attempting a new move. A reconnect cannot replay an already-started write. A
+new request is a separate operation and may leave another copy. The UIDPLUS path expunges only the selected UID
+after copying it, including when restoring that message from Trash.
 
 The mail details page first reads the body and attachment list, then submits `{"mailbox":"INBOX","seen":true}` via `/flags`. The details GET uses `BODY.PEEK`, preserving old clients' behavior rather than marking messages read automatically. Attachments include a stable `id`, filename, MIME type and decoded size; IDs bind the MIME order, file metadata and decoded content, so attachments with the same name can be distinguished. Downloads also use read-only `BODY.PEEK`, with no dependency on extensions such as BINARY; the server streams decoded content into a temporary file, then returns byte ranges of the decoded content via HTTP Range. Unknown attachments or changed content return 404; an account the manager doesn't have is 404 `mail_account_unknown`, with an `error` that names the account in the request's language (`/test` still answers `{"ok":false,"error"}`); a mailbox that couldn't be reached even after reconnecting once is 502 `mail_unreachable`, its `error` in the request's language.
 

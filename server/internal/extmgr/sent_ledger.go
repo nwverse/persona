@@ -69,6 +69,9 @@ func (h *Manager) newConnectors(rules []connector.Rule) *connector.Registry {
 // recordSent writes a row for a write that went out. A row that cannot be written does not undo the write, which
 // already happened: it is logged, without the text.
 func (h *Manager) recordSent(ctx context.Context, s connector.Sent) {
+	if s.Connector == "mail" && s.Action == mailwire.ToolMove {
+		return // Moving a message between mailboxes does not send anything as the owner.
+	}
 	st, _ := h.store.(sentStore)
 	if st == nil {
 		return
