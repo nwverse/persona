@@ -329,6 +329,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// A self-planning constraint applies only while a policy rule asks for it on this try.
 	t.planFirst = false
 	params := map[string]any{"model_source": planModelSource(*t), "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
+	if caller.model != "" {
+		params["explicit_model"] = caller.model
+	}
 	if len(t.ModelAliases) != 0 {
 		params["model_aliases"] = t.ModelAliases
 	}

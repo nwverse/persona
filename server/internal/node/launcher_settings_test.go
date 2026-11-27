@@ -20,7 +20,7 @@ func TestModelAliasSettingsArePrivateAndIsolated(t *testing.T) {
 	writeFile(t, base, `{"model":"main","env":{"ANTHROPIC_DEFAULT_SONNET_MODEL":"original","ANTHROPIC_DEFAULT_HAIKU_MODEL":"default-fast","EXAMPLE_AUTH":"test-value"}}`)
 	start := func(model string) string {
 		t.Helper()
-		path, err := n.claudeModelAliasSettings(t.Context(), "claude", home, base, proto.ModelAliases{"sonnet_model": model})
+		path, selected, err := n.claudeModelAliasSettings(t.Context(), "claude", home, base, proto.ModelAliases{"sonnet_model": model}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -30,7 +30,7 @@ func TestModelAliasSettingsArePrivateAndIsolated(t *testing.T) {
 		}
 		settings := readSettings(t, path)
 		env, _ := settings["env"].(map[string]any)
-		if settings["model"] != "main" || env["ANTHROPIC_DEFAULT_SONNET_MODEL"] != model ||
+		if selected != "main" || settings["model"] != "main" || env["ANTHROPIC_DEFAULT_SONNET_MODEL"] != model ||
 			env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "default-fast" || env["EXAMPLE_AUTH"] != "test-value" {
 			t.Fatal("override lost inherited settings or modified the main model")
 		}
@@ -38,6 +38,28 @@ func TestModelAliasSettingsArePrivateAndIsolated(t *testing.T) {
 	}
 	if start("vendor/one") == start("vendor/two") || readSettings(t, base)["env"].(map[string]any)["ANTHROPIC_DEFAULT_SONNET_MODEL"] != "original" {
 		t.Fatal("a start overwrote shared settings")
+	}
+}
+
+func TestDispatchClaudeEnvNeverInheritsNativeAliases(t *testing.T) {
+	env := map[string]any{
+		"ANTHROPIC_MODEL":                      "claude-opus-5-5",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL":       "vendor/claude-sonnet-5",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL":        "haiku",
+		"ANTHROPIC_DEFAULT_FABLE_MODEL":        "anthropic.claude-fable-5",
+		"CLAUDE_CODE_SUBAGENT_MODEL":           "claude-haiku-4-5",
+		"CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK": "0",
+	}
+	if model := dispatchClaudeEnv(env, proto.ModelAliases{"opus_model": "claude-opus-5-5"}, "vendor/main"); model != "vendor/main" {
+		t.Fatal("dispatch inherited a native default")
+	}
+	for _, key := range []string{"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL"} {
+		if env[key] != "vendor/main" {
+			t.Fatalf("unexpected automatic model in %s", key)
+		}
+	}
+	if env["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] != "1" || env["ANTHROPIC_DEFAULT_OPUS_MODEL"] != "claude-opus-5-5" {
+		t.Fatal("dispatch did not disable native fallback or preserve the explicit opt-in")
 	}
 }
 

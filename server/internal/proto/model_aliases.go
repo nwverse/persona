@@ -22,7 +22,7 @@ func (a ModelAliases) Validate() error {
 			return errors.New("model_aliases: only sonnet_model, haiku_model, opus_model, fable_model and subagent_model are supported")
 		}
 		name, _, _ := strings.Cut(model, "[")
-		if len(model) > 200 || !ValidModelID(model) || strings.Contains(model, "~") ||
+		if len(model) > 200 || !ValidModelID(model) || strings.Contains(model, "~") || strings.EqualFold(name, "claude") ||
 			strings.EqualFold(name, "sonnet") || strings.EqualFold(name, "haiku") ||
 			strings.EqualFold(name, "opus") || strings.EqualFold(name, "fable") ||
 			strings.EqualFold(name, "opusplan") || strings.EqualFold(name, "best") || strings.EqualFold(name, "default") || strings.EqualFold(name, "inherit") {

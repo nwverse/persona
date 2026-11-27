@@ -898,6 +898,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// Start with a local placeholder; the model names the returned session in the background.
 		title := localTabName(a.Prompt)
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode, "tab_name": title, "title": title}
+		if own.model != "" {
+			params["explicit_model"] = own.model
+		}
 		if len(a.ModelAliases) != 0 {
 			params["model_aliases"] = a.ModelAliases
 		}

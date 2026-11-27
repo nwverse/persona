@@ -338,16 +338,20 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return nil, err
 	}
 	modelArg := n.claudeModelArg(launcher, execution.Model)
-	if execution.ModelAliases != nil {
-		settings, err = n.claudeModelAliasSettings(ctx, launcher, cwd, settings, *execution.ModelAliases)
+	managed, managedHere := n.managedLauncher(launcher)
+	if resume == "" && (execution.ModelAliases != nil || managedHere && !anthropicEndpoint(managedBaseURL(managed))) {
+		var aliases proto.ModelAliases
+		if execution.ModelAliases != nil {
+			aliases = *execution.ModelAliases
+		}
+		requested := execution.Model
+		if nativeClaudeModel.MatchString(proto.TrimModelWindow(requested)) &&
+			!strings.EqualFold(proto.TrimModelWindow(requested), proto.TrimModelWindow(execution.ExplicitModel)) {
+			requested = ""
+		}
+		settings, modelArg, err = n.claudeModelAliasSettings(ctx, launcher, cwd, settings, aliases, requested)
 		if err != nil {
 			return nil, err
-		}
-		if isTierAlias(execution.Model) {
-			aliasEnv := execution.ModelAliases.Env()
-			if model := resolveTier(planTier(execution.Model), func(key string) string { return aliasEnv[key] }); model != "" && !isTierAlias(model) {
-				modelArg = model
-			}
 		}
 	}
 	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.

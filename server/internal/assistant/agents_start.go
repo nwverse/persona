@@ -57,6 +57,9 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		}
 		clearStandardSpeed(params)
 	} else {
+		if model, _ := params["model"].(string); model != "" {
+			params["explicit_model"] = model
+		}
 		tierCtx, _ := withTierStart(ctx, p.MachineID)
 		own, err := s.resolveStart(tierCtx, params, false)
 		if err != nil {
