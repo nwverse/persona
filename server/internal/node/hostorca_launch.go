@@ -67,6 +67,9 @@ func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string,
 		return nil, host.Mark(refusal(proto.CodeDirectoryUntypable, i18n.T(i18n.Default, "rpc-errors.directory_untypable"), nil), host.ErrNotDelivered)
 	}
 	trees, _, _, err := h.c.Worktrees(ctx, "")
+	if err != nil && orcaUnreachable(err) {
+		return nil, host.Mark(orcaMissing(err), host.ErrNotDelivered) // Orca's words for a start (orcaengine.go)
+	}
 	if err != nil {
 		return nil, orcaErr(err)
 	}

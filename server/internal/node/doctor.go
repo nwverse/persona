@@ -100,6 +100,9 @@ type DoctorOptions struct {
 	Preflight func(context.Context, i18n.Lang) DoctorCheck
 	// AgyHooksFile is agy's global hooks file (node/agyhooks.go); "" leaves the check out (agy is not here).
 	AgyHooksFile string
+	// Orca says what this machine has of Orca (orcaEngine); nil leaves the orca check out, and so does an Orca that
+	// is not installed.
+	Orca func(context.Context) proto.Engine
 	// Fix writes the generated files again when they are stale or missing, and (outside the node) writes
 	// ProcessType=Interactive into the LaunchAgent and loads it again.
 	Fix bool
@@ -122,6 +125,7 @@ func DefaultDoctorOptions() (DoctorOptions, error) {
 		Dir: dir, Bin: bin,
 		NodeSock: nodeclient.SocketPath(), RuntimeSock: RuntimeSocketPath(), HerdrSock: herdr.SocketPath(),
 		ClaudeConfigDir: claudeDirOf(home), ClaudeVersion: claudeVersion, ClaudeProbe: claudeProbe,
+		Orca: doctorOrca,
 	}
 	if an := (&Node{home: home, dir: dir, bin: bin}); an.agyInstalled() {
 		opts.AgyHooksFile = an.agyHooksFile()
@@ -407,6 +411,11 @@ func doctorChecks(ctx context.Context, opts DoctorOptions) DoctorReport {
 	add(checkCommandPathsIn(opts.Dir, opts.Lang))
 	add(checkClaudeVersionIn(ctx, opts.claudeProbe(), opts.Lang))
 	add(checkHerdrIn(ctx, opts.HerdrSock, opts.Lang))
+	if opts.Orca != nil {
+		if c, ok := checkOrcaIn(ctx, opts.Orca, opts.Lang); ok {
+			add(c)
+		}
+	}
 	add(checkGlobalPermissionHooksIn(opts.ClaudeConfigDir, opts.Dir, opts.Lang))
 	if opts.AgyHooksFile != "" {
 		add(checkAgyHooks(opts))
@@ -751,6 +760,34 @@ func checkHerdrIn(ctx context.Context, path string, lang i18n.Lang) DoctorCheck 
 	conn.Close()
 	c.Status, c.Detail = DoctorOK, i18n.T(lang, "node-doctor.herdr_ok")
 	return c
+}
+
+// doctorOrca is what this machine has of Orca, for the doctor: node.info's row (orcaEngine).
+func doctorOrca(ctx context.Context) proto.Engine { return orcaEngine(ctx, orcaClient()) }
+
+// checkOrcaIn is the doctor's orca line (#17037): Orca running with a protocol Persona speaks, installed and not
+// running, or running an incompatible version. A machine without Orca gets no line (ok false): the engine is chosen
+// on the hub, and most machines never use Orca. A stopped or incompatible Orca is a warning, like a herdr that does
+// not answer: it matters only when Orca is in this machine's engine set.
+func checkOrcaIn(ctx context.Context, orca func(context.Context) proto.Engine, lang i18n.Lang) (DoctorCheck, bool) {
+	ctx, cancel := context.WithTimeout(ctx, doctorDialTimeout)
+	defer cancel()
+	e := orca(ctx)
+	c := DoctorCheck{Name: "orca"}
+	args := i18n.Args{"version": e.Version}
+	switch e.State.Known() {
+	case proto.EngineRunning:
+		c.Status, c.Detail = DoctorOK, i18n.T(lang, "node-doctor.orca_ok", args)
+	case proto.EngineStopped:
+		c.Status, c.Detail = DoctorWarn, i18n.T(lang, "node-doctor.orca_stopped")
+		c.Hint = i18n.T(lang, "node-doctor.orca_stopped_hint")
+	case proto.EngineIncompatible:
+		c.Status, c.Detail = DoctorWarn, i18n.T(lang, "node-doctor.orca_incompatible", args)
+		c.Hint = i18n.T(lang, "node-doctor.orca_incompatible_hint")
+	default:
+		return c, false
+	}
+	return c, true
 }
 
 // checkAgentSandbox is the doctor's line for the agent sandbox: whether it is on and where from, whether this machine

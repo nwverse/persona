@@ -14,5 +14,7 @@
   "node_too_old": "这台电脑上的 Persona 版本太旧，不会启动 herdr，更新后再试",
   "offline": "这台电脑现在离线",
   "timeout": "等了很久 herdr 还没起来，稍后再看看",
-  "no_answer_after_start": "叫它启动了，但 herdr 还没有应答"
+  "no_answer_after_start": "叫它启动了，但 herdr 还没有应答",
+  "orca_not_running": "{machine} 的 Orca 没在运行",
+  "orca_hint": "在那台电脑上打开 Orca，它的 Agent 就会回来，也能新开。"
 }

@@ -28,5 +28,8 @@
   "also_open": "Also open in {engines}: messages go here only",
   "start_in": "Open in",
   "none": "no terminal engine",
-  "list_separator": ", "
+  "list_separator": ", ",
+  "detection_stopped": "Installed, not running",
+  "detection_stopped_version": "Installed, not running · {version}",
+  "detection_incompatible_version": "Not compatible · {version}"
 }

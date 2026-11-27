@@ -49,11 +49,34 @@ export function canSelectEngine(id: string, m: Pick<Machine, "engines">): boolea
   return !!known(id) || !!m.engines?.some((e) => e.id === id && e.available);
 }
 
-/** What the node found of the engine: "Available" (with its version) / "Not detected"; nothing to say while offline. */
+/** What a node found of an engine (proto.EngineState, #17037): only Orca's row says it; "unknown" for a row that does
+ * not, or a state this client does not know. */
+export type EngineState = "running" | "stopped" | "incompatible" | "missing" | "unknown";
+
+const ENGINE_STATES: readonly string[] = ["running", "stopped", "incompatible", "missing"];
+
+export function engineState(e: Pick<DetectedEngine, "state"> | undefined): EngineState {
+  return e?.state && ENGINE_STATES.includes(e.state) ? (e.state as EngineState) : "unknown";
+}
+
+/** Orca is in the machine's engine set and its node says Orca is installed and not running: what the Agents list's
+ * "Orca isn't running" notice is shown for (an incompatible Orca, a missing one, an older node's row never are). */
+export function orcaStopped(m: Pick<Machine, "online" | "engine" | "engine_hosts" | "engine_default" | "engines">): boolean {
+  if (!m.online || !currentHosts(m).hosts.includes("orca")) return false;
+  return engineState(m.engines?.find((e) => e.id === "orca")) === "stopped";
+}
+
+/** What the node found of the engine: "Available" (with its version), "Installed, not running", an incompatible version
+ * with the node's note, "Not detected"; nothing to say while offline. */
 export function detectionText(id: string, m: EngineMachine): string {
   if (!m.online) return t("lib-engines.detection_offline");
   const found = m.engines?.find((e) => e.id === id);
   if (!found) return t("lib-engines.detection_none");
+  const state = engineState(found);
+  if (!found.available && state === "stopped")
+    return found.version ? t("lib-engines.detection_stopped_version", { version: found.version }) : t("lib-engines.detection_stopped");
+  if (!found.available && state === "incompatible" && found.version)
+    return t("lib-engines.detection_incompatible_version", { version: found.version });
   if (!found.available) return t("lib-engines.detection_not_found");
   return found.version ? t("lib-engines.detection_available_version", { version: found.version }) : t("lib-engines.detection_available");
 }
