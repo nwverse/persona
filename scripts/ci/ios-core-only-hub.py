@@ -202,11 +202,42 @@ def require(ctl, element_id=None, label=None, label_contains=None, seconds=30):
 
 
 def has(ctl, element_id):
-    return bool(matches(elements(ctl), element_id=element_id))
+    return bool(visible_matches(ctl, element_id=element_id))
 
 
 def has_label(ctl, label):
-    return bool(matches(elements(ctl), label=label))
+    return bool(visible_matches(ctl, label=label))
+
+
+def visible_matches(ctl, element_id=None, label=None):
+    return [row for row in matches(elements(ctl), element_id=element_id, label=label) if row.get("visible") is True]
+
+
+def find_on_page(ctl, element_id=None, label=None):
+    """Find a visible control, scrolling the page; never count a retained hidden page as a module entry."""
+    try:
+        try:
+            ctl.call("scroll", to="top")
+        except CtlError:
+            return bool(visible_matches(ctl, element_id=element_id, label=label))
+        previous = None
+        for _ in range(8):
+            if visible_matches(ctl, element_id=element_id, label=label):
+                return True
+            try:
+                answer = ctl.call("scroll", pages=1)
+            except CtlError:
+                break
+            offset = answer.get("offset")
+            if previous is not None and offset == previous:
+                break
+            previous = offset
+        return False
+    finally:
+        try:
+            ctl.call("scroll", to="top")
+        except CtlError:
+            pass
 
 
 def ensure_active(ctl):
@@ -349,7 +380,7 @@ def exercise_app(ctl, base, code, edition, shots):
     ctl.tap(id="assistant-sidebar-button")
     require(ctl, element_id="sidebar-inbox")
     for entry in ("sidebar-health", "sidebar-meeting-recording"):
-        proof["entries"][entry] = has(ctl, entry)
+        proof["entries"][entry] = find_on_page(ctl, element_id=entry)
     check(proof["entries"]["sidebar-health"] == full, f"{edition}: wrong Health drawer visibility")
     check(proof["entries"]["sidebar-meeting-recording"], f"{edition}: the core recording archive entry is missing")
     no_errors(ctl, "drawer")
@@ -365,7 +396,7 @@ def exercise_app(ctl, base, code, edition, shots):
     settings(ctl, "openAdvancedSettings")
     require(ctl, element_id="settings-live-screen") if full else None
     for entry in ("settings-live-screen", "settings-meetings", "settings-health"):
-        proof["entries"][entry] = has(ctl, entry)
+        proof["entries"][entry] = find_on_page(ctl, element_id=entry)
     capture_both(ctl, shots, edition, "advanced-settings", proof)
     for entry in ("settings-live-screen", "settings-meetings", "settings-health"):
         check(proof["entries"][entry] == full, f"{edition}: wrong {entry} visibility")
@@ -379,9 +410,9 @@ def exercise_app(ctl, base, code, edition, shots):
     settings(ctl, "openConnectors")
     require(ctl, element_id="connectors-list")
     # Connector rows use visible titles, not registry accessibility identifiers.
-    mail = has_label(ctl, "Mail")
-    lark = has_label(ctl, "Lark")
-    bot = has_label(ctl, "Lark Bot")
+    mail = find_on_page(ctl, label="Mail")
+    lark = find_on_page(ctl, label="Lark")
+    bot = find_on_page(ctl, label="Lark Bot")
     proof["entries"]["settings-mail"] = mail
     proof["entries"]["connector-lark"] = lark
     proof["entries"]["connector-lark-bot"] = bot
@@ -393,7 +424,7 @@ def exercise_app(ctl, base, code, edition, shots):
 
     settings(ctl, "openChannels")
     require(ctl, label="Channels")
-    channel = has(ctl, "channel-feishu")
+    channel = find_on_page(ctl, element_id="channel-feishu")
     proof["entries"]["channel-feishu"] = channel
     check(channel == full, f"{edition}: wrong Lark channel visibility")
     no_errors(ctl, "Channels")
@@ -401,7 +432,7 @@ def exercise_app(ctl, base, code, edition, shots):
 
     settings(ctl, "openExtensions")
     require(ctl, label="Extensions")
-    voice = has(ctl, "extension-voice") or bool(matches(elements(ctl), label="Voice"))
+    voice = find_on_page(ctl, element_id="extension-voice") or find_on_page(ctl, label="Voice")
     proof["entries"]["voice-extension"] = voice
     check(voice == full, f"{edition}: wrong Voice extension visibility")
     no_errors(ctl, "Extensions")
@@ -418,7 +449,7 @@ def exercise_app(ctl, base, code, edition, shots):
     require(ctl, element_id="shell-composer-add")
     ctl.tap(id="shell-composer-add")
     require(ctl, element_id="composer-menu-mention")
-    meeting = has(ctl, "composer-menu-meeting")
+    meeting = find_on_page(ctl, element_id="composer-menu-meeting")
     proof["entries"]["composer-menu-meeting"] = meeting
     check(meeting == full, f"{edition}: wrong recording composer visibility")
     no_errors(ctl, "composer")
