@@ -147,6 +147,9 @@ export class ClientModel {
     const hidden = parseHiddenHubPages(this.sidebarConfig);
     return this.demo || (!hidden.has('todos') && !hidden.has('todo'));
   }
+  knowledgePageVisible(): boolean {
+    return this.demo || !parseHiddenHubPages(this.sidebarConfig).has('knowledge');
+  }
   /**
    * Whether this device has a registered Hub background push route (#16783, PushHealth).
    * HarmonyOS currently uses foreground `ws_notify` without Push Kit registration yet,
@@ -167,6 +170,7 @@ export class ClientModel {
   @Trace managers: ResourceRow[] = [];
   @Trace rosterDefaultId: string = '';
   @Trace features: string[] = [];
+  @Trace starredRevision: number = 0;
   @Trace private publishedImageLimits: Record<string, Object> = {};
   private helloHub: string = '';
   private helloScope: string = '';
@@ -979,6 +983,8 @@ export class ClientModel {
       else if (type === 'items' || type === 'items_replace') { this.transcript?.receive(data); } else if (type === 'terminal') {
         if (Wire.text(data, 'machine_id') === this.selected.machine && Wire.text(data, 'session_id') === this.selected.session)
           this.terminalText = (this.terminalText + Wire.text(data, 'data')).slice(-200000);
+      } else if (type === 'assistant_starred') {
+        this.starredRevision++;
       } else if (['interaction', 'interactions', 'interaction_resolved', 'session', 'sessions', 'sessions_delta', 'item', 'items', 'session_delta', 'todo', 'inbox', 'task_plan', 'assistant_feed', 'managers', 'machines'].includes(type)) {
         if (type === 'inbox') this.inboxRead.change++;
         if (type === 'todo') this.todoRead.change++;
@@ -1468,8 +1474,8 @@ export class ClientModel {
         return;
       }
       const projection = projectToolTurn(group[0].id, group, running && index === turns.length - 1);
-      projection.userMessages.forEach((item: TranscriptItem) => { const display = messageDisplay(item.text || ''); const message = new ChatMessage(item.id, 'user', display.text); message.ownerTarget = this.target(); message.itemId = item.id; message.source = display.sources; const content = parseMessageContent(display.text); message.text = content.text; message.imagePaths = content.images; message.filePaths = content.files; message.at = this.itemTime(item); messages.push(message); });
-      projection.userImages.forEach((item: TranscriptItem) => { const message = new ChatMessage(item.id, 'user'); message.imageId = item.id; message.ownerTarget = this.target(); message.itemId = item.id; message.at = this.itemTime(item); messages.push(message); });
+      projection.userMessages.forEach((item: TranscriptItem) => { const display = messageDisplay(item.text || ''); const message = new ChatMessage(item.id, 'user', display.text); message.ownerTarget = this.target(); message.itemId = item.id; message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : ''; message.source = display.sources; const content = parseMessageContent(display.text); message.text = content.text; message.imagePaths = content.images; message.filePaths = content.files; message.at = this.itemTime(item); messages.push(message); });
+      projection.userImages.forEach((item: TranscriptItem) => { const message = new ChatMessage(item.id, 'user'); message.imageId = item.id; message.ownerTarget = this.target(); message.itemId = item.id; message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : ''; message.at = this.itemTime(item); messages.push(message); });
       if (projection.summaryVisible) {
         const summary = new ChatMessage(projection.workKey, 'work');
         summary.at = this.itemTime(group[0]);
@@ -1477,7 +1483,7 @@ export class ClientModel {
         summary.work = projection.inspectionSteps.map((step: WorkInspectionStep) => this.workText(step)).filter((value: string) => !!value).join('\n\n');
         summary.raw = JSON.stringify(group); messages.push(summary);
       }
-      if (projection.visibleAssistantText) { const message = new ChatMessage('visible-' + group[0].id, 'assistant', projection.visibleAssistantText.text || ''); message.ownerTarget = this.target(); message.itemId = projection.visibleAssistantText.id; messages.push(message); }
+      if (projection.visibleAssistantText) { const message = new ChatMessage('visible-' + group[0].id, 'assistant', projection.visibleAssistantText.text || ''); message.ownerTarget = this.target(); message.itemId = projection.visibleAssistantText.id; message.sourceFingerprint = typeof projection.visibleAssistantText['source_fingerprint'] === 'string' ? projection.visibleAssistantText['source_fingerprint'] as string : ''; message.at = this.itemTime(projection.visibleAssistantText); messages.push(message); }
     });
     return messages;
   }

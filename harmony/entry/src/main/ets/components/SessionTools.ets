@@ -811,15 +811,15 @@ export struct SessionTools {
       }
         .width(34 * Math.min(this.env.fontScale, Tokens.interfaceFontMaxScale))
         .height(34 * Math.min(this.env.fontScale, Tokens.interfaceFontMaxScale))
-        .borderRadius(10)
+        .borderRadius(Tokens.radiusControl)
         .backgroundColor(binding.value.ignored
           ? Colors.subtle
           : binding.value.directory
             ? Colors.accentWell
             : this.isCodeFileName(binding.value.name)
-              ? (this.env.dark ? '#24B0A8FF' : '#145B4FD6')
-              : (this.env.dark ? '#18FFFFFF' : '#0E000000'))
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 10 })
+              ? Colors.aiWash
+              : Colors.pressOverlay)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusControl })
         .flexShrink(0)
         .id('session.fileRow.icon.'+binding.value.path)
       Column({space:2}) {
@@ -1291,7 +1291,7 @@ export struct SessionTools {
   private gitMarkFill(mark:string):ResourceColor {
     if (mark==='A' || mark==='U' || mark==='?' || mark==='??') return Colors.codeAddedFill;
     if (mark==='D' || mark==='!') return Colors.codeRemovedFill;
-    if (mark==='M' || mark==='R') return this.env.dark ? '#28E3B341' : '#208A6A00';
+    if (mark==='M' || mark==='R') return Colors.workingWash;
     return Colors.subtle;
   }
   private gitDate(value:string):string {
@@ -1845,8 +1845,8 @@ export struct SessionTools {
       .width('100%')
       .padding({ left: 12, right: 10, top: 8, bottom: 8 })
       .backgroundColor(Colors.surface)
-      .borderRadius(12)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: 12 })
+      .borderRadius(Tokens.radiusCard)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.radiusCard })
       .alignItems(VerticalAlign.Center)
   }
   @Builder diffViewer() {
@@ -1855,13 +1855,13 @@ export struct SessionTools {
         ForEach(['session_tools_unstaged','session_tools_staged'],(key:string,i:number) => {
           Button(tr(key),{type:ButtonType.Normal}).layoutWeight(1).height(40).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale).fontWeight(FontWeight.Medium).padding(0)
             .fontColor(this.workspace.gitDiffStaged===(i===1) ? Colors.ink : Colors.secondary)
-            .backgroundColor(this.workspace.gitDiffStaged===(i===1) ? Colors.surface : Color.Transparent).borderRadius(9)
-            .shadow(this.workspace.gitDiffStaged===(i===1) ? PhoneStyle.surfaceShadow({ radius: 4, color: this.env.dark ? '#28000000' : '#10000000', offsetY: 1 }) : { radius: 0, color: Color.Transparent })
+            .backgroundColor(this.workspace.gitDiffStaged===(i===1) ? Colors.surface : Color.Transparent).borderRadius(Tokens.radiusControl - 1)
+            .shadow(this.workspace.gitDiffStaged===(i===1) ? PhoneStyle.surfaceShadow({ radius: 4, color: Colors.hairlineGlass, offsetY: 1 }) : { radius: 0, color: Color.Transparent })
             .onClick(() => { if (this.workspace.gitDiffStaged!==(i===1)) { Haptics.selection(); this.workspace.gitDiffStaged=i===1; this.workspace.loadGitDiff(); } })
             .id(i ? 'session.git.diff.staged' : 'session.git.diff.unstaged')
         },(key:string) => key)
-      }.width('100%').padding(3).borderRadius(12).backgroundColor(Colors.control)
-        .border({ width: 0.5, color: this.cardRim(), radius: 12 })
+      }.width('100%').padding(3).borderRadius(Tokens.radiusControl).backgroundColor(Colors.control)
+        .border({ width: 0.5, color: this.cardRim(), radius: Tokens.radiusControl })
         .margin({ left: this.phoneGitReader ? 12 : 0, right: this.phoneGitReader ? 12 : 0 })
       if (this.workspace.gitDiffError) Row() {
         Text(trError(this.workspace.gitDiffError)).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.danger).layoutWeight(1)
@@ -2030,14 +2030,12 @@ export struct SessionTools {
       .fontFamily('monospace')
       .fontWeight(FontWeight.Medium)
       .fontColor(danger ? Colors.danger : Colors.ink)
-      .backgroundColor(danger
-        ? (this.env.dark ? '#28FF6369' : '#18C62B33')
-        : (this.env.dark ? '#2C2C2E' : '#FFFFFF'))
-      .borderRadius(10)
+      .backgroundColor(danger ? Colors.dangerWash : Colors.surface)
+      .borderRadius(Tokens.radiusControl)
       .border({
         width: PhoneStyle.surfaceEdgeWidth(0.5),
-        color: danger ? (this.env.dark ? '#44FF6369' : '#30C62B33') : PhoneStyle.cardBorder(this.env.dark),
-        radius: 10
+        color: danger ? Colors.danger : PhoneStyle.cardBorder(this.env.dark),
+        radius: Tokens.radiusControl
       })
       .shadow(PhoneStyle.cardElevation(this.env.dark))
       .scale({
@@ -2079,8 +2077,8 @@ export struct SessionTools {
         .width('100%')
         .padding({ left: 14, right: 10, top: 10, bottom: 10 })
         .backgroundColor(Colors.surface)
-        .borderRadius(16)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: 16 })
+        .borderRadius(Tokens.radiusCard)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.radiusCard })
         .shadow(PhoneStyle.cardElevation(this.env.dark))
       if (this.workspace.terminalError) Text(trError(this.workspace.terminalError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding({ left: 4, right: 4 })
       Scroll() {
@@ -2090,10 +2088,10 @@ export struct SessionTools {
         .layoutWeight(1)
         .width('100%')
         .align(Alignment.TopStart)
-        .backgroundColor(this.env.dark ? '#0E0F12' : Colors.codeCanvas)
-        .borderRadius(16)
+        .backgroundColor(Colors.codeCanvas)
+        .borderRadius(Tokens.radiusCard)
         .clip(true)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: 16 })
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.radiusCard })
         .shadow(PhoneStyle.cardElevation(this.env.dark))
         .onAreaChange((_oldArea: Area, newArea: Area) => this.measureTerminal(newArea))
       if (this.workspace.terminalControlState === 'active') {
@@ -2146,8 +2144,8 @@ export struct SessionTools {
         .width('100%')
         .padding({ left: 14, right: 10, top: 10, bottom: 10 })
         .backgroundColor(Colors.surface)
-        .borderRadius(16)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: 16 })
+        .borderRadius(Tokens.radiusCard)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.radiusCard })
         .shadow(PhoneStyle.cardElevation(this.env.dark))
       if (this.workspace.screenError) Text(trError(this.workspace.screenError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding({ left: 4, right: 4 })
       if (this.transferError) Text(this.transferError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding({ left: 4, right: 4 })
@@ -2158,10 +2156,10 @@ export struct SessionTools {
         .layoutWeight(1)
         .width('100%')
         .align(Alignment.TopStart)
-        .backgroundColor(this.env.dark ? '#0E0F12' : Colors.codeCanvas)
-        .borderRadius(16)
+        .backgroundColor(Colors.codeCanvas)
+        .borderRadius(Tokens.radiusCard)
         .clip(true)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: 16 })
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.radiusCard })
         .shadow(PhoneStyle.cardElevation(this.env.dark))
       if (this.workspace.screenControlRequested) {
         Column({ space: 8 }) {

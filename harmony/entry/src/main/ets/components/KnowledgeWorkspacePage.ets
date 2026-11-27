@@ -1,5 +1,9 @@
 import { relativeActivityDate } from '../core/PhoneDate';
 import { MinutesWaitResult, resolveMinutesWait } from '../core/MinutesWait';
+import { isKnownDebateStatus, MinutesDebateItem, MinutesDebatePosition, parseMinutesDebates } from '../core/MinutesDebates';
+import { KBChatInboxPage, KBChatInboxPiece, KBInboxItem, kbInboxLine, kbInboxTier, parseChatInboxPage } from '../core/KBChatInbox';
+import { isHubPageHidden } from '../core/HubModules';
+import { PersonaSectionLabel, PersonaStatusPill, PersonaStatusTone } from '../design/NormalizedPrimitives';
 import { i18n } from '@kit.LocalizationKit';
 import { KnowledgeLandingMenu, knowledgeInk, knowledgePriorityTone, knowledgeRelevanceTone, knowledgeWash } from '../models/KnowledgeListPresentation';
 import { IconActions } from '../design/IconActions';
@@ -313,6 +317,7 @@ export struct KnowledgeWorkspacePage {
   private rowBindingScope: string = '';
   @Local momentText: string = '';
   @Local selectedActions: string[] = [];
+  @Local chatInboxDoneShown: boolean = false;
   @Local recordingOpen: boolean = false;
   @Local recording: KnowledgeRecording = new KnowledgeRecording(new NativeRecording());
   private lastVisible: boolean = true;
@@ -346,11 +351,11 @@ export struct KnowledgeWorkspacePage {
     this.metadataSheet=this.workspace.editOpen;
   }
   @Monitor('workspace.editOpen') metadataChanged():void { if (!this.workspace.editOpen) this.metadataSheet=false; }
-  @Monitor('row') rowChanged(): void { this.metadataSheet=false; this.facts.close(); this.removedFacts=''; this.removedFactsOwner=''; this.recordingTools=false; this.syncRowBindings(); this.openWorkspace(); }
+  @Monitor('row') rowChanged(): void { this.metadataSheet=false; this.facts.close(); this.removedFacts=''; this.removedFactsOwner=''; this.recordingTools=false; this.chatInboxDoneShown=false; this.syncRowBindings(); this.openWorkspace(); }
 
   @Monitor('model.profile') profileChanged(): void {
     this.options().clear(this.recording);
-    this.metadataSheet=false; this.facts.close(); this.removedFacts=''; this.removedFactsOwner=''; this.recordingTools=false; this.showIgnored=false; this.recordingOpen = false;
+    this.metadataSheet=false; this.facts.close(); this.removedFacts=''; this.removedFactsOwner=''; this.recordingTools=false; this.chatInboxDoneShown=false; this.showIgnored=false; this.recordingOpen = false;
     this.selectedCalendarEvent=''; this.calendarRequest++; this.calendarEvents=[]; this.calendarState=''; this.meetingTitle=''; this.meetingKind='meeting';
     this.privateMeeting=false; this.invitationOverride='';this.syncMeetingOptions();this.meetingFeaturesChanged(); this.localMeetings = false; this.localOwner = ''; this.localOpening = undefined;
     this.recording.stopForBackground().catch(() => undefined); this.syncRowBindings(); this.openWorkspace();
@@ -1412,9 +1417,42 @@ export struct KnowledgeWorkspacePage {
         if (this.workspace.editOpen) this.editForm()
         this.entryEvidence()
         if (this.workspace.selected.path === 'recordings') this.recordingSection(UIUtils.makeBinding((): Record<string, Object> => this.workspace.detail))
+        this.chatInboxSection()
         if (this.workspace.selected.path !== 'recordings' && Wire.text(this.workspace.detail, 'recent')) {
           Column({ space: Tokens.gap }) { Text(tr('knowledge_recent')).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontWeight(FontWeight.Medium)
-            Text(Wire.text(this.workspace.detail, 'recent')).fontSize(Tokens.meta).width('100%')
+            if (this.chatInboxData()?.pieces) {
+              Column({ space: Tokens.spaceXs }) {
+                ForEach(this.chatInboxData()!.pieces!, (piece: KBChatInboxPiece) => {
+                  if (piece.item) {
+                    Button({ type: ButtonType.Normal }) {
+                      Row({ space: Tokens.spaceS }) {
+                        Text(piece.text)
+                          .fontSize(Tokens.meta)
+                          .fontColor(Colors.link)
+                          .layoutWeight(1)
+                        SymbolGlyph(Symbols.inbox)
+                          .fontSize('14vp')
+                          .fontColor([Colors.link])
+                      }
+                      .width('100%')
+                      .alignItems(VerticalAlign.Top)
+                    }
+                    .width('100%')
+                    .constraintSize({ minHeight: Tokens.controlBar })
+                    .padding({ top: Tokens.spaceXs, bottom: Tokens.spaceXs })
+                    .backgroundColor(Color.Transparent)
+                    .onClick(() => this.openChatInboxItem(piece.item!))
+                    .id('knowledge.recent.inbox')
+                  } else {
+                    Text(piece.text).fontSize(Tokens.meta).width('100%')
+                  }
+                }, (piece: KBChatInboxPiece) => String(piece.id) + ':' + (piece.item?.id || 'plain'))
+              }
+              .width('100%')
+              .alignItems(HorizontalAlign.Start)
+            } else {
+              Text(Wire.text(this.workspace.detail, 'recent')).fontSize(Tokens.meta).width('100%')
+            }
           }.width('100%').alignItems(HorizontalAlign.Start)
         }
         if (this.workspace.selected.path === 'projects' && Wire.rows(this.workspace.detail, 'moments').length) {
@@ -1451,6 +1489,260 @@ export struct KnowledgeWorkspacePage {
     }
   }
 
+  private chatInboxData(): KBChatInboxPage | null {
+    if (this.workspace.selected.path !== 'chats') return null;
+    if (isHubPageHidden('inbox', this.model.sidebarConfig, this.model.demo)) return null;
+    return parseChatInboxPage('chats', Wire.text(this.workspace.detail, 'recent'), this.workspace.inboxItems);
+  }
+
+  private openChatInboxItem(item: KBInboxItem): void {
+    Haptics.tap();
+    const target = new ResourceRow(item.id, item.title || item.id, 'inbox');
+    target.manager = this.workspace.selected.manager;
+    target.group = this.workspace.selected.group || this.model.profile.id;
+    this.onOpenResource(target);
+  }
+
+  private kbInboxTierTone(tier: string, done: boolean): PersonaStatusTone {
+    if (tier === 'action' && !done) return 'needs';
+    if (tier === 'working' && !done) return 'working';
+    return 'neutral';
+  }
+
+  private kbInboxTierLabel(tier: string): string {
+    if (tier === 'action') return tr('needs_you');
+    if (tier === 'working') return tr('flow_inbox_progress');
+    if (tier === 'fyi') return tr('flow_inbox_fyi');
+    return tr('flow_inbox_collapsed');
+  }
+
+  @Builder chatInboxRow(item: KBInboxItem) {
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: Tokens.spaceM }) {
+        SymbolGlyph(item.doneAt ? Symbols.check : Symbols.inbox)
+          .fontSize('16vp')
+          .fontColor([item.doneAt ? Colors.secondary : Colors.link])
+        Column({ space: Tokens.spaceXxs }) {
+          Text(item.title || item.id)
+            .fontSize(Tokens.typeSecondary)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(item.doneAt ? Colors.secondary : Colors.ink)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Row({ space: Tokens.spaceS }) {
+            if (kbInboxTier(item)) {
+              PersonaStatusPill({
+                tone: this.kbInboxTierTone(kbInboxTier(item)!, !!item.doneAt),
+                label: this.kbInboxTierLabel(kbInboxTier(item)!)
+              })
+            }
+            if (kbInboxLine(item)) {
+              Text(kbInboxLine(item))
+                .fontSize(Tokens.typeLabel)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                .fontColor(Colors.secondary)
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
+            }
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        SymbolGlyph(Symbols.expand)
+          .fontSize('12vp')
+          .fontColor([Colors.tertiary])
+      }
+      .width('100%')
+      .padding({ left: Tokens.spaceL, right: Tokens.spaceM, top: Tokens.spaceM, bottom: Tokens.spaceM })
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .padding(0)
+    .backgroundColor(Color.Transparent)
+    .onClick(() => this.openChatInboxItem(item))
+    .id('knowledge.inbox.item.' + item.id)
+  }
+
+  @Builder chatInboxSection() {
+    if (this.chatInboxData()) {
+      Column({ space: Tokens.spaceS }) {
+        PersonaSectionLabel({
+          text: tr('kb_chat_in_inbox'),
+          trailing: this.chatInboxData()!.open.length > 0 ? String(this.chatInboxData()!.open.length) : ''
+        })
+        Column() {
+          ForEach(this.chatInboxData()!.open, (item: KBInboxItem, idx: number) => {
+            if (idx > 0) {
+              Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: 48 })
+            }
+            this.chatInboxRow(item)
+          }, (item: KBInboxItem) => 'open:' + item.id)
+          if (this.chatInboxDoneShown) {
+            ForEach(this.chatInboxData()!.done, (item: KBInboxItem, idx: number) => {
+              if (idx > 0 || this.chatInboxData()!.open.length > 0) {
+                Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: 48 })
+              }
+              this.chatInboxRow(item)
+            }, (item: KBInboxItem) => 'done:' + item.id)
+          }
+          if (this.chatInboxData()!.done.length > 0) {
+            if (this.chatInboxData()!.open.length > 0 || this.chatInboxDoneShown) {
+              Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.spaceL })
+            }
+            Button(
+              this.chatInboxDoneShown
+                ? tr('agent_collapse')
+                : tr('kb_chat_inbox_done_count').replace('{count}', String(this.chatInboxData()!.done.length)),
+              { type: ButtonType.Normal }
+            )
+              .buttonStyle(ButtonStyleMode.TEXTUAL)
+              .fontSize(Tokens.typeSecondary)
+              .fontColor(Colors.link)
+              .width('100%')
+              .padding({ left: Tokens.spaceL, right: Tokens.spaceL, top: Tokens.spaceM, bottom: Tokens.spaceM })
+              .onClick(() => {
+                Haptics.tap();
+                Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => {
+                  this.chatInboxDoneShown = !this.chatInboxDoneShown;
+                });
+              })
+              .id('knowledge.inbox.done')
+          }
+        }
+        .width('100%')
+        .backgroundColor(Colors.surface)
+        .borderRadius(PhoneStyle.cardRadius)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+        .shadow(PhoneStyle.cardElevation(this.environment.dark))
+        .clip(true)
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .id('knowledge.inbox.section')
+    }
+  }
+
+  private minutesDebates(detail: Record<string, Object>): MinutesDebateItem[] {
+    const minutes = Wire.object(detail, 'minutes');
+    return parseMinutesDebates(minutes['debates'], Wire.rows(minutes, 'decisions').length);
+  }
+
+  @Builder minutesDebatesSection(detail: Record<string, Object>) {
+    if (this.minutesDebates(detail).length > 0) {
+      Column({ space: Tokens.spaceS }) {
+        PersonaSectionLabel({
+          text: tr('knowledge_minutes_debates'),
+          trailing: String(this.minutesDebates(detail).length)
+        })
+        ForEach(this.minutesDebates(detail), (debate: MinutesDebateItem, idx: number) => {
+          Column({ space: Tokens.spaceS }) {
+            Row({ space: Tokens.spaceS }) {
+              Text(debate.question)
+                .fontSize(Tokens.typeSecondary)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Colors.ink)
+                .layoutWeight(1)
+              if (isKnownDebateStatus(debate.status)) {
+                PersonaStatusPill({
+                  tone: debate.status === 'open' ? 'working' : 'unread',
+                  label: tr(debate.status === 'open' ? 'knowledge_minutes_debate_open' : 'knowledge_minutes_debate_settled')
+                })
+              }
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Top)
+
+            if (debate.topic) {
+              Text(debate.topic)
+                .fontSize(Tokens.typeLabel)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                .fontColor(Colors.secondary)
+            }
+
+            Column({ space: Tokens.spaceXs }) {
+              ForEach(debate.positions, (pos: MinutesDebatePosition, pIdx: number) => {
+                Row({ space: Tokens.spaceS }) {
+                  Circle()
+                    .width(Tokens.spaceSm)
+                    .height(Tokens.spaceSm)
+                    .fill(Colors.secondary)
+                    .margin({ top: 6 })
+                  Column({ space: Tokens.spaceXxs }) {
+                    Text(pos.stance)
+                      .fontSize(Tokens.typeCaption)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
+                      .fontColor(Colors.ink)
+                    if (pos.who || pos.at > 0) {
+                      Row({ space: Tokens.spaceSm }) {
+                        if (pos.who) {
+                          PersonaStatusPill({ tone: 'neutral', label: pos.who })
+                        }
+                        if (pos.at > 0) {
+                          Text(this.clock(pos.at))
+                            .fontSize(Tokens.typeLabel)
+                            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                            .fontColor(Colors.secondary)
+                            .fontFeature('tnum 1')
+                        }
+                      }
+                    }
+                  }
+                  .layoutWeight(1)
+                  .alignItems(HorizontalAlign.Start)
+                }
+                .width('100%')
+                .alignItems(VerticalAlign.Top)
+              }, (pos: MinutesDebatePosition, pIdx: number) => String(pIdx) + ':' + pos.stance)
+            }
+            .width('100%')
+
+            if (debate.outcome) {
+              Row({ space: Tokens.spaceS }) {
+                SymbolGlyph(Symbols.check)
+                  .fontSize('14vp')
+                  .fontColor([Colors.unread])
+                Column({ space: Tokens.spaceXxs }) {
+                  Text(tr('knowledge_minutes_debate_outcome'))
+                    .fontSize(Tokens.typeLabel)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Colors.unread)
+                  Text(debate.outcome.text)
+                    .fontSize(Tokens.typeCaption)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
+                    .fontColor(Colors.ink)
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+              }
+              .width('100%')
+              .padding(Tokens.spaceS)
+              .backgroundColor(Colors.unreadWash)
+              .borderRadius(Tokens.radiusControl)
+              .alignItems(VerticalAlign.Top)
+            }
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .padding(Tokens.spaceM)
+          .backgroundColor(Colors.surface)
+          .borderRadius(Tokens.radiusCard)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.radiusCard })
+          .shadow(PhoneStyle.cardElevation(this.environment.dark))
+          .id('knowledge.minutes.debate.' + String(idx))
+        }, (debate: MinutesDebateItem, idx: number) => String(idx) + ':' + debate.question)
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .id('knowledge.minutes.debates')
+    }
+  }
+
   private minutesWaitLine(detail: Record<string, Object>): MinutesWaitResult {
     const meta = Wire.object(detail, 'meta');
     const transcription = Wire.object(meta, 'transcription');
@@ -1479,6 +1771,7 @@ export struct KnowledgeWorkspacePage {
       if (Object.keys(Wire.object(detail.value, 'minutes')).length) {
         Text(tr('knowledge_minutes')).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontWeight(FontWeight.Medium)
         if (Wire.text(Wire.object(detail.value, 'minutes'), 'markdown')) MarkdownText({ text: Wire.text(Wire.object(detail.value, 'minutes'), 'markdown'), onLink: (url: string) => this.openSafeLink(url) })
+        this.minutesDebatesSection(detail.value)
         ForEach(Wire.rows(Wire.object(detail.value, 'minutes'), 'actions'), (action: Record<string, Object>) => {
           Row({ space: Tokens.gap }) { Toggle({ type: ToggleType.Checkbox, isOn: this.selectedActions.includes(Wire.text(action, 'id')) }).onChange(() => this.toggleAction(Wire.text(action, 'id')))
             Text(Wire.text(action, 'what')).fontSize(Tokens.meta).layoutWeight(1)
