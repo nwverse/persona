@@ -143,6 +143,7 @@ func buildTodoBoardProjection(items []listedTodo, directions map[string]string) 
 // for GET /api/v1/todos under todos_v2=true. When foldChildren is false, child tasks are not folded under top-level
 // parent goals and every open to-do appears flat in status_groups and sidebar_tree.
 func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[string]string, foldChildren bool) *todoBoardProjection {
+	effectiveDirs := resolveEffectiveDirections(items, directions)
 	metaByID := make(map[string]*todoBoardItemMeta, len(items))
 	orderedIDs := make([]string, 0, len(items))
 
@@ -167,7 +168,7 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 			section:     sec,
 			subOrder:    sub,
 			viewRank:    rank,
-			directionID: resolveBoardDirectionID(item, directions),
+			directionID: effectiveDirs[item.ID],
 			itemType:    itemType,
 		}
 		orderedIDs = append(orderedIDs, item.ID)
@@ -511,19 +512,16 @@ func isBoardChildSurfaced(m *todoBoardItemMeta) bool {
 	return false
 }
 
-// resolveBoardDirectionID prefers explicit direction_id, falling back to origin or supervisor
-// when it matches a known direction; everything else is ungrouped ("").
-func resolveBoardDirectionID(t listedTodo, directions map[string]string) string {
+// resolveDirectDirectionID resolves a to-do's own direction without traversing part_of links:
+//  1. Explicit direction_id (trimmed; never overridden).
+//  2. supervision.supervisor when present in directions.
+//  3. origin when present in directions.
+func resolveDirectDirectionID(t listedTodo, directions map[string]string) string {
 	if dirID := strings.TrimSpace(t.DirectionID); dirID != "" {
 		return dirID
 	}
 	if len(directions) == 0 {
 		return ""
-	}
-	if origin := strings.TrimSpace(t.Origin); origin != "" {
-		if _, ok := directions[origin]; ok {
-			return origin
-		}
 	}
 	if t.Supervision != nil {
 		if sup := strings.TrimSpace(t.Supervision.Supervisor); sup != "" {
@@ -532,7 +530,163 @@ func resolveBoardDirectionID(t listedTodo, directions map[string]string) string 
 			}
 		}
 	}
+	if origin := strings.TrimSpace(t.Origin); origin != "" {
+		if _, ok := directions[origin]; ok {
+			return origin
+		}
+	}
 	return ""
+}
+
+// resolveEffectiveDirections computes the server-authoritative effective direction_id for every
+// to-do in items with strict precedence and cycle-safe part_of inheritance:
+//  1. Explicit direction_id (trimmed; never overridden).
+//  2. supervision.supervisor (when present in directions).
+//  3. origin (when present in directions).
+//  4. part_of ancestor chain inheritance (nearest ancestor with a resolved direction).
+//  5. Unanimous subtree child fallback for undirected umbrella parents: if all directed descendants
+//     agree on one single direction in directions, inherit it for the parent and propagate to any
+//     undirected siblings under that parent.
+func resolveEffectiveDirections(items []listedTodo, directions map[string]string) map[string]string {
+	byID := make(map[string]listedTodo, len(items))
+	direct := make(map[string]string, len(items))
+	orderedIDs := make([]string, 0, len(items))
+
+	for _, item := range items {
+		if item.ID == "" {
+			continue
+		}
+		if _, dup := byID[item.ID]; dup {
+			continue
+		}
+		byID[item.ID] = item
+		direct[item.ID] = resolveDirectDirectionID(item, directions)
+		orderedIDs = append(orderedIDs, item.ID)
+	}
+
+	children := make(map[string][]string)
+	for _, id := range orderedIDs {
+		parentID := strings.TrimSpace(byID[id].PartOf)
+		if parentID == "" || parentID == id {
+			continue
+		}
+		if _, ok := byID[parentID]; !ok {
+			continue
+		}
+		children[parentID] = append(children[parentID], id)
+	}
+
+	// Pass 2: cycle-safe ancestor chain inheritance from direct directions.
+	resolved := make(map[string]string, len(orderedIDs))
+	for _, id := range orderedIDs {
+		if d := direct[id]; d != "" {
+			resolved[id] = d
+			continue
+		}
+		visited := map[string]bool{id: true}
+		cur := strings.TrimSpace(byID[id].PartOf)
+		for cur != "" && !visited[cur] {
+			visited[cur] = true
+			parent, ok := byID[cur]
+			if !ok {
+				break
+			}
+			if d := direct[cur]; d != "" {
+				resolved[id] = d
+				break
+			}
+			cur = strings.TrimSpace(parent.PartOf)
+		}
+	}
+
+	// Pass 3: unanimous subtree child fallback for undirected umbrella parents.
+	if len(directions) > 0 {
+		umbrella := make(map[string]string)
+		for _, id := range orderedIDs {
+			if resolved[id] != "" || len(children[id]) == 0 {
+				continue
+			}
+			visited := map[string]bool{id: true}
+			queue := append([]string(nil), children[id]...)
+			sole := ""
+			conflict := false
+			for len(queue) > 0 && !conflict {
+				descID := queue[0]
+				queue = queue[1:]
+				if visited[descID] {
+					continue
+				}
+				visited[descID] = true
+				if d := resolved[descID]; d != "" {
+					if sole == "" {
+						sole = d
+					} else if sole != d {
+						conflict = true
+						break
+					}
+				}
+				if kids := children[descID]; len(kids) > 0 {
+					queue = append(queue, kids...)
+				}
+			}
+			if !conflict && sole != "" {
+				if _, known := directions[sole]; known {
+					umbrella[id] = sole
+				}
+			}
+		}
+		if len(umbrella) > 0 {
+			for id, dirID := range umbrella {
+				resolved[id] = dirID
+			}
+			// Pass 4: propagate newly resolved umbrella parent directions to undirected descendants.
+			for _, id := range orderedIDs {
+				if resolved[id] != "" {
+					continue
+				}
+				visited := map[string]bool{id: true}
+				cur := strings.TrimSpace(byID[id].PartOf)
+				for cur != "" && !visited[cur] {
+					visited[cur] = true
+					parent, ok := byID[cur]
+					if !ok {
+						break
+					}
+					if d := resolved[cur]; d != "" {
+						resolved[id] = d
+						break
+					}
+					cur = strings.TrimSpace(parent.PartOf)
+				}
+			}
+		}
+	}
+
+	return resolved
+}
+
+// populateTodoEffectiveDirections attaches read-only effective_direction_id and
+// effective_direction_name onto each listedTodo in items. Callers must invoke this only when
+// todos_v2 is enabled.
+func populateTodoEffectiveDirections(items []listedTodo, directions map[string]string) {
+	if len(items) == 0 {
+		return
+	}
+	resolved := resolveEffectiveDirections(items, directions)
+	for i := range items {
+		dirID := resolved[items[i].ID]
+		if dirID == "" {
+			items[i].EffectiveDirectionID = ""
+			items[i].EffectiveDirectionName = ""
+			continue
+		}
+		items[i].EffectiveDirectionID = dirID
+		if directions != nil {
+			items[i].EffectiveDirectionName = strings.TrimSpace(directions[dirID])
+		} else {
+			items[i].EffectiveDirectionName = ""
+		}
+	}
 }
 
 func compareBoardMeta(a, b *todoBoardItemMeta) int {
