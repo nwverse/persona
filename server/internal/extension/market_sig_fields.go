@@ -154,6 +154,7 @@ var catalogItemTypes = map[string]reflect.Type{
 
 	"repository_providers": reflect.TypeFor[RepositoryProviderItem](),
 	"disk_offload":         reflect.TypeFor[DiskOffloadItem](),
+	"text_lookup":          reflect.TypeFor[TextLookupItem](),
 }
 
 // Bind the active release, its parsed projection, and the other releases to the proof.
