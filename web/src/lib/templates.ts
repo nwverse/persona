@@ -206,7 +206,7 @@ export function builtInTemplates(name: (key: string) => string): PersonaTemplate
       id: "default",
       name: name("default_name"),
       description: name("default_description"),
-      browser: { phone_nav: "switch", sidebar_icons: "monochrome", main_chat: "full", agents_view: "full", settings_view: "full", modules_off: [] },
+      browser: { phone_nav: "switch", sidebar_icons: "monochrome", main_chat: "full", agents_view: "full", settings_view: "full", sidebar_view: "full", modules_off: [] },
       navigation: { pages: null },
     },
   ];

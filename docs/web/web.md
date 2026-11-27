@@ -2362,7 +2362,7 @@ configuration in one step. A template (`schema/template.schema.json`, `persona_t
 description (one string or one per language) and up to four parts, each applied where it belongs:
 
 - `browser`: this browser's looks: `phone_nav` (`switch` / `tabs`), `sidebar_icons`, the lean looks below
-  (`main_chat`, `agents_view`, `settings_view`), and `modules_off`, the whole list of optional web modules switched off
+  (`main_chat`, `agents_view`, `settings_view`, `sidebar_view`), and `modules_off`, the whole list of optional web modules switched off
   (every other one is switched on);
 - `navigation`: the hub's start page (`start`) and sidebar arrangement (`pages`, the navigation record's shape; `null`
   puts the default back), sent with the start page's and the sidebar's own writers, so every device follows;
@@ -2374,7 +2374,7 @@ description (one string or one per language) and up to four parts, each applied 
 A template never carries secrets. The group lists the one built-in, **Default** (Persona as it comes: the top switch,
 the full main chat, Agents and Settings, every optional feature on, the sidebar's default pages); any other setup is a
 template of one's own, imported or opened from a link. For example, a lean Agent console:
-`{"persona_template":1,"id":"my-console","name":"My console","browser":{"phone_nav":"tabs","main_chat":"plain","agents_view":"active","settings_view":"short","modules_off":["health"]},"navigation":{"pages":{"order":[],"shown":[],"hidden":["home","inbox","todos","routines","kb","machines"]}}}`.
+`{"persona_template":1,"id":"my-console","name":"My console","browser":{"phone_nav":"tabs","main_chat":"plain","agents_view":"active","settings_view":"short","sidebar_view":"agents","modules_off":["health"]},"navigation":{"pages":{"order":[],"shown":[],"hidden":["home","inbox","todos","routines","kb","machines"]}}}`.
 **Use** opens a preview: every item with its current and new value, what is already set, and what is skipped or
 refused and why (the settings part is a dry run on the manager); **Apply** writes them in order, each item on its own,
 and the dialog then shows what happened to each. **Share** copies a link, `/settings?tab=general&template=<id>` for a
@@ -2385,7 +2385,7 @@ another template is the way back. Checks: `web/src/lib/templates.test.ts`, `scri
 
 ### Lean looks (#16898)
 
-Three looks (`web/src/lib/looks.ts`) make a page leaner for someone who uses Persona mainly as a console for their
+Four looks (`web/src/lib/looks.ts`) make a page leaner for someone who uses Persona mainly as a console for their
 Agents. Only a template sets them; each is kept in this browser like the phone navigation, its default (`full`) stores
 nothing and draws the page as it always was, and Default puts it back.
 
@@ -2404,6 +2404,9 @@ nothing and draws the page as it always was, and Default puts it back.
 - `settings_view: "short"`: Settings lists Models, Persona, Integrations or Channels and Extensions, Agents, General and
   Hub, and a **More settings** row lists the rest again. Search still finds every category, and an open category stays
   listed.
+- `sidebar_view: "agents"`: the sidebar and the phone's drawer hold the main chat and the Agents only, without the
+  Pages and Persona chats sections (an extension's own page group stays). Settings stays in the assistant menu at the
+  sidebar's top, ⌘, and the phone's tab bar; every chat is still in search and History.
 
 Checks: `web/src/lib/looks.test.ts`, `web/src/lib/plain-chat.test.ts`, `web/src/lib/agent-groups.test.ts`.
 

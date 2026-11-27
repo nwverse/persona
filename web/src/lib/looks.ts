@@ -4,7 +4,9 @@
 //   - main_chat: `plain` keeps the main conversation to questions and replies (views/chat/ChatView.tsx): no tray chips,
 //     permission pill, context meter, finished supervision rounds or briefing cards;
 //   - agents_view: `active` lists only the sessions running now, by computer (views/Sidebar.tsx AgentsBlock);
-//   - settings_view: `short` shows a few Settings tabs and puts the rest under More settings (views/Settings.tsx).
+//   - settings_view: `short` shows a few Settings tabs and puts the rest under More settings (views/Settings.tsx);
+//   - sidebar_view: `agents` keeps the sidebar (and the phone's drawer) to the main chat and the Agents, without the
+//     Pages and Persona chats sections (views/Sidebar.tsx); Settings stays in the assistant menu, ⌘, and the tab bar.
 // Templates set them (lib/templates.ts, the `browser` part) and the built-in Default puts them back.
 import { useSyncExternalStore } from "react";
 
@@ -12,6 +14,7 @@ export const LOOKS = {
   main_chat: ["full", "plain"],
   agents_view: ["full", "active"],
   settings_view: ["full", "short"],
+  sidebar_view: ["full", "agents"],
 } as const;
 
 export type LookName = keyof typeof LOOKS;
@@ -22,6 +25,7 @@ const KEYS: Record<LookName, string> = {
   main_chat: "persona.look.main-chat",
   agents_view: "persona.look.agents",
   settings_view: "persona.look.settings",
+  sidebar_view: "persona.look.sidebar",
 };
 
 const listeners = new Set<() => void>();
@@ -71,3 +75,4 @@ export function useLook<N extends LookName>(name: N): LookMode<N> {
 export const usePlainMainChat = () => useLook("main_chat") === "plain";
 export const useActiveAgentsView = () => useLook("agents_view") === "active";
 export const useShortSettings = () => useLook("settings_view") === "short";
+export const useAgentsSidebar = () => useLook("sidebar_view") === "agents";

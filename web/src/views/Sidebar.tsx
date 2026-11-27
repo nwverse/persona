@@ -19,7 +19,7 @@ import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, extendKept, fil
 import { applyDimensionFilters, buildAgentFacets, DEFAULT_DIMENSION_FILTERS, hasActiveDimensionFilters, type AgentDimensionFilters, type AgentFacetCounts } from "../lib/agent-chatlist-filter";
 import { pagedFilterOf, resetAgentListFilters, setAgentListFilters, useAgentListFilters } from "../lib/agent-list-filters";
 import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
-import { useActiveAgentsView } from "../lib/looks";
+import { useActiveAgentsView, useAgentsSidebar } from "../lib/looks";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, heldPlace, hostsOf, isHeldSeen, isQuiet, needsSeenOf, runningNow, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { isMuted } from "../lib/session-actions";
 import { heldOrderFor, holdNotedSeen, noteShownUnseen, releaseAllSeen, releaseSeen, useHeldSeenOrder, useSeenRowsMode, useSeenRowsNoticed, useSeenVisit } from "../lib/seen-rows";
@@ -361,6 +361,9 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // On a hub with the work browser the sidebar lists only the Agents waiting on you; with Agents set to running now
   // (#16898, lib/looks.ts) it lists those Agents, by computer, as the Agents page does
   const runningAgents = useActiveAgentsView();
+  // The Agents sidebar (#16898, lib/looks.ts `sidebar_view: "agents"`): the main chat and the Agents, no Pages and no
+  // Persona chats sections; Settings stays in the assistant menu above, ⌘, and the phone's tab bar
+  const agentsSidebar = useAgentsSidebar();
   const workBrowserReady = useStore((s) => s.features.includes("sessions_dimensions")) && !runningAgents;
   // Persona chats are the main conversation (its row above) and the leaders, "常驻" (#4331): making a chat one and ending
   // it is the menu's 设为常驻 / 取消常驻, on the hub for every device. Each says what it has open, Working and Waiting on
@@ -483,12 +486,12 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         </div>
         <div data-row-scroller data-sidebar-scroller className="min-h-0 flex-1 -mx-2.5 overflow-y-auto overscroll-contain px-2.5 pb-3">
         {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}
-        {narrow && <NavGrid showHubNotice={active} pages={sections.find((g) => !g.id)?.pages ?? []} more={more} activeKey={activeKey} go={go} onNavigate={onNavigate} />}
+        {narrow && !agentsSidebar && <NavGrid showHubNotice={active} pages={sections.find((g) => !g.id)?.pages ?? []} more={more} activeKey={activeKey} go={go} onNavigate={onNavigate} />}
         {sections
-          .filter((g) => (g.id ? g.pages.length > 0 : !narrow))
+          .filter((g) => (g.id ? g.pages.length > 0 : !narrow && !agentsSidebar))
           .map((g, i) => <PageGroup showHubNotice={active} key={g.id || "pages"} group={g} more={g.id ? [] : more} first={i === 0 && !narrow} reg={reg} hover={hover} activeKey={activeKey} go={go} />)}
 
-        {chats && (
+        {chats && !agentsSidebar && (
           <Section
             top
             title={t("sidebar.persona_chats")}

@@ -18,15 +18,16 @@ describe("lean looks", () => {
   beforeEach(() => localStorage.clear());
 
   it("start at their defaults, the page as it always was", () => {
-    expect(LOOK_NAMES.map((n) => look(n))).toEqual(["full", "full", "full"]);
+    expect(LOOK_NAMES.map((n) => look(n))).toEqual(["full", "full", "full", "full"]);
   });
 
   it("keep a lean look in this browser and store nothing for the default", () => {
     setLook("main_chat", "plain");
     setLook("agents_view", "active");
     setLook("settings_view", "short");
-    expect(LOOK_NAMES.map((n) => look(n))).toEqual(["plain", "active", "short"]);
-    expect(localStorage.length).toBe(3);
+    setLook("sidebar_view", "agents");
+    expect(LOOK_NAMES.map((n) => look(n))).toEqual(["plain", "active", "short", "agents"]);
+    expect(localStorage.length).toBe(4);
     for (const n of LOOK_NAMES) setLook(n, "full");
     expect(localStorage.length).toBe(0);
   });

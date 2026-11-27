@@ -15,7 +15,7 @@ function fakeHost(o: { extensions?: Record<string, { name: string; enabled: bool
   const state = {
     phoneNav: "switch" as PhoneNavMode,
     icons: "monochrome" as SidebarIconMode,
-    looks: { main_chat: "full", agents_view: "full", settings_view: "full" } as Record<LookName, string>,
+    looks: { main_chat: "full", agents_view: "full", settings_view: "full", sidebar_view: "full" } as Record<LookName, string>,
     off: new Set<string>(["voice"]),
     start: "",
     prefs: NONE as SidebarPrefs,
@@ -94,7 +94,7 @@ describe("templates: the format", () => {
     const builtIns = builtInTemplates((k) => k);
     expect(builtIns.map((b) => b.id)).toEqual(["default"]);
     for (const b of builtIns) expect(parseTemplate(JSON.parse(JSON.stringify(b)))).toEqual({ template: b });
-    expect(builtIns[0].browser).toEqual({ phone_nav: "switch", sidebar_icons: "monochrome", main_chat: "full", agents_view: "full", settings_view: "full", modules_off: [] });
+    expect(builtIns[0].browser).toEqual({ phone_nav: "switch", sidebar_icons: "monochrome", main_chat: "full", agents_view: "full", settings_view: "full", sidebar_view: "full", modules_off: [] });
     expect(builtIns[0].navigation).toEqual({ pages: null });
   });
 });
@@ -160,7 +160,7 @@ describe("templates: plan and apply", () => {
     const done = await applyTemplate(t, host);
     expect(done.filter((i) => i.status === "applied")).toHaveLength(9);
     expect(state.phoneNav).toBe("tabs");
-    expect(state.looks).toEqual({ main_chat: "plain", agents_view: "full", settings_view: "full" });
+    expect(state.looks).toEqual({ main_chat: "plain", agents_view: "full", settings_view: "full", sidebar_view: "full" });
     expect([...state.off]).toEqual(["health"]);
     expect(state.start).toBe("agent-list");
     expect(state.prefs.hidden).toEqual(["todos", "kb"]);

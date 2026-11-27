@@ -1344,8 +1344,8 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   waiting count the switch carries, labels use `--text-submeta` on one line, glyphs are the sidebar's (`home`, `agent`,
   `at`, `gear`), and the bar gives its room to the composer while the keyboard is up. Who it serves: people who use
   Persona mainly as a console for their Agents and reach these four places with one thumb.
-- **Lean looks (web, opt-in, #16898)**: a template's `browser.main_chat: "plain"`, `agents_view: "active"` and
-  `settings_view: "short"` (`web/src/lib/looks.ts`, docs/web/web.md "Lean looks") take away what an Agent console does not
+- **Lean looks (web, opt-in, #16898)**: a template's `browser.main_chat: "plain"`, `agents_view: "active"`,
+  `settings_view: "short"` and `sidebar_view: "agents"` (`web/src/lib/looks.ts`, docs/web/web.md "Lean looks") take away what an Agent console does not
   use. The main chat keeps questions, replies and what waits on the owner; Agents shows the Agents a terminal (herdr) still has a pane for, by computer;
   Settings lists a few categories and ends with a **More settings** row. They hide things and add nothing but that row;
   the default of each is pixel-identical.
