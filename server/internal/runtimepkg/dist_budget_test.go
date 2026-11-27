@@ -71,10 +71,12 @@ import (
 // With the compat.js declaration fix (#16771), main measured 290,321 B.
 // Keeping legacy effort-only requests in the selected model family adds 694 B (291,015 B).
 // Antigravity keep_always declaration, Assistant allow_once-absent fail-closed guard, and MultiEdit/NotebookEdit tool mapping add 101 B (291,116 B).
-// Checking conversation existence before serving Antigravity session.items adds 115 B (291,231 B, #16410).
+// Treating epoch-zero resetTime on untouched Antigravity quota buckets as unset and emitting a SHA-256 account_key for
+// signed-in Antigravity accounts add 180 B (291_296 B).
+// Checking conversation existence before serving Antigravity session.items adds 112 B (291,408 B, #16410).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 291_231
+	const budget = 291_408
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
