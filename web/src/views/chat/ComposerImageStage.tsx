@@ -1,36 +1,39 @@
 // Enlarged image stage shown above the elevated single live Composer (#17095): FLIP-animates both the clicked
 // thumbnail and the live composer container, dynamically tracks the growing composer's height, supports multi-image
 // navigation and drag-and-drop, and launches ImageEditor while keeping the expanded view alive underneath.
-import { useCallback, useEffect, useLayoutEffect, useRef, type DragEvent, type RefObject } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes, type RefObject } from "react";
 import { t } from "../../i18n";
 import { useCloseOnBack } from "../../lib/back-close";
+import type { DraftImage } from "../../lib/drafts";
+import type { EditedImage, EditState } from "../../lib/image-edit";
+import { lazyPage } from "../../lib/lazy-page";
 import { NARROW, useMedia } from "../../lib/viewport";
 import { cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+
+const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor));
 
 export interface ComposerImageStageItem {
   id: string;
   name: string;
   url: string;
+  edited?: EditedImage;
 }
 
 export interface ComposerImageStageProps {
   attachments: readonly ComposerImageStageItem[];
   activeId: string;
   closing: boolean;
-  originThumbRect: DOMRect | null;
-  originBoxRect: DOMRect | null;
+  compact: boolean;
   composerRef: RefObject<HTMLDivElement | null>;
   slotRef: RefObject<HTMLDivElement | null>;
   innerOverlayOpen: boolean;
   dragging: boolean;
+  drag: Pick<HTMLAttributes<HTMLDivElement>, "onDragOver" | "onDragLeave" | "onDrop">;
   onSelect: (id: string) => void;
-  onAnnotate: () => void;
+  onUpdateAttachment: (id: string, img: DraftImage, state: EditState) => void;
   onClose: () => void;
   onCloseComplete: () => void;
-  onDragOverStage: (e: DragEvent) => void;
-  onDragLeaveStage: (e: DragEvent) => void;
-  onDropStage: (e: DragEvent) => void;
 }
 
 const OPEN_MS = 280;
@@ -70,38 +73,43 @@ export function ComposerImageStage({
   attachments,
   activeId,
   closing,
-  originThumbRect,
-  originBoxRect,
+  compact,
   composerRef,
   slotRef,
   innerOverlayOpen,
   dragging,
+  drag,
   onSelect,
-  onAnnotate,
+  onUpdateAttachment,
   onClose,
   onCloseComplete,
-  onDragOverStage,
-  onDragLeaveStage,
-  onDropStage,
 }: ComposerImageStageProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const narrow = useMedia(NARROW);
   const index = Math.max(0, attachments.findIndex((a) => a.id === activeId));
   const active = attachments[index] ?? null;
+  const editing = editingId ? attachments.find((a) => a.id === editingId) ?? null : null;
+  const modalOpen = innerOverlayOpen || Boolean(editing);
   const many = attachments.length > 1;
 
-  // Latest callbacks/state for event listeners without re-binding on every render.
-  const latest = useRef({ active, attachments, index, closing, innerOverlayOpen, onSelect, onClose, onCloseComplete });
-  latest.current = { active, attachments, index, closing, innerOverlayOpen, onSelect, onClose, onCloseComplete };
+  useEffect(() => {
+    void ImageEditor.preload().catch(() => {});
+  }, []);
 
-  // Track running Web Animations so an interrupted open/close cancels cleanly.
+  // Latest callbacks/state for event listeners without re-binding on every render.
+  const latest = useRef({ active, attachments, index, closing, modalOpen, onSelect, onClose, onCloseComplete });
+  latest.current = { active, attachments, index, closing, modalOpen, onSelect, onClose, onCloseComplete };
+
+  // Track running Web Animations and open origin thumbnail rect captured before elevating the composer.
   const openAnims = useRef<Animation[]>([]);
   const closeAnims = useRef<Animation[]>([]);
+  const originThumbRef = useRef<DOMRect | null>(null);
   const playedOpenImg = useRef(false);
   const prevShown = useRef<{ id: string; url: string; index: number } | null>(null);
   const hadOverlayAtDown = useRef(false);
@@ -121,6 +129,13 @@ export function ComposerImageStage({
 
   // Back gesture on narrow screens collapses the stage instead of leaving the conversation.
   useCloseOnBack(!closing, onClose, narrow);
+
+  // Sync the elevated composer's width when viewport crosses the compact breakpoint.
+  useLayoutEffect(() => {
+    const composer = composerRef.current;
+    if (!composer || composer.style.position !== "fixed") return;
+    composer.style.width = compact ? "calc(100vw - 20px)" : "min(920px, calc(100vw - 48px))";
+  }, [compact, composerRef]);
 
   // Keep the stage's bottom clearance strictly above the live elevated composer as it grows or wraps.
   // Read untransformed offsetHeight so FLIP scale transforms never under-measure clearance.
@@ -155,7 +170,7 @@ export function ComposerImageStage({
     const to = img.getBoundingClientRect();
     if (to.width <= 0 || to.height <= 0) return;
     playedOpenImg.current = true;
-    const from = originThumbRect;
+    const from = originThumbRef.current;
     if (from && from.width > 0 && from.height > 0) {
       const dx = (from.left + from.width / 2) - (to.left + to.width / 2);
       const dy = (from.top + from.height / 2) - (to.top + to.height / 2);
@@ -180,11 +195,31 @@ export function ComposerImageStage({
         ),
       );
     }
-  }, [originThumbRect]);
+  }, []);
 
-  // Open choreography: fade in backdrop + header, FLIP-elevate the single live composer, FLIP-expand the image.
+  // Open choreography: measure the docked live composer & clicked tile before elevating the same DOM node to its
+  // fixed bottom dock, hold the normal-flow placeholder height so chat scroll never jumps, and run FLIP animations.
   useLayoutEffect(() => {
     cancelAll(openAnims);
+    const composer = composerRef.current;
+    const slot = slotRef.current;
+    const fromBox = composer?.getBoundingClientRect() ?? null;
+    originThumbRef.current = findTileRect(composer, activeId);
+    if (slot && fromBox && fromBox.height > 0) {
+      slot.style.height = `${fromBox.height}px`;
+    }
+    if (composer) {
+      composer.style.position = "fixed";
+      composer.style.left = "0";
+      composer.style.right = "0";
+      composer.style.marginInline = "auto";
+      composer.style.zIndex = "36";
+      composer.style.width = compact ? "calc(100vw - 20px)" : "min(920px, calc(100vw - 48px))";
+      composer.style.bottom = "calc(max(0px, 100dvh - var(--kb-top) - var(--kb-h)) + max(12px, env(safe-area-inset-bottom)))";
+      composer.style.transformOrigin = "center bottom";
+      const h = composer.offsetHeight || composer.getBoundingClientRect().height;
+      if (h > 0 && stageRef.current) stageRef.current.style.setProperty("--composer-stage-h", `${Math.ceil(h)}px`);
+    }
     if (canAnimate(backdropRef.current)) {
       openAnims.current.push(
         backdropRef.current.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240, easing: STAGE_EASE }),
@@ -201,13 +236,12 @@ export function ComposerImageStage({
         ),
       );
     }
-    const composer = composerRef.current;
-    if (originBoxRect && originBoxRect.width > 0 && canAnimate(composer)) {
+    if (fromBox && fromBox.width > 0 && canAnimate(composer)) {
       const to = composer.getBoundingClientRect();
       if (to.width > 0 && to.height > 0) {
-        const dx = (originBoxRect.left + originBoxRect.width / 2) - (to.left + to.width / 2);
-        const dy = originBoxRect.bottom - to.bottom;
-        const scale = clamp(originBoxRect.width / to.width, 0.72, 1.08);
+        const dx = (fromBox.left + fromBox.width / 2) - (to.left + to.width / 2);
+        const dy = fromBox.bottom - to.bottom;
+        const scale = clamp(fromBox.width / to.width, 0.72, 1.08);
         openAnims.current.push(
           composer.animate(
             [
@@ -220,8 +254,21 @@ export function ComposerImageStage({
       }
     }
     playOpenImageFlip();
-    return () => cancelAll(openAnims);
-    // Run once on mount; originBoxRect/originThumbRect capture the open trigger geometry.
+    return () => {
+      cancelAll(openAnims);
+      if (composer) {
+        composer.style.position = "";
+        composer.style.left = "";
+        composer.style.right = "";
+        composer.style.marginInline = "";
+        composer.style.zIndex = "";
+        composer.style.width = "";
+        composer.style.bottom = "";
+        composer.style.transformOrigin = "";
+      }
+      if (slot) slot.style.height = "";
+    };
+    // Run once on mount; captures the live docked geometry before elevating the composer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -367,7 +414,7 @@ export function ComposerImageStage({
     const cur = latest.current;
     const native = "nativeEvent" in e ? e.nativeEvent : e;
     if (cur.closing || e.defaultPrevented || native.isComposing || native.keyCode === 229) return;
-    if (cur.innerOverlayOpen || hasExternalOverlay()) return;
+    if (cur.modalOpen || hasExternalOverlay()) return;
 
     if (e.key === "Escape") {
       e.preventDefault();
@@ -401,7 +448,7 @@ export function ComposerImageStage({
   };
 
   const handleBackdropPointerDown = (e: React.PointerEvent) => {
-    hadOverlayAtDown.current = innerOverlayOpen || hasExternalOverlay();
+    hadOverlayAtDown.current = modalOpen || hasExternalOverlay();
     didSwipe.current = false;
     if (e.pointerType !== "mouse" && many) {
       swipeStart.current = { x: e.clientX, y: e.clientY };
@@ -442,9 +489,7 @@ export function ComposerImageStage({
       className={cx("fixed inset-x-0 flex flex-col select-none", closing && "pointer-events-none")}
       style={{ top: "var(--kb-top)", height: "var(--kb-h)", zIndex: 35 }}
       onKeyDown={handleKeyDown}
-      onDragOver={onDragOverStage}
-      onDragLeave={onDragLeaveStage}
-      onDrop={onDropStage}
+      {...drag}
     >
       {/* Dimmed frosted backdrop */}
       <div
@@ -453,15 +498,17 @@ export function ComposerImageStage({
         onPointerDown={handleBackdropPointerDown}
         onClick={handleBackdropClick}
         className={cx(
-          "absolute inset-0 bg-black/80 backdrop-blur-md",
+          "absolute inset-0 backdrop-blur-md",
           dragging && "ring-2 ring-inset ring-accent",
         )}
+        style={{ backgroundColor: "rgba(0,0,0,0.8)" }}
       />
 
       {/* Top toolbar: image name, counter, Annotate, Close */}
       <div
         ref={headerRef}
-        className="relative z-10 flex shrink-0 items-center justify-between gap-2 px-3 pt-[max(12px,env(safe-area-inset-top))] pb-2 sm:px-5"
+        className="relative z-10 flex shrink-0 items-center justify-between gap-2 px-3 pb-2 sm:px-5"
+        style={{ paddingTop: "max(12px, env(safe-area-inset-top))" }}
       >
         <div className="flex min-w-0 items-center gap-2">
           {active && (
@@ -485,8 +532,8 @@ export function ComposerImageStage({
             <button
               type="button"
               data-testid="composer-image-annotate"
-              onClick={onAnnotate}
-              className="touch-hit flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white/15 px-3.5 text-meta font-medium whitespace-nowrap text-white transition-[background-color,transform] duration-150 hover:bg-white/25 active:scale-[0.97]"
+              onClick={() => setEditingId(active.id)}
+              className="touch-hit flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white/15 px-3 text-meta font-medium whitespace-nowrap text-white transition-colors hover:bg-white/25"
             >
               <Icon name="pencil" size={14} stroke={2} className="shrink-0" />
               <span>{t("chat-composeroverlays.image_annotate")}</span>
@@ -499,7 +546,7 @@ export function ComposerImageStage({
             title={t("chat-composeroverlays.image_close")}
             onMouseDown={(e) => e.preventDefault()}
             onClick={onClose}
-            className="touch-hit flex size-9 shrink-0 items-center justify-center rounded-full bg-white/15 text-white transition-[background-color,transform] duration-150 hover:bg-white/25 active:scale-[0.97]"
+            className="touch-hit flex size-9 shrink-0 items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/25"
           >
             <Icon name="x" size={15} stroke={2.2} />
           </button>
@@ -547,11 +594,8 @@ export function ComposerImageStage({
                 disabled={index <= 0}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => step(-1)}
-                className={cx(
-                  "touch-hit absolute top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full text-white backdrop-blur-sm transition-[background-color,opacity,transform] duration-150 active:scale-[0.95] disabled:pointer-events-none disabled:opacity-0 sm:size-10",
-                  narrow ? "left-1.5 bg-black/50 ring-1 ring-white/20 hover:bg-black/65" : "left-0 bg-white/15 hover:bg-white/25",
-                )}
-                style={narrow ? undefined : { left: -44 }}
+                className="touch-hit absolute top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur-sm transition-colors hover:bg-white/25 disabled:pointer-events-none disabled:opacity-0"
+                style={narrow ? { left: 6, backgroundColor: "rgba(0,0,0,0.5)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.2)" } : { left: -44 }}
               >
                 <Icon name="chevronLeft" size={18} stroke={2.2} />
               </button>
@@ -563,11 +607,8 @@ export function ComposerImageStage({
                 disabled={index >= attachments.length - 1}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => step(1)}
-                className={cx(
-                  "touch-hit absolute top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full text-white backdrop-blur-sm transition-[background-color,opacity,transform] duration-150 active:scale-[0.95] disabled:pointer-events-none disabled:opacity-0 sm:size-10",
-                  narrow ? "right-1.5 bg-black/50 ring-1 ring-white/20 hover:bg-black/65" : "right-0 bg-white/15 hover:bg-white/25",
-                )}
-                style={narrow ? undefined : { right: -44 }}
+                className="touch-hit absolute top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur-sm transition-colors hover:bg-white/25 disabled:pointer-events-none disabled:opacity-0"
+                style={narrow ? { right: 6, backgroundColor: "rgba(0,0,0,0.5)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.2)" } : { right: -44 }}
               >
                 <Icon name="chevronRight" size={18} stroke={2.2} />
               </button>
@@ -575,6 +616,20 @@ export function ComposerImageStage({
           )}
         </div>
       </div>
+      {editing && (
+        <Suspense fallback={null}>
+          <ImageEditor
+            src={editing.edited?.source ?? editing.url}
+            start={editing.edited}
+            onCancel={() => setEditingId(null)}
+            onDone={(img, state) => {
+              const id = editing.id;
+              setEditingId(null);
+              onUpdateAttachment(id, img, state);
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

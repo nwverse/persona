@@ -1,5 +1,5 @@
 {
   "edit": "Edit {name}",
-  "edit_hint": "Click to expand or annotate",
+  "edit_hint": "Click to mark it up before sending",
   "remove": "Remove {name}"
 }

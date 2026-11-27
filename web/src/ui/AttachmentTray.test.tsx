@@ -107,8 +107,8 @@ describe("AttachmentTray", () => {
     const tileB = button("编辑 b.png");
     expect(tileA.getAttribute("aria-pressed")).toBe("false");
     expect(tileB.getAttribute("aria-pressed")).toBe("true");
-    expect(tileB.closest("[data-attachment-id]")?.hasAttribute("data-active")).toBe(true);
-    expect(tileA.closest("[data-attachment-id]")?.hasAttribute("data-active")).toBe(false);
+    expect(tileB.closest("[data-attachment-id]")?.classList.contains("ring-2")).toBe(true);
+    expect(tileA.closest("[data-attachment-id]")?.classList.contains("ring-2")).toBe(false);
 
     const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
     act(() => { tileB.dispatchEvent(down); });

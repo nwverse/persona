@@ -24,6 +24,8 @@ export function AttachmentTray(props: AttachmentTrayProps) {
   );
 }
 
+const prevent = (e: { preventDefault(): void }) => e.preventDefault();
+
 /** The composer places these directly beside its remote file tiles. */
 export function AttachmentTiles({ attachments, onRemove, onOpen, openLabel, activeId, keepFocus }: AttachmentTrayProps) {
   return attachments.map((a) => {
@@ -32,10 +34,9 @@ export function AttachmentTiles({ attachments, onRemove, onOpen, openLabel, acti
       <span
         key={a.id}
         data-attachment-id={a.id}
-        data-active={active ? "" : undefined}
         title={a.name}
         className={cx(
-          "group/att relative rounded-card bg-field transition-[box-shadow,transform] duration-150",
+          "group/att relative rounded-card bg-field transition-shadow duration-150",
           active ? "ring-2 ring-accent" : "ring-1 ring-inset ring-line",
           a.url ? "size-[52px] shrink-0 p-px" : "flex h-[52px] max-w-full items-center gap-2 px-3 pr-7",
         )}
@@ -48,7 +49,7 @@ export function AttachmentTiles({ attachments, onRemove, onOpen, openLabel, acti
               aria-label={openLabel?.(a.name) ?? t("ui-attachmenttray.edit", { name: a.name })}
               title={openLabel?.(a.name) ?? t("ui-attachmenttray.edit_hint")}
               aria-pressed={activeId ? active : undefined}
-              onMouseDown={keepFocus ? (e) => e.preventDefault() : undefined}
+              onMouseDown={keepFocus ? prevent : undefined}
               onClick={() => onOpen(a.id)}
               className="block size-full cursor-pointer rounded-card"
             >
@@ -76,7 +77,7 @@ export function AttachmentRemoveButton({ label, onRemove, file = false, keepFocu
       <button
         type="button"
         aria-label={label}
-        onMouseDown={keepFocus ? (e) => e.preventDefault() : undefined}
+        onMouseDown={keepFocus ? prevent : undefined}
         onClick={onRemove}
         data-remove
         className={cx(
