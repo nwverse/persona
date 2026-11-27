@@ -261,28 +261,38 @@ def navigate(ctl, scene, defaults=None, session=None):
     return ctl.call("navigate", **args)
 
 
+def launch(ctl, extra):
+    """Launch this simulator's app with a fresh runtime token, retaining its issued hub credential when extra has no pair link."""
+    ctl.token = secrets.token_hex(16)
+    subprocess.run(["xcrun", "simctl", "terminate", ctl.udid, ctl.bundle], capture_output=True)
+    result = run(["xcrun", "simctl", "launch", ctl.udid, ctl.bundle,
+                  "-runtimeCLI", str(ctl.port), "-runtimeCLIToken", ctl.token] + extra, 30)
+    check(result.returncode == 0, f"launching the app returned {result.returncode}")
+    wait_for(ctl, "the DEBUG runtime channel", 30, lambda: ctl.call("ping", _timeout=2))
+
+
 def settings(ctl, key):
-    flags = {name: False for name in ("openAdvancedSettings", "openConnectors", "openChannels", "openDevices", "openExtensions")}
+    # SettingsView opens a DEBUG destination once per process. Relaunch for each destination and prove the path opened,
+    # rather than mistaking an unchanged Settings home for a hidden module entry.
+    extra = ["-tab", "settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-showScreenVideoDemo", "YES"]
     if key:
-        flags[key] = True
-    navigate(ctl, "settings", flags)
+        extra += ["-" + key, "YES"]
+    launch(ctl, extra)
+    ctl.online(timeout=30)
+    if key:
+        wait_for(ctl, f"Settings destination {key}", 30,
+                 lambda: (ctl.call("state").get("settingsDepth") or 0) > 0 or None)
 
 
 def exercise_app(ctl, base, code, edition, shots):
     full = edition == "full"
     proof = {"schema": 1, "run_id": ctl.run_id, "edition": edition, "core_reads": core_reads(base, code)}
-    ctl.token = secrets.token_hex(16)
     ctl.hub = base
     pair = "persona://pair?url=" + urllib.parse.quote(base, safe="") + "&token=" + urllib.parse.quote(code, safe="")
-    subprocess.run(["xcrun", "simctl", "terminate", ctl.udid, ctl.bundle], capture_output=True)
     # No -pairURL: its presence deliberately suppresses the device-credential exchange.
-    result = subprocess.run(["xcrun", "simctl", "launch", ctl.udid, ctl.bundle,
-                             "-runtimeCLI", str(ctl.port), "-runtimeCLIToken", ctl.token,
-                             "-openWelcome", "YES", "-openPairLink", pair,
-                             "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
-                             "-showScreenVideoDemo", "YES"], capture_output=True, text=True, timeout=30)
-    check(result.returncode == 0, f"launching the app returned {result.returncode}")
-    wait_for(ctl, "the DEBUG runtime channel", 30, lambda: ctl.call("ping", _timeout=2))
+    launch(ctl, ["-openWelcome", "YES", "-openPairLink", pair,
+                 "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+                 "-showScreenVideoDemo", "YES"])
 
     def paired():
         state = ctl.call("state")
