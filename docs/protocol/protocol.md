@@ -2701,7 +2701,7 @@ exist on the selected manager. Use the IDs from its direction and to-do APIs.
 | PUT | `/api/v1/assistant/external-source-bindings/{id}` | Replaces the binding using the same body and returns it with the same ID. |
 | DELETE | `/api/v1/assistant/external-source-bindings/{id}` | Deletes the explicit binding and returns 204. |
 | GET | `/api/v1/assistant/external-source-bindings/lookup` | Takes `external_ref` and returns `{path,matches}`. Matches include all ancestors in most-specific-first order. |
-| GET | `/api/v1/assistant/external-source-bindings/summary` | Returns the read-only `{"bindings":[…]}` data-flow list with explicit connections and repository projections. Filter by `provider` and optionally by its `channel`. An empty `channel` selects that provider's default channel. |
+| GET | `/api/v1/assistant/external-source-bindings/summary` | Returns the read-only `{"bindings":[…]}` data-flow list with explicit connections and repository projections. Filter by `provider` and optionally by its `channel`. An empty `channel` selects that provider's default channel. Set `include_done=true` or `1` to include completed to-dos. |
 | GET | `/api/v1/assistant/external-source-policies` | Takes `external_ref` and returns `{external_ref,policy}` with saved overrides for that exact node. An unset node returns an empty policy. |
 | PUT | `/api/v1/assistant/external-source-policies` | Takes `external_ref` and replaces that node's policy with the JSON body. Send `{}` to restore inheritance. Returns the saved scope and policy. |
 | GET | `/api/v1/assistant/external-source-policies/effective` | Takes `external_ref` and optional `binding_id` and returns `{external_ref,policy,provenance}`. The binding must be on that reference path. |
@@ -2730,6 +2730,18 @@ mean `delivery`. Projected links match only their exact GitHub item and coexist 
 An existing Lark bot to-do thread can also appear in the exact topic lookup as `source: "lark_topic"` with
 `target_kind: "todo"` and its `target_id`. Its source is the native chat link, so it has no `binding_id`.
 The lookup lists explicit entries first at the same node and returns empty arrays when there are no matches.
+
+The summary shows directions first, followed by open to-dos and then any completed to-dos. Each to-do group is
+ordered by most recently updated first, with deterministic ties. To-do rows include the current `target_title`
+when nonempty and `target_done: true` when completed. Repository projections require an existing to-do and appear
+once per exact reference and to-do, with `delivery` taking precedence over `reference`. Explicit rows and distinct
+to-dos on the same reference are separate connections.
+
+An omitted `include_done`, `include_done=false`, or `include_done=0` hides completed to-do rows. Supply the parameter
+at most once. An invalid value returns 400 `invalid_include_done`. A malformed query string returns 400
+`invalid_external_query`. After provider and channel filtering and repository role deduplication, `total_count`
+is the number of rows in `bindings` and `omitted_done_count` is the number of rows hidden because the to-do is
+completed. Zero counts are omitted. The summary returns an empty `bindings` array when no rows are visible.
 
 A duplicate explicit reference and target pair returns 409 `external_binding_exists`. Missing or unrelated
 bindings and missing targets return 404 with `external_binding_not_found` or `external_target_not_found`.
