@@ -5,6 +5,7 @@
   "cancelling": "キャンセル中…",
   "stop_after_backup": "バックアップが完了したら停止します…",
   "cancelled": "キャンセル済み",
+  "progress_step_preflight": "バックアップ設定を確認",
   "pipeline_title": "更新の進行状況",
   "pipeline_stages": "更新の段階",
   "pipeline_steps": "現在の段階の手順",

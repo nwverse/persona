@@ -70,6 +70,9 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		if m, ok := s.device(ctx, p.MachineID); ok {
 			note, agent, err := s.fitNewLauncher(withPersonStart(ctx), m, own, params)
 			if err != nil {
+				if code, _ := relayErrCode(err); code == proto.CodeLauncherOutOfScope || code == proto.CodeLauncherOwnService {
+					return nil, err
+				}
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}
 			if err := checkStartSpeed(params, agent, ""); err != nil {
