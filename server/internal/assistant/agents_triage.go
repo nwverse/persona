@@ -43,9 +43,8 @@ type triageOut struct {
 	Artifacts []proto.WorkArtifact `json:"artifacts"`
 }
 
-// triageTurnModel asks the triage model where c stands after its turn. An answer it cannot read is unsure: a work state
-// with no phase (nothing shown, nothing done; the turn is not triaged again).
-// same: the model says the turn still waits on the very step the user approved (#3824), false when there is none.
+// triageTurnModel settles a structured closeout before asking the model about plain-text replies. An unrecognized
+// model phase leaves the work state unsure. A true same means the model recognized the previously approved wait.
 func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine string, c proto.Session) (w *proto.WorkState, same bool, err error) {
 	ask, reply := s.triageRead(ctx, machine, c)
 	if reply == "" {
@@ -54,17 +53,9 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 	if reply == "" {
 		return &proto.WorkState{}, false, nil
 	}
-	co, coArtifacts, hasCloseout := closeout.Parse(reply)
-	if hasCloseout {
-		s.checkCloseout(ctx, &co, coArtifacts)
-		if closeoutDisproved(co) {
-			// It says merged or deployed and it is not: nobody can call this turn finished. No phase, with the closeout
-			// and what was found kept for whoever looks, and a line naming the claim (unfinished).
-			return unfinished(&proto.WorkState{Closeout: &co, Artifacts: workArtifacts(coArtifacts), By: "rule"}, s.lang(ctx)), false, nil
-		}
-	}
-	if hasCloseout && co.Status == proto.CloseoutDone && !closeoutAsksOwner(co) {
-		return closeoutDone(co, coArtifacts, s.lang(ctx)), false, nil // its own closeout says so: no model
+	if co, artifacts, ok := closeout.Parse(reply); ok {
+		s.checkCloseout(ctx, &co, artifacts)
+		return closeoutWork(co, artifacts, s.lang(ctx)), false, nil
 	}
 	others, byShort := triageOthers(machine, c.SessionID, v.sessions(machine))
 	name := machine
@@ -90,17 +81,10 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 		in.Answered = triageAnswered(records)
 	}
 	hello := s.hello(ctx)
-	w, same, err = judgeTriageWith(ctx, s.purposeModel("agent.triage"), triageJudgeInput{
+	return judgeTriageWith(ctx, s.purposeModel("agent.triage"), triageJudgeInput{
 		System: prompts.AgentTriage{Owner: strings.TrimSpace(hello.Owner), Language: answerLanguage(hello.Locale)},
 		Input:  in, Reply: reply, Others: byShort, Lang: i18n.Lang(hello.Locale).Or(i18n.Default),
 	})
-	if err != nil {
-		return nil, false, err
-	}
-	if hasCloseout {
-		w = unfinished(withCloseout(w, co, coArtifacts), s.lang(ctx))
-	}
-	return w, same, nil
 }
 
 // triageJudgeInput is everything the triage model's answer is judged on, read from the session and the hub
