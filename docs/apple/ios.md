@@ -1903,6 +1903,20 @@ every platform are described from #13430; this section is the Apple side.
   shows the page's title and one line (`ModuleOffPage`) without asking the hub anything. This is not `LarkFeatures`:
   those are the installed Lark extension's (`lark`, `lark_moments`, …) and keep deciding Settings › Connectors › Lark,
   Messages, the Inbox's Lark chats and the readers, which use `/api/v1/lark/…` and stay as they are with the module off.
+- **`mail`, the same kind of flag** (#15995): `MailModule.access` (`apple/Persona/App/MailModule.swift`) answers the
+  closed `MailAccess` (`live`, `storedOnly`) from the registry's hub answer with the descriptor id `mail`. It is the
+  one decision between "the whole message" and "the stored text because mail is off"; pages take the type. Stored-only
+  (the hub's hello has `modules` and no `module.mail`): the Mail row leaves Settings › Connectors and its accounts are
+  not read, a link to its page lands on one line (`ModuleOffPage`), the Inbox's New Email is not offered, and nothing
+  that would send a mail is (AI Draft Reply, Draft Reply, the AI twin's draft card on a row, Send and Edit on a
+  suggested reply to a mail). A mail already in the Inbox still opens: `MailReaderView` shows `MailStoredView` in the
+  live reader's place, which reads the item's own page (`GET /api/v1/inbox/{id}`, a Core route) and shows the text
+  the hub stored (`context`, without the header lines the hub writes for its models), then one line saying the full
+  message and its attachments cannot be loaded and, from the hub's `mail_body_truncated` decoded as the closed
+  `MailStoredClipping` (`clipped`, `whole`, `unknown`), whether that text is cut short. It asks no route under
+  `/api/v1/mail`: no message, no flags (opening marks nothing read), no translation of the live body. Hand to AI, Done,
+  mute and folders are the Inbox's own and stay. The Inbox keeps naming its mail groups and filters from the accounts
+  it cached before.
 - **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
   `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
   `GUARDED` in the ratchet; write a type
