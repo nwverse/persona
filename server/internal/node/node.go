@@ -2454,6 +2454,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if rev := dialogRev(text, p.Lines, p.Source, p.Format); rev != "" {
 			res["dialog_rev"] = rev
 		}
+		if ms := n.screenRefresh(p.SessionID); ms > 0 {
+			res["refresh_ms"] = ms // a client polling a screen that cannot stream may read it this often (#17048)
+		}
 		return res, err
 	case "terminal.watch":
 		var a struct {
@@ -3238,7 +3241,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 			}
 			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": model, "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.effectiveStopCause(id)}, nil
 		}
-		return nil, err
+		return nil, n.readErr(id, err)
 	}
 	n.refresh(id, f)
 	m := f.Meta()

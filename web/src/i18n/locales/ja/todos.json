@@ -501,5 +501,10 @@
   "grouping_v2_request": "依頼別",
   "detail_direction_inherited_hint": "「{name}」から継承",
   "detail_direction_inherited_picker_hint": "現在は「{name}」から継承しています。適用で明示的に固定するか、別の方向を選択・解除できます。",
-  "detail_subtask_direction_mismatch": "方向：{direction}"
+  "detail_subtask_direction_mismatch": "方向：{direction}",
+  "direction_uncategorized": "未分類",
+  "done_direction_filter_label": "方向別に完了したToDoを絞り込む",
+  "direction_done_count": "完了 {count}",
+  "direction_review_done_label": "「{direction}」の完了 {count} 件を振り返る",
+  "detail_subtasks_done_toggle": "完了したサブタスク · {count}"
 }

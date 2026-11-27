@@ -14,6 +14,11 @@ import {
   encodeKey,
   fontLoadQuery,
   historyAnchor,
+  historyEnd,
+  POLL_FAST_FOR_MS,
+  POLL_MIN_MS,
+  POLL_MS,
+  pollDelay,
   keyDecision,
   keyNameForBytes,
   isStale,
@@ -322,6 +327,26 @@ describe("history anchor", () => {
     expect(a.anchor).toHaveLength(20);
     expect(a.anchor[0]).toBe("line 0");
     expect(historyAnchor(["", ""])).toEqual({ anchor: [], loaded: 0 });
+  });
+
+  it("says where scrolling up stopped: more, the start, older output not kept, herdr's cap", () => {
+    expect(historyEnd({ has_more: true, at_limit: false })).toBe("more");
+    expect(historyEnd({ has_more: false, at_limit: false })).toBe("start");
+    expect(historyEnd({ has_more: false, at_limit: true, dropped: true })).toBe("dropped");
+    expect(historyEnd({ has_more: false, at_limit: true })).toBe("limit"); // a node without `dropped`
+    expect(historyEnd({})).toBe("start");
+  });
+});
+
+describe("poll pace", () => {
+  it("reads at the node's pace while the screen changes, once a second when it is idle or no pace is given", () => {
+    const now = 100_000;
+    expect(pollDelay(undefined, now, now)).toBe(POLL_MS);
+    expect(pollDelay(250, now - 100, now)).toBe(250);
+    expect(pollDelay(250, now - POLL_FAST_FOR_MS - 1, now)).toBe(POLL_MS);
+    expect(pollDelay(50, now, now)).toBe(POLL_MIN_MS);
+    expect(pollDelay(5000, now, now)).toBe(POLL_MS);
+    expect(pollDelay(Number.NaN, now, now)).toBe(POLL_MS);
   });
 });
 

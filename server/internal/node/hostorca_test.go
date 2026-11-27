@@ -592,7 +592,8 @@ func TestOrcaKeysAndText(t *testing.T) {
 	}
 }
 
-// A colored screen read gets the plain rows (CRLF-ended like colored ones); "recent" reads the screen too.
+// A colored screen read gets the plain rows (CRLF-ended like colored ones); "recent" asks for Orca's output tail
+// first (hostorca_scrollback.go), and reads the screen when Orca answers with the screen (nothing above it).
 func TestOrcaScreenIsPlain(t *testing.T) {
 	n, o, _ := orcaSession(t)
 	o.SetScreen("term_1", "line one\nline two\n")
@@ -608,6 +609,7 @@ func TestOrcaScreenIsPlain(t *testing.T) {
 	}
 	assertTrace(t, o.Trace(), []string{
 		`terminal.read {"screen":true,"terminal":"term_1"}`,
+		`terminal.read {"limit":750,"terminal":"term_1"}`,
 		`terminal.read {"screen":true,"terminal":"term_1"}`,
 	})
 	if _, err := request(t, n, "terminal.watch", map[string]any{"session_id": sidA}); err == nil ||

@@ -1155,3 +1155,68 @@ Hub: when a computer's connection ends (`connectionEnded` → `terminalsEnded`),
 - Hub: `terminal_reconnect_test.go`. The node's connection closes with the takeover's watch on its way: the app is told at once, and subscribing again takes over on the new connection. The hub hears of the reconnect before the old call fails: the next takeover goes through within 3 seconds, not after 20.
 - iOS: `TerminalTakeoverTests` (a `pane:` terminal takes over and takes keys; the 10-second limit, its reason and the fresh subscription; Retry unsubscribes first; back online subscribes at once). `TerminalTakeoverHangTests` is the UI flow with screenshots, against the mock's `/mock/terminal_node?state=stalled|gone|back`.
 - Web: `terminal/feed.test.ts` (the same three cases).
+
+## 31. Orca terminals: scrolling up, and a quicker plain view (#17048)
+
+Orca has no terminal stream Persona can use on its local socket, so an Orca terminal is the plain view: the apps read
+`GET …/screen` themselves. Two things were missing next to herdr: scrolling up found nothing above the screen (the
+iPhone, reading fewer lines than it asked for, said **— Beginning of output —** at once), and the view changed once a
+second.
+
+### What is above the screen
+
+Orca's screen read (`terminal.read {screen:true}`) is the screen alone, so the host's "recent" read is the screen too. Orca
+keeps the output apart from it, in two forms (measured on Orca 1.4.277 against an isolated runtime):
+
+| Read | What it is | Kept |
+| --- | --- | --- |
+| `terminal.read {terminal, limit}` (no screen, no cursor) | The output tail: the newest lines, escapes stripped, rows a program redrew in place as they ended (a spinner shows once, its last state), the line being written last. For a program on the alternate screen Orca answers with the screen (`source: "screen"`) | 2000 lines and 256 KiB; one read sends at most 32 KiB, the newest (`limited`) |
+| `terminal.read {terminal, cursor, limit}` | The log: every completed line from the cursor on, also each redraw of a program's live rows (an agent's spinner and input box, again and again). `oldestCursor` / `latestCursor` say what is kept | 2000 lines and 256 KiB |
+
+So the tail is the scrollback (`host.Scrollbacker`, `node/hostorca_scrollback.go`). When one read sends less than Orca
+keeps, the log reaches further back only where it agrees with the tail line for line (plain output: a build, a shell);
+a log of redraws is never shown. The node puts the screen below that output (`aboveScreen` in `node/panescreen.go`: the
+output is cut where the screen's rows start, passing over blank lines the screen read leaves out) and pages it as it
+pages herdr's scrollback: `session.screen.before` by anchor, and `session.screen` with `source=recent`. The node's own
+checks of a pane (dialogs, readiness, exits) keep reading the screen: the log and the tail can hold rows the pane no
+longer shows.
+
+Where the kept output begins is said, not guessed: `screen/before` answers `dropped: true` when the page reached the
+oldest line kept and Orca let older output go (or holds it only as a log that does not line up), and the web's top line
+says **— Older output isn't kept —**; without `dropped` it says **— Beginning of output —**, which is then true. A node
+that predates `dropped` sends `at_limit` alone, worded as herdr's ~1000-line cap; `at_limit` is set with `dropped` for
+apps that know only it. Orca reads no output by cursor before the version that added it (no cursors in the answer): the
+tail alone is shown then. A program on the alternate screen (vim, a full-screen agent) has nothing above its screen, as
+under herdr.
+
+### A quicker plain view
+
+`GET …/screen` answers `refresh_ms` for a host whose screen read is cheap (`host.QuickScreen`; Orca: 250, one request
+on its local socket that Orca answers from its own emulator's state). The web (`pollDelay` in `web/src/lib/terminal.ts`)
+reads at that pace while the screen changes and for 3 seconds after, then once a second again; a hidden page reads once a
+second. An idle terminal costs what it did; keys still read again at once. The size label's hint says the screen is read
+several times a second while it changes.
+
+Measured on an isolated Orca 1.4.277 runtime on Linux, reading one terminal through the node's `session.screen` path for
+60 s at each pace: Orca's server and terminal-daemon processes, and the node side (in the same process as the reads),
+as a share of one core.
+
+| Terminal | Pace | Orca CPU | Node CPU |
+| --- | --- | --- | --- |
+| Busy (a 4-row live region redrawn ten times a second, a line printed each second) | No reads | 1.67 % (its own output handling) | — |
+| Busy | Once a second (before) | 1.98 % | 0.06 % |
+| Busy | Four times a second (now, while it changes) | 2.03 % | 0.31 % |
+| Idle shell | Once a second | 0.22 % | 0.07 % |
+| Idle shell | Four times a second | 0.65 % | 0.33 % |
+
+A read costs Orca about a millisecond and the node under one. The quicker pace is used only while the screen changes
+and for 3 seconds after, so an idle terminal stays on the once-a-second row; while it changes, a watching page costs
+under 1 % of one core more (Orca and the node together). Each read is also one request through the hub, as before.
+
+### Tests
+
+- Node: `hostorca_scrollback_test.go` (a short shell paged to where its output began; a long build log reaching back
+  through the log to the oldest kept line, `dropped`; a log of redraws left out, also on an Orca without cursor reads;
+  the alternate screen as before; `refresh_ms` for Orca and not herdr; where the screen begins in the output). The fake
+  runtime (`orcarttest`) answers tail and cursor reads as Orca 1.4.277 does, its 32 KiB cut included.
+- `orcart`: `TestReadTailAndLog`. Web: `lib/terminal.test.ts` ("history anchor", "poll pace").
