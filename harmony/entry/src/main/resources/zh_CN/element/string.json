@@ -9147,6 +9147,58 @@
     {
       "name": "copied",
       "value": "已复制"
+    },
+    {
+      "name": "quick_palette_title",
+      "value": "快速命令"
+    },
+    {
+      "name": "quick_palette_placeholder",
+      "value": "跳转到智能体、工作区或操作…"
+    },
+    {
+      "name": "quick_palette_agents",
+      "value": "待处理与活跃智能体"
+    },
+    {
+      "name": "quick_palette_workspaces",
+      "value": "工作区"
+    },
+    {
+      "name": "quick_palette_actions",
+      "value": "快捷控制"
+    },
+    {
+      "name": "quick_palette_toggle_theme",
+      "value": "切换浅色 / 深色主题"
+    },
+    {
+      "name": "quick_palette_toggle_workbench",
+      "value": "切换实时工作台"
+    },
+    {
+      "name": "quick_palette_liveview_preview",
+      "value": "实况窗预览"
+    },
+    {
+      "name": "quick_palette_code_tab",
+      "value": "切换到代码标签页"
+    },
+    {
+      "name": "quick_palette_machines_tab",
+      "value": "切换到设备标签页"
+    },
+    {
+      "name": "quick_palette_empty",
+      "value": "没有匹配的命令"
+    },
+    {
+      "name": "fold_posture_book",
+      "value": "折叠书本模式"
+    },
+    {
+      "name": "machine_cpu_load",
+      "value": "CPU 与负载"
     }
   ]
 }
