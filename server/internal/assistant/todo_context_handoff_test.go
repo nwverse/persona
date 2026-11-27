@@ -186,8 +186,8 @@ func TestTodoContextHandoffClaudeToCodexAndProfileSwitch(t *testing.T) {
 				t.Fatalf("no plan id in response: %s", planRes)
 			}
 			// Repeating the already-started plan must not dispatch or inject the handoff twice.
-			if _, err := e.s.startPlan(ctx, planID, nil, false); err != nil {
-				t.Fatalf("startPlan: %v", err)
+			if _, err := e.s.startPlan(ctx, planID, nil, false); !errors.Is(err, errPlanNotOpen) {
+				t.Fatalf("repeated start must reject the closed plan: %v", err)
 			}
 			waitFor(t, "replacement agent linked", func() bool {
 				return len(todoNow(e.s, todo.ID).Agents) == 2 && e.s.taskStarting.Load() == 0
@@ -1801,9 +1801,12 @@ func TestTodoContextHandoffSameEngineCrossMachineAutoStart(t *testing.T) {
 // owner permission, duplicate to-do or unaudited handoff may result from that choice.
 func TestTodoContextHandoffAuthorizedLauncherSwitches(t *testing.T) {
 	for _, tc := range []struct {
-		name, source, agent, target string
-		readonly                   bool
-		mixed                      bool
+		name     string
+		source   string
+		agent    string
+		target   string
+		readonly bool
+		mixed    bool
 	}{
 		{name: "gateway_to_agy", source: "gateway-claude", agent: "claude", target: "agy"},
 		{name: "codex_gateway_to_agy", source: "gateway-codex", agent: "codex", target: "agy"},
@@ -1906,8 +1909,8 @@ func TestTodoContextHandoffAuthorizedLauncherSwitches(t *testing.T) {
 						t.Fatalf("brief lost: %+v", kept)
 					}
 					// Retrying the same plan must not create another todo, replacement or audit record.
-					if _, err := e.s.startPlan(ctx, planID, nil, false); err != nil {
-						t.Fatal(err)
+					if _, err := e.s.startPlan(ctx, planID, nil, false); !errors.Is(err, errPlanNotOpen) {
+						t.Fatalf("repeated start must reject the closed plan: %v", err)
 					}
 					if todoCount(e.s) != wantTodos || len(taskStartMachines(e.f)) != len(tasks) || len(todoNow(e.s, todo.ID).Agents) != 2 {
 						t.Fatalf("duplicate dispatch: todos=%d starts=%v", todoCount(e.s), taskStartMachines(e.f))
