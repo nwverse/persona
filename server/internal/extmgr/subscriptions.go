@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/subscriptions"
@@ -188,12 +189,11 @@ func (m subscriptionModel) JSON(ctx context.Context, c subscriptions.ModelCall) 
 	for i, t := range c.Turns {
 		turns[i] = assistantwire.ModelMessage{Role: t.Role, Content: t.Content}
 	}
-	var out assistantwire.ModelCompleteResult
-	err := m.h.callAssistant(ctx, assistantwire.MethodModelsPurposeComplete, assistantwire.PurposeComplete{
+	out, err := buswire.Call(ctx, assistantCaller(m.h.callAssistant), assistantwire.ModelsPurposeCompleteMethod, assistantwire.PurposeComplete{
 		Purpose: assistantwire.PurposeSubscriptionRecipe,
 		Params: assistantwire.ModelCompleteParams{System: c.System, Messages: turns, MaxTokens: c.MaxTokens, JSONSchema: c.Schema,
 			TimeoutSeconds: subscriptionModelWait, Label: c.Label},
-	}, &out)
+	})
 	var re *rpc.Error
 	switch {
 	case errors.As(err, &re) && re.Code == assistantwire.CodeModelUnavailable:

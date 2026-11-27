@@ -7,6 +7,7 @@ The proposal is section 5 of [plan-hub-mesh.md](../archive/operations/plan-hub-m
 Code: server `server/internal/hub/admin*.go` (extensions in `admin_extensions.go`), `server/internal/db/admin.go` (migration `0161_admin.sql`),
 web `web/admin/index.html` + `web/src/admin/` (same project and same design tokens as the web app, with its own entry point).
 The admin console is only at the hub's root path: the web app can be mounted under a reverse-proxy subpath ([web.md](../web/web.md) ("Subpaths")), but the admin console does not read `X-Forwarded-Prefix` and cannot be opened through a subpath; access the hub's port directly.
+The desktop app opens it in its own window beside the Assistant window, so following an admin link there never replaces the Assistant's page ([desktop.md](../desktop/desktop.md) ("Existing web behavior"), #16992).
 
 
 ## 客户端密码登录
