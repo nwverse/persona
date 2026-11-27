@@ -211,12 +211,29 @@ func cutPartialTag(s string) string {
 // blockTitleRe is an attributed block's whole opening tag with its title.
 var blockTitleRe = lazyre.New(`<` + compat.ContextPattern() + `\b[^>]*?\stitle="([^"]*)"[^>]*>`)
 
+const startScriptFilename = `agent-start-\d+\.sh`
+
+var startScriptTitleRe = lazyre.New(`^(?:\.|source)[ \t]+(?:` +
+	`(?:[^'" \t\r\n;&|<>]*[/\\])?` + startScriptFilename + `|` +
+	`'(?:[^'\r\n]*[/\\])?` + startScriptFilename + `'|` +
+	`"(?:[^"\r\n]*[/\\])?` + startScriptFilename + `"` +
+	`)(?:[ \t]+&&(?:[ \t]+(?:t|tr|tru|true(?:[ \t]+[A-Za-z0-9_.-]+)?))?)?(?:…|\.\.\.)?$`)
+
+// IsStartScriptTitle recognizes the shell echo of Persona's sourced startup script, including clipped echoes.
+func IsStartScriptTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	return (strings.HasPrefix(title, ".") || strings.HasPrefix(title, "source")) && startScriptTitleRe.MatchString(title)
+}
+
 // Title is a message (or a title someone made of one) as a title or a preview line: what the user wrote, else the
 // title of the first attributed block ("Continuing the old main chat" for a main conversation handed over), else "" (the caller
 // falls back to the agent's project). A tag cut off by a clip ("<persona-context kind="context" title="Continuing…") has
 // no title to take: it is dropped. Strip first, then clip: a clip first can end inside a tag.
 func Title(s string) string {
 	if t := dropLeadingBlocks(StripInjected(s)); t != "" {
+		if IsStartScriptTitle(t) {
+			return ""
+		}
 		return t
 	}
 	if m := blockTitleRe.FindStringSubmatch(s); m != nil {

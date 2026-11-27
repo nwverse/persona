@@ -2,11 +2,14 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -44,6 +47,7 @@ type TodoOrphan struct {
 	key              string
 	machine, session string
 	detail           string
+	workerSet        string
 }
 
 // orphanAgent is one agent of a to-do as the pass found it: whether its computer answers, whether that computer lists
@@ -53,6 +57,15 @@ type orphanAgent struct {
 	reachable, listed bool
 	c                 proto.Session
 	connected         time.Time
+}
+
+// A stopped read-only node session may retain the name of its host after its
+// foreground Agent disappears. A live pane or an unsupported status is not
+// evidence that the Agent stopped.
+func orphanSessionClosed(c proto.Session) bool {
+	return sessionClosed(c) || c.PaneID == "" && !c.Starting &&
+		(c.Status == proto.StatusInterrupted || c.Status == proto.StatusOffline) &&
+		c.Capabilities != nil && c.Capabilities.Read && c.Capabilities.Terminal && !c.Capabilities.Send
 }
 
 // agentGone says why a is not working and will not by itself ("": it works, or something pending brings it back).
@@ -70,7 +83,7 @@ func agentGone(a orphanAgent, now time.Time) string {
 	switch {
 	case c.Assistant || c.Starting:
 		return ""
-	case !sessionClosed(c):
+	case !orphanSessionClosed(c):
 		return "" // in a host (stopped or working, the task's other states say which), or working
 	case c.State == proto.StateNeedsYou || c.PendingInteractions > 0 || len(c.Queued) > 0:
 		return "" // a card waits for the user, or input waits to go in
@@ -181,6 +194,48 @@ func (s *Service) orphanAgents(ctx context.Context, t Todo, reachable map[string
 	return agents, true
 }
 
+// workerCompletion is derived from stored child rows. Reopening and accepting a
+// child again produces a new generation. Failed, cancelled or unreviewed rows
+// cannot stand in for an accepted result.
+type workerCompletion struct {
+	accepted   []string
+	incomplete bool
+}
+
+func completedWorkerSets(todos map[string]*Todo) map[string]workerCompletion {
+	groups := map[string]workerCompletion{}
+	for _, t := range todos {
+		parent := t.PartOf
+		if parent == "" {
+			for _, a := range t.Agents {
+				if a.Source == sourceWorker && a.Via != "" {
+					parent = a.Via
+					break
+				}
+			}
+		}
+		if parent == "" || todos[parent] == nil || todos[parent].DoneAt != nil {
+			continue
+		}
+		group := groups[parent]
+		if t.DoneAt == nil || t.StartError != "" || t.Supervision.state(*t) != reviewAccepted {
+			group.incomplete = true
+		} else {
+			group.accepted = append(group.accepted, t.ID+"@"+t.DoneAt.UTC().Format(time.RFC3339Nano))
+		}
+		groups[parent] = group
+	}
+	return groups
+}
+
+func (w workerCompletion) key() string {
+	if w.incomplete || len(w.accepted) == 0 {
+		return ""
+	}
+	slices.Sort(w.accepted)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(w.accepted, "|"))))
+}
+
 // orphanWatch looks at the open to-dos' agents and records which to-dos nobody works on (taskOrphan). A to-do one of
 // whose computers could not be asked keeps what was found before. The apps are told to read the to-dos again when
 // what they show changed.
@@ -189,6 +244,7 @@ func (s *Service) orphanWatch(ctx context.Context, now time.Time) {
 		return
 	}
 	s.todos.mu.RLock()
+	workers := completedWorkerSets(s.todos.todos)
 	var open []Todo
 	for _, t := range s.todos.todos {
 		if t.DoneAt == nil && len(t.Agents) > 0 {
@@ -218,6 +274,13 @@ func (s *Service) orphanWatch(ctx context.Context, now time.Time) {
 		}
 		listed[t.ID] = agents
 		if o, ok := taskOrphan(t, agents, now); ok {
+			if group := workers[t.ID]; !group.incomplete && len(group.accepted) > 0 && slices.ContainsFunc(t.Agents, func(a TodoAgent) bool {
+				return a.active() && a.Source == sourceLeader
+			}) {
+				o.workerSet = group.key()
+				o.key += "|workers:" + o.workerSet
+				o.detail = strings.TrimSpace(o.detail + " " + i18n.T(s.botLang(ctx), "assistant-tasks.workers_accepted", i18n.Args{"count": len(group.accepted)}))
+			}
 			found[t.ID] = o
 		}
 	}
@@ -242,7 +305,7 @@ func (s *Service) orphanWatch(ctx context.Context, now time.Time) {
 		active := false
 		prevTodo := b.progress[id]
 		for _, a := range agents {
-			if !a.listed || !sessionClosed(a.c) {
+			if !a.listed || !orphanSessionClosed(a.c) {
 				continue
 			}
 			k := [2]string{a.machine, a.session}
@@ -309,5 +372,5 @@ func (s *Service) orphanSignal(t Todo) (superviseSignal, bool) {
 		return superviseSignal{}, false
 	}
 	return superviseSignal{Todo: t.ID, Kind: sigOrphaned, Key: o.key, Machine: o.machine, Session: o.session,
-		Detail: o.detail, Orphan: o.Reason}, true
+		Detail: o.detail, Orphan: o.Reason, WorkerSet: o.workerSet}, true
 }

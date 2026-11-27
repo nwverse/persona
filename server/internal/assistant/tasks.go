@@ -925,11 +925,56 @@ func (s *Service) trustKinds(ctx context.Context, tasks []PlanTask) {
 
 // ---- HTTP ----
 
+func (s *Service) listTaskPlans(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	query := r.URL.Query()
+	conv, scoped := query.Get("conversation"), query.Has("conversation")
+	ext := r.Header.Get(RoleHeader) == roleExtension
+	plans := []*TaskPlan{}
+	if ext && !scoped {
+		// Extensions can read individual conversation feeds. The main pending view spans conversations.
+		apierr.WriteJSON(w, map[string]any{"plans": plans})
+		return
+	}
+	if ext && s.feedHiddenFromExtension(ctx, conv) {
+		apierr.Write(w, http.StatusNotFound, errNoSuchConversation)
+		return
+	}
+	var pending []*TaskPlan
+	var err error
+	if scoped {
+		pending, err = s.openTaskPlans(ctx)
+		pending = slices.DeleteFunc(pending, func(p *TaskPlan) bool { return p.Conversation != conv })
+	} else {
+		pending, err = s.mainPendingPlans(ctx)
+	}
+	if err != nil {
+		apierr.Write(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	var visible map[string]*TaskPlan
+	if ext {
+		byID := make(map[string]*TaskPlan, len(pending))
+		for _, p := range pending {
+			byID[p.ID] = p
+		}
+		_, visible, _ = s.extensionFeed(ctx, nil, byID)
+	}
+	lang := s.requestLang(r)
+	for _, p := range pending {
+		if !ext || visible[p.ID] != nil {
+			plans = append(plans, s.planWithSpace(ctx, s.planWithSuggestion(ctx, p, lang)))
+		}
+	}
+	apierr.WriteJSON(w, map[string]any{"plans": plans})
+}
+
 func (s *Service) taskRoutes() {
 	s.draftDecisionRoutes()
 	s.doneCheckRoute()
 	s.taskTerminalRoute()
 	s.handle("POST /api/v1/task-plans/{id}/workspace-preview", s.previewPlanWorkspaces)
+	s.handle("GET /api/v1/task-plans", s.listTaskPlans)
 	s.handle("GET /api/v1/task-plans/{id}", func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.loadPlan(r.Context(), r.PathValue("id"))
 		if err != nil {

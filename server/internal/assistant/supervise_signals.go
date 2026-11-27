@@ -88,6 +88,7 @@ var (
 // superviseSignal is one thing about one task the supervisor should know. Key names the stretch of state it is about:
 // the same signal with the same key is told once.
 type superviseSignal struct {
+	WorkerSet       string `json:"worker_set,omitempty"` // accepted child generation of an orphaned leader
 	Todo, Kind, Key string
 	// Handoff is an idle-shaped report that an owner's decision or review rework did not reach the agent.
 	// It is not a turn-end stop, so a native wakeup must not defer it.

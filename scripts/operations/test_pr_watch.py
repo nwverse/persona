@@ -409,7 +409,14 @@ class WatcherTests(unittest.TestCase):
         self.assertTrue(all("needReviews" in call["variables"] for call in calls))
         self.assertTrue(all("needThreads" in call["variables"] for call in calls))
         self.assertEqual([call["variables"]["commentsCursor"] for call in calls],
-                         [None, False])
+                         [None, None])
+        # A finished collection stays out of the query through @include, but its cursor variable is still
+        # declared String, so it must stay null rather than `false` (#16737).
+        for call in calls:
+            for field in ("comments", "reviews", "threads"):
+                value = call["variables"][field + "Cursor"]
+                self.assertIsInstance(value, (str, type(None)),
+                                      "%sCursor must be a string or null" % field)
 
     def test_stale_activity_requires_complete_cursor_pages(self):
         response = {"data": {"repository": {"pullRequest": {

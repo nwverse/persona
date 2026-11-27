@@ -145,6 +145,24 @@ stands as far below the group before it, all within 0.5 px (iOS: `SidebarHeading
 mock's own requests leave the browser. Screenshots and `results.json` go to the artifact directory; a four-minute
 watchdog ends the run, and the last line is the verdict.
 
+## Unread Persona chats in the sidebar (#13425)
+
+```sh
+MOCK_LEADERS=1 MOCK_RECENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --host 127.0.0.1 --port <web port> --strictPort &)
+node web/e2e/sidebar-unread-chats.mjs <loopback-web-origin> <loopback-mock-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English, at 1440 × 1000 and 390 × 844 (the phone's drawer),
+standard and Large text, light and dark. The mock's `GET /mock/incoming` puts a reply nobody has opened in two pinned leads (one with Agents
+at work under it, whose arc its own Unread replaces) and two Recent chats, pushed as the hub pushes it; each row is
+measured before and after: its height and where its mark's slot, title and time sit stay, the slot draws the unread
+mark in place of the chat icon and the title takes the unread weight. Folded, Recent's heading counts its two and the
+Persona chats heading all four ("Folded chats: N unread"); open, neither does. Opening a chat clears its mark at once
+(the time from the click is recorded) and it stays clear after the hub has it; closed, a later reply brings it back.
+Screenshots of the sidebar read, unread and folded, and `results.json`, go to the artifact directory; a four-minute
+watchdog ends the run, and the last line is the verdict.
+
 ## Start page (#9071)
 
 ```sh

@@ -382,6 +382,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/followups",
 	"POST /api/v1/assistant/followups/{id}/run",
 	"DELETE /api/v1/assistant/followups/{id}",
+	"GET /api/v1/task-plans",
 	"GET /api/v1/task-plans/{id}",
 	"POST /api/v1/task-plans/{id}/start",
 	"POST /api/v1/task-plans/{id}/workspace-preview",
