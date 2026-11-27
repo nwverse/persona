@@ -1088,11 +1088,12 @@ func TestHerdrSendResumesWithTheHubsLauncher(t *testing.T) {
 	}
 }
 
-// session.keys: pre_keys first (their own send_keys), then the text, then the keys; session.interrupt is esc.
-// A session herdr does not have is looked for in one snapshot and refused.
+// session.keys: pre_keys first (their own send_keys), then the text, then the keys; session.interrupt of a working
+// claude is esc (an idle one gets none: TestInterruptSendsNoEscToAnIdleClaude). A session herdr does not have is
+// looked for in one snapshot and refused.
 func TestHerdrKeysWithPreKeys(t *testing.T) {
 	n, f, _ := herdrNode(t)
-	seedAgents(t, n, f, claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", "/tmp/k", ""))
+	seedAgents(t, n, f, claudeAgent(sidA, proto.StatusWorking, "w1:p1", "w1:t1", "w1", "/tmp/k", ""))
 	if _, err := request(t, n, "session.keys", map[string]any{"session_id": sidA, "pre_keys": []string{"down", "down"},
 		"text": "other answer", "keys": []string{"enter"}}); err != nil {
 		t.Fatal(err)

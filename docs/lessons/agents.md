@@ -1221,11 +1221,15 @@ Closing is not durable merely because the card vanished: persist the interaction
 - With an empty box and no turn running, one Esc leaves claude and the pane falls back to its shell. Esc stops a running
   turn; on an idle conversation it is "quit", not "clear the input".
 - Every place Persona sends `esc` to a Claude pane, checked 2026-11-07:
-  - `session.interrupt` (`node/node.go`, the Claude case calling `n.keys(ctx, p.SessionID, []string{"esc"}, "")`; a Codex
+  - `session.interrupt` (`node/node.go`, the Claude case resolving the pane and calling `n.sendKeys(ctx, pane, "esc")`; a Codex
     session goes to `interruptCodex` and an assistant conversation to `assistantInterrupt`, which kills the process rather
     than sending Esc): the app's stop button, the assistant's `agent_interrupt`, Feishu cards and channels all land here. It
-    does not look at the session's state first, so a stop sent on a stale "working" state, or a second stop after the turn
-    already ended, can hit an idle box and end the session.
+    did not look at the session's state first, so a stop sent on a stale "working" state, or a second stop after the turn
+    already ended, could hit an idle box and end the session. Since #10827 a positively finished turn gets no Esc and answers
+    settled / not_running, or `turn_over_background` when background work still runs (#10828). Working, blocked and unknown
+    states still take Esc; idle/done must also have a transcript with no open turn, so a stale host status cannot swallow a
+    real Stop. The same guard covers host agents discovered by the route refresh and outside tmux Claudes, and
+    `agent_interrupt` reads the status again after the phone confirmation.
   - Not guarded: the `/effort` picker (`node/modes.go`) sends `esc` when it could not recognize the picker within its own
     timeout (`_ = n.sendKeys(ctx, pane, "esc")` before returning "没打开思考强度的选择器…"), right after `/effort` was typed
     and submitted. On a version without `/effort` the box is idle at that moment — exactly the case above. It also sends
@@ -1236,8 +1240,9 @@ Closing is not durable merely because the card vanished: persist the interaction
     screen). Each sends Esc only after its own screen was recognized.
   - Free key presses from a phone terminal, a watch answer, or a Feishu screen card's Esc button
     (`modules/lark/ask_cards.go`): the user's own key, not a decision Persona makes.
-- Before sending `esc` as "stop", confirm the turn is running (session state, or the working status line above the box);
-  send it at most once per stop, and never as a way to clear the box — the `/effort` path above shows how easy that is.
+- Before sending `esc` as "stop", confirm the turn is running (working or a dialog); when the host says idle/done, also
+  require a transcript with no open turn before withholding it. Unknown is not proof of rest. Send Esc at most once per
+  stop, and never as a way to clear the box — the `/effort` path above shows how easy that is.
 
 ## Another program runs the user's Claude hooks: grok does (measured 2026-11; re-check)
 

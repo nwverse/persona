@@ -11,9 +11,9 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Stop always presses Escape. On a Claude Code session whose turn is over while a background command still runs, the
-// Escape interrupts nothing, and the answer says so instead of claiming an interruption; a turn that runs, or one with
-// no background work left, is answered as before (#10828).
+// A turn that runs or waits takes Escape. Once the turn is positively over, #10827 sends none: an idle-box Escape can
+// quit Claude. If background work still runs, the answer is turn_over_background rather than a successful interruption;
+// with none left it is settled + not_running. Working and blocked sessions are answered as before (#10828).
 func TestInterruptWithOnlyBackgroundWorkSaysSo(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	started := []string{
@@ -31,28 +31,35 @@ func TestInterruptWithOnlyBackgroundWorkSaysSo(t *testing.T) {
 		name    string
 		status  string
 		lines   []string
+		esc     bool
 		refused bool
 	}{
-		{"turn over, the command still runs", proto.StatusIdle, started, true},
-		{"turn over and done, the command still runs", proto.StatusDone, started, true},
-		{"working, with the command in the background", proto.StatusWorking, started, false},
-		{"waiting on the user", proto.StatusBlocked, started, false},
-		{"turn over, nothing in the background", proto.StatusIdle, nil, false},
-		{"turn over, the command has finished", proto.StatusIdle, append(append([]string{}, started...), finished...), false},
+		{"turn over, the command still runs", proto.StatusIdle, started, false, true},
+		{"turn over and done, the command still runs", proto.StatusDone, started, false, true},
+		{"working, with the command in the background", proto.StatusWorking, started, true, false},
+		{"waiting on the user", proto.StatusBlocked, started, true, false},
+		{"turn over, nothing in the background", proto.StatusIdle, nil, false, false},
+		{"turn over, the command has finished", proto.StatusIdle, append(append([]string{}, started...), finished...), false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, f, home := herdrNode(t)
 			seedAgents(t, n, f, claudeAgent(sidA, tc.status, "w1:p1", "w1:t1", "w1", "/tmp/m", ""))
 			writeTranscript(t, home, "/tmp/m", sidA, time.Now(), append(finishedTurn("/tmp/m"), tc.lines...)...)
 			f.reset()
-			_, err := request(t, n, "session.interrupt", map[string]any{"session_id": sidA})
+			res, err := request(t, n, "session.interrupt", map[string]any{"session_id": sidA})
 			keys := f.trace("pane.send_keys", "pane.send_input")
-			if len(keys) != 1 || !strings.Contains(keys[0], "esc") {
-				t.Fatalf("keys %q: want the Escape, whatever the answer", keys)
+			if tc.esc && (len(keys) != 1 || !strings.Contains(keys[0], "esc")) {
+				t.Fatalf("keys %q: want one Escape", keys)
+			}
+			if !tc.esc && len(keys) != 0 {
+				t.Fatalf("keys %q: a finished turn takes no Escape (#10827)", keys)
 			}
 			if !tc.refused {
 				if err != nil {
 					t.Fatalf("err = %v, want the stop taken", err)
+				}
+				if !tc.esc && (res["settled"] != true || res["not_running"] != true) {
+					t.Fatalf("answer %v: want settled and not_running", res)
 				}
 				return
 			}

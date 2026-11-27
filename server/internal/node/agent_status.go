@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"time"
@@ -22,6 +23,45 @@ func (n *Node) agent(id string) (host.Agent, bool) {
 		a.AgentStatus = n.liveStatus(id, a, time.Now())
 	}
 	return a, ok
+}
+
+var interruptStat = os.Stat
+
+// escStops: Esc may be sent to live agent a (its status as liveStatus says) as "stop". A Claude whose turn is running
+// or whose screen waits on a dialog takes it. Idle or done alone is not enough: the host can be stale through a long,
+// quiet tool call, so the transcript must also have no open turn. Unknown keeps the old Esc behavior rather than
+// suppressing a turn whose state cannot be proved. Other agents are not judged here (#10827).
+func (n *Node) escStops(ctx context.Context, id string, a host.Agent) bool {
+	if a.Agent != "claude" || a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked || a.AgentStatus == proto.StatusUnknown {
+		return true
+	}
+	if a.AgentStatus != proto.StatusIdle && a.AgentStatus != proto.StatusDone {
+		return false
+	}
+	if n.waitsOnUser(ctx, id) {
+		return true
+	}
+	p := n.transcriptPath(id)
+	if p == "" {
+		return false
+	}
+	st, err := interruptStat(p)
+	if err != nil {
+		// Absence is an empty conversation, not an open turn. Any other failure is uncertainty: retain Esc rather than
+		// claiming rest without being able to read the evidence.
+		return !errors.Is(err, os.ErrNotExist)
+	}
+	m := n.meta(p, st)
+	return m.claudeTurn && !m.turnClosed
+}
+
+// outsideEscStops is the tmux form of escStops. Claude's own status file is direct evidence of busy/waiting versus
+// idle/shell; an unrecognized status keeps the old Esc behavior. A dialog on an otherwise resting pane still takes Esc.
+func (n *Node) outsideEscStops(ctx context.Context, pane string, c claudeProc) bool {
+	if c.Status != "idle" && c.Status != "shell" {
+		return true
+	}
+	return n.dialogShown(ctx, pane)
 }
 
 // liveStatus is an agent's status with its own signs of work over its host's: a Claude's as claudeStatus says, a
