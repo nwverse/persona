@@ -25,7 +25,9 @@ function restorePersonaSession(rawId) {
   saved.title && sessionTitles.set(rawId, saved.title);
   saved.model && sessionModels.set(rawId, saved.model);
   saved.explicit_model && explicitModels.set(rawId, saved.explicit_model);
-  saved.mode_info && sessionModes.set(rawId, saved.mode_info);
+  // Native acknowledgement belongs to the old ACP process. Keep the requested
+  // permission/effort, but require the resumed process to confirm its mode.
+  saved.mode_info && sessionModes.set(rawId, {...saved.mode_info, nativeMode: undefined, applyingAuto: false});
   return saved;
 }
 function persistPersonaSession(rawId, changes = {}) {
@@ -136,7 +138,7 @@ ${ctx}
         await applySessionOptions(acp, rawId, {
           model: forkInfo.model || restoredModel || resumeModel,
           permission_mode: params.mode || (settingsMode ? configuredMode() : explicitMode),
-          effort: forkInfo.effort || (reloaded && !params.model ? previousEffort : undefined),
+          effort: forkInfo.effort || (reloaded && personaSessions.has(rawId) && !forkInfo.hadFork && !params.model ? previousEffort : undefined),
           settings_mode: settingsMode,
           resume_model: !!resumeModel,
           restored_model: !!restoredModel && !personaSessions.get(rawId)?.awaiting_first_message,
@@ -165,7 +167,7 @@ ${ctx}
       const effModel = effortOnly ? model : forkInfo.model;
       const restoredModel = !effModel && !legacyEffortModel && reloaded && prevModel && (personaSessions.has(rawId) || prevModel !== sessionModels.get(rawId)) ? prevModel : undefined;
       try {
-        await applySessionOptions(acp, rawId, {model: effModel || restoredModel, permission_mode, effort: forkInfo.effort || (reloaded && !model ? previousEffort : undefined), legacyEffortModel, restored_model: !effModel && !!restoredModel && !personaSessions.get(rawId)?.awaiting_first_message});
+        await applySessionOptions(acp, rawId, {model: effModel || restoredModel, permission_mode, effort: forkInfo.effort || (reloaded && personaSessions.has(rawId) && !forkInfo.hadFork && !model ? previousEffort : undefined), legacyEffortModel, restored_model: !effModel && !!restoredModel && !personaSessions.get(rawId)?.awaiting_first_message});
       } catch (err) {
         throw err && typeof err == "object" && (err._fork = forkInfo), err;
       }

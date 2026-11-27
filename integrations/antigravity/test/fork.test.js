@@ -798,7 +798,7 @@ test('switching explicitly from a variant fork model to a non-variant model clea
 })
 
 test('fork creates brain/ safely in a fresh agyDir to persist .persona-permission-mode and never follows a symlinked brain', async (t) => {
-  await t.test('creates brain/<branch>/.persona-permission-mode in a fresh agyDir without brain/', async (t) => {
+  await t.test('creates the branch directory after persisting a prepared source in a fresh agyDir', async (t) => {
     const { node, cwd, config, fork } = await fixture(t, {
       skipBrain: true,
       delayForkExport: true,
@@ -806,7 +806,8 @@ test('fork creates brain/ safely in a fresh agyDir to persist .persona-permissio
     assert.equal(existsSync(join(config, 'brain')), false)
     const started = await node.peer.call('session.start', { cwd, permission_mode: 'bypassPermissions' })
     assert.equal(started.session.session_id, sessionId)
-    assert.equal(existsSync(join(config, 'brain')), false)
+    assert.equal(existsSync(join(config, 'brain', source, '.persona-session.json')), true, 'prepare persists its identity before acknowledgement')
+    assert.equal(existsSync(join(config, 'brain', branch)), false, 'the fork has not created its own directory yet')
 
     const result = await fork('', sessionId)
     assert.equal(result.session_id, branched)
@@ -814,7 +815,7 @@ test('fork creates brain/ safely in a fresh agyDir to persist .persona-permissio
     assert.equal(readFileSync(join(config, 'brain', branch, '.persona-permission-mode'), 'utf8').trim(), 'bypassPermissions')
   })
 
-  await t.test('never writes through a symlinked brain directory during fork', async (t) => {
+  await t.test('preparation refuses a symlinked brain directory before it can be used for a fork', async (t) => {
     const { node, home, cwd, config, fork } = await fixture(t, {
       skipBrain: true,
       delayForkExport: true,
@@ -822,11 +823,8 @@ test('fork creates brain/ safely in a fresh agyDir to persist .persona-permissio
     const target = join(home, 'outside-target')
     mkdirSync(target, { recursive: true })
     symlinkSync(target, join(config, 'brain'))
-    const started = await node.peer.call('session.start', { cwd, permission_mode: 'bypassPermissions' })
-    assert.equal(started.session.session_id, sessionId)
-
-    const result = await fork('', sessionId)
-    assert.equal(result.session_id, branched)
+    await assert.rejects(node.peer.call('session.start', { cwd, permission_mode: 'bypassPermissions' }), /Invalid Persona session directory/)
+    assert.equal(existsSync(join(target, source)), false, 'prepare must not follow the symlink to persist an identity')
     assert.equal(existsSync(join(target, branch)), false, 'must never create directories or files through symlinked brain')
   })
 })
