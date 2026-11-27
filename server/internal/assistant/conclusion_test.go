@@ -615,10 +615,10 @@ func TestAcceptRouteSaysTheRecommendationWasNotTaken(t *testing.T) {
 	}
 }
 
-// The web button's 502 says it in the request's language (whatever the bot's), as its error: a plain error there became
-// the generic "the request did not complete" with the sentence moved to its detail. A reason the hub words itself (an
-// offline computer) reads in that language too, not the default one.
-func TestAcceptRouteNotTakenReadsInTheRequestLanguage(t *testing.T) {
+// The web button's answer says it in the request's language (whatever the bot's): a 502's error, and the reason a
+// recorded decision did not reach its Agent (an offline computer, which the hub words itself, #17431), not the
+// default language.
+func TestAcceptRouteReasonReadsInTheRequestLanguage(t *testing.T) {
 	for _, tc := range []struct {
 		bot, request string
 		want         i18n.Lang
@@ -626,21 +626,31 @@ func TestAcceptRouteNotTakenReadsInTheRequestLanguage(t *testing.T) {
 		{"en", "zh-Hans", i18n.ZhHans},
 		{"zh-Hans", "en", i18n.En},
 	} {
-		s, f, todo, _, _ := conclusionService(t, false)
-		f.mu.Lock()
-		f.hello.Locale = tc.bot
-		f.mu.Unlock()
-		waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
-		reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
-		a := askOf(s, todo.ID)
-		f.mu.Lock()
-		f.failSend = i18n.Err("assistant-tasks.route_offline")
-		f.mu.Unlock()
-		asked, _ := json.Marshal(a.AskedAt)
-		status, body := serveJSON(t, s, "POST", "/api/v1/todos/"+todo.ID+"/accept", tc.request, `{"asked_at":`+string(asked)+`}`)
-		want := i18n.T(tc.want, "assistant-reports.accept_not_taken", i18n.Args{"error": i18n.T(tc.want, "assistant-tasks.route_offline")})
-		if status != http.StatusBadGateway || body["error"] != want {
-			t.Fatalf("bot %s, request %s: %d %v, want %q", tc.bot, tc.request, status, body, want)
+		for _, offline := range []bool{true, false} {
+			s, f, todo, _, _ := conclusionService(t, false)
+			f.mu.Lock()
+			f.hello.Locale = tc.bot
+			f.mu.Unlock()
+			waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+			reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
+			a := askOf(s, todo.ID)
+			f.mu.Lock()
+			f.failSend = errors.New("node down")
+			if offline {
+				f.failSend = i18n.Err("assistant-tasks.route_offline")
+			}
+			f.mu.Unlock()
+			asked, _ := json.Marshal(a.AskedAt)
+			status, body := serveJSON(t, s, "POST", "/api/v1/todos/"+todo.ID+"/accept", tc.request, `{"asked_at":`+string(asked)+`}`)
+			if offline {
+				if want := i18n.T(tc.want, "assistant-tasks.route_offline"); status != http.StatusOK || body["delivered"] != "none" || body["reason"] != want {
+					t.Fatalf("bot %s, request %s: %d %v, want reason %q", tc.bot, tc.request, status, body, want)
+				}
+				continue
+			}
+			if want := i18n.T(tc.want, "assistant-reports.accept_not_taken", i18n.Args{"error": "node down"}); status != http.StatusBadGateway || body["error"] != want {
+				t.Fatalf("bot %s, request %s: %d %v, want %q", tc.bot, tc.request, status, body, want)
+			}
 		}
 	}
 }
