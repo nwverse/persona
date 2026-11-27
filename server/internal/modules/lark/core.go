@@ -162,12 +162,6 @@ type botAnswerCard struct {
 // feishuTarget is where a post goes (the outbound port's target).
 type feishuTarget = assistantwire.ChannelTarget
 
-// readChatKey is the run's channel value a "/read" in a group is answered by (the core's feishu_route.go).
-const readChatKey = "read_chat"
-
-// readRun: the run answers a "/read" in a group.
-func readRun(ext map[string]string) bool { return ext[readChatKey] != "" }
-
 // readDirectKey is set ("1") on a /read's run asked with the read_group_direct switch on: its answer goes straight
 // into the group. Without it the answer is held for the owner (read_held.go, #14437).
 const readDirectKey = "read_direct"
