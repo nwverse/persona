@@ -62,6 +62,14 @@ const InteractionsOwnerAction = "interactions.owner_action"
 // {interaction} → proto.Resolution, when it is answered, expires or the call ends.
 const MethodFleetAsk = "fleet.ask"
 
+// FleetAskMethod waits for the owner to answer the hub's interaction.
+var FleetAskMethod = buswire.Method[FleetAskParams, proto.Resolution]{Name: MethodFleetAsk}
+
+// FleetAskParams carries the interaction to show to the owner.
+type FleetAskParams struct {
+	Interaction proto.Interaction `json:"interaction"`
+}
+
 // MethodFleetAskPrepared is the hub's retained settings operation:
 // {interaction, replacement} → approval.Outcome. The executable handle stays in
 // the hub; only its random interaction ID crosses the bus.

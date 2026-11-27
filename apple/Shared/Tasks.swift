@@ -1354,7 +1354,11 @@ nonisolated extension APIClient {
                 case askedAt = "asked_at"
             }
         }
-        _ = try await post("/api/v1/todos/\(Self.pathPart(id))/accept", body: Body(askedAt: askedAt, option: option, response: response))
+        // Plain acceptance (`acceptTryFromApp`) can block up to 45 s on `confirmOwnerTaskClose` while waiting for the
+        // owner to confirm closing active Agent work, so wait past the server's confirmation window.
+        _ = try await post("/api/v1/todos/\(Self.pathPart(id))/accept",
+                           body: Body(askedAt: askedAt, option: option, response: response),
+                           timeout: Self.todoCloseConfirmWait)
     }
 
     /// Don't handle on a decision row (`decision_review`, docs/protocol/protocol.md): the round `reviewAt` stays hidden from

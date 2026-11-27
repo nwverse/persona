@@ -205,6 +205,9 @@ type Manager struct {
 	reportMu            sync.Mutex
 	reportSent          []byte
 	reportBotIdentities []extwire.BotIdentity
+	// reservedLogged are the "<extension> <feature>" pairs whose reserved module feature was dropped and logged once
+	// (extension_api.go).
+	reservedLogged sync.Map
 
 	// ruleStore keeps the user's per-chat rules (chat_rules.go): the manager's setting connector_chat_rules, made in New.
 	// It is set before Run, which reads it as the gate starts (startConnectorGate): assigned later it would race with that

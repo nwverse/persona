@@ -185,7 +185,7 @@ struct TodoDetailView: View {
 
     /// Shows a failed write's error, from a plain method rather than inside the async block.
     private func report(_ failure: any Error) {
-        AppModel.shared.show(failure)
+        TodoStore.reportWriteFailure(failure)
     }
 
     private func content(_ todo: TodoItem) -> some View {
