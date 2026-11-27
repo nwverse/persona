@@ -7,3 +7,10 @@
   - points：这个议题讨论的要点，按时间顺序，说清讨论了什么、有哪些观点或进展。格式 {text, line, who}，who 是提出或主讲的人；
   - decisions：这个议题里已经定下来的结论和决定，不包括讨论中的想法。格式 {text, line}。
   每个要点和决定都放进一个议题，不要写在 topics 外面。一个议题写 2 到 4 条，超过 5 条的拆成两个议题。
+- debates：会上真正的分歧，最多 6 条；没有真正分歧时写空数组。只有有人提出互相对立的主张时才算分歧；普通讨论、补充细节、提问确认、顺着同一方向完善方案都不算分歧，拿不准就不写。格式 {question, topic, status, positions, outcome}：
+  - question：争议的核心问题，一句话，不加 **；
+  - topic：所属议题名（对应 topics 里的一个 title，没有就写空字符串）；
+  - status：固定写英文 "open"（仍未谈拢）或 "settled"（后面谈拢定了下来）；
+  - positions：2 到 4 个对立立场，格式 {stance, line, who}。stance 是这一方的主张短句，里面不写人名、不加 **；who 是持这个立场的人名，只有转写里明确说出或日历支持才填，否则写空字符串；line 必须是持这个立场的人自己说出该主张的那一行行号，不要填别人转述或总结这一立场的那一行；不能引用照片；
+  - outcome：只有 status 为 "settled" 时才填，格式 {text, line}，写清最后怎么定下来的，line 填最终敲定那一行（与对应 decision 同一行），不能引用照片；status 为 "open" 时省略或写 null。
+  仍未谈拢的分歧（status 为 "open"）不要再重复写进 open（未决问题）里。
