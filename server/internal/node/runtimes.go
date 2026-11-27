@@ -168,6 +168,7 @@ type runtimeConn struct {
 	codexThreads map[string]string
 	// agyPaneBackground holds running tasks projected for a live terminal when the ACP row hides them.
 	agyPaneBackground map[string][]proto.BackgroundTask
+	agyPreviews       map[string]agyPreview
 	// workspaces are its own workspaces, as its last runtime.workspaces said (caps.workspaces, runtimeworkspaces.go);
 	// workspacesSaid: it said them on this connection (a workspace missing from them is gone).
 	workspaces     []runtimeWorkspace

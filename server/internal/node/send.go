@@ -184,20 +184,25 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 			}
 			return err
 		}
+		switched := false
 		if kind == "claude" && ps != nil && ps.Agent == "" { // one to the other engine waits, above
 			// The user's own message carries out the switch to another launcher they picked (launcher_switch.go): the
 			// agent is quit and resumed there, in the same terminal, and the message goes to it. While the agent is busy
 			// the message goes on the launcher it runs on and the switch waits; a failed switch is dropped with nothing
 			// typed. The assistant's (switch_now) is refused then instead, and dropped.
-			switched := false
 			if pane, switched, err = n.applySwitch(ctx, id, pane, *ps, opts.SwitchNow); err != nil {
 				return err
 			}
-			// The new claude came up behind a dialog of its own (start returns early then): the text would answer it.
-			if switched {
-				if err := n.checkPane(ctx, pane, "claude", ""); err != nil {
-					return err
-				}
+		}
+		if kind == "claude" && !switched && !opts.SwitchNow {
+			if switched, err = n.refreshManagedLauncher(ctx, id, pane); err != nil {
+				return err
+			}
+		}
+		// A restarted Claude may have come up behind a dialog: the text would answer it.
+		if switched {
+			if err := n.checkPane(ctx, pane, "claude", ""); err != nil {
+				return err
 			}
 		}
 	} else {

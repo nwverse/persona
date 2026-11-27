@@ -197,6 +197,19 @@ describe("the assistant's live text", () => {
     expect(tr.streaming).toBe("Writing the reply");
   });
 
+  it("keeps live progress streaming when a late same-seq wake notice updates an earlier thinking step", async () => {
+    items([said(6, "Full completed reply."), { id: "7@r#0", seq: 7, role: "assistant", kind: "thinking", text: "Checking background task." } as Item], 5);
+    await delta("Running follow-up step...");
+    expect(tr.streaming).toBe("Running follow-up step...");
+    // Retroactive in-place update delivers the #-1 wake notice at seq 7 without clearing live streaming.
+    items([
+      { id: "6@c#-1", seq: 7, role: "system", kind: "notice", wake: true, text: "Background task updated" } as Item,
+      { id: "7@r#0", seq: 7, role: "assistant", kind: "thinking", text: "Checking background task." } as Item,
+    ], 7);
+    expect(tr.streaming).toBe("Running follow-up step...");
+    expect(tr.items.map((i) => i.wake ? "wake" : i.kind)).toEqual(["text", "text", "wake", "thinking"]);
+  });
+
   it("keeps a preview with a late echo until the next input really arrives", async () => {
     items([said(6, "The prior turn has an answer.")], 5);
     await delta("The turn is answering.");

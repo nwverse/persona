@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/nodeproto"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -26,37 +27,33 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 		return nil
 	}
 	switch method {
-	case devicewire.MethodCall, devicewire.MethodFileCall, devicewire.MethodRetireCall:
-		var p devicewire.NodeCall
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		if method == devicewire.MethodRetireCall && p.Method != nodeproto.StopIfIdle {
-			return nil, true, &rpc.Error{Code: "invalid_params", Message: "devices.retire_call requires session.stop_if_idle"}
-		}
-		out, err := d.Call(ctx, p)
-		return out, true, err
+	case devicewire.MethodCall:
+		return handleDeviceRequest(devicewire.CallMethod, decode, func(p devicewire.NodeCall) (json.RawMessage, error) {
+			return d.Call(ctx, p)
+		})
+	case devicewire.MethodFileCall:
+		return handleDeviceRequest(devicewire.FileCallMethod, decode, func(p devicewire.NodeCall) (json.RawMessage, error) {
+			return d.Call(ctx, p)
+		})
+	case devicewire.MethodRetireCall:
+		return handleDeviceRequest(devicewire.RetireCallMethod, decode, func(p devicewire.NodeCall) (json.RawMessage, error) {
+			if p.Method != nodeproto.StopIfIdle {
+				return nil, &rpc.Error{Code: "invalid_params", Message: "devices.retire_call requires session.stop_if_idle"}
+			}
+			return d.Call(ctx, p)
+		})
 	case devicewire.MethodHoldStart:
-		var p devicewire.HoldStartRequest
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		out, err := d.holdStart(ctx, p)
-		return out, true, err
+		return handleDeviceRequest(devicewire.HoldStartMethod, decode, func(p devicewire.HoldStartRequest) (devicewire.HoldStartReply, error) {
+			return d.holdStart(ctx, p)
+		})
 	case devicewire.MethodAccept:
-		var p devicewire.Accept
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		return map[string]any{}, true, d.Accept(ctx, p)
+		return handleDeviceRequest(devicewire.AcceptMethod, decode, func(p devicewire.Accept) (buswire.None, error) {
+			return buswire.None{}, d.Accept(ctx, p)
+		})
 	case devicewire.MethodReconnect:
-		var p struct {
-			MachineID string `json:"machine_id"`
-		}
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		return map[string]any{}, true, d.Reconnect(p.MachineID)
+		return handleDeviceRequest(devicewire.ReconnectMethod, decode, func(p devicewire.ReconnectRequest) (buswire.None, error) {
+			return buswire.None{}, d.Reconnect(p.MachineID)
+		})
 	case devicewire.MethodMachinesPut:
 		return handleDeviceRequest(devicewire.MachinesPutMethod, decode, func(p devicewire.MachinePut) (buswire.None, error) {
 			return buswire.None{}, d.putMachine(ctx, p.Entry)
@@ -81,20 +78,19 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 			return buswire.None{}, d.setEngineHosts(ctx, p.MachineID, p.Choice.Hosts, p.Choice.Default)
 		})
 	case devicewire.MethodUpdateNodes:
-		go d.updateNodes(context.WithoutCancel(ctx))
-		return map[string]any{}, true, nil
+		return handleDeviceRequest(devicewire.UpdateNodesMethod, decode, func(buswire.None) (buswire.None, error) {
+			go d.updateNodes(context.WithoutCancel(ctx))
+			return buswire.None{}, nil
+		})
 	case devicewire.MethodUsageGatewayAccounts:
-		return d.UsageGatewayAccounts(), true, nil
+		return handleDeviceRequest(devicewire.UsageGatewayAccountsMethod, decode, func(buswire.None) (proto.GatewayAccounts, error) {
+			return d.UsageGatewayAccounts(), nil
+		})
 	case devicewire.MethodPairConnector:
-		var p devicewire.PairConnector
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		addr, version, err := d.PairConnector(ctx, p)
-		if err != nil {
-			return nil, true, err
-		}
-		return map[string]any{"address": addr, "version": version}, true, nil
+		return handleDeviceRequest(devicewire.PairConnectorMethod, decode, func(p devicewire.PairConnector) (devicewire.PairConnectorReply, error) {
+			addr, version, err := d.PairConnector(ctx, p)
+			return devicewire.PairConnectorReply{Address: addr, Version: version}, err
+		})
 	}
 	return nil, false, nil
 }
@@ -102,8 +98,11 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 // handleDeviceRequest checks a handler against its descriptor and keeps Request's lenient decoder.
 func handleDeviceRequest[P, R any](_ buswire.Method[P, R], decode func(any) error, run func(P) (R, error)) (any, bool, error) {
 	var p P
-	if err := decode(&p); err != nil {
-		return nil, true, err
+	// Methods without parameters historically ignored the payload entirely.
+	if _, unused := any(p).(buswire.None); !unused {
+		if err := decode(&p); err != nil {
+			return nil, true, err
+		}
 	}
 	out, err := run(p)
 	if err != nil {

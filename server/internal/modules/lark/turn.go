@@ -82,7 +82,10 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 	s := f.s
 	ctx = s.sendAs(ctx, "progress", r.MachineID, r.SessionID)
 	if s.runExt(r, readChatKey) != "" {
-		return // a /read shows no progress in its group: the reaction says it is being worked on (read.go)
+		// A /read shows no progress in its group: the reaction says it is being worked on (read.go). A held one that
+		// takes a while tells the owner once, privately (readWorking).
+		s.readWorking(ctx, r, took)
+		return
 	}
 	scope := s.cotScope(r)
 	switch {

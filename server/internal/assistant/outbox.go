@@ -161,8 +161,8 @@ func (b *BusHub) sendPush(ctx context.Context, p NotifyRequest) (NotifyResult, e
 	if raw != nil && b.queued() && b.keep(ctx, id, outboxPush, raw) {
 		return NotifyResult{OK: true, Queued: true}, nil
 	}
-	var res NotifyResult
-	err := busError(b.client.Call(ctx, assistantwire.MethodNotify, p, &res))
+	res, err := buswire.Call(ctx, b.client, assistantwire.NotifyMethod, p)
+	err = busError(err)
 	if err != nil && !answered(err) && raw != nil && b.keep(ctx, id, outboxPush, raw) {
 		return NotifyResult{OK: true, Queued: true}, nil
 	}
@@ -344,7 +344,8 @@ func (b *BusHub) deliverOutbox(ctx context.Context, items []assistantwire.Outbox
 	for _, it := range items {
 		var err error
 		if it.Notification != nil {
-			err = busError(peer.Call(ctx, assistantwire.MethodNotify, NotifyRequest{Notification: *it.Notification}, nil))
+			_, err = buswire.Call(ctx, peer, assistantwire.NotifyMethod, NotifyRequest{Notification: *it.Notification})
+			err = busError(err)
 		} else {
 			err = peer.Notify(assistantwire.EventBroadcast, Broadcast{Message: it.Message})
 		}

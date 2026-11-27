@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-// Pictures put in the box and never sent free their object URLs when the box goes away or shows another
-// conversation (#2378), including ones still being read or a send that fails after the box moved on.
+// Pictures stay with their conversation. Their object URLs are freed when the pictures are discarded or sent.
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setPairedToken } from "../../lib/api";
 import { loadPages } from "../../lib/lazy-page";
 import { addQuote, getQuotes, parseQuotes, sendDraft, setQuotes, splitQuotes, storedQuotes } from "../../lib/drafts";
 import { toast } from "../../ui/atoms";
@@ -68,6 +68,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  setPairedToken("");
   host.remove();
 });
 
@@ -225,6 +226,7 @@ describe("inline selection comment images", () => {
     await send();
     expect(onSend).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(t("chat-comments.preparing_images"));
+    await until(() => expect(reads).toHaveLength(1));
     press("Escape");
     await settle(0);
     expect(getQuotes(key).list).toHaveLength(0);
@@ -267,7 +269,7 @@ describe("inline selection comment images", () => {
     await comment();
     paste([screenshot()]);
     expect(reads).toHaveLength(0);
-    expect(toast).toHaveBeenCalledWith(t("chat-composer.too_many_images", { max: 1 }), "error");
+    await until(() => expect(toast).toHaveBeenCalledWith(t("chat-composeroverlays.too_many_images", { max: 1 }), "error"));
     const composerRemove = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("ui-attachmenttray.remove", { name: "a.png" })}"]`)!;
     act(() => composerRemove.click());
     paste([screenshot()]);
@@ -420,34 +422,64 @@ describe("double Esc recalls the last message", () => {
 });
 
 describe("Composer image object URLs", () => {
-  it("are freed when the box unmounts", () => {
+  it("survive unmounting and are reused when the conversation is opened again", () => {
     render("a");
     putImage("a");
     expect(create).toHaveBeenCalledTimes(1);
     expect(revoke).not.toHaveBeenCalled();
-    act(() => root.unmount());
-    expect(revoke).toHaveBeenCalledWith("blob:test/1");
-    root = createRoot(host); // afterEach unmounts again
+    act(() => root.render(null));
+    render("a");
+    expect(revoke).not.toHaveBeenCalled();
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("blob:test/1");
   });
 
-  it("are freed when the box switches to another conversation", () => {
+  it("belong to their conversation when the same box switches keys", () => {
     render("a");
     putImage("a");
     render("b");
-    expect(revoke).toHaveBeenCalledWith("blob:test/1");
+    expect(trayImages()).toBe(0);
+    render("a");
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("blob:test/1");
+    expect(revoke).not.toHaveBeenCalled();
+  });
+
+  it("moves images when the main chat learns its current address", () => {
+    const at = (draftKey: string) => act(() => root.render(<Composer draftKey={draftKey} placeholder="" carryDraft />));
+    at("cached/main");
+    putImage("cached/main");
+    at("current/main");
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("blob:test/1");
+    expect(revoke).not.toHaveBeenCalled();
+    render("cached/main");
     expect(trayImages()).toBe(0);
   });
 
-  it("are freed, not put back into the other conversation, when a send fails after the switch", async () => {
+  it("keeps the scheduled prompt editor separate from chat image drafts", () => {
+    render("a");
+    putImage("a");
+    const editor = { text: "Scheduled prompt", refs: [], onChange: vi.fn(), label: "Prompt" };
+    act(() => root.render(<Composer draftKey="a" placeholder="" editor={editor} />));
+    expect(trayImages()).toBe(0);
+    expect(sendDraft("a", { type: "image", image: { name: "b.png", mime: "image/png", data: btoa("other") } })).toBe(false);
+    render("a");
+    expect(trayImages()).toBe(1);
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("blob:test/1");
+    expect(revoke).not.toHaveBeenCalled();
+  });
+
+  it("are restored to the original draft when a send fails after unmount", async () => {
     let finish!: (ok: boolean) => void;
     render("a", () => new Promise<boolean>((resolve) => (finish = resolve)));
     putImage("a");
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
+    act(() => root.render(null));
     render("b", async () => true);
-    expect(revoke).not.toHaveBeenCalled(); // the picture is in flight, not in the box
+    putImage("b");
     await act(async () => finish(false));
-    expect(revoke).toHaveBeenCalledWith("blob:test/1");
-    expect(trayImages()).toBe(0);
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("blob:test/2");
+    render("a");
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("blob:test/1");
+    expect(revoke).not.toHaveBeenCalled();
   });
 
   it("are put back when a send fails in the same conversation", async () => {
@@ -461,6 +493,7 @@ describe("Composer image object URLs", () => {
   it("are freed for a picked file whose read finishes after the switch", async () => {
     render("a");
     await pickFile(new File(["png"], "b.png", { type: "image/png" }));
+    await until(() => expect(reads).toHaveLength(1));
     render("b");
     await settle(0);
     expect(create).toHaveBeenCalledTimes(1);
@@ -471,6 +504,7 @@ describe("Composer image object URLs", () => {
   it("are freed for a picked file whose read finishes after the box unmounted", async () => {
     render("a");
     await pickFile(new File(["png"], "b.png", { type: "image/png" }));
+    await until(() => expect(reads).toHaveLength(1));
     act(() => root.unmount());
     await settle(0);
     expect(revoke).toHaveBeenCalledWith("blob:test/1");
@@ -595,7 +629,7 @@ describe("Composer image limits", () => {
     for (let i = 0; i < 5; i++) putImage("a");
     await act(async () => {}); // the word comes once the tick's pictures are in
     expect(trayImages()).toBe(4);
-    expect(toast).toHaveBeenCalledWith(t("chat-composer.too_many_images", { max: 4 }), "error");
+    expect(toast).toHaveBeenCalledWith(t("chat-composeroverlays.too_many_images", { max: 4 }), "error");
   });
 
   it("sends a picture past the hub's count to the session's computer as a file", async () => {
@@ -605,7 +639,7 @@ describe("Composer image limits", () => {
     await until(() => expect(uploads).toHaveLength(2));
     expect(tiles()).toHaveLength(2);
     expect(toast).toHaveBeenCalledTimes(1); // one word for the two of the same tick
-    expect(toast).toHaveBeenCalledWith(t("chat-composer.images_as_files", { max: 4, count: 2 }));
+    expect(toast).toHaveBeenCalledWith(t("chat-composeroverlays.images_as_files", { max: 4, count: 2 }));
   });
 
   it("holds 20 pictures with a hub that publishes none", () => {
@@ -621,7 +655,7 @@ describe("Composer image limits", () => {
     for (let i = 0; i < 3; i++) putImage("a"); // 4 characters each
     expect(trayImages()).toBe(2);
     await until(() => expect(uploads).toHaveLength(1));
-    expect(toast).toHaveBeenCalledWith(t("chat-composer.images_bytes_as_files", { count: 1 }));
+    expect(toast).toHaveBeenCalledWith(t("chat-composeroverlays.images_bytes_as_files", { count: 1 }));
   });
 
   it("sends a picked picture the page cannot read as a file", async () => {

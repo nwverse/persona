@@ -460,6 +460,16 @@ func (f feishuSink) cotFinishNow(ctx context.Context, r *channel.Run) bool {
 
 func (f feishuSink) cotFinishNowItems(ctx context.Context, r *channel.Run, p *runLive, items []proto.Item, fin cotFinal) bool {
 	if ctx.Err() != nil {
+		f.s.loadCot(&p.cot, r)
+		if p.cot.cot != "" && !p.cot.done && !p.cot.off {
+			if err := f.cotEnd(ctx, p.cot.cot, p.cot.msg, cotEndReason(fin.end)); err != nil {
+				f.s.logf("bots: agent message %s: not ended: %v", p.cot.cot, err)
+			} else {
+				p.cot.done = true
+				f.s.setCotExt(r, &p.cot, "cot_done", "1")
+			}
+			p.cot.queue = nil
+		}
 		return false
 	}
 	f.s.loadCot(&p.cot, r)

@@ -85,9 +85,25 @@ import (
 // interval keeps evaluating). It uses main's object-shaped transcriptVersion key, keeps main's #16604 compact,
 // CHECKPOINT and availability-model edits through the merge, and ships summary-db.js through the antigravity/lib/*.js
 // glob. Re-aligned onto the main carrying #16604, the union measures 296,417 B exactly (+1,779 B over 294,638 B).
+// Main carrying #17140 (Antigravity background-task restart/list reconciliation, +2,241 B) measured 298,658 B.
+// Deterministic runtime compaction settlement (`session.compaction.settled` in runtime-sdk and antigravity runtime) adds 211 B (298,869 B).
+// Main carrying #17145 (Antigravity ACP pool isolation) plus hardening runtime-sdk shell-gates against POSIX/zsh/ksh -c/operand option bypasses, standalone +, unquoted command substitutions, and line continuations measures 301,379 B (+2,510 B over 298,869 B).
+// Checking conversation existence before serving Antigravity session.items (fail-closed on stat/metadata read errors) adds 272 B (301,651 B, #16410).
+// Antigravity session model persistence and reload restoration after idle ACP recycle or companion restart (#16393) adds 313 B over main (301,651 B -> 301,964 B).
+// Making runtime-sdk light() idempotent and avoiding double light() in dsh-files adds 58 B (302,022 B).
+// Registering integer and number A2A tool parameters with numeric TypeBox schemas in pi adds 172 B (302,194 B).
+// Hardening opencode pre-prompt interrupt/close guards and post-close snapshot/streamEnd suppression adds 644 B (302,838 B).
+// Pausing the Antigravity prompt inactivity watchdog once a matched foreground reply is settled and the only open
+// work is a same-turn live background task (six fail-closed predicates, wake re-arm and T1-T5 tests; #17214) adds
+// 1,424 B of gzipped-package budget (302,838 B -> 304,262 B).
+// Preserving delivered replies across live Antigravity background wakes, in-place RUNNING->DONE updates, and runtime-sdk catch-up/batch delta ordering (#14920) adds 1,015 B over main (304,262 B -> 305,277 B).
+// Keeping Antigravity summary-db connection() atomic and closing on probe() error adds 48 B (305,277 B -> 305,325 B).
+// Persisting the model after the first turn and restoring older Antigravity sessions from their transcript adds 100 B (#16458).
+// Targeted Antigravity stepsToItems lookup (targetItemId), per-session sentMsgVersions, and lazy transcriptOf projection (#16152) add 567 B (305,425 B -> 305,992 B).
+// Antigravity unavailable-Auto permission-mode fallback, restricted permission_modes advertisement, and runtime-sdk session.modes permission_mode forwarding (#17239) add 703 B (305,992 B -> 306,695 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 296_417
+	const budget = 306_695
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

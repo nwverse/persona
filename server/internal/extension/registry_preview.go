@@ -161,6 +161,9 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 		}
 		verifiedKey = e.verifiedKey
 	}
+	if err := e.EngineProblem(r.build); err != nil {
+		return nil, err
+	}
 	pkg := e.PackageFor(Platform())
 	if pkg == nil {
 		return nil, fmt.Errorf("%s 没有这台 hub（%s）能用的包", e.Parsed.ID, Platform())
