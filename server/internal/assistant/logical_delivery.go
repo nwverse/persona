@@ -65,7 +65,7 @@ func (s *Service) reconcileLogicalInput(ctx context.Context, st logicalSwitchSto
 			return blocked("dispatch identity conflicts with current activation; explicit audited resolution required")
 		}
 		operation := ""
-		if c.Switch != nil {
+		if c.Switch != nil && c.Switch.Phase == "active" && c.Switch.ExpectedEpoch+1 == c.Epoch && c.Switch.TargetSegment == input.DispatchSegment {
 			operation = c.Switch.OperationID
 		}
 		err = delivery.ResolveClaimedConversationDelivery(ctx, c.MachineID, c.SessionID, c.Epoch, input, operation, outcome)

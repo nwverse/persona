@@ -11,9 +11,10 @@ import (
 
 type historicalReceiptStore struct {
 	*db.DB
-	historical string
-	current    bool
-	blocked    string
+	historical       string
+	current          bool
+	currentOperation string
+	blocked          string
 }
 
 func (st *historicalReceiptStore) ResolveHistoricalConversationDelivery(_ context.Context, _, _ string, epoch int64, input db.ConversationInput, outcome string) error {
@@ -24,8 +25,9 @@ func (st *historicalReceiptStore) ResolveHistoricalConversationDelivery(_ contex
 	return nil
 }
 
-func (st *historicalReceiptStore) ResolveClaimedConversationDelivery(context.Context, string, string, int64, db.ConversationInput, string, string) error {
+func (st *historicalReceiptStore) ResolveClaimedConversationDelivery(_ context.Context, _, _ string, _ int64, _ db.ConversationInput, operation, _ string) error {
 	st.current = true
+	st.currentOperation = operation
 	return nil
 }
 
@@ -104,5 +106,22 @@ func TestManualInputResolutionRouteRequiresRoleAndCAS(t *testing.T) {
 		if code != 200 {
 			t.Fatalf("explicit replay: %d %s", code, body)
 		}
+	}
+}
+
+func TestSourceReceiptDoesNotAcceptAnAlreadyPreparingUpgradeSwitch(t *testing.T) {
+	s, f, d, _ := logicalPair(t, "agy")
+	st := &historicalReceiptStore{DB: d}
+	f.answerNode("assistant.segment.input", func(_ string, _ json.RawMessage) (any, error) {
+		return map[string]bool{"accepted": true}, nil
+	})
+	active := conversationlog.Segment{ID: "source", MachineID: "server", SessionID: "original-session", State: "active"}
+	c := &db.LogicalConversation{MachineID: "server", SessionID: "side-chat", Epoch: 3, Segments: []conversationlog.Segment{active}, Switch: &db.ConversationSwitch{OperationID: "pre-upgrade-prepared", ExpectedEpoch: 3, TargetSegment: "prepared-target", Phase: "prepared"}}
+	input := db.ConversationInput{ClientMsgID: "source-reply-lost", Epoch: 3, State: "in_doubt", DispatchEpoch: 3, DispatchSegment: "source", DispatchMachine: "server", DispatchSession: "original-session"}
+	if err := s.reconcileLogicalInput(t.Context(), st, c, active, input); err != nil {
+		t.Fatal(err)
+	}
+	if !st.current || st.currentOperation != "" || st.historical != "" || c.Switch.Phase != "prepared" {
+		t.Fatalf("source receipt consumed pending activation: %+v", st)
 	}
 }

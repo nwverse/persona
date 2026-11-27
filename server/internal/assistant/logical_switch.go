@@ -597,8 +597,16 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 	if unresolvedErr != nil {
 		return unresolvedErr
 	}
+	// A pre-upgrade switch may already be preparing with a source delivery in
+	// doubt. Coordinate that input before preparation/activation can block drain.
+	if unresolved != nil {
+		if active, ok := c.Active(); ok {
+			return s.reconcileLogicalInput(ctx, st, c, active, *unresolved)
+		}
+		return nil
+	}
 	for _, seg := range c.Segments {
-		if seg.ClosePending && (unresolved == nil || unresolved.DispatchSegment != seg.ID && unresolved.DispatchSegment != "") {
+		if seg.ClosePending {
 			closeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			_, err := s.logicalPhysical(closeCtx, seg.MachineID, "session.close", map[string]any{"session_id": seg.SessionID})
 			cancel()
