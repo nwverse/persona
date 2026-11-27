@@ -191,7 +191,7 @@ describe("a Persona conversation on the generic session route says its foregroun
     expect(sendFeedback()).toBeNull();
     const statuses = [...host.querySelectorAll('[role="status"]')];
     expect(statuses).toHaveLength(1);
-    expect(statuses[0]?.textContent).toContain("正在读取对话");
+    expect(statuses[0]?.textContent).toContain("正在加载对话");
     expect(host.textContent).not.toContain("处理中…");
     act(() => { transcript.items = cached; transcript.loading = false; root.render(<ChatView mid="hub" sid="c1" />); });
     await flush();
@@ -287,7 +287,7 @@ describe("Agent chats never render duplicate competing Working… timers (#12380
     expect(sendFeedback()).toBeNull();
     const loaders = [...host.querySelectorAll('[role="status"]')];
     expect(loaders).toHaveLength(1);
-    expect(loaders[0]?.textContent).toContain("正在读取对话");
+    expect(loaders[0]?.textContent).toContain("正在加载对话");
     expect(host.textContent).not.toContain("处理中…");
   });
 });

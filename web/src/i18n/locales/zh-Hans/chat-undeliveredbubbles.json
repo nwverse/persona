@@ -2,8 +2,8 @@
   "waiting": "未送达：{reason}。恢复后会自动发送。",
   "failed": "未送达：{reason}",
   "images": "图片：{count} 张",
-  "action_failed": "没有成功：{error}",
-  "held_waiting": "等 {computer} 回来后发送",
-  "held_failed": "没有发送",
-  "held_placeholder": "{computer} 已离线，回来后发送。"
+  "action_failed": "操作失败：{error}",
+  "held_waiting": "待 {computer} 上线后自动发送",
+  "held_failed": "未发送",
+  "held_placeholder": "{computer} 当前离线，重新上线后将自动发送。"
 }
