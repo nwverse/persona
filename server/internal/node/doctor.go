@@ -27,6 +27,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // `personad node doctor` looks at what a node on this machine needs for the sessions Persona starts to reach the
