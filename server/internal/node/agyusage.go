@@ -470,6 +470,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	usage := extractAgyUsage(steps)
 	usage.turn = summarizeAgyTurn(steps)
 	usage.modTime = info.ModTime().UTC()
+	usage.size = info.Size()
 	meta := agySessionMeta{agyTranscriptUsage: usage, background: agyBackground(steps, conversation, dir, root)}
 
 	n.mu.Lock()
@@ -496,6 +497,9 @@ func (n *Node) mergeAgyTranscript(s *proto.Session, conversation string) {
 		}
 		if s.UpdatedAt.IsZero() && !u.modTime.IsZero() {
 			s.UpdatedAt = u.modTime
+		}
+		if s.Rev == 0 && u.size > 0 {
+			s.Rev = u.size
 		}
 		n.setAgyTranscriptContext(s, u.agyTranscriptUsage)
 		return

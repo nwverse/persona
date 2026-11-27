@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -167,7 +168,7 @@ func TestPREventsRouteSettingOffUnchanged(t *testing.T) {
 		t.Fatal("setting off unexpectedly emitted sigPREvent for CI failure")
 	}
 
-	// Merge-parked task: changes_requested still wakes existing sigReview while conflict stays quiet per #10798.
+	// Merge-parked task: with setting off, bound Agent still receives nothing while conflict and changes_requested both wake supervision (#15611).
 	s.supervise.mu.Lock()
 	clear(s.supervise.pending)
 	s.supervise.mu.Unlock()
@@ -195,8 +196,8 @@ func TestPREventsRouteSettingOffUnchanged(t *testing.T) {
 	if got := len(sentToAgent(f)) - before; got != 0 {
 		t.Fatalf("setting off still sent %d message(s) to bound Agent", got)
 	}
-	if _, ok := pendingPRConflict(s, task.ID); ok {
-		t.Fatal("merge-parked task unexpectedly emitted standalone sigPRConflict")
+	if _, ok := pendingPRConflictFor(s, task.ID, task.PRURL); !ok {
+		t.Fatal("merge-parked task lost sigPRConflict supervisor wake")
 	}
 	if !pendingReviewSignal(s, task.ID) || todoNow(s, task.ID).Supervision.State != reviewPending {
 		t.Fatal("setting off lost existing parked changes_requested supervisor wake")
@@ -1202,6 +1203,192 @@ func TestPREventRoutePruneDeterministicAndProtectsJustRecorded(t *testing.T) {
 			t.Fatalf("nondeterministic pruning: key %q in m1 but not m2", k)
 		}
 	}
+}
+
+func TestPREventsRouteMultiPRAndParkedConflicts(t *testing.T) {
+	t.Run("earlier open PR conflict routes to bound Agent and deduplicates across sweeps and restart", func(t *testing.T) {
+		idleAgent := proto.Session{
+			SessionID: "agent-multi-pr", MachineID: "box", Cwd: "/code/app", Agent: "claude", Title: "worker",
+			Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now(),
+		}
+		st := &memStore{}
+		s, f, task := newBoundPRTask(t, st, idleAgent)
+		turnPREventsRouteOn(t, s)
+		ctx := context.Background()
+		first := task.PRURL // pull/12
+		second := "https://github.com/example/app/pull/13"
+		current := "https://github.com/example/app/pull/14"
+		s.setTaskStage(ctx, task.ID, "review", second)
+		s.setTaskStage(ctx, task.ID, "review", current)
+
+		// Also park the task on the current PR so both multi-PR AND merge-park are active together.
+		if _, err := reviewErr(s, task.ID, mergePark(current)); err != nil {
+			t.Fatal(err)
+		}
+
+		base := time.Now().UTC().Truncate(time.Second)
+		forge := &prsForge{byNumber: map[int]TodoPRStatus{
+			12: {State: "open", HeadOID: "head-12a", Conflicts: true},
+			13: {State: "open", HeadOID: "head-13a"},
+			14: {State: "open", HeadOID: "head-14a"},
+		}}
+		s.deploy.forge = forge
+		before := len(sentToAgent(f))
+
+		// Sweep 1: earlier PR #12 conflicts -> routed once to Agent, no sigPRConflict leak.
+		s.sweepPRStatuses(ctx, base)
+		sent := sentToAgent(f)[before:]
+		if len(sent) != 1 || !strings.Contains(sent[0], first) || !strings.Contains(sent[0], "head-12a") || !strings.Contains(sent[0], "Event: pr_conflict") {
+			t.Fatalf("sweep 1 routed = %q, want 1 conflict for %s@head-12a", sent, first)
+		}
+		if _, ok := pendingPRConflict(s, task.ID); ok {
+			t.Fatal("routed earlier-PR conflict leaked sigPRConflict to supervisor")
+		}
+
+		// Sweep 2: unchanged -> 0 new sends (exact 5-tuple dedup).
+		s.sweepPRStatuses(ctx, base.Add(deployRecheck))
+		if len(sentToAgent(f))-before != 1 {
+			t.Fatalf("sweep 2 re-routed duplicate conflict: total=%d", len(sentToAgent(f))-before)
+		}
+
+		// Sweep 3: #13 and parked current #14 also conflict -> +2 routed sends, still no supervisor leak.
+		forge.byNumber[13] = TodoPRStatus{State: "open", HeadOID: "head-13a", Conflicts: true}
+		forge.byNumber[14] = TodoPRStatus{State: "open", HeadOID: "head-14a", Conflicts: true}
+		s.sweepPRStatuses(ctx, base.Add(2*deployRecheck))
+		sent = sentToAgent(f)[before:]
+		if len(sent) != 3 {
+			t.Fatalf("sweep 3 total routed = %d, want 3: %q", len(sent), sent)
+		}
+		if _, ok := pendingPRConflict(s, task.ID); ok {
+			t.Fatal("routed parked current/earlier PR conflicts leaked sigPRConflict")
+		}
+
+		// Simulate restart: persisted dedupe keeps all three (pr_url, head) deduplicated.
+		s.prEventRoute.mu.Lock()
+		s.prEventRoute.loaded = false
+		s.prEventRoute.seen = nil
+		s.prEventRoute.mu.Unlock()
+		s.sweepPRStatuses(ctx, base.Add(3*deployRecheck))
+		if len(sentToAgent(f))-before != 3 {
+			t.Fatalf("post-restart sweep re-routed persisted conflicts: total=%d", len(sentToAgent(f))-before)
+		}
+
+		// New conflicting head on earlier PR #12 routes again.
+		forge.byNumber[12] = TodoPRStatus{State: "open", HeadOID: "head-12b", Conflicts: true}
+		s.sweepPRStatuses(ctx, base.Add(4*deployRecheck))
+		sent = sentToAgent(f)[before:]
+		if len(sent) != 4 || !strings.Contains(sent[3], first) || !strings.Contains(sent[3], "head-12b") {
+			t.Fatalf("new conflicting head on earlier PR = %q", sent)
+		}
+	})
+
+	t.Run("merge-parked fallback emits sigPRConflict for both current and earlier PR and passes digest revalidation", func(t *testing.T) {
+		st := &memStore{}
+		agent := proto.Session{
+			SessionID: "agent-offline", MachineID: "box", Cwd: "/code/app", Agent: "claude", Title: "worker",
+			Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now(),
+		}
+		s, f, task := newBoundPRTask(t, st, agent)
+		turnPREventsRouteOn(t, s)
+		f.devices = []Device{
+			{ID: "server", Name: "server", Online: true, Reachable: true},
+			{ID: "box", Name: "box", Online: false, Reachable: false},
+		}
+		ctx := context.Background()
+		first := task.PRURL // pull/12
+		current := "https://github.com/example/app/pull/13"
+		s.setTaskStage(ctx, task.ID, "review", current)
+		if _, err := reviewErr(s, task.ID, mergePark(current)); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC().Truncate(time.Second)
+		s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
+			12: {State: "open", HeadOID: "head-fb-12", Conflicts: true},
+			13: {State: "open", HeadOID: "head-fb-13", Conflicts: true},
+		}}
+		s.sweepPRStatuses(ctx, now)
+		for _, tc := range []struct{ url, head string }{{first, "head-fb-12"}, {current, "head-fb-13"}} {
+			g, ok := pendingPRConflictFor(s, task.ID, tc.url)
+			if !ok || g.Key != tc.url+"@"+tc.head {
+				t.Fatalf("parked fallback missing sigPRConflict for %s: %+v, %v", tc.url, g, ok)
+			}
+			if _, holds := s.digestEntry(ctx, g, ""); !holds {
+				t.Fatalf("parked fallback sigPRConflict for %s was dropped by digestEntry", tc.url)
+			}
+		}
+		sendPendingPRConflicts(s)
+		if notices := f.notices(); len(notices) != 1 || !strings.Contains(notices[0], first) || !strings.Contains(notices[0], current) {
+			t.Fatalf("parked fallback notices = %q, want both %s and %s", notices, first, current)
+		}
+		// Repeated sweep on the same heads must not re-notify supervisor.
+		s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+		sendPendingPRConflicts(s)
+		if len(f.notices()) != 1 {
+			t.Fatalf("parked fallback repeated sweep spammed supervisor: %q", f.notices())
+		}
+	})
+
+	t.Run("reference-role repository link PR does not trigger conflict route or sigPRConflict", func(t *testing.T) {
+		idleAgent := proto.Session{
+			SessionID: "agent-ref-pr", MachineID: "box", Cwd: "/code/app", Agent: "claude", Title: "worker",
+			Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now(),
+		}
+		st := &todoReadyRepoStore{memStore: &memStore{}}
+		s, f, task := newBoundPRTask(t, st, idleAgent)
+		turnPREventsRouteOn(t, s)
+		ctx := context.Background()
+		deliveryPR := task.PRURL                          // pull/12 (earlier PR)
+		refPR := "https://github.com/example/app/pull/13" // current PR, marked reference
+		s.setTaskStage(ctx, task.ID, "review", refPR)
+		st.setRepo(task.ID, repository.TaskSet{
+			TodoID: task.ID,
+			Repositories: []repository.TaskRepository{{
+				RepoID: "repo-1",
+				Links: []repository.TaskLink{
+					{Kind: "pull_request", CanonicalURL: deliveryPR, Role: repository.LinkRoleDelivery},
+					{Kind: "pull_request", CanonicalURL: refPR, Role: repository.LinkRoleReference},
+				},
+			}},
+		})
+		now := time.Now().UTC().Truncate(time.Second)
+		s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
+			12: {State: "open", HeadOID: "head-del-1", Conflicts: true},
+			13: {State: "open", HeadOID: "head-ref-1", Conflicts: true},
+		}}
+		before := len(sentToAgent(f))
+		s.sweepPRStatuses(ctx, now)
+		sent := sentToAgent(f)[before:]
+		if len(sent) != 1 || !strings.Contains(sent[0], deliveryPR) || strings.Contains(sent[0], refPR) {
+			t.Fatalf("expected only delivery PR routed, got %q", sent)
+		}
+		if _, ok := pendingPRConflictFor(s, task.ID, refPR); ok {
+			t.Fatal("reference PR unexpectedly queued sigPRConflict")
+		}
+		// Also verify with routing off: reference PR stays quiet while earlier delivery PR wakes supervisor.
+		setSettings(t, s, func(v *Settings) { off := false; v.PREventsRouteToAgent = &off })
+		s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+		if _, ok := pendingPRConflictFor(s, task.ID, refPR); ok {
+			t.Fatal("reference PR unexpectedly queued sigPRConflict with routing off")
+		}
+		g, ok := pendingPRConflictFor(s, task.ID, deliveryPR)
+		if !ok {
+			t.Fatal("delivery PR did not queue sigPRConflict with routing off")
+		}
+		// Downgrading deliveryPR to reference while queued drops it during digest revalidation.
+		st.setRepo(task.ID, repository.TaskSet{
+			TodoID: task.ID,
+			Repositories: []repository.TaskRepository{{
+				RepoID: "repo-1",
+				Links: []repository.TaskLink{
+					{Kind: "pull_request", CanonicalURL: deliveryPR, Role: repository.LinkRoleReference},
+					{Kind: "pull_request", CanonicalURL: refPR, Role: repository.LinkRoleReference},
+				},
+			}},
+		})
+		if _, holds := s.digestEntry(ctx, g, ""); holds {
+			t.Fatal("PR downgraded to reference still held in digestEntry")
+		}
+	})
 }
 
 func feedbackTestAgent(now time.Time, stopped bool) proto.Session {
