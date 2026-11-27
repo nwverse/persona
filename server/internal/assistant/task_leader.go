@@ -814,11 +814,6 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	verdict, note := a.Verdict, clip(a.Note, 2000)
 	over, overSafetyCap, overCount := false, false, 0
 	var criteriaErr, findingErr error
-	var cancelCheckedAgents []TodoAgent
-	cancelStaleAllowed := false
-	if verdict == reviewCancelled {
-		cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, t)
-	}
 	var closing *taskReviewClose
 	if verdict == reviewAccepted || verdict == reviewCancelled {
 		reason := cmp.Or(clip(oneLine(note), 80), "验收通过") // i18n-ignore: done_reason, as a conversation's review writes it
@@ -826,6 +821,11 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了") // i18n-ignore: done_reason, as a conversation's review writes it
 		}
 		closing = &taskReviewClose{reason: reason, accepted: verdict == reviewAccepted}
+	}
+	var cancelCheckedAgents []TodoAgent
+	cancelStaleAllowed := false
+	if verdict == reviewCancelled {
+		cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, t)
 	}
 	var guard func(Todo) bool
 	if verdict == reviewAccepted || verdict == reviewCancelled {

@@ -96,6 +96,7 @@ it("in the side panel: the terminal button opens the agent's page in its termina
 });
 
 it("the side panel's localized terminal menu item opens the terminal page and closes the panel", async () => {
+  await initI18n("zh-Hans");
   media.phone = true;
   const router = await import("../../lib/router");
   const navigate = vi.spyOn(router, "navigate").mockImplementation(() => {});

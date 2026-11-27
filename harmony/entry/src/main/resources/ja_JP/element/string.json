@@ -9115,6 +9115,14 @@
     {
       "name": "knowledge_minutes_writing",
       "value": "議事録を作成中…"
+    },
+    {
+      "name": "agents_use_herdr_tab_name",
+      "value": "herdr のタブ名をセッション名として使う"
+    },
+    {
+      "name": "agents_use_herdr_tab_name_hint",
+      "value": "タブ名を優先して表示します。この設定は同じハブのデバイス間で同期されます。"
     }
   ]
 }

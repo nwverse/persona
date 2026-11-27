@@ -21,7 +21,30 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x3a4a9b026ed8443a
+// Derive the merged layout only after proving that it is the union of both incoming
+// schemas. Removing either new field must reproduce the layout from the branch that
+// did not add it. Any subsequent Session change still fails the layout comparison.
+var sessionWireLayout = func() uint64 {
+	t := reflect.TypeFor[Session]()
+	without := func(skip string) uint64 {
+		h := fnv.New64a()
+		for i := range t.NumField() {
+			f := t.Field(i)
+			if f.Name == skip {
+				continue
+			}
+			h.Write([]byte(f.Name + " " + f.Type.String() + " " + string(f.Tag) + "\n"))
+		}
+		return h.Sum64()
+	}
+	if got := without("LogicalPlaceholder"); got != 0xb2c1878f1bb31c09 {
+		return got
+	}
+	if got := without("NativeTurnVerified"); got != 0x3a4a9b026ed8443a {
+		return got
+	}
+	return typeLayout(t)
+}()
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -138,6 +161,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.boolean(`"effort_change_failed":`, s.EffortChangeFailed, true)
 	w.boolean(`"context_restart_recommended":`, s.ContextRestartRecommended, true)
 	w.boolean(`"off_launcher":`, s.OffLauncher, true)
+	w.boolean(`"native_turn_verified":`, s.NativeTurnVerified, true)
 	if s.BackgroundStalledSince != 0 {
 		w.time(`"background_stalled_since":`, s.BackgroundStalledSince.Time())
 	}

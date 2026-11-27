@@ -149,6 +149,11 @@ dropped when its pane no longer runs agy. A pane is only readable under an engin
 `personad node agy-hooks [status|install|uninstall]` manages the entries; `uninstall` also tells the node not to put
 them back.
 
+Assistant's `agent_read` and `agents_list` show an AGY pane's working or finished turn only when a native hook matches
+the current input in its verified transcript. A successful idle `Stop` must also have a completed reply. The list
+gets its preview from the bound transcript. Terminal controls still use the engine's status, including the window
+between typing a prompt and AGY taking it.
+
 A conversation's row changes ID with the pane that shows it (#14395). While a live pane shows it, the row is the pane's,
 `agy-<workspace>-<pane>`, and the companion's own row for the conversation, `agy-<conversation id>`, is left out. With no
 such pane (it closed, agy quit in it, the engine gave the conversation another pane) the companion's row is listed
