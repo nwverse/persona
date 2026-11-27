@@ -111,6 +111,12 @@ func TestHistoricalDeliverySettlementPreservesCurrentSwitchAndFIFO(t *testing.T)
 				if err := d.pool.QueryRow(ctx, `SELECT original_payload FROM conversation_input_resolutions WHERE actor='runtime_receipt' AND client_msg_id='old'`).Scan(&original); err != nil || string(original) != string(input.Payload) {
 					t.Fatalf("definite refusal lost original dispatch audit: %q %v", original, err)
 				}
+				if row != nil && string(row.Payload) != string(input.Payload) {
+					t.Fatalf("definite refusal changed the replay payload: %s", row.Payload)
+				}
+				if err := d.ResolveHistoricalConversationDelivery(ctx, "root", "chat", 4, input, "accepted"); !errors.Is(err, ErrConversationEpoch) {
+					t.Fatalf("late old receipt settled the new dispatch: %v", err)
+				}
 			}
 			if err != nil || row == nil || row.ClientMsgID != want || row.DispatchSegment != "s4" || row.DispatchEpoch != 4 {
 				t.Fatalf("next input not claimed in order: %+v %v", row, err)

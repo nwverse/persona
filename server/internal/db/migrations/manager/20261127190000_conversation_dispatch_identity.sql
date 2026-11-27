@@ -24,7 +24,8 @@ FROM conversation_segments s WHERE i.logical_machine=s.logical_machine
  AND i.state IN ('sending','in_doubt') AND i.dispatch_epoch=0;
 
 -- The exact original payload and operator intent survive settlement and replay.
--- No automatic policy authorizes replay. The request id is an idempotency key.
+-- Absent receipts never authorize replay. Definitive refusals are audited before
+-- requeue; operators explicitly choose ambiguous replay. Request IDs are idempotent.
 CREATE TABLE conversation_input_resolutions (
  logical_machine text NOT NULL,
  logical_session text NOT NULL,
