@@ -27,8 +27,7 @@ import { fromDraftImage, getComposerImages, moveComposerImages, setComposerImage
 import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ContextRef, type ComposerHandle } from "../../lib/links";
 import { addQuote, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, restoreQuotes, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, type CommentImagePicker, type DraftEvent, type DraftImage } from "../../lib/drafts";
 import type { EditState } from "../../lib/image-edit";
-import { mentionAt, sessionQuote, workspaceContext, type MentionToken } from "../../lib/mentions";
-import { machineWithHub } from "../../lib/mesh";
+import { mentionAt, type MentionToken } from "../../lib/mentions";
 import { skillContext, skillDraft, splitSkillDraft } from "../../lib/skill-mentions";
 import { contextXML } from "../../lib/context-xml";
 import {
@@ -36,7 +35,6 @@ import {
   writeInlineDraft, type InlineDocument, type InlineSelection,
 } from "../../lib/inline-mentions";
 import { parseUserText } from "../../lib/turns";
-import { getState } from "../../lib/store";
 import { AttachmentTiles } from "../../ui/AttachmentTray";
 import { FileTiles } from "./FileTiles";
 import { cx, EASE, Spinner, toast } from "../../ui/atoms";
@@ -44,6 +42,7 @@ import { Icon } from "../../ui/icons";
 import { ContextChips, ContextChipList } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
 import { ComposerField, preloadInlineField } from "./ComposerField";
+import type { ComposerImageStageHandle } from "./ComposerImageStage";
 import type { InlineMentionInputHandle } from "./InlineMentionInput";
 import { QuoteBars } from "./Quote";
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
@@ -102,10 +101,8 @@ interface PastedBlock {
 }
 
 interface ConfirmState {
-  title: string;
+  word: string;
   message: string;
-  confirmLabel: string;
-  tone?: "primary" | "danger";
   onConfirm: () => void;
 }
 
@@ -271,6 +268,7 @@ export const Composer = memo(function Composer({
   const [imagePreview, setImagePreview] = useState<{ id: string; closing?: boolean } | null>(null);
   const imageExpanded = Boolean(imagePreview && !imagePreview.closing);
   const dockSlot = useRef<HTMLDivElement>(null);
+  const stageHandle = useRef<ComposerImageStageHandle | null>(null);
   // Enter while blocked (#4480): a line says why nothing went, the button and the card light up; it fades after a while
   const [nudge, setNudge] = useState(0);
   useEffect(() => {
@@ -354,7 +352,8 @@ export const Composer = memo(function Composer({
   const openImagePreview = (id: string) => {
     preloadComposerOverlay();
     setExpanded(false);
-    setImagePreview({ id });
+    if (stageHandle.current && imageExpanded) stageHandle.current.select(id);
+    else setImagePreview({ id });
   };
   const removeAttachment = (id: string) => {
     if (!canWriteDraft()) return;
@@ -718,12 +717,12 @@ export const Composer = memo(function Composer({
   const pickRow = (r: MentionRow, at: MentionToken | null) => {
     let ref: ContextRef | undefined;
     if (r.kind === "session") {
-      const q = sessionQuote(r.session);
+      const q = r.toContext();
       ref = newContext("context", q.title, q.url, q.text);
     } else if (r.kind === "skill") {
       ref = skillContext(r.skill);
     } else if (r.kind === "workspace") {
-      const w = workspaceContext(r.workspace, (id) => machineWithHub(id, getState().machines));
+      const w = r.toContext();
       ref = { ...newContext("workspace", w.title, w.url, w.text), attrs: w.attrs };
     } else if (r.kind === "repository") {
       const c = r.context;
@@ -878,6 +877,8 @@ export const Composer = memo(function Composer({
       }
       if (!mounted.current || keyNow.current !== draftKey || draftNow.current !== value || !canWriteDraft()) return;
     }
+    const pendingEdits = stageHandle.current?.flush();
+    if (pendingEdits && (!(await pendingEdits) || !mounted.current || keyNow.current !== draftKey || !canWriteDraft())) return;
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
     if (commentReads.size) {
@@ -1004,13 +1005,7 @@ export const Composer = memo(function Composer({
     };
     if (c.confirm) {
       preloadComposerOverlay();
-      setConfirmState({
-        title: t("chat-composer.confirm_run_title", { word: c.word }),
-        message: c.confirm,
-        confirmLabel: t("chat-composer.confirm_ok"),
-        tone: "danger",
-        onConfirm: apply,
-      });
+      setConfirmState({ word: c.word, message: c.confirm, onConfirm: apply });
       return;
     }
     apply();
@@ -1025,7 +1020,7 @@ export const Composer = memo(function Composer({
   const innerOverlay = Boolean(slashOpen || mOpen || plusOpen || history.searching || confirmState || expanded);
   const drag = {
     onDragOver: (e: React.DragEvent) => {
-      if (!editor && (e.dataTransfer.types.includes("Files") || Array.from(e.dataTransfer.types ?? []).includes(ENTRY_DRAG_TYPE))) {
+      if (!editor && (e.dataTransfer.types.includes("Files") || e.dataTransfer.types.includes(ENTRY_DRAG_TYPE))) {
         e.preventDefault();
         setDragging(true);
       }
@@ -1055,6 +1050,7 @@ export const Composer = memo(function Composer({
                 compact,
                 composerRef: box,
                 slotRef: dockSlot,
+                handleRef: stageHandle,
                 innerOverlayOpen: innerOverlay,
                 dragging,
                 drag,
@@ -1275,9 +1271,11 @@ export const Composer = memo(function Composer({
               }
             }
             if (e.key === "Escape" && imageExpanded && !innerOverlay && !document.querySelector("[role=dialog],[role=menu]")) {
-              e.preventDefault();
-              e.stopPropagation();
-              closeImagePreview();
+              if (!stageHandle.current) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeImagePreview();
+              }
               return;
             }
             // Esc while editing cancels it; kept from ChatView's interrupt on the window

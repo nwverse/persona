@@ -90,12 +90,14 @@ import (
 // Main carrying #17145 (Antigravity ACP pool isolation) plus hardening runtime-sdk shell-gates against POSIX/zsh/ksh -c/operand option bypasses, standalone +, unquoted command substitutions, and line continuations measures 301,379 B (+2,510 B over 298,869 B).
 // Checking conversation existence before serving Antigravity session.items (fail-closed on stat/metadata read errors) adds 272 B (301,651 B, #16410).
 // Antigravity session model persistence and reload restoration after idle ACP recycle or companion restart (#16393) adds 313 B over main (301,651 B -> 301,964 B).
+// Making runtime-sdk light() idempotent and avoiding double light() in dsh-files adds 58 B (302,022 B).
+// Registering integer and number A2A tool parameters with numeric TypeBox schemas in pi adds 172 B (302,194 B).
 // Pausing the Antigravity prompt inactivity watchdog once a matched foreground reply is settled and the only open
 // work is a same-turn live background task (six fail-closed predicates, wake re-arm and T1-T5 tests; #17214) adds
-// 1,424 B (301,964 B -> 303,388 B).
+// 1,424 B of gzipped-package budget on the merged main (302,194 B -> 303,618 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 303_388
+	const budget = 303_618
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

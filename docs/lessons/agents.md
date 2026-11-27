@@ -1,5 +1,21 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A delivery label does not prove a disabled feature (#16936)
+
+- A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require
+  an explicit default-off statement in its missing or waiting gate before presenting that claim to the owner.
+- Apply the same guard to historical acceptance cards and model judgments. Preserve a deployed report when it gives
+  deployment evidence; without that evidence, keep an unverified delivery hold instead of inventing a disabled switch.
+- Exercise the closeout-to-title path and the judge's criterion checks together; a second assignment of the raw model
+  delivery can otherwise restore the unsupported state after normalization.
+
+## Inbox handoffs are not task ownership (#17119)
+
+- A conversation's historical handoff does not identify the source of every later task. Omitted sources must not
+  claim unrelated handoffs, and continuations skip source inference. A strongly matching handoff is still inferred:
+  retain its matching snapshot and recheck competing task ownership before admission. Explicit source selection is
+  a separate contract.
+
 ## Persona's own agy hooks: report only, own one key, prove the pane (#13729)
 
 - agy's global `hooks.json` is shared: herdr, Moshi and Orca each own a top-level group. Write only the `persona` key through the ordered-object editor (`editSettings`), never rewrite the others, and treat a changed command (moved binary) as stale, not as foreign.

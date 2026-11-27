@@ -168,6 +168,7 @@
   "read_held_from": "グループでの /read から：{ask}",
   "read_held_from_bare": "グループでの /read から",
   "read_held_waiting": "あなただけに見えています。グループの /read に返信として送りますか？",
+  "read_working": "グループを読み、手がかりを調べています。終わったら結果をここに送ります。グループに投稿するかは、そのときに決められます。",
   "read_held_post": "グループに送る",
   "read_held_skip": "送らない",
   "read_held_open": "グループを開く",

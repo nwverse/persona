@@ -1879,7 +1879,8 @@ operation then read as accepted and the bubble waited for the transcript and wen
   context (leaving `Later` untouched even if storage recovers before settlement), while saving a carry reservation for
   waiting quiet messages stays fail-closed. Nothing is guessed from
   the words: only the explicit argument decides. A `quote` (the owner's request) always wakes, so the two together are
-  refused. While kept, the message shows above the composer (`queuedRelays`) and disappears once consumed.
+  refused. While kept, a user-facing message shows above the composer (`queuedRelays`) and disappears once consumed.
+  Internal-only relays (the card ledger and non-owner card routing notes) stay in the delivery state but are not listed.
 - **Per-sender wake cap and deferred wakes** (#13888, #14352, `server/internal/assistant/conversation_fanout.go`,
   `server/internal/assistant/delayed_waits.go`). To keep one broadcast from waking every leader at once, a sender may
   immediately wake at most `fanoutWide - 1` (2) distinct conversations within `fanoutWindow` (10 min); a conversation
@@ -2272,7 +2273,8 @@ kept per day of the owner's time zone in the setting `assistant.card_ledger` (ei
 database). Once a day, from the morning briefing's time (`acceptLoop`'s tick), the day before's count goes to the main
 conversation as a message kept without waking it (`keepRelayLater`, setting `assistant.card_ledger_told`): in all, each
 of the six kinds, and kind 0 by source. It is never pushed to the owner and the briefing does not carry it. The ledger
-only records; which cards are pushed is decided where they are made.
+only records; which cards are pushed is decided where they are made. Its report is internal-only: it is kept for
+the main conversation but left out of the queue shown above the composer.
 
 ## Supervision by model (#5086)
 

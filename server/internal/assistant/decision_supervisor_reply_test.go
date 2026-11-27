@@ -334,3 +334,143 @@ func TestAgentChatReplyOnLeaderTaskKeepsLegacyRouting(t *testing.T) {
 		t.Fatalf("the Agent-chat reply was rerouted to %q; legacy no-To escalation changed", g.To)
 	}
 }
+
+// A supervisor-conversation hand-back must keep routing to its owning direction across a manager
+// restart. The persisted reply records its supervisor origin; the recovery sweep rebuilds the
+// explicit leader destination instead of the shared no-To signal that would escalate a
+// needs_user card back to Main.
+func TestSupervisorHandBackRoutingSurvivesRestart(t *testing.T) {
+	st := &memStore{}
+	first, f := newQuietServiceOn(t, st)
+	setSettings(t, first, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	first.accept.mu.Lock()
+	if !first.loadAcceptLocked(context.Background()) {
+		first.accept.mu.Unlock()
+		t.Fatal("the accept book could not be loaded")
+	}
+	first.accept.mu.Unlock()
+	leader := putLeaderDecisionTodo(t, first)
+	first.userSpokeText(context.Background(), leaderDirectionRef(), "let me think about the rollout risk first")
+	waitFor(t, "the leader hand-off", func() bool {
+		return signalled(first, f, leader.ID, sigDecisionReply, "task_decided")
+	})
+	if got := askOf(first, leader.ID); got == nil || got.AgentReply == nil || !got.AgentReply.FromSupervisor {
+		t.Fatalf("the supervisor origin was not recorded on the persisted reply: %+v", got)
+	}
+	// A brand-new manager over the same store: nothing is carried in memory.
+	reloaded, _ := newQuietServiceOn(t, st)
+	setSettings(t, reloaded, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	putTodo(reloaded, Todo{ID: leader.ID, Title: leader.Title, Origin: "lead1",
+		Supervision: &Supervision{Supervisor: "lead1", State: reviewNeedsUser, Round: 1}})
+	if err := reloaded.ensureTodosLoaded(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reloaded.sweepAgentDecisionReplies()
+	to, routed := decisionReplyTarget(t, reloaded, leader.ID)
+	if to != "lead1" || routed != "lead1" {
+		t.Fatalf("after restart the hand-back routed to %q (To %q), want the lead1 direction", routed, to)
+	}
+}
+
+// A can_wait decision held for a briefing has no card and the owner has never seen this round.
+// Any message in its supervisor conversation must leave the hold, the card and the ask untouched:
+// neither release it for hand-back nor settle an option label.
+func TestHeldForBriefingDecisionIgnoresSupervisorConversation(t *testing.T) {
+	s, f, todo := decisionAgentReplyService(t)
+	s.accept.mu.Lock()
+	a := s.accept.asks[todo.ID]
+	if a == nil {
+		s.accept.mu.Unlock()
+		t.Fatal("no decide ask to hold for a briefing")
+	}
+	a.ForBriefing, a.NoCard = true, true
+	s.accept.mu.Unlock()
+	if !s.waitsForBriefing(todo.ID) {
+		t.Fatal("the fixture ask is not held for a briefing")
+	}
+	before := askOf(s, todo.ID)
+	// An exact option label would settle an ordinary card once delivered; here it must do nothing.
+	deliveredSupervisorChoice(t, s, supervisorRef(), before.Options[1].Label, "briefing-choice-1")
+	got := askOf(s, todo.ID)
+	if got == nil || !got.ForBriefing || got.AgentReply != nil || got.Chosen != "" || !got.AcceptedAt.IsZero() {
+		t.Fatalf("a briefing-held decision was released or settled: %+v", got)
+	}
+	if s.supervisorSettlePending(todo.ID, time.Now()) {
+		t.Fatal("a briefing-held decision registered a pending supervisor settlement")
+	}
+	if signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
+		t.Fatal("a briefing-held decision emitted a hand-back signal")
+	}
+	if todoNow(s, todo.ID).Supervision.State != reviewNeedsUser {
+		t.Fatal("the held decision left needs_user")
+	}
+}
+
+// An active "Don't handle" dismissal hides the round from the supervisor reverse-lookup: neither
+// an exact option label nor free text may reopen, hand back or settle it. Undoing the dismissal
+// restores normal answering.
+func TestDismissedDecisionIgnoresSupervisorConversation(t *testing.T) {
+	// A real store is required: with no store, chooseOption fails on errAcceptStore before it can
+	// deliver or record, which would mask whether the dismissal gate actually blocks settlement.
+	// The fixture is built by hand because memStore has no task_plans table for the plan flow.
+	st := &memStore{}
+	s, f := newQuietServiceOn(t, st)
+	now := time.Now().UTC()
+	todo := Todo{
+		ID: "todo_supervisor_dismissed", Title: "Choose the rollback plan", Origin: "conv1",
+		Supervision: &Supervision{Supervisor: "conv1", State: reviewNeedsUser, Round: 1,
+			Reviews: []TaskReview{{At: now, Verdict: reviewNeedsUser, Note: "needs an owner choice"}}},
+	}
+	putTodo(s, todo)
+	s.accept.mu.Lock()
+	if !s.loadAcceptLocked(context.Background()) {
+		s.accept.mu.Unlock()
+		t.Fatal("the accept book could not be loaded")
+	}
+	s.accept.asks[todo.ID] = &acceptAsk{
+		Conclusion: true, Outcome: outcomeDecide, Reason: "rollback strategy",
+		Recommend: "snapshot", AskedAt: now, DueAt: now.Add(time.Hour),
+		Options: []DecisionOption{
+			{Label: "snapshot", LeadsTo: "restore a snapshot"},
+			{Label: "redeploy", LeadsTo: "ship the previous build"},
+		},
+	}
+	s.accept.mu.Unlock()
+	review := triageLatestReview(todoNow(s, todo.ID).Supervision)
+	if review == nil {
+		t.Fatal("the fixture has no needs_user review")
+	}
+	dismiss := func(undone bool) {
+		s.reviewDismissals.mu.Lock()
+		s.reviewDismissals.loaded = true
+		s.reviewDismissals.byTodo = map[string]taskReviewDismissal{
+			todo.ID: {decisionReview: decisionReview{ReviewAt: review.At, DismissalID: "dismiss-1"}, Undone: undone},
+		}
+		s.reviewDismissals.mu.Unlock()
+	}
+	dismiss(false)
+	want := "redeploy" // the non-recommended option, so chooseOption takes its full delivery path
+	deliveredSupervisorChoice(t, s, supervisorRef(), want, "dismissed-choice-1")
+	if got := askOf(s, todo.ID); got == nil || got.Chosen != "" || !got.AcceptedAt.IsZero() || got.AgentReply != nil {
+		t.Fatalf("an exact label reopened a dismissed decision: %+v", got)
+	}
+	if s.supervisorSettlePending(todo.ID, time.Now()) {
+		t.Fatal("a dismissed decision registered a pending supervisor settlement")
+	}
+	s.userSpokeText(context.Background(), supervisorRef(), "let me think about the rollout risk first")
+	if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || got.Chosen != "" {
+		t.Fatalf("free text handed back a dismissed decision: %+v", got)
+	}
+	if signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
+		t.Fatal("a dismissed decision emitted a hand-back signal")
+	}
+	if todoNow(s, todo.ID).Supervision.State != reviewNeedsUser {
+		t.Fatal("the dismissed decision left needs_user")
+	}
+	// Undo restores the ordinary path: the same exact label now settles the round once delivered.
+	dismiss(true)
+	deliveredSupervisorChoice(t, s, supervisorRef(), want, "dismissed-choice-2")
+	if got := askOf(s, todo.ID); got == nil || got.AcceptedAt.IsZero() || got.Chosen != want {
+		t.Fatalf("the decision did not answer after Undo: %+v", got)
+	}
+}

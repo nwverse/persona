@@ -245,7 +245,7 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 				"handle": newHandle, "tabId": newTab, "leafId": newLeaf, "incarnationId": newInc,
 				"worktreeId": wtID, "title": title, "connected": true, "writable": true,
 				"orphaned": false, "executionHostId": "local", "agentIdentity": "",
-				"paneKey": newTab + ":" + newLeaf,
+				"paneKey": newTab + ":" + newLeaf, "processId": os.Getpid(),
 			},
 		}
 	case "terminal.list":
@@ -782,13 +782,14 @@ func (f *Fake) SetTerminals(terms ...map[string]any) {
 		}
 		if !seen[tab] {
 			seen[tab] = true
-			byTree[w] = append(byTree[w], map[string]any{"tabId": tab, "title": "tab " + tab, "activeLeafId": t["leafId"]})
+			byTree[w] = append(byTree[w], map[string]any{"tabId": tab, "title": "tab " + tab, "activeLeafId": t["leafId"],
+				"panes": map[string]any{"type": "terminal", "handle": t["handle"], "tabId": tab, "leafId": t["leafId"]}})
 		}
 	}
 	var layouts []any
 	for _, w := range order {
 		layouts = append(layouts, map[string]any{"worktreeId": w, "root": map[string]any{"type": "group",
-			"groupId": "g-" + w, "tabs": byTree[w]}})
+			"groupId": "g-" + w, "activeTabId": byTree[w][0].(map[string]any)["tabId"], "tabs": byTree[w]}})
 	}
 	f.mu.Lock()
 	f.terms, f.layouts = terms, layouts

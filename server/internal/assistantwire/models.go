@@ -205,8 +205,10 @@ var modelRoutes = []string{
 	"GET /api/v1/model-profiles",
 	"GET /api/v1/model-profiles/{id}/candidates",
 	"PUT /api/v1/model-profiles/{id}",
+	"DELETE /api/v1/model-profiles",
 	"DELETE /api/v1/model-profiles/{id}",
 	"POST /api/v1/model-profiles/{id}/apply",
+	"POST /api/v1/model-profiles/deactivate",
 	"POST /api/v1/model-profiles/rollback",
 }
 

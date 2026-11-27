@@ -319,7 +319,6 @@
   "lib-launcher-models",
   "lib-links",
   "lib-loop-command",
-  "lib-mentions",
   "lib-mesh",
   "lib-model-config.runtime_fallback",
   "lib-new-agent.outcome_unknown",
