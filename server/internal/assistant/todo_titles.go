@@ -128,9 +128,10 @@ func (s *Service) nameTodoLater(ctx context.Context, id, from, prompt string) {
 		defer s.todos.titling.Done()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
-		// The budget runs from the start of resolution, which is itself bounded by the longest budget.
+		// The budget runs from the start of resolution. Resolution keeps the API budget (15 s) as before; only a
+		// title that resolved to a launcher gets the longer deadline, counted from the same start.
 		start := time.Now()
-		rctx, rcancel := context.WithTimeout(ctx, todoTitleLauncherTimeout)
+		rctx, rcancel := context.WithTimeout(ctx, todoTitleTimeout)
 		model, timeout, err := s.laterTodoTitleModel(rctx)
 		rcancel()
 		if err != nil {
