@@ -68,10 +68,12 @@ import (
 // summary_behind readListedTranscript cache, restores dev/ino/ctime wake-receipt detection, and adds a fixed
 // 4 KiB head-sample integrity check inside the racy window alongside the tail anchor. The union measures
 // 290,316 B exactly. The merge also restores one missing ASI semicolon in main's runtime.js.
-// Checking conversation existence before serving Antigravity session.items adds 142 B (290,458 B, #16410).
+// With the compat.js declaration fix (#16771), main measured 290,321 B.
+// Keeping legacy effort-only requests in the selected model family adds 694 B (291,015 B).
+// Checking conversation existence before serving Antigravity session.items adds 115 B (291,130 B, #16410).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 290_458
+	const budget = 291_130
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
