@@ -4913,6 +4913,10 @@ trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
   - `PUT` body: `{"hosts": ["herdr", "orca"], "default": "herdr"}`. Without `default`, the first host in the order herdr, herdr-core, orca, tern, rex, paseo, cindy, t3code;
     `"hosts": []` is the empty set. Older clients still send `{"engine": "herdr-core"}`, which stands for its set; a body with `hosts` is always a set.
     An unknown host, `herdr-both` as a member, or a default that is not enabled is a 400, and nothing is written.
+  - **A single engine on a stored set (#17052)**: a client that picks one engine saves the one it shows, so `{"engine": X}` may not shrink a set it cannot
+    show. When no single engine stands for the stored set (`{herdr, orca, paseo}`, say) and the set already holds X's hosts, X only becomes the default and
+    the other hosts stay: `{"engine": "herdr"}` on that set leaves `{herdr, orca, paseo}` with herdr the default. An engine outside the set, and any set a
+    single engine does stand for (`{orca}`, `{herdr, herdr-core}` with herdr the default), are replaced by X's set as before (`proto.LegacyEngineOnto`).
   - **Storage**: the key `machine_engine_hosts` (machine id → `{hosts, default}`) is the choice. `machine_engines` (machine id → single engine) is written beside it
     with the single engine closest to the set (the host itself when there is one, `herdr-both` for herdr + herdr-core, else the default host, herdr for the empty set),
     so an older hub still works after a rollback. A machine with only `machine_engines` (chosen before sets) reads as the set its engine stands for and is not
