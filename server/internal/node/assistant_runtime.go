@@ -269,7 +269,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	live, commit := "", func() {}
 	if !command {
 		if !public {
-			live, commit = n.turnContext(id, n.assistantContext(id))
+			live, commit = n.turnContext(id, n.assistantContextFor(id, text))
 		}
 		// Antigravity loads .agents/rules on every turn. Other generic runtimes have no verified native
 		// rule-directory contract, so carry the exact split remainder alongside their bounded AGENTS.md.

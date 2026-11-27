@@ -9,5 +9,10 @@
   "suggestion_label": "Claude suggests: {suggestion}",
   "suggestion_use": "Use",
   "suggestion_use_hint": "Put it in the box (Tab)",
-  "suggestion_send": "Send now"
+  "suggestion_send": "Send now",
+  "image_stage_label": "Expanded image preview",
+  "image_annotate": "Annotate",
+  "image_close": "Collapse image preview",
+  "image_previous": "Previous image",
+  "image_next": "Next image"
 }

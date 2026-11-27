@@ -136,7 +136,7 @@ const FEISHU_BOT_STATUS: FeishuBotStatus = {
   domain: "feishu",
   bot_name: "Persona Feishu",
   owner: { name: "Alice", paired_at: 1700000000 },
-  features: { main: true, cards: false, report_steps: true, answer_new_card: true, topic_cot: false, read_group: false, all_cards: false, pushes: true, sync: true, reports: true, board: false, workbench: false, only_conclusions: false, agents: true },
+  features: { main: true, cards: false, report_steps: true, answer_new_card: true, topic_cot: false, dm_cot: false, cot_answer: false, read_group: false, all_cards: false, pushes: true, sync: true, reports: true, board: false, workbench: false, only_conclusions: false, agents: true },
   nudge_after: 15,
 };
 

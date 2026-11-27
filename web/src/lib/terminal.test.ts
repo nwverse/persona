@@ -157,14 +157,14 @@ describe("link status", () => {
   });
 
   it("says how old the screen is", () => {
-    expect(linkHeadline(null, 0)).toBe("还没有拿到终端");
-    expect(linkHeadline(1000, 13_400)).toBe("上次更新 12 秒前");
-    expect(linkHeadline(0, 125_000)).toBe("上次更新 2 分钟前");
-    expect(linkHeadline(new Date(2026, 10, 2, 9, 5).getTime(), new Date(2026, 10, 2, 11, 0).getTime())).toBe("上次更新 09:05");
+    expect(linkHeadline(null, 0)).toBe("暂未连接到终端");
+    expect(linkHeadline(1000, 13_400)).toBe("12 秒前更新");
+    expect(linkHeadline(0, 125_000)).toBe("2 分钟前更新");
+    expect(linkHeadline(new Date(2026, 10, 2, 9, 5).getTime(), new Date(2026, 10, 2, 11, 0).getTime())).toBe("更新于 09:05");
   });
 
   it("says when it tries again and why", () => {
-    expect(linkDetail(null, 0, 0)).toBe("等待电脑回应…");
+    expect(linkDetail(null, 0, 0)).toBe("正在等待电脑响应…");
     expect(linkDetail("连不上 hub", 4000, 200)).toBe("4 秒后重试 · 连不上 hub");
     expect(linkDetail("连不上 hub", 4000, 4000)).toBe("正在重试… · 连不上 hub");
   });

@@ -195,7 +195,7 @@ func (h *Hub) relayProjectReviewOwners(ctx context.Context) (retry time.Duration
 				SessionRef: assistantwire.SessionRef{MachineID: row.Machine, SessionID: row.Session},
 				MessageID:  assistantwire.ProjectReviewMessageID(row.MessageID), At: row.At, Unscoped: row.Unscoped,
 			}
-			err := h.asstOf(row.Manager).call(bound, assistantwire.MethodProjectReviewOwnerInput, p, nil)
+			_, err := callAssistant(bound, h.asstOf(row.Manager), assistantwire.ProjectReviewOwnerInputMethod, p)
 			cancel()
 			if err != nil {
 				failed[row.Manager] = true

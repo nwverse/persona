@@ -728,9 +728,6 @@ func keepableMessage(p map[string]any) map[string]any {
 func (h *Hub) keepUndelivered(ctx context.Context, m *Machine, sid string, msg map[string]any, code, why string) (int, []byte, bool) {
 	kctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var res struct {
-		Undelivered *proto.UndeliveredMessage `json:"undelivered"`
-	}
 	tried := time.Time{}
 	if code == assistantwire.CodeDeliveryUnknown {
 		tried = sendTimingOf(ctx).start
@@ -740,10 +737,10 @@ func (h *Hub) keepUndelivered(ctx context.Context, m *Machine, sid string, msg m
 	if p.Role == roleFull || p.Role == roleAnswer {
 		credential = p.ID
 	}
-	err := h.asstOf(h.sessionOwner(m.cfg.ID, sid)).call(kctx, assistantwire.MethodKeepUndelivered, assistantwire.KeepUndeliveredParams{
+	res, err := callAssistant(kctx, h.asstOf(h.sessionOwner(m.cfg.ID, sid)), assistantwire.KeepUndeliveredMethod, assistantwire.KeepUndeliveredParams{
 		MachineID: m.cfg.ID, SessionID: sid, Params: msg, Human: personSent(ctx), Lang: string(h.contextLang(ctx)), Code: code, Error: why, TriedAt: tried,
 		CredentialID: credential,
-	}, &res)
+	})
 	if err != nil || res.Undelivered == nil {
 		h.logf("send to %s/%s: not kept for later: %v", m.cfg.ID, sid, err)
 		return 0, nil, false

@@ -2937,6 +2937,20 @@ screens. One card contains a title, speaker, timestamp, saved text, and **Open o
 actions. Long saved text folds in the card. The original uses the existing transcript jump. The saved text stays usable
 when the original cannot be opened.
 
+### 4.15 Following a name in code (web, UI version 13)
+
+When an extension sets `navigate` on a `code` component (`docs/extensions/extensions.md`, "UI version 13: go to
+definition"), a name in the code can be followed the way an IDE does it, with IntelliJ's keys
+(`web/src/views/extensions/CodeViews.tsx`, `web/src/lib/code-navigate.ts`):
+
+- **⌘-click or ⌘B** (Ctrl-click, Ctrl+B elsewhere) goes to the definition of the name under the pointer or the caret;
+  **⌥F7** (Alt+F7) asks for its usages; **⌘[** (Ctrl+Alt+← elsewhere) goes back. The extension answers with the page to
+  show, and the code shows the busy state as for any other action.
+- The keys work only inside the code area, never in a field or during an IME composition, and ⌘F there still finds in
+  the file.
+- There is no new visible control: a hover title on the code area names the keys. A code without `navigate`, and an
+  app below UI version 13, look and work as before (principle 2).
+
 ## 5. Content
 
 ### 5.1 Voice and tone
@@ -4336,12 +4350,36 @@ the flat Key points / Decisions lists made them read every line (principle 2).
   `send`, performance `gauge`, metrics `chart`, tooling `tool`, quality `shield`, design `layers`, people `users`,
   customer `person`, budget `money`, risk `shieldAlert`, general `list`.
 - **Copy** sends the hub's `markdown`, as it always did.
+- **Disagreements (#16728)** (contract: `docs/assistant/meeting-minutes.md` "Disagreements (#16728)"):
+  `web/src/modules/recording/minutes-debates.ts` (`minutesDebates`) cleans `detail.minutes.debates` on its own, apart
+  from the rest of the minutes, and `MinutesDebatesSection` (`web/src/modules/recording/MinutesOverview.tsx`) renders it
+  in both layouts whenever at least one valid disagreement survives; minutes with no disagreement render unchanged.
+  - **Why not a summary-card bullet (principle 4):** the summary card's topic bullets must be a 1-to-1 mirror of the flat
+    `points` and `decisions` lists so older clients and meeting material carry the same items; a disagreement cannot live
+    inside them because it carries a disputed question, two to four attributed stances with transcript timestamps, an
+    explicit status word, and an optional settled outcome linked to a decision.
+  - **Placement and headings:** in the summary card, a `section` labelled by an `h4` (**Disagreements**) sits after Core
+    conclusions and before the topic cards; in the legacy layout, the same `h4` section sits inside the minutes `Card`
+    after Action items and before Open questions (under the `h3` title, with Key points, Decisions, Action items,
+    Disagreements and Open questions at `h4`). Each disagreement is an `article` labelled by its `h5` question heading.
+  - **Card and controls (reused):** each disagreement uses a neutral inset card (`rounded-card bg-inset shadow-hairline`),
+    reusing `TonePill` (`orange` for **still disagreed**, `neutral` for **settled**, omitted for an unknown status so
+    status is always text, never color alone, and never reuses the wording of **Open questions**), `Icon`
+    (`arrowLeftRight`, `flag`, `clock`), `TranscriptTime` (jumping to the cited transcript line), and `.minutes-words`,
+    `.minutes-mark` and `.minutes-glyph` from `web/src/modules/recording/minutes-overview.css` (plus
+    `.minutes-debate-outcome` for the outcome row's top spacing). No new color token or first-screen CSS is added.
+  - **Linked decision:** for a settled disagreement, the outcome row offers a single-line **Decision** jump button only
+    when the hub set an in-bounds `outcome.decision` index (scrolling to and highlighting that decision in either layout,
+    and unfolding its topic card in the summary card if folded); the web never matches timestamps itself.
 - Checks: `web/src/modules/recording/minutes-overview.test.ts` (the cleaning, `boldParts` and the shared
-  `spec/fixtures/minutes-overview/cases.json`), `RecordingMinutes.test.tsx` (order, heading levels, fallback, the fold,
-  to-dos, Copy, the trim), `RecordingPhotos.test.tsx` (a cited photo after the trim) and `web/e2e/recording-minutes.mjs`
-  (en, zh-Hans and ja at 1440 and 390, light and dark; the Large text size and a 1440 window at 200% zoom; a card
-  alone in its row and a long speaker name, with every topic card and line checked for running past its box; and the
-  legacy baseline).
+  `spec/fixtures/minutes-overview/cases.json`), `web/src/modules/recording/minutes-debates.test.ts` (the cleaning,
+  decision target mapping and the shared `spec/fixtures/minutes-debates/cases.json`), `RecordingMinutes.test.tsx` (order,
+  heading levels, fallback, disagreements in both layouts, the fold, to-dos, Copy, the trim), `RecordingPhotos.test.tsx`
+  (a cited photo after the trim), `TestMinutesHeadingsAreTheWebsSections` (`en`, `zh-Hans` and `ja` heading and status
+  parity with `kb-minutes.json`), and `web/e2e/recording-minutes.mjs` (en, zh-Hans and ja at 1440 and 390, light and dark;
+  the Large text size and a 1440 window at 200% zoom; both layouts with disagreements, a card alone in its row and a long
+  speaker name, with every topic card, disagreement card and line checked for running past its box; and the legacy
+  no-disagreement baseline).
 
 ### The summary card (#6563)
 

@@ -272,12 +272,12 @@ describe("the error the Persona conversation stopped on", () => {
     captured.session = { ...IDLE, turn_error_code: "auth_failed" };
     transcript.items = [msg("u1", 1, "user", "帮我看看今天的会"), msg("e1", 2, "assistant", "API Error: 401 authentication_error")];
     await draw(true);
-    expect(banner()!.textContent).toContain("模型没接好：Key 不对");
-    expect(banner()!.textContent).toContain("去修");
+    expect(banner()!.textContent).toContain("模型未连接：Key 无效");
+    expect(banner()!.textContent).toContain("修复");
     act(() => banner()!.querySelector<HTMLButtonElement>('[aria-label="关闭错误提示"]')!.click());
     await flush();
-    expect(inChat()!.textContent).toContain("模型没接好：Key 不对");
-    expect(inChat()!.textContent).toContain("去修");
+    expect(inChat()!.textContent).toContain("模型未连接：Key 无效");
+    expect(inChat()!.textContent).toContain("修复");
     expect(button(inChat(), "重试")).toBeUndefined();
   });
 
@@ -308,7 +308,7 @@ describe("image-limit Compact and send again (#13045)", () => {
     captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
     transcript.items = [msg("u1", 1, "user", "帮我对比这几张截图"), msg("e1", 2, "assistant", TOO_LARGE)];
     await draw(true);
-    expect(banner()!.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    expect(banner()!.textContent).toContain("该对话中的图片数量过多或体积过大，超出了模型限制。");
     const btn = banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]');
     expect(btn?.textContent).toBe("压缩并重发");
     expect(button(banner(), "重试")).toBeUndefined();
@@ -373,13 +373,13 @@ describe("image-limit Compact and send again (#13045)", () => {
     captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
     transcript.items = [msg("u1", 1, "user", "看看图"), msg("e1", 2, "assistant", TOO_LARGE)];
     await draw(true);
-    expect(banner()!.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    expect(banner()!.textContent).toContain("该对话中的图片数量过多或体积过大，超出了模型限制。");
     expect(banner()!.querySelector('[data-testid="compact-and-resend"]')).toBeNull();
 
     // Non-Claude agent session (Codex).
     captured.session = { ...IDLE, agent: "codex", turn_error_code: "images_too_large" };
     await draw(false);
-    expect(banner()!.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    expect(banner()!.textContent).toContain("该对话中的图片数量过多或体积过大，超出了模型限制。");
     expect(banner()!.querySelector('[data-testid="compact-and-resend"]')).toBeNull();
     expect(button(banner(), "重试")).toBeUndefined();
   });
@@ -541,7 +541,7 @@ describe("image-limit Compact and send again (#13045)", () => {
     captured.session = { ...IDLE, assistant: true, manager: "m2", turn_error_code: "images_too_large" };
     transcript.items = [msg("u1", 1, "user", "帮我看看这张图"), msg("e1", 2, "assistant", TOO_LARGE)];
     await draw(true);
-    expect(banner()!.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    expect(banner()!.textContent).toContain("该对话中的图片数量过多或体积过大，超出了模型限制。");
     expect(banner()!.querySelector('[data-testid="compact-and-resend"]')).toBeNull();
   });
 

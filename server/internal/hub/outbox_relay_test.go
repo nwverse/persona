@@ -9,9 +9,24 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+func TestOutboxAndCallRingBusInvalidParams(t *testing.T) {
+	for _, tc := range []struct{ method, params, message string }{
+		{assistantwire.MethodOutbox, `[]`, "manager.outbox: json: cannot unmarshal array into Go value of type assistantwire.Outbox"},
+		{assistantwire.MethodCallRing, `[]`, "call.ring: json: cannot unmarshal array into Go value of type assistantwire.CallRingRequest"},
+		{assistantwire.MethodCallRing, `{"call":{"id":"call-1"}}`, "call.ring: id and title are required"},
+	} {
+		out, err := busMethods[tc.method](nil, t.Context(), nil, json.RawMessage(tc.params))
+		var re *rpc.Error
+		if out != nil || !errors.As(err, &re) || re.Code != bus.CodeInvalidParams || re.Message != tc.message {
+			t.Errorf("%s %s = %v, %v, want invalid_params with %q", tc.method, tc.params, out, err, tc.message)
+		}
+	}
+}
 
 // What a manager kept while the hub was away is delivered in order, each item once: sent again (the manager did not
 // hear the answer), or once live and again from the outbox, it does not push twice.

@@ -62,5 +62,9 @@
   "feature_read_group_direct": "Answer /read in the group directly",
   "feature_read_group_direct_description": "Post a /read answer straight under your message in the group, for everyone there to see, instead of sending it to you first",
   "feature_topic_cot": "Native process in topics",
-  "feature_topic_cot_description": "Show a topic run's thinking and tool calls in Lark's collapsible agent message, alongside the progress card; off: keep the process in the card's folded panel"
+  "feature_topic_cot_description": "Show a topic run's thinking and tool calls in Lark's collapsible agent message, alongside the progress card; off: keep the process in the card's folded panel",
+  "feature_dm_cot": "Native process in the private chat",
+  "feature_dm_cot_description": "Show a private-chat turn's thinking and tool calls in Lark's collapsible agent message, alongside the progress card; off: keep the process in the card's folded panel",
+  "feature_cot_answer": "Answer inside the agent message",
+  "feature_cot_answer_description": "When a turn has a native agent message, write the answer into it and send no progress or answer card; long answers, stopped or failed turns and turns without one still use cards"
 }

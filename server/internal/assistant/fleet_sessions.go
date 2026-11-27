@@ -80,7 +80,16 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			s.turnsBook().working(key, now)
 			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
 			ref, row := SessionRef{MachineID: machine, SessionID: sess.SessionID}, startRow{Rev: sess.Rev, At: sess.UpdatedAt}
-			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn, row) }) // after the items that came before it
+			// Every non-working -> working edge except unblocking an interactive blocked turn (StatusBlocked)
+			// or recovering from a transient Unknown blip during the same turn (wasWorking) starts a new
+			// clarification answer turn, including reaped/stopped/reopened StatusOffline sessions.
+			approvalStart := prev != proto.StatusBlocked && !wasWorking
+			s.inOrder(func() {
+				if approvalStart {
+					s.approvalAnswerTurnStarted(ref)
+				}
+				s.turnStartedObserved(context.Background(), ref, newTurn, row)
+			}) // after the items that came before it
 		case wasWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle) && reconnectStop:
 			unsure = append(unsure, sess) // reconnectedTurnEnd, once the list is kept
 		case wasWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle):
@@ -160,8 +169,19 @@ func (s *Service) turnEndSeen(machine string, sess proto.Session, now time.Time)
 	s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(machine+"/"+sess.SessionID, now, background), end)
 	s.suggestTurnEnded(machine, sess) // the next message, when nothing else suggests it (suggest_next.go)
 	// A new assistant conversation is named after its first turn; a task from one may be done. After the items of the
-	// turn (a channel's answer is read from them).
-	s.inOrder(func() { go s.TurnEnded(context.WithValue(ctx, supervisionEndKey{}, end), ref) })
+	// turn (a channel's answer is read from them). Advance approval clarification turn state synchronously inside
+	// inOrder so a delayed TurnEnded goroutine (for example blocked in A2AReady) cannot race out of order against a
+	// subsequent turn-start.
+	endCtx := context.WithValue(context.WithValue(ctx, supervisionEndKey{}, end), approvalEndHandledKey{}, true)
+	s.inOrder(func() {
+		tells := s.approvalAnswerTurnEndedSync(ref)
+		go func() {
+			for _, ix := range tells {
+				s.show(ix)
+			}
+			s.TurnEnded(endCtx, ref)
+		}()
+	})
 }
 
 // reconnectedTurnEnd is sess's stop in the first list of its node's new connection, taken as the end of its turn only
