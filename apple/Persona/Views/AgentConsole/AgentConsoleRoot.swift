@@ -44,7 +44,14 @@ struct AgentConsoleRoot: View {
     @State private var router = AgentConsoleRouter()
     @State private var agentsMode: AgentConsoleAgentsMode = .running
 
-    var body: some View {
+    typealias Body = AnyView
+
+    var body: AnyView {
+        AnyView(content)
+    }
+
+    // Keep the TabView out of View.Body's associated-type witness (the iOS 27 TestFlight abort is in BodyAccessor).
+    @ViewBuilder private var content: some View {
         // A relaunch can restore .feishu or .mail from before the template. The console has neither tab; map it before
         // TabView reads the selection rather than letting UIKit see a value its current tab set does not contain.
         let selected: AppTab = switch model.selectedTab {

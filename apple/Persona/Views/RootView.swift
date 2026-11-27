@@ -121,7 +121,15 @@ struct RootView: View {
     /// checklist, an extension page in the app's place, the Mac, Apple Vision Pro).
     private var overlayToasts: Bool { model.extensionOpen != nil || !(shellShown || tabsToastWindow) }
 
-    var body: some View {
+    typealias Body = AnyView
+
+    var body: AnyView {
+        AnyView(content)
+    }
+
+    // Keep the shell choice in a computed child view. Body has a direct, small witness, avoiding the opaque conditional
+    // tree's View.Body resolution in the iOS 27 TestFlight crash after applying the template.
+    @ViewBuilder private var content: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("RootView")
         #endif
