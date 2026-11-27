@@ -1006,9 +1006,9 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 			if runtimeRow.Effort != "" {
 				info["effort"] = runtimeRow.Effort
 			}
-			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokens > 0 {
+			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokensValue() > 0 {
 				info["context_tokens"] = int(runtimeRow.ContextTokens)
-				info["output_tokens"] = runtimeRow.OutputTokens
+				info["output_tokens"] = int(runtimeRow.OutputTokensValue())
 				delete(info, "usage_unknown")
 			}
 			n.resolveAgyContext(&runtimeRow, conversation)

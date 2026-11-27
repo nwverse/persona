@@ -824,8 +824,9 @@ Android pairs, and removes only its own hub processes and container. It runs
 phase's 0600 fixture. Ordinary Android test runs skip this test when that variable is absent.
 
 The JVM test uses the production `HubPairingClient` to obtain a device credential (falling back to the pairing token is
-a failure), opens `OkHttpHubConnection`, consumes the real WebSocket hello, reads the manager roster, sessions and
-current device through the production transports, and applies the live features to `Modules.carried`, `ModuleRegistry`
+a failure), opens `OkHttpHubConnection`, consumes the real WebSocket hello, reads the manager roster, sessions, the
+Inbox and To-dos lists, and the current device through the production transports, and applies the live features to
+`Modules.carried`, `ModuleRegistry`
 and `HubModule`. On the core-only hub every carried module and Recording/Lark/Mail is off, so no module's `navEntries`
 runs and every debug page the carried modules expose falls through to the unavailable-page fallback; on the full hub
 the same modules and pages are on and registered. The

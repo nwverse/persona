@@ -22,6 +22,12 @@ the existing active `todo`. The Web chat menu labels it Completed and opens the 
 Active task routing, supervision, counts and the existing quiet grace period still read only their original active
 links/quiet report. Unknown optional fields are ignored by older clients; native menus are not changed by this fix.
 
+## Reuse hints in plan receipts
+
+The `task_plan` receipt can suggest an idle Agent in the chosen directory or worktree even after its previous to-do
+closed. It gives the machine and full session ID for an explicit `agent_send` with `text`, plus `task` for new
+supervised work. The caller checks whether the context and permissions fit. Normal dispatch and Start rules still apply.
+
 ## Permission of a planned task
 
 A writable task that `task_plan` leaves without a `permission` gets one on the hub before the plan is saved, so the

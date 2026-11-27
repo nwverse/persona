@@ -405,8 +405,8 @@ func TestAgyPaneSessionTokensAndInfo(t *testing.T) {
 		Models: []proto.ProviderModel{{ID: "gemini-4-carbon", ContextWindow: 1_000_000}},
 	}})
 	row := listed(t, n)[agyTestRow]
-	if row.Model != "gemini-4-carbon-high" || row.ContextTokens != 35_000 || row.ContextWindow != 1_000_000 || row.OutputTokens != 400 {
-		t.Fatalf("pane row = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokens)
+	if row.Model != "gemini-4-carbon-high" || row.ContextTokens != 35_000 || row.ContextWindow != 1_000_000 || row.OutputTokensValue() != 400 {
+		t.Fatalf("pane row = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokensValue())
 	}
 	bd := row.ContextBreakdown()
 	if bd == nil || bd.Source != proto.ContextBreakdownEstimated || bd.Free == nil || *bd.Free != 965_000 {
@@ -445,8 +445,8 @@ func TestAgyPaneSessionTokensAndInfo(t *testing.T) {
 	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyOtherTestID))
 	n.state.put(agyTestRow, sessionState{Launcher: "agy", Cwd: home, StartedAt: time.Now()})
 	row = listed(t, n)[agyTestRow]
-	if row.ContextTokens != 8000 || row.ContextWindow != 0 || row.OutputTokens != 90 {
-		t.Fatalf("unknown model row = ctx:%d/%d out:%d, want 8000/0 out 90", row.ContextTokens, row.ContextWindow, row.OutputTokens)
+	if row.ContextTokens != 8000 || row.ContextWindow != 0 || row.OutputTokensValue() != 90 {
+		t.Fatalf("unknown model row = ctx:%d/%d out:%d, want 8000/0 out 90", row.ContextTokens, row.ContextWindow, row.OutputTokensValue())
 	}
 	if bd := row.ContextBreakdown(); bd == nil || bd.Free != nil {
 		t.Fatalf("unknown model breakdown = %+v, want an estimate with no free count", bd)
@@ -547,17 +547,17 @@ func TestAgyRuntimeSessionTokensItemsAndInfo(t *testing.T) {
 	})
 
 	got := listed(t, n)
-	if s := got[claudeSID]; s.Model != "claude-opus-5-5-high" || s.ContextTokens != 51_500 || s.ContextWindow != 1_000_000 || s.OutputTokens != 250 {
-		t.Fatalf("claudeSID row = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got[claudeSID]; s.Model != "claude-opus-5-5-high" || s.ContextTokens != 51_500 || s.ContextWindow != 1_000_000 || s.OutputTokensValue() != 250 {
+		t.Fatalf("claudeSID row = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokensValue())
 	}
 	if row := got[claudeSID]; row.ContextBreakdown() != nil {
 		t.Fatalf("runtime row used unrelated disk stats: %+v", row.ContextBreakdown())
 	}
-	if s := got[unknownSID]; s.Model != "opaque-agy-model-medium" || s.ContextTokens != 10_000 || s.ContextWindow != 0 || s.OutputTokens != 55 {
-		t.Fatalf("unknownSID row = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got[unknownSID]; s.Model != "opaque-agy-model-medium" || s.ContextTokens != 10_000 || s.ContextWindow != 0 || s.OutputTokensValue() != 55 {
+		t.Fatalf("unknownSID row = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokensValue())
 	}
-	if s := got[rewoundSID]; s.Model != "" || s.ContextTokens != 0 || s.ContextWindow != 0 || s.OutputTokens != 0 {
-		t.Fatalf("rewoundSID row must stay cleared despite stale disk transcript = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got[rewoundSID]; s.Model != "" || s.ContextTokens != 0 || s.ContextWindow != 0 || s.OutputTokensValue() != 0 {
+		t.Fatalf("rewoundSID row must stay cleared despite stale disk transcript = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokensValue())
 	}
 	if row := got[rewoundSID]; row.ContextBreakdown() != nil {
 		t.Fatalf("rewound runtime row breakdown = %+v", row.ContextBreakdown())
@@ -686,8 +686,9 @@ func TestAgyPanePrefersCompanionProjectedUsageOverUnfilteredDisk(t *testing.T) {
 	runtime.ready, runtime.hello.Runtime, runtime.hello.Agent = true, agyAgent, agyAgent
 	companion := proto.Session{
 		SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusIdle,
-		Model: "claude-opus-5-5-high", ContextTokens: 12_000, OutputTokens: 110,
+		Model: "claude-opus-5-5-high", ContextTokens: 12_000,
 	}
+	companion.SetOutputTokens(110)
 	n.runtimes.setSessions(runtime, []proto.Session{companion})
 
 	var row proto.Session
@@ -696,8 +697,8 @@ func TestAgyPanePrefersCompanionProjectedUsageOverUnfilteredDisk(t *testing.T) {
 			row = r
 		}
 	}
-	if row.Model != "claude-opus-5-5-high" || row.ContextTokens != 12_000 || row.ContextWindow != 1_000_000 || row.OutputTokens != 110 {
-		t.Fatalf("pane row with companion = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokens)
+	if row.Model != "claude-opus-5-5-high" || row.ContextTokens != 12_000 || row.ContextWindow != 1_000_000 || row.OutputTokensValue() != 110 {
+		t.Fatalf("pane row with companion = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokensValue())
 	}
 	if bd := row.ContextBreakdown(); bd != nil {
 		t.Fatalf("companion row used stale transcript stats: %+v", bd)
@@ -741,8 +742,8 @@ func TestAgyPanePrefersCompanionProjectedUsageOverUnfilteredDisk(t *testing.T) {
 			row = r
 		}
 	}
-	if row.Model != "" || row.ContextTokens != 0 || row.ContextWindow != 0 || row.OutputTokens != 0 {
-		t.Fatalf("fully rewound pane row must stay cleared = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokens)
+	if row.Model != "" || row.ContextTokens != 0 || row.ContextWindow != 0 || row.OutputTokensValue() != 0 {
+		t.Fatalf("fully rewound pane row must stay cleared = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokensValue())
 	}
 	if got := row.ContextBreakdown(); got != nil {
 		t.Fatalf("rewound pane row breakdown = %+v", got)
@@ -775,11 +776,11 @@ func TestAgyRuntimeRowContextWindowWithoutLocalTranscript(t *testing.T) {
 		return g["agy-remote-1"].SessionID != "" && g["agy-remote-2"].SessionID != ""
 	})
 	got := listed(t, n)
-	if s := got["agy-remote-1"]; s.ContextTokens != 42_000 || s.ContextWindow != 1_000_000 || s.OutputTokens != 120 {
-		t.Fatalf("agy-remote-1 = ctx:%d/%d out:%d", s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got["agy-remote-1"]; s.ContextTokens != 42_000 || s.ContextWindow != 1_000_000 || s.OutputTokensValue() != 120 {
+		t.Fatalf("agy-remote-1 = ctx:%d/%d out:%d", s.ContextTokens, s.ContextWindow, s.OutputTokensValue())
 	}
-	if s := got["agy-remote-2"]; s.ContextTokens != 9_000 || s.ContextWindow != 0 || s.OutputTokens != 30 {
-		t.Fatalf("agy-remote-2 = ctx:%d/%d out:%d", s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got["agy-remote-2"]; s.ContextTokens != 9_000 || s.ContextWindow != 0 || s.OutputTokensValue() != 30 {
+		t.Fatalf("agy-remote-2 = ctx:%d/%d out:%d", s.ContextTokens, s.ContextWindow, s.OutputTokensValue())
 	}
 	if s := got["agy-remote-3"]; s.ContextTokens != 15_000 || s.ContextWindow != 1_048_576 {
 		t.Fatalf("Gemini runtime row = %d/%d", s.ContextTokens, s.ContextWindow)

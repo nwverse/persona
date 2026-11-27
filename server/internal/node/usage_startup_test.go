@@ -22,6 +22,7 @@ type usageStartupWriter struct {
 	reports chan []byte
 	answers io.Writer // the node's input
 	dirs    bool
+	temps   bool // and takes temporary folders by their paths (temp_dirs, #16827)
 }
 
 func (w usageStartupWriter) Write(p []byte) (int, error) {
@@ -33,6 +34,9 @@ func (w usageStartupWriter) Write(p []byte) (int, error) {
 		reply := `{"id":"` + call.ID + `","error":{"message":"unknown method"}}`
 		if call.Method == "usage.features" && w.dirs {
 			reply = `{"id":"` + call.ID + `","result":{"dirs":true}}`
+			if w.temps {
+				reply = `{"id":"` + call.ID + `","result":{"dirs":true,"temp_dirs":true}}`
+			}
 		}
 		go func() { _, _ = w.answers.Write([]byte(reply + "\n")) }()
 		return len(p), nil
@@ -49,6 +53,12 @@ func usageStartupNode(t *testing.T) (*Node, <-chan []byte) {
 // usageStartupNodeDirs is usageStartupNode with a manager that keeps directories (dirs) or not.
 func usageStartupNodeDirs(t *testing.T, dirs bool) (*Node, <-chan []byte) {
 	t.Helper()
+	return usageStartupNodeFeatures(t, dirs, false)
+}
+
+// usageStartupNodeFeatures is usageStartupNodeDirs with a manager that also takes temporary folders (temps) or not.
+func usageStartupNodeFeatures(t *testing.T, dirs, temps bool) (*Node, <-chan []byte) {
+	t.Helper()
 	home := t.TempDir()
 	config := filepath.Join(home, "claude-fixture")
 	t.Setenv("CLAUDE_CONFIG_DIR", config)
@@ -63,7 +73,7 @@ func usageStartupNodeDirs(t *testing.T, dirs bool) (*Node, <-chan []byte) {
 		t.Fatal(err)
 	}
 	in, answers := io.Pipe()
-	w := usageStartupWriter{reports: make(chan []byte, 4), answers: answers, dirs: dirs}
+	w := usageStartupWriter{reports: make(chan []byte, 4), answers: answers, dirs: dirs, temps: temps}
 	n := &Node{home: home, dir: home, state: newState(), logger: log.New(io.Discard, "", 0)}
 	n.peer = rpc.New("usage-test", w)
 	go func() { _ = n.peer.Serve(context.Background(), in) }()
