@@ -17,28 +17,28 @@ type usageResplitMemStore struct {
 	notSplit, tempNotSplit bool
 	from, to               time.Time // what UsageNotSplit was asked
 	puts                   [][]proto.UsageBucket
-	passes                 []db.UsageResplitPass
+	froms                  []string // the directory each ResplitUsage split
 	through                []time.Time
 	done                   []bool
 	dirs                   []proto.UsageDir
 }
 
-func (s *usageResplitMemStore) UsageResplit(_ context.Context, _ string, pass db.UsageResplitPass) (db.UsageResplitRecord, error) {
-	if pass == db.ResplitTemp {
+func (s *usageResplitMemStore) UsageResplit(_ context.Context, _, from string) (db.UsageResplitRecord, error) {
+	if from == proto.UsageDirTemp {
 		return s.tempRec, nil
 	}
 	return s.rec, nil
 }
-func (s *usageResplitMemStore) UsageNotSplit(_ context.Context, _ string, pass db.UsageResplitPass, from, to time.Time) (bool, error) {
+func (s *usageResplitMemStore) UsageNotSplit(_ context.Context, _, dir string, from, to time.Time) (bool, error) {
 	s.from, s.to = from, to
-	if pass == db.ResplitTemp {
+	if dir == proto.UsageDirTemp {
 		return s.tempNotSplit, nil
 	}
 	return s.notSplit, nil
 }
-func (s *usageResplitMemStore) ResplitUsage(_ context.Context, _ string, pass db.UsageResplitPass, buckets []proto.UsageBucket, through time.Time, done bool) (int, error) {
+func (s *usageResplitMemStore) ResplitUsage(_ context.Context, _, from string, buckets []proto.UsageBucket, through time.Time, done bool) (int, error) {
 	s.puts, s.through, s.done = append(s.puts, append([]proto.UsageBucket(nil), buckets...)), append(s.through, through), append(s.done, done)
-	s.passes = append(s.passes, pass)
+	s.froms = append(s.froms, from)
 	return len(buckets), nil
 }
 func (s *usageResplitMemStore) PutUsageDirs(_ context.Context, _ string, dirs []proto.UsageDir) error {
@@ -129,8 +129,8 @@ func TestUsageResplitTempPass(t *testing.T) {
 		t.Fatalf("temporary folders = %v", s)
 	}
 	st.tempNotSplit = false
-	if s := status(`{"temp_dirs":true}`); s["done"] != true || len(st.done) != 1 || !st.done[0] || st.passes[0] != db.ResplitTemp {
-		t.Fatalf("nothing under :temp = %v, recorded %v %v", s, st.passes, st.done)
+	if s := status(`{"temp_dirs":true}`); s["done"] != true || len(st.done) != 1 || !st.done[0] || st.froms[0] != proto.UsageDirTemp {
+		t.Fatalf("nothing under :temp = %v, recorded %v %v", s, st.froms, st.done)
 	}
 
 	in := time.Date(2026, 11, 22, 3, 0, 0, 0, time.UTC).Unix()
@@ -144,7 +144,7 @@ func TestUsageResplitTempPass(t *testing.T) {
 			Place: "/tmp/app-lane-x", Worktree: true}, {Dir: "/tmp/scratch", Project: "temp"}}})
 	out, err := d.putUsageResplit(context.Background(), "a", params, now)
 	last := len(st.puts) - 1
-	if err != nil || out["moved"] != 2 || st.passes[last] != db.ResplitTemp || len(st.puts[last]) != 2 ||
+	if err != nil || out["moved"] != 2 || st.froms[last] != proto.UsageDirTemp || len(st.puts[last]) != 2 ||
 		st.puts[last][0].Dir != "/tmp/app-lane-x" || st.puts[last][1].Dir != proto.UsageDirTemp || len(st.dirs) != 2 {
 		t.Fatalf("out %v, %v; puts %+v, dirs %+v", out, err, st.puts, st.dirs)
 	}

@@ -19,26 +19,13 @@ import (
 // UsageResplitStep is the re-split's step: the ten minutes the last week's rows are kept in.
 const UsageResplitStep = UsageRolledStep
 
-// UsageResplitPass is which stored rows a re-split splits: those stored before a node named directories, or those a
-// node stored under proto.UsageDirTemp before it named temporary folders by their paths (#16827).
-type UsageResplitPass string
+// A re-split splits the rows stored under one directory, from: "" (stored before a node named directories), or
+// proto.UsageDirTemp (stored before a node named temporary folders by their paths, #16827), each with its own record.
 
-const (
-	ResplitNotSplit UsageResplitPass = ""     // rows with no directory
-	ResplitTemp     UsageResplitPass = "temp" // rows under proto.UsageDirTemp
-)
-
-// from is the directory of the rows pass splits.
-func (p UsageResplitPass) from() string {
-	if p == ResplitTemp {
-		return proto.UsageDirTemp
-	}
-	return ""
-}
-
-// resplitSQL is each pass's record in usage_resplit (the temporary folders' in its temp_ columns): read, and moved on.
-var resplitSQL = map[UsageResplitPass]struct{ read, record string }{
-	ResplitNotSplit: {
+// resplitSQL is each re-split's record in usage_resplit, by the directory it splits (the temporary folders' in its
+// temp_ columns): read, and moved on.
+var resplitSQL = map[string]struct{ read, record string }{
+	"": {
 		read: `SELECT through, done_at, moved FROM usage_resplit WHERE machine_id = $1`,
 		record: `INSERT INTO usage_resplit (machine_id, through, done_at, moved)
 			VALUES ($1, $2, CASE WHEN $3::boolean THEN now() END, $4)
@@ -46,7 +33,7 @@ var resplitSQL = map[UsageResplitPass]struct{ read, record string }{
 				done_at = COALESCE(usage_resplit.done_at, excluded.done_at), moved = usage_resplit.moved + excluded.moved,
 				updated_at = now()`,
 	},
-	ResplitTemp: {
+	proto.UsageDirTemp: {
 		read: `SELECT temp_through, temp_done_at, temp_moved FROM usage_resplit WHERE machine_id = $1`,
 		record: `INSERT INTO usage_resplit (machine_id, temp_through, temp_done_at, temp_moved)
 			VALUES ($1, $2, CASE WHEN $3::boolean THEN now() END, $4)
@@ -63,10 +50,10 @@ type UsageResplitRecord struct {
 	Moved   int       // keys split so far
 }
 
-// UsageResplit is machine's re-split of pass so far (zero: never started).
-func (d *DB) UsageResplit(ctx context.Context, machine string, pass UsageResplitPass) (UsageResplitRecord, error) {
+// UsageResplit is machine's re-split of the rows under from so far (zero: never started).
+func (d *DB) UsageResplit(ctx context.Context, machine, from string) (UsageResplitRecord, error) {
 	var r UsageResplitRecord
-	q, ok := resplitSQL[pass]
+	q, ok := resplitSQL[from]
 	if !ok {
 		return r, errors.New("no such re-split")
 	}
@@ -84,12 +71,12 @@ func (d *DB) UsageResplit(ctx context.Context, machine string, pass UsageResplit
 	return r, err
 }
 
-// UsageNotSplit says whether machine has usage of the file-metered agents from from to to that pass would split (rows
-// of a minute or ten minutes with no directory, or under proto.UsageDirTemp).
-func (d *DB) UsageNotSplit(ctx context.Context, machine string, pass UsageResplitPass, from, to time.Time) (bool, error) {
+// UsageNotSplit says whether machine has usage of the file-metered agents from since to until under the directory dir
+// (rows of a minute or ten minutes): what a re-split of dir could split.
+func (d *DB) UsageNotSplit(ctx context.Context, machine, dir string, since, until time.Time) (bool, error) {
 	var any bool
 	err := d.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM machine_usage WHERE machine_id = $1 AND dir = $5
-		AND agent = ANY($2) AND step IN (60, 600) AND ts >= $3 AND ts < $4)`, machine, tokenuse.FileAgents(), from, to, pass.from()).Scan(&any)
+		AND agent = ANY($2) AND step IN (60, 600) AND ts >= $3 AND ts < $4)`, machine, tokenuse.FileAgents(), since, until, dir).Scan(&any)
 	return any, err
 }
 
@@ -99,21 +86,21 @@ type resplitKey struct {
 	model, launcher, agent string
 }
 
-// ResplitUsage splits machine's usage stored without a directory (pass ResplitNotSplit) or under proto.UsageDirTemp
-// (ResplitTemp) by what the node re-read of the same ten minutes (buckets: Minute a ten minutes' start, each with its
-// Dir). For each ten minutes, model, launcher and file-metered agent that has both a stored row of pass and re-read
-// buckets, the stored rows (of a minute or ten minutes) are replaced by one row a directory, each of the stored kinds
-// and requests split in the re-read shares (largest remainder), so every key's sums, and the calendar, stay exactly
-// as they were. A temporary folders' pass splits, with the rows under UsageDirTemp, the rows already stored for the
-// re-read's directories in those ten minutes (a node that named them by path for part of them), so they are not
-// counted twice. A key with no re-read usage stays as it was, and re-read usage with nothing stored is left out.
-// through and done move the machine's record of pass on; one transaction. moved: the keys split.
-func (d *DB) ResplitUsage(ctx context.Context, machine string, pass UsageResplitPass, buckets []proto.UsageBucket, through time.Time, done bool) (moved int, err error) {
-	q, ok := resplitSQL[pass]
+// ResplitUsage splits machine's usage stored under from, without a directory ("") or under proto.UsageDirTemp, by
+// what the node re-read of the same ten minutes (buckets: Minute a ten minutes' start, each with its Dir). For each
+// ten minutes, model, launcher and file-metered agent that has both a stored row under from and re-read buckets, the
+// stored rows (of a minute or ten minutes) are replaced by one row a directory, each of the stored kinds and requests
+// split in the re-read shares (largest remainder), so every key's sums, and the calendar, stay exactly as they were.
+// The temporary folders' re-split splits, with the rows under UsageDirTemp, the rows already stored for the re-read's
+// directories in those ten minutes (a node that named them by path for part of them), so they are not counted twice.
+// A key with no re-read usage stays as it was, and re-read usage with nothing stored is left out. through and done
+// move the machine's record of from's re-split on; one transaction. moved: the keys split.
+func (d *DB) ResplitUsage(ctx context.Context, machine, from string, buckets []proto.UsageBucket, through time.Time, done bool) (moved int, err error) {
+	q, ok := resplitSQL[from]
 	if !ok {
 		return 0, errors.New("no such re-split")
 	}
-	from := pass.from()
+	pool := from == proto.UsageDirTemp // with the rows already stored for the re-read's directories
 	read := map[resplitKey][]proto.UsageBucket{}
 	dirs := []string{from}
 	for _, b := range buckets {
@@ -122,7 +109,7 @@ func (d *DB) ResplitUsage(ctx context.Context, machine string, pass UsageResplit
 		}
 		k := resplitKey{b.Minute / UsageResplitStep * UsageResplitStep, b.Model, b.Launcher, b.Agent}
 		read[k] = append(read[k], b)
-		if pass == ResplitTemp && !slices.Contains(dirs, b.Dir) {
+		if pool && !slices.Contains(dirs, b.Dir) {
 			dirs = append(dirs, b.Dir)
 		}
 	}
@@ -175,7 +162,7 @@ func (d *DB) ResplitUsage(ctx context.Context, machine string, pass UsageResplit
 			batch := &pgx.Batch{}
 			for _, k := range keys {
 				whole, wholeDirs := stored[k][from], []string{from}
-				if pass == ResplitTemp {
+				if pool {
 					for _, b := range read[k] {
 						if s, ok := stored[k][b.Dir]; ok && !slices.Contains(wholeDirs, b.Dir) {
 							addBucket(&whole, s)

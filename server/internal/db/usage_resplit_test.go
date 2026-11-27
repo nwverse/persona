@@ -67,7 +67,7 @@ func TestResplitUsage(t *testing.T) {
 	if err := d.PutUsage(ctx, "m", []proto.UsageBucket{b(slot.Add(5*time.Minute), "", "opus", 20)}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := d.UsageNotSplit(ctx, "m", ResplitNotSplit, slot, slot.Add(time.Hour)); err != nil || !ok {
+	if ok, err := d.UsageNotSplit(ctx, "m", "", slot, slot.Add(time.Hour)); err != nil || !ok {
 		t.Fatalf("not split = %v, %v", ok, err)
 	}
 	bounds := []time.Time{slot, slot.Add(time.Hour)}
@@ -76,7 +76,7 @@ func TestResplitUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := []proto.UsageBucket{b(slot, "~/a", "opus", 30), b(slot, "~/b", "opus", 10), b(slot, "~/a", "haiku", 99)}
-	moved, err := d.ResplitUsage(ctx, "m", ResplitNotSplit, read, slot, false)
+	moved, err := d.ResplitUsage(ctx, "m", "", read, slot, false)
 	if err != nil || moved != 1 {
 		t.Fatalf("moved %d, %v", moved, err)
 	}
@@ -96,14 +96,14 @@ func TestResplitUsage(t *testing.T) {
 	if len(got) != 3 || got["opus ~/a"] != 45 || got["opus ~/b"] != 15 || got["sonnet "] != 7 {
 		t.Fatalf("by dir %v", got)
 	}
-	if moved, err := d.ResplitUsage(ctx, "m", ResplitNotSplit, read, slot, true); err != nil || moved != 0 {
+	if moved, err := d.ResplitUsage(ctx, "m", "", read, slot, true); err != nil || moved != 0 {
 		t.Fatalf("again: moved %d, %v", moved, err)
 	}
-	rec, err := d.UsageResplit(ctx, "m", ResplitNotSplit)
+	rec, err := d.UsageResplit(ctx, "m", "")
 	if err != nil || rec.Moved != 1 || !rec.Through.Equal(slot) || rec.Done.IsZero() {
 		t.Fatalf("record %+v, %v", rec, err)
 	}
-	if ok, _ := d.UsageNotSplit(ctx, "m", ResplitNotSplit, slot, slot.Add(time.Hour)); !ok { // sonnet's stays
+	if ok, _ := d.UsageNotSplit(ctx, "m", "", slot, slot.Add(time.Hour)); !ok { // sonnet's stays
 		t.Fatal("sonnet's is split")
 	}
 }
@@ -130,10 +130,10 @@ func TestResplitUsageTemp(t *testing.T) {
 		b(edge.Add(time.Minute), proto.UsageDirTemp, 6), b(edge.Add(2*time.Minute), "/tmp/app-lane-x", 12)}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := d.UsageNotSplit(ctx, machine, ResplitTemp, slot, slot.Add(time.Hour)); err != nil || !ok {
+	if ok, err := d.UsageNotSplit(ctx, machine, proto.UsageDirTemp, slot, slot.Add(time.Hour)); err != nil || !ok {
 		t.Fatalf("under :temp = %v, %v", ok, err)
 	}
-	if ok, err := d.UsageNotSplit(ctx, machine, ResplitNotSplit, slot, slot.Add(time.Hour)); err != nil || ok {
+	if ok, err := d.UsageNotSplit(ctx, machine, "", slot, slot.Add(time.Hour)); err != nil || ok {
 		t.Fatalf("not split = %v, %v", ok, err)
 	}
 	bounds := []time.Time{slot, slot.Add(time.Hour)}
@@ -142,7 +142,7 @@ func TestResplitUsageTemp(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := []proto.UsageBucket{b(slot, "/tmp/app-lane-x", 30), b(slot, "/tmp/scratch", 10), b(edge, "/tmp/app-lane-x", 18)}
-	if moved, err := d.ResplitUsage(ctx, machine, ResplitTemp, read, edge, true); err != nil || moved != 2 {
+	if moved, err := d.ResplitUsage(ctx, machine, proto.UsageDirTemp, read, edge, true); err != nil || moved != 2 {
 		t.Fatalf("moved %d, %v", moved, err)
 	}
 	after, err := d.UsageSpans(ctx, bounds, UsageByMachine)
@@ -180,17 +180,17 @@ func TestResplitUsageTemp(t *testing.T) {
 			t.Fatalf("%s = %+v, want %+v (all %+v)", k, got[k], w, got)
 		}
 	}
-	if moved, err := d.ResplitUsage(ctx, machine, ResplitTemp, read, edge, true); err != nil || moved != 0 {
+	if moved, err := d.ResplitUsage(ctx, machine, proto.UsageDirTemp, read, edge, true); err != nil || moved != 0 {
 		t.Fatalf("again: moved %d, %v", moved, err)
 	}
-	rec, err := d.UsageResplit(ctx, machine, ResplitTemp)
+	rec, err := d.UsageResplit(ctx, machine, proto.UsageDirTemp)
 	if err != nil || rec.Moved != 2 || !rec.Through.Equal(edge) || rec.Done.IsZero() {
 		t.Fatalf("record %+v, %v", rec, err)
 	}
-	if first, err := d.UsageResplit(ctx, machine, ResplitNotSplit); err != nil || !first.Done.IsZero() || !first.Through.IsZero() || first.Moved != 0 {
+	if first, err := d.UsageResplit(ctx, machine, ""); err != nil || !first.Done.IsZero() || !first.Through.IsZero() || first.Moved != 0 {
 		t.Fatalf("first pass's record %+v, %v", first, err)
 	}
-	if ok, _ := d.UsageNotSplit(ctx, machine, ResplitTemp, slot, slot.Add(time.Hour)); ok {
+	if ok, _ := d.UsageNotSplit(ctx, machine, proto.UsageDirTemp, slot, slot.Add(time.Hour)); ok {
 		t.Fatal(":temp is left")
 	}
 }

@@ -19,15 +19,19 @@ import (
 
 // A second pass (#16827): a node that names a temporary folder by its path (usage.features' temp_dirs) and says so in
 // usage.resplit.status re-reads the week once more, and the manager splits what it stored under proto.UsageDirTemp
-// among those folders (db.ResplitTemp), so a worktree made in /tmp moves to its repository's project. An older node
+// among those folders (db.ResplitUsage from proto.UsageDirTemp), so a worktree made in /tmp moves to its repository's project. An older node
 // is never asked: its re-read still says :temp.
 
 // usageResplitStore keeps the re-split (Postgres).
 type usageResplitStore interface {
-	UsageResplit(ctx context.Context, machine string, pass db.UsageResplitPass) (db.UsageResplitRecord, error)
-	UsageNotSplit(ctx context.Context, machine string, pass db.UsageResplitPass, from, to time.Time) (bool, error)
-	ResplitUsage(ctx context.Context, machine string, pass db.UsageResplitPass, buckets []proto.UsageBucket, through time.Time, done bool) (int, error)
+	UsageResplit(ctx context.Context, machine, from string) (db.UsageResplitRecord, error)
+	UsageNotSplit(ctx context.Context, machine, dir string, since, until time.Time) (bool, error)
+	ResplitUsage(ctx context.Context, machine, from string, buckets []proto.UsageBucket, through time.Time, done bool) (int, error)
 }
+
+// usageResplitPasses are the re-splits by the pass a node names on the wire ("" the first, "temp" the temporary
+// folders'): the directory each splits the stored rows of.
+var usageResplitPasses = map[string]string{"": "", "temp": proto.UsageDirTemp}
 
 // usageResplitRange is what a re-split may read at now: from a week ago (the ten-minute rows the projects' week is
 // summed from) to where a node's whole window starts (usageNodeWindow: that the node sends split already).
@@ -48,12 +52,13 @@ func (d *Devices) usageResplitStatus(ctx context.Context, machine string, params
 		TempDirs bool `json:"temp_dirs"`
 	}
 	_ = json.Unmarshal(params, &p) // an older node's {} (or nothing): the first pass only
-	passes := []db.UsageResplitPass{db.ResplitNotSplit}
+	passes := []string{""}
 	if p.TempDirs {
-		passes = append(passes, db.ResplitTemp)
+		passes = append(passes, "temp")
 	}
 	for _, pass := range passes {
-		rec, err := st.UsageResplit(ctx, machine, pass)
+		from := usageResplitPasses[pass]
+		rec, err := st.UsageResplit(ctx, machine, from)
 		if err != nil {
 			return map[string]any{"done": true}, err
 		}
@@ -64,19 +69,19 @@ func (d *Devices) usageResplitStatus(ctx context.Context, machine string, params
 		if !rec.Through.IsZero() && !rec.Through.Before(since) {
 			since = rec.Through.Add(time.Duration(db.UsageResplitStep) * time.Second)
 		}
-		pending, err := st.UsageNotSplit(ctx, machine, pass, since, before)
+		pending, err := st.UsageNotSplit(ctx, machine, from, since, before)
 		if err != nil {
 			return nil, err
 		}
 		if !pending || !since.Before(before) {
-			if _, err := st.ResplitUsage(ctx, machine, pass, nil, time.Time{}, true); err != nil {
+			if _, err := st.ResplitUsage(ctx, machine, from, nil, time.Time{}, true); err != nil {
 				return map[string]any{"done": true}, err
 			}
 			continue
 		}
 		out := map[string]any{"done": false, "since": since.Unix(), "before": before.Unix()}
-		if pass != db.ResplitNotSplit {
-			out["pass"] = string(pass)
+		if pass != "" {
+			out["pass"] = pass
 		}
 		return out, nil
 	}
@@ -97,8 +102,8 @@ func (d *Devices) putUsageResplit(ctx context.Context, machine string, params js
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
 	}
-	pass := db.UsageResplitPass(p.Pass)
-	if pass != db.ResplitNotSplit && pass != db.ResplitTemp {
+	from, known := usageResplitPasses[p.Pass]
+	if !known {
 		return nil, errors.New("no such re-split")
 	}
 	st, ok := d.opts.Store.(usageResplitStore)
@@ -116,7 +121,7 @@ func (d *Devices) putUsageResplit(ctx context.Context, machine string, params js
 		if t := time.Unix(b.Minute, 0); t.Before(since) || !t.Before(before) || !usableDir(b.Dir) {
 			continue
 		}
-		if pass == db.ResplitTemp && b.Dir != proto.UsageDirTemp && strings.HasPrefix(b.Dir, ":") {
+		if from == proto.UsageDirTemp && b.Dir != proto.UsageDirTemp && strings.HasPrefix(b.Dir, ":") {
 			continue // the assistant's, an unknown one: never a temporary folder's
 		}
 		keep = append(keep, b)
@@ -125,12 +130,12 @@ func (d *Devices) putUsageResplit(ctx context.Context, machine string, params js
 	if p.Through > 0 {
 		through = time.Unix(p.Through, 0)
 	}
-	moved, err := st.ResplitUsage(ctx, machine, pass, keep, through, p.Done)
+	moved, err := st.ResplitUsage(ctx, machine, from, keep, through, p.Done)
 	if err != nil {
 		return nil, err
 	}
 	switch {
-	case p.Done && pass == db.ResplitTemp:
+	case p.Done && from == proto.UsageDirTemp:
 		d.logf("[%s] usage re-split of temporary folders done", machine)
 	case p.Done:
 		d.logf("[%s] usage re-split by directory done", machine)
