@@ -31,6 +31,15 @@ var (
 	_ logicalSegmentInputStore = (*logicalHistoryMemStore)(nil)
 )
 
+// confirmLiveSegment is one segment of the switched conversation on machine "server", engine and launcher alike,
+// built from the documented zero (archguard's out-literal rule).
+func confirmLiveSegment(id string, ordinal int, state, session, engine, history string, offset int, frozenEnd *int) conversationlog.Segment {
+	var s conversationlog.Segment
+	s.ID, s.Ordinal, s.State, s.MachineID, s.SessionID = id, ordinal, state, "server", session
+	s.Engine, s.Launcher, s.SourceHistory, s.Offset, s.FrozenEnd = engine, engine, history, offset, frozenEnd
+	return s
+}
+
 func newLogicalHistoryMemStore(conversations ...db.LogicalConversation) *logicalHistoryMemStore {
 	return &logicalHistoryMemStore{
 		memHistoryStore: newMemHistoryStore(),
@@ -235,18 +244,8 @@ func TestDirectSupervisionConfirmBypassesStaleHistoryCache(t *testing.T) {
 			History:   "logical-h2",
 			Revision:  50,
 			Segments: []conversationlog.Segment{
-				{
-					ID: "seg-1", Ordinal: 1, State: "retired",
-					MachineID: "server", SessionID: "conv2",
-					Engine: "claude", Launcher: "claude",
-					SourceHistory: "h-claude-1", Offset: 0, FrozenEnd: &frozenEnd,
-				},
-				{
-					ID: "seg-2", Ordinal: 2, State: "active",
-					MachineID: "server", SessionID: "agy-seg2",
-					Engine: "agy", Launcher: "agy",
-					SourceHistory: "h-agy-2", Offset: 2,
-				},
+				confirmLiveSegment("seg-1", 1, "retired", "conv2", "claude", "h-claude-1", 0, &frozenEnd),
+				confirmLiveSegment("seg-2", 2, "active", "agy-seg2", "agy", "h-agy-2", 2, nil),
 			},
 		}
 		store := newLogicalHistoryMemStore(logicalConv)
