@@ -52,6 +52,29 @@ type fleetCache struct {
 	clientsSend sync.Mutex
 }
 
+// interactionResolvedEvent carries occurrence identity whenever the hub knows it.
+// Older clients ignore the additive field; a zero-time legacy withdrawal remains
+// ID-only. Clients use it to ignore an earlier resolution arriving after a same-ID
+// replacement instead of guessing that every ID-only event names the latest card.
+func interactionResolvedEvent(ix proto.Interaction) map[string]any {
+	event := map[string]any{"type": "interaction_resolved", "id": ix.ID}
+	if !ix.CreatedAt.IsZero() {
+		event["created_at"] = ix.CreatedAt
+	}
+	return event
+}
+
+// Resolved mirror events carry no interaction object for the generic broadcast
+// classifier to inspect. Pass their display-only identity explicitly so both
+// live delivery and event-log replay retain the approval_mirrors capability fence.
+func (h *Hub) broadcastInteractionResolved(ix proto.Interaction, event map[string]any) {
+	b, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	h.broadcastToApprovalMirror("interaction_resolved", b, false, ix.MirrorOf != "")
+}
+
 func init() {
 	handleBusEvent(assistantwire.EventFleetSessions, func(h *Hub, c *busConn, params json.RawMessage) {
 		rest, rows, scanned := proto.ScanSessionList(params)
@@ -97,7 +120,7 @@ func init() {
 	})
 	handleBusEvent(assistantwire.EventFleetInteraction, func(h *Hub, c *busConn, params json.RawMessage) {
 		var p assistantwire.FleetInteraction
-		if json.Unmarshal(params, &p) != nil || p.Interaction.ID == "" {
+		if json.Unmarshal(params, &p) != nil || p.Interaction.ID == "" || reservedDisplayOriginal(p.Interaction) {
 			return
 		}
 		if !h.cardAllowed(c.managerID(), p.Interaction) {
@@ -107,16 +130,55 @@ func init() {
 		p.Interaction.Manager = c.managerID() // its manager's (ownership.go)
 		f := &h.reported
 		f.mu.Lock()
-		if o, ok := f.interactions[p.Interaction.ID]; ok && o.Manager != p.Interaction.Manager {
-			f.mu.Unlock()
-			return // another manager's card: not replaced
+		if o, ok := f.interactions[p.Interaction.ID]; ok {
+			if o.Manager != p.Interaction.Manager {
+				f.mu.Unlock()
+				return // another manager's card: not replaced
+			}
+			if !p.Interaction.CreatedAt.IsZero() && !o.CreatedAt.IsZero() && p.Interaction.CreatedAt.Before(o.CreatedAt) {
+				f.mu.Unlock()
+				return // a delayed update for an earlier occurrence
+			}
+		}
+		if p.Interaction.MirrorOf != "" {
+			origin, ok := f.interactions[p.Interaction.MirrorOf]
+			if !ok || !validDisplayMirror(origin, p.Interaction) {
+				f.mu.Unlock()
+				return // no display copy without its live authoritative permission
+			}
+			// Display content is authoritative-only. Even a malformed manager event
+			// cannot show one operation while its action resolves another.
+			p.Interaction = refreshedDisplayMirror(origin, p.Interaction)
 		}
 		if f.interactions == nil {
 			f.interactions = map[string]proto.Interaction{}
 		}
 		f.interactions[p.Interaction.ID] = p.Interaction
+		updated := []proto.Interaction{p.Interaction}
+		var resolved []proto.Interaction
+		if p.Interaction.MirrorOf == "" {
+			for id, mirror := range f.interactions {
+				if mirror.MirrorOf != p.Interaction.ID || mirror.Manager != p.Interaction.Manager {
+					continue
+				}
+				mirror = refreshedDisplayMirror(p.Interaction, mirror)
+				if !validDisplayMirror(p.Interaction, mirror) {
+					delete(f.interactions, id)
+					resolved = append(resolved, mirror)
+					continue
+				}
+				f.interactions[id] = mirror
+				updated = append(updated, mirror)
+			}
+		}
 		f.mu.Unlock()
-		h.broadcast(map[string]any{"type": "interaction", "interaction": p.Interaction})
+		for _, ix := range updated {
+			h.broadcast(map[string]any{"type": "interaction", "interaction": ix})
+		}
+		for _, ix := range resolved {
+			h.push.withdraw(ix.ID, ix.CreatedAt)
+			h.broadcastInteractionResolved(ix, interactionResolvedEvent(ix))
+		}
 		if !h.cardAllowed(c.managerID(), p.Interaction) { // its machine moved meanwhile (dropCard)
 			h.dropCard(c.managerID(), p.Interaction.ID)
 		}
@@ -128,25 +190,44 @@ func init() {
 		}
 		f := &h.reported
 		f.mu.Lock()
-		if ix, ok := f.interactions[p.ID]; ok && ix.Manager != c.managerID() {
+		current, exists := f.interactions[p.ID]
+		if exists && current.Manager != c.managerID() {
 			f.mu.Unlock()
 			return // another manager's
 		}
+		if exists && !p.CreatedAt.IsZero() && !current.CreatedAt.Equal(p.CreatedAt) {
+			f.mu.Unlock()
+			return // a delayed resolution for an earlier occurrence
+		}
 		delete(f.interactions, p.ID)
-		f.mu.Unlock()
-		h.push.withdraw(p.ID) // a suspended app hears it by push (#4349)
-		h.push.resolvedPushOver(p.ID)
-		event := map[string]any{"type": "interaction_resolved", "id": p.ID}
-		if p.AnsweredBy != "" {
-			event["answered_by"] = p.AnsweredBy // the app marks a question the assistant answered (docs/assistant/assistant.md)
-			if p.Reason != "" {
-				event["reason"] = p.Reason // "Assistant answered: X, because Y"
-			}
-			if len(p.Answers) > 0 {
-				event["answers"] = p.Answers // what "Change answer" (POST …/reanswer) starts from
+		resolved := proto.Interaction{ID: p.ID, CreatedAt: p.CreatedAt}
+		if exists {
+			resolved = current
+		}
+		ids := []proto.Interaction{resolved}
+		for id, ix := range f.interactions {
+			if ix.MirrorOf == p.ID && ix.Manager == c.managerID() &&
+				(p.CreatedAt.IsZero() || ix.CreatedAt.Equal(p.CreatedAt)) {
+				delete(f.interactions, id)
+				ids = append(ids, ix)
 			}
 		}
-		h.broadcast(event)
+		f.mu.Unlock()
+		for _, ix := range ids {
+			h.push.withdraw(ix.ID, ix.CreatedAt) // a suspended app hears it by push (#4349)
+			h.push.resolvedPushOver(ix.ID)
+			event := interactionResolvedEvent(ix)
+			if p.AnsweredBy != "" {
+				event["answered_by"] = p.AnsweredBy // the app marks a question the assistant answered (docs/assistant/assistant.md)
+				if p.Reason != "" {
+					event["reason"] = p.Reason // "Assistant answered: X, because Y"
+				}
+				if len(p.Answers) > 0 {
+					event["answers"] = p.Answers // what "Change answer" (POST …/reanswer) starts from
+				}
+			}
+			h.broadcastInteractionResolved(ix, event)
+		}
 	})
 	handleBusEvent(assistantwire.EventFleetInteractions, func(h *Hub, c *busConn, params json.RawMessage) {
 		var p assistantwire.FleetInteractions
@@ -229,7 +310,9 @@ func (h *Hub) takeFleetInteractions(list []proto.Interaction) {
 // (re)connected: those gone are over for the apps, the others are sent as they are. The other managers' stay.
 func (h *Hub) takeFleetInteractionsFrom(owner string, list []proto.Interaction) {
 	// Only cards on its own machines, or naming none (ownership.go cardAllowed).
-	list = slices.DeleteFunc(slices.Clone(list), func(ix proto.Interaction) bool { return !h.cardAllowed(owner, ix) })
+	list = slices.DeleteFunc(slices.Clone(list), func(ix proto.Interaction) bool {
+		return reservedDisplayOriginal(ix) || !h.cardAllowed(owner, ix)
+	})
 	f := &h.reported
 	f.mu.Lock()
 	// Another manager's card with the same id stays its (it is not this one's to replace).
@@ -237,11 +320,77 @@ func (h *Hub) takeFleetInteractionsFrom(owner string, list []proto.Interaction) 
 		o, ok := f.interactions[ix.ID]
 		return ok && o.Manager != owner && o.Manager != ""
 	})
+	// A malformed snapshot cannot make two entries with one display ID race for
+	// which content is shown. The map below has always used the last entry; keep
+	// that same entry's position and content in the ordered snapshot too.
+	last := make(map[string]int, len(list))
+	for i, ix := range list {
+		last[ix.ID] = i
+	}
+	deduped := make([]proto.Interaction, 0, len(list))
+	for i, ix := range list {
+		if last[ix.ID] == i {
+			deduped = append(deduped, ix)
+		}
+	}
+	list = deduped
 	now := make(map[string]proto.Interaction, len(list))
 	for i := range list {
 		list[i].Manager = owner
 		now[list[i].ID] = list[i]
 	}
+	// A delayed reconnect snapshot has the same occurrence fence as a live
+	// fleet.interaction event. Retain the newer card in both the authoritative map
+	// and the ordered broadcast list; merely skipping the assignment would make
+	// the withdrawal pass below remove the newer occurrence instead.
+	for i, ix := range list {
+		current, ok := f.interactions[ix.ID]
+		if ok && !ix.CreatedAt.IsZero() && !current.CreatedAt.IsZero() && ix.CreatedAt.Before(current.CreatedAt) {
+			list[i] = current
+			now[ix.ID] = current
+		}
+	}
+	// A display copy belongs to the hub's display state, not to the manager's
+	// pending-operation list. Keep an already-published copy when a reconnect
+	// snapshot contains its still-live original but omits the copy (for example
+	// after approval_mirror_main was turned off for new cards). The original's
+	// resolved event remains the only normal withdrawal boundary.
+	for id, previous := range f.interactions {
+		if previous.MirrorOf == "" || previous.Manager != owner {
+			continue
+		}
+		if _, supplied := now[id]; supplied {
+			continue
+		}
+		if origin, ok := now[previous.MirrorOf]; ok && origin.MirrorOf == "" {
+			refreshed := refreshedDisplayMirror(origin, previous)
+			now[id] = refreshed
+			list = append(list, refreshed)
+		}
+	}
+	for id, mirror := range now {
+		if mirror.MirrorOf == "" {
+			continue
+		}
+		origin, ok := now[mirror.MirrorOf]
+		if !ok || !validDisplayMirror(origin, mirror) {
+			delete(now, id)
+			continue
+		}
+		// Snapshots get the same authoritative-only display content as live
+		// events; identity validation alone must not admit forged text or deadlines.
+		refreshed := refreshedDisplayMirror(origin, mirror)
+		now[id] = refreshed
+		for i := range list {
+			if list[i].ID == id {
+				list[i] = refreshed
+			}
+		}
+	}
+	list = slices.DeleteFunc(list, func(ix proto.Interaction) bool {
+		_, ok := now[ix.ID]
+		return !ok
+	})
 	old := map[string]proto.Interaction{}
 	all := make(map[string]proto.Interaction, len(f.interactions)+len(now))
 	for id, ix := range f.interactions {
@@ -263,10 +412,10 @@ func (h *Hub) takeFleetInteractionsFrom(owner string, list []proto.Interaction) 
 			}
 		}
 	}()
-	for id := range old {
+	for id, ix := range old {
 		if _, ok := now[id]; !ok {
-			h.push.withdraw(id)
-			h.broadcast(map[string]any{"type": "interaction_resolved", "id": id})
+			h.push.withdraw(id, ix.CreatedAt)
+			h.broadcastInteractionResolved(ix, interactionResolvedEvent(ix))
 		}
 	}
 	for _, ix := range list {
@@ -285,13 +434,23 @@ func (h *Hub) dropCard(owner, id string) {
 	f.mu.Lock()
 	ix, ok := f.interactions[id]
 	other := ok && cmp.Or(ix.Manager, assistantwire.AssistantID) != owner
+	ids := []proto.Interaction{{ID: id}}
 	if ok && !other {
+		ids[0] = ix
 		delete(f.interactions, id)
+		for copyID, mirror := range f.interactions {
+			if mirror.MirrorOf == id && mirror.Manager == ix.Manager {
+				delete(f.interactions, copyID)
+				ids = append(ids, mirror)
+			}
+		}
 	}
 	f.mu.Unlock()
 	if !other {
-		h.push.withdraw(id)
-		h.broadcast(map[string]any{"type": "interaction_resolved", "id": id})
+		for _, gone := range ids {
+			h.push.withdraw(gone.ID, gone.CreatedAt)
+			h.broadcastInteractionResolved(gone, interactionResolvedEvent(gone))
+		}
 	}
 }
 
@@ -712,7 +871,7 @@ func (h *Hub) mutesSettle(c *busConn) {
 // (it answers them as the hub did); while it is not connected they are answered 503 assistant_offline. A device
 // that may only answer is held to a card's own choices first, here.
 func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
-	api.HandleFunc("POST /api/v1/interactions/{id}/resolve", h.withoutTerminalControls(h.withClientOp("resolve", func(w http.ResponseWriter, r *http.Request) {
+	api.HandleFunc("POST /api/v1/interactions/{id}/resolve", h.withoutTerminalControls(h.withNormalizedDisplayMirror(h.withClientOp("resolve", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 		if err != nil {
 			writeBodyErr(w, err, err)
@@ -753,12 +912,12 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		h.forwardOwned(w, h.captureOwnerAnswer(r), h.byInteraction)
-	})))
+	}))))
 	// A clarification is an owner's free-text message to the originating
 	// conversation, not a card answer. Restricted answer-only devices and
 	// extension principals cannot speak as the owner here. The operation receipt
 	// and the manager's client_msg_id together make an unchanged retry one message.
-	api.HandleFunc("POST /api/v1/interactions/{id}/clarify", h.withoutTerminalControls(h.withClientOp("clarify", func(w http.ResponseWriter, r *http.Request) {
+	api.HandleFunc("POST /api/v1/interactions/{id}/clarify", h.withoutTerminalControls(h.withNormalizedDisplayMirror(h.withClientOp("clarify", func(w http.ResponseWriter, r *http.Request) {
 		if answerOnly(r) || principalOf(r.Context()).Role == roleExtension {
 			writeErr(w, http.StatusForbidden, errors.New("only the owner can ask an approval question"))
 			return
@@ -799,7 +958,7 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		h.forwardOwned(w, r, h.byInteraction)
-	})))
+	}))))
 	// Body client_id uses the same durable operation receipts as resolve.
 	api.HandleFunc("POST /api/v1/interactions/{id}/choose", h.withReplyReceipt("choose", h.serveChoose))
 	// "Change answer": a question the assistant answered gets the user's answer (assistant/fleet_delegate.go); a device that may

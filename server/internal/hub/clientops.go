@@ -60,6 +60,14 @@ func (h *Hub) withClientOp(kind string, next http.HandlerFunc) http.HandlerFunc 
 			params = object
 			raw, _ = json.Marshal(object)
 		}
+		if kind == "clarify" && object != nil && len(bytes.TrimSpace(raw)) != 0 {
+			if clientMsgID, _ := object["client_msg_id"].(string); strings.TrimSpace(clientMsgID) == "" {
+				// A retry after uncertain delivery must keep the manager's dedupe ID even though its receipt was forgotten.
+				object["client_msg_id"] = "approval-question-" + id
+				params = object
+				raw, _ = json.Marshal(object)
+			}
+		}
 		r.Body = io.NopCloser(bytes.NewReader(raw))
 		r.ContentLength = int64(len(raw))
 		if h.store == nil {
@@ -67,6 +75,11 @@ func (h *Hub) withClientOp(kind string, next http.HandlerFunc) http.HandlerFunc 
 			return
 		}
 		target := devicewire.ClientOpTarget(r.URL.Path, r.URL.Query().Encode())
+		if occurrence := r.Header.Get(assistantwire.InteractionCreatedAtHeader); occurrence != "" {
+			// A mirror retry must keep the occurrence normalized on its first try,
+			// even if the origin has since been replaced under the same ID.
+			target = devicewire.ClientOpTargetWithOccurrence(r.URL.Path, r.URL.Query().Encode(), occurrence)
+		}
 		valid := len(bytes.TrimSpace(raw)) == 0 || json.Valid(raw)
 		digest := devicewire.ClientOpDigest(kind, target, valid, opDigestParams(kind, raw, params))
 		var timing *sendTiming

@@ -140,6 +140,23 @@ func TestHubOnlySlotKeepsRemoteAgentsIndependent(t *testing.T) {
 	}
 }
 
+func TestUpdateBusyIgnoresDisplayMirrorCards(t *testing.T) {
+	p := newPublisher(t, "v2-202611021700", 202611021700)
+	h, m, _, _ := updatingHub(t, p, "release")
+	h.slot = &hubedge.Slot{}
+	setSessions(m,
+		proto.Session{SessionID: "main", Title: "Main", Assistant: true, Status: proto.StatusIdle, State: proto.StateNeedsYou, PendingInteractions: 1},
+		proto.Session{SessionID: "side", Title: "Remote task", Status: proto.StatusIdle, State: proto.StateNeedsYou, PendingInteractions: 1, Host: proto.EngineHerdr},
+	)
+	unwaited := proto.Interaction{ID: "ix_main_later", MachineID: "box", SessionID: "main", Kind: proto.IxQuestion,
+		ToolName: "ask_user", Resumable: true, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(2 * time.Hour)}
+	origin, mirror := mirrorPairForTest("ix_remote_permission")
+	h.takeFleetInteractions([]proto.Interaction{unwaited, origin, mirror})
+	if busy := h.updateBusy(); len(busy) != 0 {
+		t.Fatalf("a display copy alone made Main block a hub-only update: %+v", busy)
+	}
+}
+
 // A conversation waiting only on the assistant's ask_user cards asked without waiting does not hold the update: no turn
 // waits on them and they outlive a restart (#7392). A waiting question's card, another card next to it, a card the
 // hub was not shown, or a running turn still do.
