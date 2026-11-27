@@ -387,6 +387,8 @@ type FeishuStatus struct {
 	HomeChat string `json:"home_chat,omitempty"`
 	// TopicTodoModes holds the non-default to-do policies of opted-in groups, keyed by chat ID.
 	TopicTodoModes map[string]TopicTodoMode `json:"topic_todo_modes,omitempty"`
+	// TopicSpaces maps opted-in topic group chat IDs to their bound domain space slug.
+	TopicSpaces map[string]string `json:"topic_spaces,omitempty"`
 	// NudgeAfter is the bot's setting nudge_after (#6084): minutes a card waits unanswered before the one nudge under it,
 	// 0 off. nil (a status from before the setting) is NudgeAfterDefault.
 	NudgeAfter *int `json:"nudge_after,omitempty"`

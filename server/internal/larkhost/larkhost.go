@@ -221,6 +221,9 @@ type Chat interface {
 	// SetTarget makes the chat's messages go to t; RememberThread binds a message the bot posted to a target.
 	SetTarget(t assistantwire.ChatTarget)
 	RememberThread(messageID string, t assistantwire.ChatTarget, title string)
+	// RememberTopicSession binds a group chat topic (chatID/threadID) to a conversation target so replies
+	// in that topic continue the bound conversation.
+	RememberTopicSession(ctx context.Context, chatID, threadID string, t assistantwire.ChatTarget, title string)
 	// Send passes a message of the chat on to its target and starts the run that answers it.
 	Send(ctx context.Context, ev *botcard.MessageEvent, content botcard.Content, t assistantwire.ChatTarget) error
 	// CardsWaiting is how many cards are open; CardNudged whether interaction id's card was nudged under.
@@ -509,6 +512,8 @@ func (None) Route(string, string) assistantwire.ChatTarget {
 }
 func (None) SetTarget(assistantwire.ChatTarget)                      {}
 func (None) RememberThread(string, assistantwire.ChatTarget, string) {}
+func (None) RememberTopicSession(context.Context, string, string, assistantwire.ChatTarget, string) {
+}
 func (None) Send(context.Context, *botcard.MessageEvent, botcard.Content, assistantwire.ChatTarget) error {
 	return ErrNoChannel
 }

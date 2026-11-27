@@ -384,6 +384,11 @@ func (l *Layer) RememberThread(messageID string, t assistantwire.ChatTarget, tit
 	l.chat().rememberBotThread(messageID, t, title)
 }
 
+// RememberTopicSession binds a group chat topic to a conversation target so follow-up replies route back to it.
+func (l *Layer) RememberTopicSession(ctx context.Context, chatID, threadID string, t assistantwire.ChatTarget, title string) {
+	l.chat().rememberTopicSession(ctx, chatID, threadID, t, title)
+}
+
 // Send passes a message of the chat on to its target and starts the run that answers it.
 func (l *Layer) Send(ctx context.Context, ev *botcard.MessageEvent, content botcard.Content, t assistantwire.ChatTarget) error {
 	return l.chat().botSend(ctx, ev, content, t)

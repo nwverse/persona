@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -29,10 +30,17 @@ import (
 // botStore keeps settings, sends and interactions in memory.
 type botStore struct {
 	Store
-	mu    sync.Mutex
-	vals  map[string][]byte
-	sends map[string]string
-	audit []auditRow // plugin_audit (bots_audit_test.go)
+	mu     sync.Mutex
+	vals   map[string][]byte
+	sends  map[string]string
+	audit  []auditRow // plugin_audit (bots_audit_test.go)
+	tracks []db.Track
+}
+
+func (s *botStore) Tracks(context.Context) ([]db.Track, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]db.Track(nil), s.tracks...), nil
 }
 
 func newBotStore() *botStore {

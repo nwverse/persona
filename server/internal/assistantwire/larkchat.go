@@ -20,6 +20,8 @@ type ChatTarget struct {
 	SessionID string `json:"session_id,omitempty"`
 	// TodoID is set only on a to-do reminder's cards: a reply still goes to the conversation, with that to-do as data.
 	TodoID string `json:"todo_id,omitempty"`
+	// Space is the domain space slug when starting a new conversation for a space-bound topic.
+	Space string `json:"space,omitempty"`
 }
 
 // The kinds of a ChatTarget.
