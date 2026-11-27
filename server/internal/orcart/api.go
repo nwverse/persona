@@ -233,19 +233,51 @@ type Screen struct {
 	Wrapped []bool
 	// Source is what was read ("screen"; "stream" is the output's tail, not the screen).
 	Source string
+	// Draft is the text in an agent's input box, which Orca lifts out of the rows: it leaves the prompt's row as its
+	// bare glyph (❯ › ») and drops the rows the text wrapped onto (Orca 1.4.277; older runtimes leave the rows as
+	// drawn and send no draft). Without colors it is whatever the box shows: typed text, and also Claude Code's grey
+	// suggested next message (checked live on 1.4.277 with Claude Code 2.1.331). Empty: the box shows no text, or
+	// only a placeholder Orca knows (Claude's `Try "…"` tip, Codex's).
+	Draft string
 }
 
-// Text is the screen as text, soft-wrapped rows joined, one line per row, ending in a newline.
+// Text is the screen as text, soft-wrapped rows joined, one line per row, ending in a newline. The box's text Orca
+// lifted out (Draft) is put back on the prompt's row, its further lines under it indented as Claude Code draws them:
+// a reader of the text sees the box as it is on screen.
 func (s Screen) Text() string {
 	var b strings.Builder
+	at := s.draftRow()
 	for i, l := range s.Lines {
-		b.WriteString(l)
+		if i == at {
+			lines := strings.Split(s.Draft, "\n")
+			b.WriteString(l + " " + lines[0])
+			for _, r := range lines[1:] {
+				b.WriteString("\n  " + r)
+			}
+		} else {
+			b.WriteString(l)
+		}
 		if i < len(s.Wrapped) && s.Wrapped[i] && i+1 < len(s.Lines) {
 			continue
 		}
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// draftRow is the row Orca left the box's prompt glyph on alone (its own lvo does the same: the last such row), -1
+// without a draft or such a row.
+func (s Screen) draftRow() int {
+	if s.Draft == "" {
+		return -1
+	}
+	for i := len(s.Lines) - 1; i >= 0; i-- {
+		switch strings.TrimSpace(s.Lines[i]) {
+		case "❯", "›", "»":
+			return i
+		}
+	}
+	return -1
 }
 
 // ErrNoScreen: Orca has no screen for the terminal right now (terminal.read's source "screen-unavailable").
@@ -260,6 +292,7 @@ func (c *Client) Read(ctx context.Context, t Target) (*Screen, error) {
 				Wrapped bool `json:"wrapped"`
 			} `json:"tailRows"`
 			Source string `json:"source"`
+			Draft  string `json:"draft"`
 		} `json:"terminal"`
 	}
 	p := t.params()
@@ -270,7 +303,7 @@ func (c *Client) Read(ctx context.Context, t Target) (*Screen, error) {
 	if res.Terminal.Source == "screen-unavailable" {
 		return nil, fmt.Errorf("orca terminal.read: %w", ErrNoScreen)
 	}
-	s := &Screen{Lines: res.Terminal.Tail, Source: res.Terminal.Source}
+	s := &Screen{Lines: res.Terminal.Tail, Source: res.Terminal.Source, Draft: res.Terminal.Draft}
 	for _, r := range res.Terminal.TailRows {
 		s.Wrapped = append(s.Wrapped, r.Wrapped)
 	}
