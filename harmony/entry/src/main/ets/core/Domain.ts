@@ -1327,8 +1327,9 @@ export function projectTranscriptRows(input: readonly TranscriptItem[], live: bo
       }
     }
     if (proposal && wrap) rows.push({kind:'next_step',id:'next-step:' + wrap.id,item:wrap.use,proposal});
-    if (!sections && running && !final && !items.some(item => item.kind === 'thinking' || item.kind === 'fold')) {
-      rows.push({kind:'work', id:work.workKey, work:{...work,latestExchange,inspectionSteps:[]}});
+    if (!sections && running && !items.some(item => item.kind === 'thinking' || item.kind === 'fold')) {
+      const position = reply ? rows.indexOf(reply) : rows.length;
+      rows.splice(position, 0, {kind:'work', id:work.workKey, work:{...work,latestExchange,inspectionSteps:[]}});
     }
   });
   return rows;

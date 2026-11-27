@@ -178,6 +178,10 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 			task.Last = clip(oneLine(t.StartError), 80) // why it did not start, for the morning brief (#4124)
 		}
 		task.Link = todoLink(web, t.ID)
+		task.OriginID, task.OriginTitle, task.OriginLink = s.originAttribution(ctx, t, web)
+		if t.Supervision != nil && t.Supervision.Supervisor != "" && t.Supervision.Supervisor != s.settings(ctx).Main {
+			task.SupervisedElsewhere = true
+		}
 		if t.Cancelled() {
 			task.CancelledReason = clip(oneLine(t.DoneReason), 80)
 			if v := t.Supervision; v != nil {

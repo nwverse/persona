@@ -66,6 +66,11 @@ const ConnectorNamespace = "connector"
 // contribution. A provider answers them with ext.Methods under this namespace.
 const RepositoryNamespace = "repo"
 
+// OffloadNamespace is the disk_offload extension point's: the manager asks offload.inventory, offload.run, offload.job
+// and the optional offload.cancel (schema/extension/offload.schema.json), with the disk_offload item's id as the
+// contribution. A provider answers them with ext.Methods under this namespace.
+const OffloadNamespace = "offload"
+
 // SentNamespace is the hub's own namespace for the sent-as-user ledger: RecordSent is sent.record.
 const SentNamespace = "sent"
 
@@ -200,7 +205,8 @@ func (h *Hub) ModelComplete(ctx context.Context, p wire.ModelCompleteParams) (wi
 }
 
 // The user's conversations with the assistant (docs/extensions/extensions.md "Assistant conversations"): the
-// permission assistant.read, read-only, only the assistant's own space and only words.
+// permission assistant.read, read-only, only the assistant's own space and only words. Telling the main conversation
+// something is a call of its own, AssistantEvent below.
 
 // AssistantConversations lists the conversations last active since a time, newest first, a page at a time.
 func (h *Hub) AssistantConversations(ctx context.Context, p wire.AssistantConversationsParams) (wire.AssistantConversationsResult, error) {
@@ -246,6 +252,16 @@ func (h *Hub) BrowserMachines(ctx context.Context, p wire.BrowserMachinesParams)
 // browser.run; #12866).
 func (h *Hub) BrowserRun(ctx context.Context, p wire.BrowserRunParams) (wire.BrowserRunResult, error) {
 	return callHub[wire.BrowserRunResult](ctx, h, "browser.run", p)
+}
+
+// AssistantEvent tells the assistant's main conversation what the extension observed (permission assistant.events,
+// docs/extensions/extensions.md "Assistant events"). The assistant gets it as an extension's report, never as the
+// user's words, and decides what to tell the user. An event with the same Key as one of this extension's still waiting
+// behind a running turn replaces it, unless Replace is wire.AssistantEventReplaceFalse. Errors carry wire.AssistantErrorCode* or
+// permission_denied: no_main_conversation (nothing was started: do not retry until the user has one), rate_limited
+// (data {retry_after}), queue_full and invalid_params; assistant_offline and machine_offline are worth trying again.
+func (h *Hub) AssistantEvent(ctx context.Context, p wire.AssistantEventParams) (wire.AssistantEventResult, error) {
+	return callHub[wire.AssistantEventResult](ctx, h, "assistant.event", p)
 }
 
 func callHub[R any](ctx context.Context, h *Hub, method string, params any) (R, error) {

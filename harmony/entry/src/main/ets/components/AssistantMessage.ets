@@ -59,7 +59,7 @@ export struct AssistantMessage {
       ForEach(this.parts, (part: BoundRow<AssistantMessagePart>) => {
         if (part.value.cardKey) AssistantViewCard({ model: this.model, feed: this.feed, item: this.item, cardKey: part.value.cardKey,
           active: this.active && this.model.connected, onLink: (address: string) => this.onLink(address), onOpenResource: (address: string) => this.openResource(address) })
-        else if (part.value.text) MarkdownText({ transcript: true, documents:this.documents, narration:this.message.narration, text: part.value.text, mediaModel:this.model, mediaActive:this.active, mediaWidth:this.mediaWidth,
+        else if (part.value.text) MarkdownText({ transcript: true, chatReply: true, documents:this.documents, narration:this.message.narration, text: part.value.text, mediaModel:this.model, mediaActive:this.active, mediaWidth:this.mediaWidth,
           mediaTarget:this.message.ownerTarget, messageId:this.message.id, onPreview:this.onPreview, onEditImage:this.onEditImage, workspaceRoot:this.workspaceRoot, onOpenFile:(path: string) => this.onOpenFile(path), onLink: (address: string) => this.onLink(address) })
       }, (part: BoundRow<AssistantMessagePart>) => part.key)
     }.width('100%').alignItems(HorizontalAlign.Start)

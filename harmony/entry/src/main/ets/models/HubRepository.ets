@@ -29,18 +29,19 @@ export class HubRepository {
     if (local) this.mutations = MutationStore.shared(local, JSON.stringify([config.hubId, config.managerId]));
   }
   async call(path: string, method: string = 'GET', body: Record<string, Object> = {}, op: string = '', admit?: () => boolean, completedAsAck: boolean = false,
-    acknowledged?: (result: Record<string, Object>) => boolean): Promise<Record<string, Object>> {
+    acknowledged?: (result: Record<string, Object>) => boolean, emptyRequest: boolean = false): Promise<Record<string, Object>> {
+    const payload=method==='GET' || emptyRequest && !Object.keys(body).length ? '' : JSON.stringify(body);
     const catalogRead = method === 'GET' && /^\/api\/v1\/machines\/[^/]+\/launchers\/[^/]+\/models(?:\?|$)/.test(path);
     // An earlier transcript page can make the Hub read a long file from the computer; it is prefetched, so waiting is unseen.
     const historyRead = method === 'GET' && /^\/api\/v1\/sessions\/[^?]+\/items\?(?:[^#]*&)?before_seq=/.test(path);
     const timeout = catalogRead ? 75000 : historyRead ? 30000 : method === 'POST' && (path === '/api/v1/sessions' || path.endsWith('/takeover')) ? 110000 : undefined;
     if (method === 'GET' || !this.mutations) {
       if (admit && !admit()) throw new HttpFailure(0, 'request_updated', false);
-      const result = Wire.parse(await this.transport.request(path, method, method === 'GET' ? '' : JSON.stringify(body), op, timeout));
+      const result = Wire.parse(await this.transport.request(path, method, payload, op, timeout));
       if (acknowledged && !acknowledged(result)) throw new HttpFailure(0, 'result_unknown', true);
       return result;
     }
-    const payload = JSON.stringify(body), record = await this.mutations.begin(path, method, payload, op); this.changed();
+    const record = await this.mutations.begin(path, method, payload, op); this.changed();
     let pendingReceipt = false;
     try {
       if (admit && !admit()) { await this.mutations.finish(record, 'failed'); throw new HttpFailure(0, 'request_updated', false); }
@@ -74,11 +75,12 @@ export class HubRepository {
       throw new HttpFailure(0, 'result_unknown', true);
     } finally { this.changed(); }
   }
-  async list(path: string, envelope: string, kind: string, merged: boolean = false): Promise<ResourceRow[]> {
+  async list(path: string, envelope: string, kind: string, merged: boolean = false, observe?: (source: Record<string,Object>) => void): Promise<ResourceRow[]> {
     const result = await this.call(path), rows = Wire.rows(result, envelope);
     // Only a complete session list can establish that a manager-held operation has disappeared.
     if (path === '/api/v1/sessions' && (!Array.isArray(result[envelope]) || Wire.bool(result, 'has_more') ||
       !rows.every(completeSessionRow))) throw new Error('incomplete_sessions');
+    if (observe) observe(result);
     return this.resourceRows(rows, kind, merged);
   }
 
@@ -151,6 +153,7 @@ export class HubRepository {
     return Array.from(snapshot.values()).filter((row: ResourceRow) => row.manager === this.owner).map((row: ResourceRow) => row.copy());
   }
   async machines(): Promise<ResourceRow[]> { return this.list('/api/v1/machines', 'machines', 'machine', true); }
+  isDefaultManager(): boolean { return !this.defaultOwner || this.owner === this.defaultOwner; }
   async todos(): Promise<ResourceRow[]> { return this.list('/api/v1/todos', 'todos', 'todo'); }
   async inbox(): Promise<ResourceRow[]> { return this.list('/api/v1/inbox?sources=all', 'items', 'inbox', true); }
   async knowledge(kind: string = 'projects', query: string = ''): Promise<ResourceRow[]> {
@@ -236,13 +239,16 @@ export class HubRepository {
     const path = '/api/v1/machines/' + segment(machine) + '/launchers/' + segment(launcher) + '/models';
     return new SessionModelCatalog(await this.call(path + (refresh ? '?refresh=1' : '')));
   }
-  async createAgent(prompt: string, machine: ResourceRow, cwd: string, launcher: string, op: string, todoId: string = '', admit?: () => boolean, agent: string = '', model: string = '', effort: string = ''): Promise<ResourceRow> {
+  async createAgent(prompt: string, machine: ResourceRow, cwd: string, launcher: string, op: string, todoId: string = '', admit?: () => boolean, workspaceId: string = '', host: string = '', model: string = '', effort: string = '', tabName: string = '', agent: string = ''): Promise<ResourceRow> {
     if (!machine.id || machine.manager && machine.manager !== this.owner || Wire.text(machine.data(), 'trust') === 'pending' ||
       !Wire.bool(machine.data(), 'online', true) || Wire.bool(machine.data(), 'pending_confirm') || Wire.bool(machine.data(), 'pending')) throw new Error('permission_denied');
     const body = Wire.payload(['machine_id', 'cwd', 'launcher', 'prompt'], [machine.id, cwd, launcher, prompt]);
     if (launcher && agent) body['agent_type'] = agent;
-    if (launcher && model) body['model'] = model;
-    if (launcher && effort) body['effort'] = effort; // without one, the hub runs Agents' configured effort
+    if (model) body['model'] = model;
+    if (effort) body['effort'] = effort;
+    const name = tabName.trim();
+    if (name) body['tab_name'] = name;
+    if (workspaceId && host) { body['workspace_id'] = workspaceId; body['host'] = host; }
     if (todoId) body['todo_id'] = todoId;
     const result = await this.call('/api/v1/sessions', 'POST', body, op, admit, false, (reply: Record<string,Object>): boolean => {
       const session = Wire.object(reply,'session');

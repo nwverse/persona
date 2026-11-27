@@ -313,19 +313,50 @@ export class ComputerScreen {
     this.waitForFrame(this.attempt);
   }
 
-  pointerFromView(x: number, y: number, viewWidth: number, viewHeight: number, buttons: number): boolean {
+  /** The framebuffer pixel under a point of the viewer, within the display it shows; [] outside the picture. */
+  private pointInView(x: number, y: number, viewWidth: number, viewHeight: number): number[] {
     const view = this.client?.framebuffer.view;
-    if (!this.hasFrame || !this.controlAllowed() || !view || viewWidth <= 0 || viewHeight <= 0) return false;
+    if (!this.hasFrame || !this.controlAllowed() || !view || view.width <= 0 || view.height <= 0 || viewWidth <= 0 || viewHeight <= 0) return [];
     const scale: number = Math.min(viewWidth / view.width, viewHeight / view.height);
-    if (!Number.isFinite(scale) || scale <= 0) return false;
+    if (!Number.isFinite(scale) || scale <= 0) return [];
     const contentWidth: number = view.width * scale;
     const contentHeight: number = view.height * scale;
     const offsetX: number = (viewWidth - contentWidth) / 2;
     const offsetY: number = (viewHeight - contentHeight) / 2;
     const localX: number = x - offsetX;
     const localY: number = y - offsetY;
-    if (localX < 0 || localY < 0 || localX >= contentWidth || localY >= contentHeight) return false;
-    return this.pointerAt(localX / contentWidth, localY / contentHeight, buttons);
+    if (localX < 0 || localY < 0 || localX >= contentWidth || localY >= contentHeight) return [];
+    return [view.x + Math.floor(localX / contentWidth * view.width), view.y + Math.floor(localY / contentHeight * view.height)];
+  }
+
+  pointerFromView(x: number, y: number, viewWidth: number, viewHeight: number, buttons: number): boolean {
+    const pt = this.pointInView(x, y, viewWidth, viewHeight);
+    return pt.length === 2 && (this.client?.pointer(pt[0], pt[1], buttons) || false);
+  }
+
+  scrollFromView(x:number,y:number,width:number,height:number,notches:number):boolean {
+    const pt=this.pointInView(x,y,width,height);
+    return pt.length===2 && (this.client?.wheel(pt[0],pt[1],notches) || false);
+  }
+
+  scrollPointsInView(width:number,height:number):number {
+    const view=this.client?.framebuffer.view;
+    if (!this.controlAllowed() || !view || view.width<=0 || view.height<=0 || width<=0 || height<=0 || this.remoteWidth<=0 || this.remoteHeight<=0) return 0;
+    const machine=this.row?.data();
+    const computer=machine ? Wire.object(machine,'computer') : Wire.payload([],[]);
+    const browser=machine ? Wire.object(machine,'browser') : Wire.payload([],[]);
+    const primary=Wire.bool(computer,'enabled') && Wire.bool(computer,'screen_sharing') ? Wire.rows(computer,'displays') : [];
+    const displays=primary.length ? primary : Wire.bool(browser,'enabled') && Wire.bool(browser,'screen_sharing') ? Wire.rows(browser,'displays') : [];
+    let x=Infinity,y=Infinity,r=-Infinity,b=-Infinity;
+    for (const display of displays) {
+      const w=Wire.number(display,'width'),h=Wire.number(display,'height');
+      if (w<=0 || h<=0) continue;
+      const left=Wire.number(display,'x'),top=Wire.number(display,'y');
+      x=Math.min(x,left);y=Math.min(y,top);r=Math.max(r,left+w);b=Math.max(b,top+h);
+    }
+    const sx=this.remoteWidth/(r-x),sy=this.remoteHeight/(b-y);
+    const macScale=sx>0 && sy>0 && Math.abs(sx/sy-1)<=.02 ? Math.max(1,Math.min(4,sx)) : 1;
+    return Math.max(view.width/width,view.height/height)/macScale; // the framebuffer's pixels per display point stay the same in one display's view
   }
 
   pointerAt(x: number, y: number, buttons: number): boolean {

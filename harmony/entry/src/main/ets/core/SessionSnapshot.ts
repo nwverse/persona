@@ -72,9 +72,9 @@ function held(row: Payload): boolean {
  * then stores nothing rather than a value it could not read back.
  */
 export function encodeSessionSnapshot(sessions: Payload[], conversations: Payload[], heldActions: Payload[],
-  budget: number = SNAPSHOT_BUDGET_BYTES): string {
+  budget: number = SNAPSHOT_BUDGET_BYTES, sidebarConfig?: string): string {
   const rows = sessions.map(compactRow), chats = conversations.map(compactRow);
-  const whole = JSON.stringify({ sessions: rows, conversations: chats, heldActions: heldActions });
+  const whole = JSON.stringify({ sessions: rows, conversations: chats, heldActions: heldActions, sidebarConfig: sidebarConfig });
   let size = utf8Bytes(whole);
   if (size <= budget) return whole;
   const sizes = rows.map((row: Payload): number => utf8Bytes(JSON.stringify(row)) + 1);
@@ -86,7 +86,7 @@ export function encodeSessionSnapshot(sessions: Payload[], conversations: Payloa
     dropped.add(index); size -= sizes[index];
   }
   const text = JSON.stringify({ sessions: rows.filter((_row: Payload, index: number): boolean => !dropped.has(index)),
-    conversations: chats, heldActions: heldActions });
+    conversations: chats, heldActions: heldActions, sidebarConfig: sidebarConfig });
   return utf8Bytes(text) <= budget ? text : '';
 }
 

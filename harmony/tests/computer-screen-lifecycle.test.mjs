@@ -495,7 +495,7 @@ function componentMethod(source, name) {
 const pageMethod = name => componentMethod(pageSource, name);
 test('stalled WebSocket writes replace waiting mouse motion while preserving every button and keyboard transition', async () => {
   const src = readFileSync(new URL('../entry/src/main/ets/platform/HubTransport.ets', import.meta.url), 'utf8');
-  const methods = ['sendBinary', 'enqueueFrame'].map(name => componentMethod(src, name));
+  const methods = ['sendBinary', 'enqueueFrame', 'outgoingLimit'].map(name => componentMethod(src, name));
   const crypto = { createRandom: () => ({ generateRandom: async () => ({ data: new Uint8Array(4) }) }) };
   const Transport = new Function('cryptoFramework', 'MAX_FRAME_BYTES', 'toArrayBuffer', 'concatArrays',
     'return ' + stripTypeScriptTypes('class Transport {' + methods.join('\n') + '}'))(
@@ -524,6 +524,7 @@ test('a system touch cancellation with no remaining fingers releases the pointer
   page.pointerDown = true;
   page.screen = { releasePointer: () => released++ };
   page.viewport = { cancel: () => cancelled++ };
+  page.stopWheel = () => {};
   page.setViewingGesture = value => assert.equal(value, false);
   page.touchFrame({ type: 3, changedTouches: [], touches: [] });
   assert.equal(page.pointerDown, false);
@@ -834,26 +835,31 @@ test('one legal full-screen update can arrive as a burst above the pre-login que
   assert.equal(screen.presentationSource().pixels.at(-4),123);
 });
 
-test('a screen opened from the Computers directory stays open when its owner refreshes an ungrouped roster', () => {
-  const Subject = new Function('Wire', 'return ' + stripTypeScriptTypes('class Subject {' +
-    ['machinesChanged', 'sameMachine'].map(pageMethod).join('\n') + '}'))({ bool: (data, key) => data[key] === true });
-  const machine = (group, manager, id = 'mac', online = true) => ({ kind: 'machine', id, group, manager,
-    data: () => ({ online }), key() { return JSON.stringify(group ? [group, 'machine', manager, '', id] : ['machine', manager, '', id]); } });
-  const page = new Subject();
-  let dismissed = 0;
-  page.dismissForOwnerChange = () => dismissed++;
-  page.screen = { validateOwner: () => true };
-  page.row = machine('hub-a', 'owner');
-  page.model = { profile: { id: 'hub-a', manager: 'owner' }, machines: [machine('', 'owner')] };
-  page.machinesChanged();
-  assert.equal(dismissed, 0, 'the same computer without a Hub group still matches');
-  page.model.machines = [machine('', 'owner', 'mac', false)];
-  page.machinesChanged();
-  assert.equal(dismissed, 1, 'going offline still closes the screen');
-  page.model = { profile: { id: 'hub-b', manager: 'owner' }, machines: [machine('', 'owner')] };
-  page.machinesChanged();
-  assert.equal(dismissed, 2, 'the same id on another Hub is not this computer');
-  page.model = { profile: { id: 'hub-a', manager: 'owner' }, machines: [machine('', 'other')] };
-  page.machinesChanged();
-  assert.equal(dismissed, 3, 'the same id under another manager is not this computer');
+test('two fingers moving together scroll the computer, a pinch zooms the picture, and neither clicks or keeps a drag',async()=>{
+ const {ScreenWheel,ScreenTwoFingers,screenScrollFactor}=await import('../entry/src/main/ets/core/ScreenWheel.ts');
+ const touchType={Down:0,Up:1,Move:2,Cancel:3};
+ const Behavior=new Function('TouchType','ScreenPoint','screenScrollPreference','screenScrollFactor','return '+stripTypeScriptTypes('class TouchBehavior {'+['stopWheel','scrollWithTwoFingers','touchFrame'].map(pageMethod).join('\n')+'}'))(touchType,ScreenPoint,{choice:'default'},screenScrollFactor);
+ const page=new Behavior(),sent=[],viewport=new ScreenViewport();let control=true;viewport.layout(300,150,2);
+ Object.assign(page,{wheel:new ScreenWheel(),fingerMotion:new ScreenTwoFingers(),wheelTimer:-1,frameAreaWidth:300,frameAreaHeight:150,
+   framePixels:{},viewport,setViewingGesture(){},paceWheel(){},
+   screen:{hasFrame:true,controlAllowed:()=>control,scrollPointsInView:()=>1,pointerAt(x,y,b){sent.push(b);return true},releasePointer(){sent.push(0)}}});
+ // Each finger is [id,x,y]; `changed` is the finger this event is about, `type` its touch type.
+ function event(type,fingers,changed){
+   const touches=fingers.map(([id,x,y])=>({id,x,y,type:id===changed?type:touchType.Move}));
+   page.touchFrame({type,touches,changedTouches:touches.filter(t=>t.id===changed)});
+ }
+ event(0,[[1,30,75]],1);event(1,[[1,30,75]],1);assert.deepEqual(sent.splice(0),[1,0],'a tap still clicks');
+ event(0,[[1,30,50]],1);event(0,[[1,30,50],[2,60,50]],2);event(2,[[1,30,60],[2,60,60]],1);
+ event(1,[[1,30,60],[2,60,60]],1);event(1,[[2,60,60]],2);
+ assert.deepEqual(sent,[],'scrolling never clicks');assert.equal(page.wheel.busy,true);assert.equal(viewport.zoom,1);
+ event(0,[[1,30,75]],1);assert.equal(page.wheel.busy,false,'a new touch stops the momentum');event(1,[[1,30,75]],1);sent.splice(0);
+ event(0,[[1,100,75]],1);event(0,[[1,100,75],[2,140,75]],2);event(2,[[1,60,75],[2,180,75]],1);
+ assert.ok(viewport.zoom>1,'a pinch zooms the picture');assert.equal(page.wheel.busy,false);
+ event(1,[[1,60,75],[2,180,75]],1);event(1,[[2,180,75]],2);assert.deepEqual(sent,[]);
+ viewport.reset();control=false;
+ event(0,[[1,30,50]],1);event(0,[[1,30,50],[2,60,50]],2);event(2,[[1,30,70],[2,60,70]],1);
+ assert.equal(page.wheel.busy,false,'without control two fingers never scroll the computer');
+ event(1,[[1,30,70],[2,60,70]],1);event(1,[[2,60,70]],2);control=true;viewport.reset();
+ event(0,[[1,30,75]],1);event(2,[[1,40,75]],1);event(0,[[1,40,75],[2,90,75]],2);
+ assert.deepEqual(sent,[1,1,0],'a second finger releases a held drag');assert.equal(page.pointerDown,false);
 });

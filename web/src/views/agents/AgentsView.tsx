@@ -5,6 +5,7 @@ import { AgentAvatar, type AvatarSession } from "./AgentAvatar";
 import {
   blockView,
   fetchMessages,
+  personalAgentDraftKey,
   fetchAgentOutbox,
   arrangeSessions,
   togglePin,
@@ -424,12 +425,8 @@ function MessageRow({ m }: { m: AgentMessage }) {
   );
 }
 
-/** The draft key for a personal agent's box: stable while its rows are recreated, and shaped so no sidebar row reads it
- *  (the draft indicator only asks for `draft:<machine>/<session>` keys). */
-const agentDraftKey = (id: string) => `agent:${id}`;
-
 export function AgentComposer({ id, disabled, reason, onSend }: { id: string; disabled: boolean; reason: string; onSend: (text: string) => void }) {
-  const draftKey = agentDraftKey(id);
+  const draftKey = personalAgentDraftKey(id);
   const [text, setText] = useState(() => storedPageDraft(draftKey));
   useEffect(() => {
     storePageDraft(draftKey, text);
