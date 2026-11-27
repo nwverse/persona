@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/approval"
+	preparedapproval "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -364,7 +364,7 @@ func TestPreparedMaintenanceRequiresFreshDecision(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			go func() {
-				_, err := e.s.waitPreparedCard(ctx, ix, approval.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
+				_, err := e.s.waitPreparedCard(ctx, ix, preparedapproval.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
 					applied <- struct{}{}
 					return "applied", nil
 				}, Unanswered: "nothing executed"})

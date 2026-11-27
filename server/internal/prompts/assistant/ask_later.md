@@ -17,5 +17,4 @@ This is Persona's internal receipt, not a new owner instruction.{{else}}🔔 你
 {{else}}
 这张卡片没有得到回答就结束了（用户把它关了，或者它已经失效）。用户已经在对话里直接答过的，照那个答案做；没答过的，不要按其中任何一个选项去做，也别再问同一个问题，事情要是还卡在这里，简短告诉用户卡在哪。
 {{end}}
-（这是 Persona 的通知，不是用户在这里发的消息。）
-{{end}}
+（这是 Persona 的通知，不是用户在这里发的消息。）{{end}}
