@@ -30,7 +30,7 @@ type TodoPRStatus struct {
 
 	terminalAt       time.Time          // forge time for a merge or close, when known
 	submittedReview  prSubmittedReview  // consumed by the park in the same pass, separate from the stage's review summary
-	actionableReview prActionableReview // current-head changes_requested / actionable review for opt-in Agent routing
+	actionableReview prActionableReview // current-head changes_requested for opt-in Agent routing
 	failingCheck     prFailingCheck     // current-head failing CI summary for opt-in Agent routing
 }
 
@@ -239,32 +239,6 @@ func (g githubForge) readPRStatus(ctx context.Context, repo string, number int, 
 					Body:        strings.TrimSpace(r.Body),
 					URL:         strings.TrimSpace(r.HTMLURL),
 					SubmittedAt: at,
-				}
-			}
-		}
-	}
-	if out.actionableReview.State == "" && out.Review != "approved" && len(reviews) < 100 {
-		for _, r := range reviews {
-			if r.State != "COMMENTED" || r.ID <= 0 || r.CommitID != pr.Head.SHA || r.SubmittedAt.IsZero() {
-				continue
-			}
-			author := strings.TrimSpace(r.User.Login)
-			body := strings.TrimSpace(r.Body)
-			if author == "" || body == "" || (pr.User.Login != "" && strings.EqualFold(author, pr.User.Login)) {
-				continue
-			}
-			if isBotReviewAuthor(author, r.User.Type) || !reviewAuthorHasWriteAssociation(r.AuthorAssociation) || commentedReviewLooksInformational(body) {
-				continue
-			}
-			if r.SubmittedAt.After(out.actionableReview.SubmittedAt) ||
-				r.SubmittedAt.Equal(out.actionableReview.SubmittedAt) && r.ID > out.actionableReview.ID {
-				out.actionableReview = prActionableReview{
-					ID:          r.ID,
-					Author:      author,
-					State:       r.State,
-					Body:        body,
-					URL:         strings.TrimSpace(r.HTMLURL),
-					SubmittedAt: r.SubmittedAt.UTC(),
 				}
 			}
 		}
@@ -596,12 +570,18 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 			p.seen[key] = last // failures are attempts too, not fresh evidence
 			p.mu.Unlock()
 			var status TodoPRStatus
+			var feedback prFeedback
+			g, canReadFeedback := f.(githubForge)
 			var err error
 			if other != nil {
 				status, err = otherPRStatus(ctx, other, url)
 			} else {
 				number, _ := strconv.Atoi(m[2])
-				status, err = f.PRStatus(ctx, m[1], number)
+				if canReadFeedback && url == t.PRURL && s.prEventsRouteToAgentOn(ctx) {
+					status, err = g.readPRStatus(ctx, m[1], number, &feedback)
+				} else {
+					status, err = f.PRStatus(ctx, m[1], number)
+				}
 			}
 			if err != nil {
 				s.logf("task %s: PR status: %v", t.ID, err)
@@ -615,6 +595,12 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 			status.URL, status.CheckedAt = url, observedAt
 			if err := s.applyPRStatus(ctx, t, status); err != nil {
 				s.logf("task %s: keep PR status: %v", t.ID, err)
+				continue
+			}
+			if feedback.pullPath != "" {
+				if err := s.routePRFeedback(ctx, t.ID, status, g, feedback); err != nil {
+					s.logf("task %s: route PR feedback: %v", t.ID, err)
+				}
 			}
 		}
 	}
