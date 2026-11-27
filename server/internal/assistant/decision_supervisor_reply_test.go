@@ -338,7 +338,7 @@ func TestAgentChatReplyOnLeaderTaskKeepsLegacyRouting(t *testing.T) {
 // A supervisor-conversation hand-back must keep routing to its owning direction across a manager
 // restart. The persisted reply records its supervisor origin; the recovery sweep rebuilds the
 // explicit leader destination instead of the shared no-To signal that would escalate a
-// needs_user card back to Main (chyroc P1 on #12430).
+// needs_user card back to Main.
 func TestSupervisorHandBackRoutingSurvivesRestart(t *testing.T) {
 	st := &memStore{}
 	first, f := newQuietServiceOn(t, st)
@@ -374,7 +374,7 @@ func TestSupervisorHandBackRoutingSurvivesRestart(t *testing.T) {
 
 // A can_wait decision held for a briefing has no card and the owner has never seen this round.
 // Any message in its supervisor conversation must leave the hold, the card and the ask untouched:
-// neither release it for hand-back nor settle an option label (chyroc P2 on #12430).
+// neither release it for hand-back nor settle an option label.
 func TestHeldForBriefingDecisionIgnoresSupervisorConversation(t *testing.T) {
 	s, f, todo := decisionAgentReplyService(t)
 	s.accept.mu.Lock()
@@ -408,7 +408,7 @@ func TestHeldForBriefingDecisionIgnoresSupervisorConversation(t *testing.T) {
 
 // An active "Don't handle" dismissal hides the round from the supervisor reverse-lookup: neither
 // an exact option label nor free text may reopen, hand back or settle it. Undoing the dismissal
-// restores normal answering (chyroc P2 on #12430).
+// restores normal answering.
 func TestDismissedDecisionIgnoresSupervisorConversation(t *testing.T) {
 	// A real store is required: with no store, chooseOption fails on errAcceptStore before it can
 	// deliver or record, which would mask whether the dismissal gate actually blocks settlement.
