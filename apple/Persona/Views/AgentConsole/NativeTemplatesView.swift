@@ -56,6 +56,7 @@ struct NativeTemplatesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("native-templates")
         .onAppear {
+            if input.isEmpty, let value = model.templateLink { input = value }
             if !input.isEmpty { read() }
         }
         .onChange(of: model.pendingNativeTemplate) { _, value in
@@ -131,6 +132,9 @@ struct NativeTemplatesView: View {
                         }
                         error = nil
                         applied = true
+                        model.templateLink = nil
+                        model.pendingNativeTemplate = nil
+                        model.settingsPath = NavigationPath()
                         model.selectedTab = .assistant
                         model.toast = Toast(String(localized: "Template applied"), style: .success)
                     }

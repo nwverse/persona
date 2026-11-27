@@ -87,7 +87,9 @@ enum SettingsCatalog {
     /// The core's own entries.
     private static let coreEntries: [SettingsEntry] = {
         var rows: [SettingsEntry] = [
-            .init(id: "models", title: String(localized: "Models"), symbol: Theme.Icon.model, group: .assistant, page: .models,
+            .init(id: "templates", title: String(localized: "Templates"), symbol: Theme.Icon.style, group: .device, page: .templates,
+                  aliases: String(localized: "Agent console")),
+                        .init(id: "models", title: String(localized: "Models"), symbol: Theme.Icon.model, group: .assistant, page: .models,
                   aliases: String(localized: "settings.search.models")),
             .init(id: "assistant", title: String(localized: "Assistant Profile"), symbol: Theme.Icon.ai, group: .assistant, page: .assistant,
                   aliases: String(localized: "settings.search.assistant")),

@@ -40,6 +40,36 @@ import XCTest
         XCTAssertTrue(app.tabBars.buttons.element(boundBy: 2).exists)
     }
 
+    func testApplyingTemplatePersistsAcrossRestart() {
+        let app = XCUIApplication()
+        let json = #"{"persona_template":1,"id":"example-console","name":"Agent console","browser":{"main_chat":"plain","agents_view":"active","settings_view":"short"}}"#
+        app.launchArguments = ["-demo.on", "YES", "-tab", "assistant", "-persona.ios.console.enabled", "NO"]
+        app.launch()
+        let link = "persona://template?template=" + json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        app.terminate()
+        app.launchArguments = ["-demo.on", "YES"]
+        app.launch()
+        app.open(URL(string: link)!)
+        // A link opens an already parsed preview; the input belongs to the import form, not this page.
+        let apply = app.buttons["template-apply"].firstMatch
+        XCTAssertTrue(apply.waitForExistence(timeout: 15), app.debugDescription)
+        apply.tap()
+        XCTAssertTrue(app.tabBars.buttons.element(boundBy: 0).waitForExistence(timeout: 15), app.debugDescription)
+        app.tabBars.buttons.element(boundBy: 1).tap()
+        XCTAssertTrue(app.segmentedControls.firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+        app.terminate()
+        app.launchArguments = ["-demo.on", "YES"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons.element(boundBy: 0).waitForExistence(timeout: 15), app.debugDescription)
+        app.tabBars.buttons.element(boundBy: 1).tap()
+        XCTAssertTrue(app.segmentedControls.firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+        app.tabBars.buttons.element(boundBy: 2).tap()
+        app.terminate()
+        app.launchArguments = ["-demo.on", "YES"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons.element(boundBy: 2).waitForExistence(timeout: 15), app.debugDescription)
+    }
+
     func testDefaultDoesNotReplaceTheExistingShell() {
         let app = XCUIApplication()
         app.launchArguments = ["-demo.on", "YES", "-persona.ios.console.enabled", "NO", "-tab", "assistant"]
