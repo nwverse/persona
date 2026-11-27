@@ -271,7 +271,8 @@ func startsWithAny(s string, prefixes []string) bool {
 // StartEnded is session.start_ended's params: how an app's start that the node ran before answering went (a resume, a
 // Codex, an older app; one answered at once is followed in the session lists), for launcher health
 // (docs/server/launcher-health.md). Launcher is the one the start ran ("" : claude); Error and Code, Data are the
-// node's answer when it failed (its rpc.Error's code and data, when it had them).
+// node's answer when it failed (its rpc.Error's code and data, when it had them). Started is the new session a start
+// made in Claude's desktop app, for the manager to name (an older hub sends none).
 type StartEnded struct {
 	MachineID string          `json:"machine_id"`
 	SessionID string          `json:"session_id,omitempty"`
@@ -280,7 +281,22 @@ type StartEnded struct {
 	Error     string          `json:"error,omitempty"`
 	Code      string          `json:"code,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
+	Started   *StartedSession `json:"started,omitempty"`
 }
+
+// StartedSession is a new session an app's start made in Claude's desktop app (#13728): the node seeds it under a
+// placeholder title, never its first message, and the manager names it from NameFrom with the model once the start
+// has ended (assistant/desktop_start_naming.go). SessionID and Title are the node's answer; NameFrom is the start's
+// first message, or the name hint when the app sends the message after the start, cut to StartedNameFromRunes.
+type StartedSession struct {
+	SessionID string `json:"session_id"`
+	Title     string `json:"title,omitempty"`
+	NameFrom  string `json:"name_from,omitempty"`
+}
+
+// StartedNameFromRunes bounds StartedSession.NameFrom: a name is made from the start of the message (the manager reads
+// no more than this), so a long first message does not travel twice.
+const StartedNameFromRunes = 2000
 
 // ConversationSent is session.assistant_sent's params: an app's message the hub sent to the assistant's conversation
 // SessionID, and what became of it. Outcome is ConversationDelivered, ConversationFailed or ConversationUnknown (it may

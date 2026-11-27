@@ -1139,8 +1139,8 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	params := map[string]any{}
 	_ = json.Unmarshal(raw, &params)
 	name := "" // a local placeholder now; the manager names the returned session in the background
-	if p.TabName == "" && p.ResumeSessionID == "" {
-		name = nameFrom
+	if p.TabName == "" && p.ResumeSessionID == "" && p.Launcher != claudeDesktopLauncher {
+		name = nameFrom // Claude's desktop app has no tab: its manager names the session once the start has ended
 	}
 	// The manager says what it runs on (Models › Agents, a model picked for this start) and names its tab
 	// (agents_link.go).
@@ -1252,7 +1252,7 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 				return
 			}
 		}
-		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, err)
+		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, nil, err)
 		if re := (*rpc.Error)(nil); checkedResume && errors.As(err, &re) && re.Code == proto.CodeResumeUnknown {
 			// The answer the hub gives a conversation it lists in the space or does not know: the extension is not
 			// told which it was.
@@ -1268,7 +1268,14 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		params["launcher"] = res.Session.Launcher
 	}
 	if !async {
-		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, nil)
+		var started *assistantwire.StartedSession
+		if p.ResumeSessionID == "" && res.Session.SessionID != "" && res.Session.SourceKind == proto.SourceClaudeDesktop {
+			// Seeded under a placeholder title (node/claudedesktop_new.go): the manager names it from what the start
+			// asked, off the start's path (assistant/desktop_start_naming.go, #13728).
+			started = &assistantwire.StartedSession{SessionID: res.Session.SessionID, Title: res.Session.Title,
+				NameFrom: cutNameFrom(nameFrom)}
+		}
+		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, started, nil)
 	}
 	recordFirstInput := func() {
 		// Before the machine lists it, the returned session says where it runs.
@@ -1336,13 +1343,14 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 // startEnded tells the machine's manager how an app's start went, for launcher health (#1642,
 // assistant/launcher_health_starts.go): one that failed, or one the node ran before answering that worked; the manager
 // follows one answered at once (async) in the session list. A start whose outcome the hub does not know (the machine
-// away, the call timed out) is not told, nor a resume on the launcher it had (which one the node ran is its).
-func (h *Hub) startEnded(mid, resume string, params map[string]any, err error) {
+// away, the call timed out) is not told, nor a resume on the launcher it had (which one the node ran is its). started
+// is the new session a start made in Claude's desktop app, for the manager to name (nil for any other).
+func (h *Hub) startEnded(mid, resume string, params map[string]any, started *assistantwire.StartedSession, err error) {
 	launcher, _ := params["launcher"].(string)
 	if launcher == "" && resume != "" {
 		return
 	}
-	r := assistantwire.StartEnded{MachineID: mid, SessionID: resume, Launcher: launcher, OK: err == nil}
+	r := assistantwire.StartEnded{MachineID: mid, SessionID: resume, Launcher: launcher, OK: err == nil, Started: started}
 	if err != nil {
 		if code := apierr.NodeCode(err); code == "timeout" || code == "node_unreachable" || errors.Is(err, context.Canceled) {
 			return
@@ -1401,8 +1409,23 @@ func startBudget(async bool) time.Duration {
 	return 100 * time.Second
 }
 
+// claudeDesktopLauncher is the node's launcher that starts a session in Claude's desktop app (node/claudedesktop_new.go).
+const claudeDesktopLauncher = "claude-desktop"
+
+// cutNameFrom is what a started session is named from: the start of it, at most assistantwire.StartedNameFromRunes.
+func cutNameFrom(s string) string {
+	n := 0
+	for i := range s {
+		if n == assistantwire.StartedNameFromRunes {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
 func desktopStartLauncher(launcher string) bool {
-	return launcher == "claude-desktop" || launcher == "codex-app"
+	return launcher == claudeDesktopLauncher || launcher == "codex-app"
 }
 
 func startBudgetForLauncher(async bool, launcher string) time.Duration {

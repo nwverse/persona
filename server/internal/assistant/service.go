@@ -891,6 +891,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if err == nil {
 		round.sent(s, res) // whose round it is, for the owner's next message (owner_preempt.go)
 	}
+	if err == nil && startsSession(method) {
+		if started, ok := desktopStartCalled(params, res); ok {
+			s.nameDesktopStart(device, started) // a session it made in Claude's desktop app (desktop_start_naming.go)
+		}
+	}
 	if err == nil && (method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		if sent, ok := params.(map[string]any); ok {
 			if id, _ := sent["session_id"].(string); id != "" {

@@ -343,6 +343,18 @@ selected host. They offer typed model IDs for native `omp` only when that respon
 `"supports_start_model": true`. An older node can start `omp` with its own default. Older clients ignore the
 optional field. A registered runtime called `omp` still supplies its own list of supported models.
 
+### Titles of new sessions in Claude's desktop app (#13728)
+
+The node seeds a new desktop session under its folder's name, and the manager names it from `session.start_ended`'s
+optional `started` (`docs/integrations/claude-integration.md`, "New sessions in the desktop app"). A start the manager
+sends itself is named from its own `session.start` answer, whatever the hub's version.
+
+| Pair | What happens |
+| --- | --- |
+| New node, hub and manager | The folder name shows until the model's name arrives, then the automatic name. |
+| Older node, new hub and manager | The older node still seeds the first message as the title; the manager names the session the same way and the automatic name stands over that title. |
+| New node, older hub or older manager | An older hub sends no `started`, and an older manager ignores it: an app's start keeps the folder name until **Auto Rename** or a rename. With an older manager, so does a start it sends. |
+
 ## Start-defaults field convergence (#11719)
 
 The rule fields of `GET`/`PUT /api/v1/assistant/start-defaults` and of the nested `start_defaults` in `PUT /api/v1/assistant` converge on new names in #11719. This is extension-facing JSON, and the same structure is persisted in the Postgres settings, so dual-read must cover both live requests and already-stored policies.

@@ -34,8 +34,12 @@ type countedStart struct {
 	At      time.Time `json:"at"`
 }
 
-// StartEnded: an app's start the node ran before answering went as r says (the hub's POST /api/v1/sessions).
+// StartEnded: an app's start the node ran before answering went as r says (the hub's POST /api/v1/sessions). A
+// session it made in Claude's desktop app is named in the background (desktop_start_naming.go).
 func (s *Service) StartEnded(ctx context.Context, r StartEnded) {
+	if r.OK && r.Started != nil {
+		s.nameDesktopStart(r.MachineID, *r.Started)
+	}
 	launcher := cmp.Or(r.Launcher, "claude")
 	if r.OK {
 		s.recordStartSuccess(ctx, r.MachineID, launcher)

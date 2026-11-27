@@ -182,8 +182,8 @@ func startDesktop(t *testing.T, n *Node, params map[string]any) (proto.Session, 
 }
 
 // New Agent with the desktop app's launcher starts the session in the app: the CLI writes it with a local command only
-// (named after the first message), the app imports it at its resume link, and the first message goes to the inbox of
-// the claude the app starts for it. No terminal is asked for anything.
+// (named after its folder, not the first message), the app imports it at its resume link, and the first message goes
+// to the inbox of the claude the app starts for it. No terminal is asked for anything.
 func TestNewAgentWithTheDesktopLauncherStartsTheSessionInTheApp(t *testing.T) {
 	n, f, home := herdrNode(t)
 	noPaneEnv(t)
@@ -228,11 +228,11 @@ func TestNewAgentWithTheDesktopLauncherStartsTheSessionInTheApp(t *testing.T) {
 			return ok
 		})
 	}()
-	if !validID(s.SessionID) || s.Cwd != dir || s.Title != "整理 本周的" || s.SourceKind != proto.SourceClaudeDesktop || s.Launcher != "" {
+	if !validID(s.SessionID) || s.Cwd != dir || s.Title != "report" || s.SourceKind != proto.SourceClaudeDesktop || s.Launcher != "" {
 		t.Fatalf("session: %+v", s)
 	}
 	seeds := app.seeded()
-	if len(seeds) != 1 || seeds[0] != (fakeSeed{claude, dir, s.SessionID, "整理 本周的"}) {
+	if len(seeds) != 1 || seeds[0] != (fakeSeed{claude, dir, s.SessionID, "report"}) {
 		t.Fatalf("seeded: %+v (claude %s)", seeds, claude)
 	}
 	if links := app.opened(); len(links) == 0 || links[0] != "claude://resume?session="+s.SessionID {
@@ -267,8 +267,8 @@ func TestADesktopStartMakesANewFolder(t *testing.T) {
 	}
 }
 
-// The apps start with no first message and send it after (async): the session is named after the start's name hint,
-// and the message, sent as any message, goes to the inbox of the claude the app starts for it.
+// The apps start with no first message and send it after (async): the session is seeded under its folder's name, not
+// the start's name hint, and the message, sent as any message, goes to the inbox of the claude the app starts for it.
 func TestADesktopStartNamedAfterItsHintTakesTheFirstMessageAfter(t *testing.T) {
 	n, f, home := herdrNode(t)
 	noPaneEnv(t)
@@ -282,7 +282,7 @@ func TestADesktopStartNamedAfterItsHintTakesTheFirstMessageAfter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Title != "周报" || len(app.seeded()) != 1 || app.seeded()[0].title != "周报" {
+	if s.Title != filepath.Base(dir) || len(app.seeded()) != 1 || app.seeded()[0].title != filepath.Base(dir) {
 		t.Fatalf("session %+v, seeded %v", s, app.seeded())
 	}
 	if links := app.opened(); len(links) != 1 {
@@ -575,6 +575,34 @@ func TestStampDesktopModeKeepsTheRestOfTheTranscript(t *testing.T) {
 	}
 	if err := stampDesktopMode(path, "auto"); err == nil {
 		t.Fatal("a transcript with no user line was stamped")
+	}
+}
+
+// A new session of the app is written under its folder's name, never its first message or the start's name hint: the
+// transcript's title is the one the app and the lists show, and a long instruction made an unreadable one. The manager
+// names it from that message with the model once the start has ended (assistant/desktop_start_naming.go, #13728). The
+// first message itself is TestNewAgentWithTheDesktopLauncherStartsTheSessionInTheApp's.
+func TestADesktopStartIsSeededUnderItsFolderNotItsFirstMessage(t *testing.T) {
+	n, home := testNode(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	app := newFakeDesktopApp(t, home)
+	fakeClaudeOnPath(t)
+	shellLaunchers(t)
+	dir := filepath.Join(t.TempDir(), "export-fix")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const hint = "用中文工作，最后用中文汇报。帮我把 PDF 导出时丢失图片的问题修一下"
+	s, err := startDesktop(t, n, map[string]any{"cwd": dir, "launcher": "claude-desktop", "name_hint": hint})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	seeds := app.seeded()
+	if len(seeds) != 1 || seeds[0].title != "export-fix" || s.Title != "export-fix" {
+		t.Fatalf("seeded %+v, session title %q: want the folder's name", seeds, s.Title)
+	}
+	if b, err := os.ReadFile(findTranscript(t, home, s.SessionID)); err != nil || strings.Contains(string(b), "PDF") {
+		t.Fatalf("the first message is in the seeded transcript (%v):\n%s", err, b)
 	}
 }
 

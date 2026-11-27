@@ -188,7 +188,8 @@ const (
 	EventUpdated             = "manager.updated" // Hello again: hub.json's assistant section or the machines changed
 	EventResync              = "manager.resync"  // {}: report the whole snapshot again
 
-	// EventStartEnded (StartEnded): how an app's start the node ran before answering went (POST /api/v1/sessions).
+	// EventStartEnded (StartEnded): how an app's start the node ran before answering went (POST /api/v1/sessions), and
+	// the session it made in Claude's desktop app, to name.
 	EventStartEnded = "session.start_ended"
 
 	// EventConversationSent (ConversationSent): how an app's message to one of the assistant's conversations went, as

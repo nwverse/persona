@@ -233,7 +233,7 @@ func TestClaudeDesktopPartialSeedRecoveryKeepsStartSettings(t *testing.T) {
 			}
 			params := runtimeStartParams{Cwd: t.TempDir(), Model: "gateway-opus-5-5[1m]", Effort: "xhigh", PermissionMode: mode, Prompt: "send this after setup"}
 			params.DesktopProjectID = projectSpace + params.Cwd
-			s, err := n.newDesktopSession(context.Background(), params, "")
+			s, err := n.newDesktopSession(context.Background(), params)
 			if s == nil {
 				t.Fatalf("the partial seed lost the session: %v", err)
 			}

@@ -960,7 +960,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		WorkspaceID             string        `json:"workspace_id"`
 		WorkspaceLabel          string        `json:"workspace_label"`
 		ReopenWorktreeWorkspace bool          `json:"reopen_worktree_workspace"`
-		NameHint                string        `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
+		NameHint                string        `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (codexapp_new.go)
 		Text                    string        `json:"text"`
 		SkillOwner              string        `json:"skill_owner"` // manager-owned identity for explicit skill selections
 		Images                  []proto.Image `json:"images"`
@@ -1952,7 +1952,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return withInstead(res, err, instead)
 		}
 		if method == "session.start" {
-			if s, err, ok := n.startInDesktopApp(ctx, rp, p.NameHint); ok { // a new session in Claude's desktop app (claudedesktop_new.go)
+			if s, err, ok := n.startInDesktopApp(ctx, rp); ok { // a new session in Claude's desktop app (claudedesktop_new.go)
 				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 			}
 		}

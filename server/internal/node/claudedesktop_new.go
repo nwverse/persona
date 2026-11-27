@@ -32,8 +32,9 @@ import (
 //
 //  1. writes the session with the CLI and no model request: `claude -p --session-id <new id> "/rename <title>"` runs a
 //     local command only, so it needs no sign-in, and the transcript holds the folder and the title the app shows (the
-//     app gives an imported session none of its own: the title is the first message's, or the start's name hint when
-//     the message goes after it, as the apps send it);
+//     app gives an imported session none of its own). The title is a placeholder, the folder's name
+//     (desktopPlaceholderTitle): never the first message, and its manager names the session from that message with the
+//     model once the start has ended (assistant/desktop_start_naming.go, #13728);
 //  2. stamps the start's permission mode on the transcript's user lines (desktopStartMode, stampDesktopMode), the
 //     mode the app imports the session in;
 //  3. asks the app to import it (in the background; the app comes to the front all the same) and waits for its index to
@@ -160,8 +161,7 @@ func terminalLauncher(launcher, resume string) (string, error) {
 
 // startInDesktopApp starts a new session in the desktop app for a start with its launcher; handled false for any
 // other start. A resume only retries setup of an existing desktop session, without creating a second transcript.
-// nameHint names a new session when the start carries no first message (the apps send it after the start).
-func (n *Node) startInDesktopApp(ctx context.Context, p runtimeStartParams, nameHint string) (s *proto.Session, err error, handled bool) {
+func (n *Node) startInDesktopApp(ctx context.Context, p runtimeStartParams) (s *proto.Session, err error, handled bool) {
 	if !isDesktopLauncher(p.Launcher) {
 		return nil, nil, false
 	}
@@ -169,11 +169,11 @@ func (n *Node) startInDesktopApp(ctx context.Context, p runtimeStartParams, name
 		s, err = n.resumeDesktopSession(ctx, p)
 		return s, err, true
 	}
-	s, err = n.newDesktopSession(ctx, p, nameHint)
+	s, err = n.newDesktopSession(ctx, p)
 	return s, err, true
 }
 
-func (n *Node) newDesktopSession(ctx context.Context, p runtimeStartParams, nameHint string) (*proto.Session, error) {
+func (n *Node) newDesktopSession(ctx context.Context, p runtimeStartParams) (*proto.Session, error) {
 	if n.sessionScope != nil {
 		return nil, refusal("desktop_scope_unavailable", "Desktop sessions are unavailable in a scoped node.", nil)
 	}
@@ -205,7 +205,7 @@ func (n *Node) newDesktopSession(ctx context.Context, p runtimeStartParams, name
 	if err != nil {
 		return nil, err
 	}
-	id, title := newUUID(), desktopTitle(cmp.Or(strings.TrimSpace(p.Prompt), nameHint), dir)
+	id, title := newUUID(), desktopPlaceholderTitle(dir)
 	s := &proto.Session{SessionID: id, Cwd: dir, Title: title, Agent: "claude", Status: proto.StatusIdle,
 		Model: model, Effort: p.Effort, StartedByPersona: true, SourceKind: proto.SourceClaudeDesktop, UpdatedAt: time.Now().UTC()}
 	backend := backendLaunchFrom(ctx)
@@ -514,11 +514,19 @@ func (n *Node) desktopScratchDir() string {
 	return filepath.Join(best, desktopScratchName)
 }
 
-// desktopTitleMax is how many characters of the first message name the session in the app's sidebar.
+// desktopPlaceholderTitle names a new session of Claude's desktop app until its manager names it with the model
+// (assistant/desktop_start_naming.go): its folder's name, as a start with no message always had. The first message no
+// longer names it (#13728): an instruction template or pasted context made an unreadable title, and the title said
+// nothing of the task.
+func desktopPlaceholderTitle(dir string) string {
+	return filepath.Base(dir)
+}
+
+// desktopTitleMax is how many characters of the first message name a new chat in the Codex App's sidebar.
 const desktopTitleMax = 40
 
-// desktopTitle names a new session of the app: the first line of its first message, spaces folded, cut at
-// desktopTitleMax characters; with no message, its folder's name.
+// desktopTitle names a new chat of the Codex App (codexapp_new.go): the first line of its first message, spaces
+// folded, cut at desktopTitleMax characters; with no message, its folder's name.
 func desktopTitle(prompt, dir string) string {
 	line := ""
 	for _, l := range strings.Split(prompt, "\n") {

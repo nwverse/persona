@@ -50,6 +50,7 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 	if launcher, _ := params["launcher"].(string); proto.IsExternalLauncher(launcher) {
 		return nil, badRequest(i18n.Err("external-adapter.purpose_unsupported"), s.appLang(ctx, p.Lang))
 	}
+	inDesktopApp := false // the launcher starts it in Claude's desktop app, which has no tab to name
 	if resume, _ := params["resume_session_id"].(string); resume != "" {
 		if err := checkStartSpeed(params, startAgent{}, resume); err != nil {
 			return nil, badRequest(err, s.appLang(ctx, p.Lang))
@@ -82,6 +83,7 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 				delete(params, "permission_mode")
 			}
 			leaveLauncherNote(ctx, note) // the app says so (agents_bus.go launcher_note, #4661)
+			inDesktopApp = startsInDesktopApp(agent, params)
 			// AGY returns a session only after startup, including for a launcher resolved from Model settings.
 			if declared, _ := params["agent_type"].(string); declared == "" && agent.agent == "agy" {
 				params["agent_type"] = agent.agent
@@ -96,7 +98,9 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 	delete(params, "launcher_default_effort")
 	clearStandardSpeed(params)
 	s.setPlanThen(ctx, p.MachineID, params)
-	if name, _ := params["tab_name"].(string); strings.TrimSpace(name) == "" && p.NameFrom != "" {
+	// A session in Claude's desktop app has no tab: its manager names it from its first message with the model once the
+	// start has ended, off the start's path (desktop_start_naming.go).
+	if name, _ := params["tab_name"].(string); strings.TrimSpace(name) == "" && p.NameFrom != "" && !inDesktopApp {
 		// Start locally; agents.tab_name_started asks the model after the hub has the session identity.
 		params["tab_name"] = localTabName(p.NameFrom)
 	}
