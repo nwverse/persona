@@ -9123,6 +9123,30 @@
     {
       "name": "agents_use_herdr_tab_name_hint",
       "value": "优先显示标签名。此设置会在连接同一 Hub 的设备间同步。"
+    },
+    {
+      "name": "composer_queued_count",
+      "value": "{count} 条排队中"
+    },
+    {
+      "name": "composer_queue_send_now",
+      "value": "立即发送"
+    },
+    {
+      "name": "composer_queue_relayed",
+      "value": "已转达"
+    },
+    {
+      "name": "code_wrap_lines",
+      "value": "换行"
+    },
+    {
+      "name": "code_unwrap_lines",
+      "value": "横向滚动"
+    },
+    {
+      "name": "copied",
+      "value": "已复制"
     }
   ]
 }
