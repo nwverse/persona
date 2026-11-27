@@ -38,11 +38,12 @@ type KBProviderRequest struct {
 	Params      KBImportQuery       `json:"params"`
 }
 
-// KBImportQuery holds the only selectors forwarded from the SDK. A checkpoint
-// uses an empty object. A marker page must supply a day and its approval.
+// KBImportQuery holds the only selectors forwarded from the SDK: kb.sent_markers' params as the schema has them
+// (KBSentMarkersParams: day and approval always there). A checkpoint takes an empty object and forwards the zero query;
+// a marker page must supply a day and its approval.
 type KBImportQuery struct {
-	Day      string `json:"day,omitempty"`
-	Approval string `json:"approval,omitempty"`
+	Day      string `json:"day"`
+	Approval string `json:"approval"`
 	After    int    `json:"after,omitempty"`
 }
 
