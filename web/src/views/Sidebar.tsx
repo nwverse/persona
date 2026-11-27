@@ -87,7 +87,6 @@ import { heldSidesOf, useHeldVersion } from "../lib/use-child-sessions";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, HISTORY_ICON, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, pageIconStyle, pageLabel, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading, unreadShown } from "./SidebarRows";
-import { SidebarSpaces } from "./SidebarSpaces";
 import { GroupBranch, LooseSection, MachineSection, RepoMachineSection, SessionTally, ShellSpaceSection, type SpaceMenuFn, type WorkspaceTreeActions, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
 import type { PageSection } from "../lib/sidebar-pages";
@@ -107,6 +106,7 @@ export { SidebarRail } from "./SidebarRail";
 // the chunk is in, never suspending: a Suspense here would hold the sidebar's other updates (a navigation) while it
 // loads. A chunk that will not load is reported, and the next mount asks again.
 const HerdrNoticesContent = lazyPage(() => import("./agents/HerdrNotices").then((m) => m.HerdrNotices));
+const SidebarSpacesLazy = lazy(() => import("./SidebarSpaces").then((m) => ({ default: m.SidebarSpaces })));
 export const HerdrNotices = memo(function HerdrNotices() {
   const [ready, setReady] = useState(HerdrNoticesContent.ready);
   useEffect(() => {
@@ -481,7 +481,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         <div data-row-scroller data-sidebar-scroller className="min-h-0 flex-1 -mx-2.5 overflow-y-auto overscroll-contain px-2.5 pb-3">
         {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}
         {narrow && <NavGrid showHubNotice={active} pages={sections.find((g) => !g.id)?.pages ?? []} more={more} activeKey={activeKey} go={go} onNavigate={onNavigate} />}
-        <SidebarSpaces route={route} reg={reg} hover={hover} activeKey={activeKey} go={go} />
+        <Suspense fallback={null}><SidebarSpacesLazy route={route} reg={reg} hover={hover} activeKey={activeKey} go={go} /></Suspense>
         {sections
           .filter((g) => (g.id ? g.pages.length > 0 : !narrow))
           .map((g, i) => <PageGroup showHubNotice={active} key={g.id || "pages"} group={g} more={g.id ? [] : more} first={i === 0 && !narrow} reg={reg} hover={hover} activeKey={activeKey} go={go} />)}
