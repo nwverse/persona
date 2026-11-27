@@ -74,7 +74,7 @@ func TestOrcaSplitsAPane(t *testing.T) {
 	if _, err := h.Split(context.Background(), host.PaneRef{Kind: host.Orca, ID: "tab1:leaf1"}, "right", orcaCwd+"/bad\nname"); err != nil {
 		t.Fatal(err)
 	}
-	if w := o.Writes(); len(w) != 2 || w[0].Text != "cd '"+orcaCwd+"/web'" || w[1].Text != "" {
+	if w := o.Writes(); len(w) != 2 || w[0].Text != "cd "+shellQuote(orcaCwd+"/web") || w[1].Text != "" {
 		t.Fatalf("split commands %+v", w)
 	}
 	if _, err := h.Split(context.Background(), host.PaneRef{Kind: host.Orca, ID: "tab1:leaf1"}, "left", ""); err == nil {
@@ -143,8 +143,10 @@ func TestOrcaWithoutSplitOrCloseTab(t *testing.T) {
 	}
 }
 
-// The assistant's tab name (#15674) lands on an Orca tab only while Orca's layout, read then, still shows the name the
-// assistant saw: a rename the owner made in Orca's window meanwhile wins, and nothing is renamed.
+// The assistant's tab name (#15674) lands on an Orca tab only while Orca, asked then, still shows the name the
+// assistant saw: a rename made meanwhile (the owner's in Orca's window, or Persona's own) wins, and nothing is renamed.
+// The name asked for is the phone tab model's (session.tabs.list): on an Orca with no window the layout keeps the tab's
+// first title whatever it is renamed to (as the fake does, after Orca 1.4.277).
 func TestOrcaGuardedTabRename(t *testing.T) {
 	n, o, _ := orcaSession(t)
 	rename := func(expected, name string) error {
@@ -158,12 +160,35 @@ func TestOrcaGuardedTabRename(t *testing.T) {
 	if tr := o.Trace("terminal.rename"); strings.Join(tr, "|") != `terminal.rename {"terminal":"term_1","title":"async-login"}` {
 		t.Fatalf("rename calls %v", tr)
 	}
+	if tr := o.Trace("session.tabs.list"); len(tr) != 1 || tr[0] != `session.tabs.list {"worktree":"id:repo::`+orcaCwd+`"}` {
+		t.Fatalf("tab names read %v", tr)
+	}
 	o.Reset()
-	o.SetTabTitle("tab1", "owner-chosen")
+	// The layout still says "tab tab1"; the tab is called async-login now.
+	if err := rename("tab tab1", "late-name"); err == nil {
+		t.Fatal("renamed over a name given since, which only the layout did not show")
+	}
+	o.RenameTab("tab1", "owner-chosen")
 	if err := rename("async-login", "late-name"); err == nil {
 		t.Fatal("renamed over the owner's name")
 	}
 	if n := o.Count("terminal.rename"); n != 0 {
-		t.Fatalf("renamed %d times over the owner's name", n)
+		t.Fatalf("renamed %d times over a newer name", n)
+	}
+	if inv := o.Invalid(); len(inv) != 0 {
+		t.Errorf("params Orca would refuse: %v", inv)
+	}
+
+	// An Orca without the phone's tab model: its layout's titles, read now, decide.
+	n, o, _ = orcaSession(t)
+	o.Lack("session.tabs.list")
+	if err := rename("tab tab1", "async-login"); err != nil {
+		t.Fatalf("an Orca without session.tabs.list: %v", err)
+	}
+	if err := rename("other", "late-name"); err == nil {
+		t.Fatal("renamed a tab the layout does not show under the expected name")
+	}
+	if n := o.Count("terminal.rename"); n != 1 {
+		t.Fatalf("%d renames on an Orca without session.tabs.list", n)
 	}
 }

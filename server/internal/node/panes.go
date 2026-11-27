@@ -73,6 +73,24 @@ func (n *Node) hasPane(pane string) bool {
 	return false
 }
 
+// canSplit and canCloseTab: the host splits a pane (host.Splitter) / closes a whole tab (host.SlotCloser) now, as far
+// as it knows without asking: an Orca that answered method_not_found to the call no longer offers it (#17043).
+func canSplit(h host.Host) bool {
+	if o, ok := h.(*orcaHost); ok {
+		return o.CanSplit()
+	}
+	_, ok := h.(host.Splitter)
+	return ok
+}
+
+func canCloseTab(h host.Host) bool {
+	if o, ok := h.(*orcaHost); ok {
+		return o.CanCloseSlot()
+	}
+	_, ok := h.(host.SlotCloser)
+	return ok
+}
+
 // listPanes is the terminal browser's tree: from the layouts the node keeps, refreshed first when they are older
 // than paneListMaxAge (or a host has none yet).
 func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
@@ -105,12 +123,8 @@ func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
 		}
 		_, c.NewTab = h.(host.Launcher)
 		c.Worktree = canWorktree(h)
-		_, c.Split = h.(host.Splitter)
-		_, c.CloseTab = h.(host.SlotCloser)
+		c.Split, c.CloseTab = canSplit(h), canCloseTab(h)
 		_, c.Rename = h.(host.Organizer)
-		if o, ok := h.(*orcaHost); ok { // an Orca that answered method_not_found to one no longer offers it
-			c.Split, c.CloseTab = o.CanSplit(), o.CanCloseSlot()
-		}
 		caps[h.Kind()] = c
 	}
 	n.mu.Lock()

@@ -97,6 +97,16 @@ what an engine's read returns against a real Agent on an isolated runtime (its o
 a stand-in Messages API) before trusting a plain-text rule, and capture the empty box, a typed draft and the grey
 suggestion separately.
 
+## Orca's schema is not its behavior: fences, folders and tab names (#17043)
+
+On Orca 1.4.277's local socket, `terminal.split` and `terminal.closeTab` accept `expectedIncarnationId` but do not
+hold it (a wrong one still split and closed the tab), the split's `cwd` is honoured only by the layout-addressed form
+the socket refuses (`host_not_owned`), and on a runtime with no window `terminal.rename` changes the terminals' titles
+and the phone tab model (`session.tabs.list`'s `customTitle`) but not the tab title in `terminal.list`'s layouts. Look
+the terminal up yourself right before a call whose fence the runtime ignores, reach a folder through the new shell's
+`command`, and read a tab's current name where renames land. Check each of these on an isolated runtime: the request
+schema in Orca's bundle says what it accepts, not what it does.
+
 ## A visible Codex composer does not prove takeover readiness
 
 Codex can draw an empty input box before its folder-trust dialog arrives. A takeover must wait for the original thread to be loaded and joined on the shared app-server, not merely for a running process, a visible composer, or an HTTP success. Test the late dialog after a transient composer, and send a real follow-up from the client. Keep the pending client action mounted when session discovery changes the history row into a live row, or a later failure and its continuation-only fallback can disappear before the request completes (#5739).

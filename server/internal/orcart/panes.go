@@ -3,6 +3,7 @@ package orcart
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // The split directions terminal.split takes, in Orca's words for where the new pane goes: "vertical" puts it to the
@@ -55,6 +56,42 @@ func (c *Client) Split(ctx context.Context, t Target, direction, command string)
 // CloseTab is terminal.closeTab: Orca closes the tab the terminal is in, with every pane in it, whatever runs there.
 func (c *Client) CloseTab(ctx context.Context, t Target) error {
 	return c.Call(ctx, CloseTimeout, "terminal.closeTab", t.params(), nil)
+}
+
+// TabNames is session.tabs.list's view of a worktree's terminal tabs ("id:<worktreeId>"), the model Orca's phone app
+// reads: for each tab, the name each of its panes shows now, its custom name when it has one (set by
+// terminal.rename, or a rename in Orca's window) else its title. Unlike the tab titles of terminal.list's layouts, it
+// follows renames on a runtime with no window (Orca 1.4.277's headless server keeps the layout's tab title as created;
+// checked live).
+func (c *Client) TabNames(ctx context.Context, worktree string) (map[string][]string, error) {
+	var res struct {
+		Tabs []struct {
+			Type        string `json:"type"`
+			ID          string `json:"id"`
+			ParentTabID string `json:"parentTabId"`
+			Title       string `json:"title"`
+			CustomTitle string `json:"customTitle"`
+		} `json:"tabs"`
+	}
+	if err := c.Call(ctx, CallTimeout, "session.tabs.list", map[string]any{"worktree": worktree}, &res); err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, t := range res.Tabs {
+		if t.Type != "terminal" {
+			continue
+		}
+		tab := t.ParentTabID
+		if tab == "" {
+			tab, _, _ = strings.Cut(t.ID, "::")
+		}
+		name := strings.TrimSpace(t.CustomTitle)
+		if name == "" {
+			name = strings.TrimSpace(t.Title)
+		}
+		out[tab] = append(out[tab], name)
+	}
+	return out, nil
 }
 
 // RuntimeID is the id of the runtime whose metadata the client read last ("" before any call). It changes when Orca

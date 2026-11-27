@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -145,15 +146,44 @@ func (h *orcaHost) slotTerminal(ctx context.Context, slot string) (orcart.Termin
 // errTabRenamed: the tab no longer shows the name a guarded rename expected (someone renamed it meanwhile).
 var errTabRenamed = errors.New("the tab name changed")
 
-// RenameSlotIf renames the tab only while Orca's layout, read now (the cached one may be orcaLayoutMaxAge old), shows
-// it under the expected name as Snapshot labels it: a rename the owner made meanwhile wins (#15674).
+// RenameSlotIf renames the tab only while Orca, asked now, still shows it under the expected name: a rename the owner
+// made meanwhile wins (#15674). The name asked for is the one in Orca's phone tab model (orcart.TabNames): the tab
+// titles of terminal.list's layouts, which Snapshot labels slots with, stay as created on a runtime with no window,
+// whatever the tab is renamed to since. An Orca without that model is asked for its layouts instead.
 func (h *orcaHost) RenameSlotIf(ctx context.Context, slot, expected, name string) error {
-	l, err := h.c.Terminals(ctx, true)
+	t, ok, err := h.slotTerminal(ctx, slot)
 	if err != nil {
 		return orcaErr(err)
 	}
+	if !ok {
+		return fmt.Errorf("orca: the selected tab is no longer available")
+	}
+	var shown bool
+	names, err := h.c.TabNames(ctx, "id:"+t.WorktreeID)
+	switch {
+	case orcart.IsCode(err, "method_not_found"):
+		if shown, err = h.layoutShows(ctx, slot, expected); err != nil {
+			return err
+		}
+	case err != nil:
+		return orcaErr(err)
+	default:
+		shown = len(names[slot]) > 0 && !slices.ContainsFunc(names[slot], func(n string) bool { return n != expected })
+	}
+	if !shown {
+		return errTabRenamed
+	}
+	return h.RenameSlot(ctx, slot, name)
+}
+
+// layoutShows: terminal.list's layouts, read now (the cached ones may be orcaLayoutMaxAge old), label the tab as
+// expected, the way Snapshot labels slots.
+func (h *orcaHost) layoutShows(ctx context.Context, slot, expected string) (bool, error) {
+	l, err := h.c.Terminals(ctx, true)
+	if err != nil {
+		return false, orcaErr(err)
+	}
 	perSpace := map[string]int{}
-	shown := false
 	for _, tab := range l.Tabs {
 		perSpace[tab.WorktreeID]++
 		if tab.ID != slot {
@@ -163,10 +193,7 @@ func (h *orcaHost) RenameSlotIf(ctx context.Context, slot, expected, name string
 		if label == "" {
 			label = strconv.Itoa(perSpace[tab.WorktreeID])
 		}
-		shown = strings.TrimSpace(label) == expected
+		return strings.TrimSpace(label) == expected, nil
 	}
-	if !shown {
-		return errTabRenamed
-	}
-	return h.RenameSlot(ctx, slot, name)
+	return false, nil
 }
