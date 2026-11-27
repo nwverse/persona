@@ -221,7 +221,8 @@ func validSessionID(id string) bool { return sessionIDRe.MatchString(id) }
 // --- messages between conversations ---
 
 type relayMsg struct {
-	// OnceID preserves a supervision relay's delivery identity when its queued text is refreshed.
+	// OnceID preserves a relay's delivery identity when its queued text is refreshed
+	// (supervision digest refresh or a consumed detached continuation).
 	OnceID string `json:"once_id,omitempty"`
 	// Signals is the structured JSON content of a queued supervision message. It stays comparable with the relay and lets
 	// /stop remove one task and regather the others after restart; older messages without it use their embedded task ids.
@@ -247,6 +248,11 @@ type relayMsg struct {
 	Title string `json:"title,omitempty"`
 	// Card identifies the card behind a quiet task's needs notice or a standalone permission relay.
 	Card string `json:"card,omitempty"`
+	// Internal marks a message meant only for the assistant, such as a card-ledger report or a card routed away
+	// from the owner. queuedRelays leaves it out of the queue shown above the composer; delivery is unchanged. A
+	// version that does not know it drops it on its next save: the relay then shows above the composer until it is
+	// consumed, as an Urgent message ranks as any other.
+	Internal bool `json:"internal,omitempty"`
 	// Urgent: a supervision message with a signal that waits on a decision (relay_presence.go). A version that does
 	// not know it drops it on its next save: the message then ranks and waits as any other supervision message.
 	Urgent bool `json:"urgent,omitempty"`
@@ -267,6 +273,12 @@ type relayMsg struct {
 	// Private renews Just me when the message is actually dispatched, including
 	// a result that waited in the durable queue or across a manager restart.
 	Private bool `json:"private,omitempty"`
+	// Continuation marks a detached approval's one-time retry instruction. Its
+	// grant is checked again at the final drain, not only when it was queued.
+	Continuation bool `json:"continuation,omitempty"`
+	// ContinuationDigest binds that instruction to the exact journal occurrence,
+	// not to whichever grant later reuses the interaction ID.
+	ContinuationDigest string `json:"continuation_digest,omitempty"`
 	// Answer: it answers a request the receiver sent (hopLocked, #7391), so it starts no exchange of its own: what
 	// the receiver sends next costs a hop.
 	Answer bool `json:"answer,omitempty"`
@@ -420,6 +432,16 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 	}
 	if rs.SupervisePending == nil {
 		rs.SupervisePending = map[string]superviseSignal{}
+	}
+	for to, q := range rs.Queue {
+		for i := range q {
+			if q[i].Continuation && q[i].OnceID == "" {
+				// Keep the ID an older manager may already have sent. New
+				// continuations are pinned before delivery in deliverApprovalResult.
+				q[i].OnceID = legacyRelayMsgID(to, q[i])
+			}
+		}
+		rs.Queue[to] = q
 	}
 	// Upgrade an old queue in place: structured signals are exact; a pre-signals message still carries its todo ids.
 	here := s.settings(ctx)
@@ -894,6 +916,9 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 	out := map[string][]string{}
 	for id, q := range b.st.Later { // kept without waking it (relay_later.go): they go in with its next message
 		for _, msg := range q {
+			if msg.Internal {
+				continue
+			}
 			if msg.DeferredWake {
 				out[id] = append(out[id], "来自「"+msg.FromTitle+"」（稍后唤醒）："+msg.Text) // i18n-ignore: the queue's label, as the others'
 				continue
@@ -903,6 +928,9 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 	}
 	for id, q := range b.st.Queue {
 		for _, msg := range q {
+			if msg.Internal {
+				continue
+			}
 			if msg.standalonePermission() || msg.Tool == noticeTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool { // a quiet task's notice (quiet.go), a question's answer (ask_todo.go): its title is enough
 				out[id] = append(out[id], msg.FromTitle+"的通知")
 				continue
@@ -923,6 +951,18 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 		}
 	}
 	return out, true
+}
+
+// relayWaitingFor reports whether a conversation has any relay waiting, including one kept only for the assistant.
+// Conversation deletion uses this rather than queuedRelays, whose labels leave internal relays out of the client UI.
+func (s *Service) relayWaitingFor(id string) (bool, bool) {
+	b := &s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.relayLocked(context.Background()) {
+		return false, false
+	}
+	return len(b.st.Queue[id]) > 0 || len(b.st.Later[id]) > 0, true
 }
 
 func (msg relayMsg) source() *proto.MessageSource {
@@ -987,6 +1027,8 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 		}
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
+	} else if s.conversationModelPurpose(ctx, machine, to) == purposeMain {
+		s.relayMainModel(ctx, machine, to, params)
 	}
 	if msg.standalonePermission() {
 		cfg := s.settings(ctx)
@@ -1324,7 +1366,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				}
 			}
 			if !stale && !keep && !landed {
-				msg, retry, err = s.tryQueuedRelay(ctx, machine, id, &original)
+				msg, retry, err = s.tryQueuedApprovalRelay(ctx, machine, id, &original)
 				keep = retry > 0
 				if relaySuppressed(err) { // restored after a restart or a reconnect, or left by a withdrawal that did not reach it
 					stale, suppressed, keep, retry, err = true, true, false, 0, nil // leaves unsent: nothing replayed, nobody pushed

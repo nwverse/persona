@@ -353,7 +353,24 @@ func (h larkHost) AskSensitive(ctx context.Context, ix proto.Interaction) bool {
 	return h.s.ixSensitive(ctx, ix)
 }
 
+func (h larkHost) AskDirect(ctx context.Context, ix proto.Interaction) bool {
+	return h.s.nonMainAssistantPermission(ctx, ix)
+}
+
 func (h larkHost) AskState(id string) (ended, pending bool) { return h.s.ixState(id) }
+
+func (h larkHost) AskStateFor(ix proto.Interaction) (ended, pending bool) {
+	_, pending = h.s.ixState(ix.ID)
+	return h.s.interactionEndedFor(ix), pending
+}
+
+// AskPostHook is the existing test-only race hook; the module calls it through
+// an optional interface after the first occurrence check, before claiming a card.
+func (h larkHost) AskPostHook(ix proto.Interaction) {
+	if h.s.postCardHook != nil {
+		h.s.postCardHook(ix)
+	}
+}
 
 func (h larkHost) AskPending(id string) (proto.Interaction, bool) { return h.s.pendingIx(id) }
 
@@ -361,10 +378,18 @@ func (h larkHost) ResolveInteraction(ctx context.Context, id string, r proto.Res
 	return h.s.resolveInteraction(ctx, channel.Feishu, id, r, action)
 }
 
+func (h larkHost) ResolveInteractionAt(ctx context.Context, id string, r proto.Resolution, action string, expected *time.Time) (bool, error) {
+	return h.s.resolveInteractionAt(ctx, channel.Feishu, id, r, action, expected)
+}
+
 func (h larkHost) ValidateClarifyQuestion(text string) error { return validateClarifyQuestion(text) }
 
 func (h larkHost) ClarifyInteraction(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string) (bool, error) {
 	return h.s.clarifyInteraction(ctx, channel.Feishu, id, question, clientMsgID, action, chatID, messageID)
+}
+
+func (h larkHost) ClarifyInteractionAt(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string, expected *time.Time) (bool, error) {
+	return h.s.clarifyInteractionAt(ctx, channel.Feishu, id, question, clientMsgID, action, chatID, messageID, expected)
 }
 
 // AcceptAction answers a press of a "Please verify" or decision card's button ({a: accept}): the toast's kind and

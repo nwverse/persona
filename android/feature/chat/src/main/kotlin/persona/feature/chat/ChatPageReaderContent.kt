@@ -172,8 +172,7 @@ internal fun ChatPageReaderContent(
         ) { listBottomInset ->
             val outboxBubble: @Composable (OutboxMessage) -> Unit = { message ->
                 val delivery = composerDeliveries[message.clientMessageId]
-                val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
-                    delivery?.state ?: message.state else message.state
+                val deliveryState = effectiveOutboxState(message.state, delivery?.state)
                 val busy = message.clientMessageId in deliveryActions.busyIds
                 val onAction = onDeliveryAction?.let { action -> { messageAction: DeliveryAction -> action(message, messageAction) } }
                 val failed = deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused
@@ -296,6 +295,16 @@ internal fun ChatPageReaderContent(
         }
     }
 }
+
+/**
+ * Resolves the displayed delivery state for an outbox bubble. A composer overlay may advance a refused message while
+ * its Clear & Send retry is in flight or freshly accepted, but a stale Unknown / WaitingForNetwork overlay from an
+ * earlier attempt must never mask an authoritative Refused / Rejected outbox state.
+ */
+internal fun effectiveOutboxState(outboxState: DeliveryState, composerState: DeliveryState?): DeliveryState =
+    if (outboxState in setOf(DeliveryState.Refused, DeliveryState.Rejected) &&
+        composerState in setOf(DeliveryState.Sending, DeliveryState.Sent, DeliveryState.Held))
+        composerState!! else outboxState
 
 private sealed interface TranscriptListRow {
     val key: String

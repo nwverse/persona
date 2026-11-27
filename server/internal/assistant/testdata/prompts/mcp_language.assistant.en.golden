@@ -1957,7 +1957,7 @@
   },
   {
     "name": "model_profiles_list",
-    "description": "List profiles, active profile, drift, rollback previews and audit events. Model settings only, never credentials.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "List saved profiles, active profile, drift, rollback previews and audit events.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "properties": {},
@@ -1966,13 +1966,13 @@
   },
   {
     "name": "model_profile_get",
-    "description": "Inspect a profile. Edit bindings with persona_settings model_profiles.bindings, tiers with model_profiles.tiers, or capture with model_profile_capture. Saving does not apply purposes/launchers.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Inspect a saved profile. Edit its bindings or tiers with persona_settings.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Profile id from model_profiles_list"
+          "description": "Saved profile ID"
         }
       },
       "additionalProperties": false,
@@ -1984,13 +1984,13 @@
   },
   {
     "name": "model_profile_switch",
-    "description": "Switch atomically to a profile by id; inspect first. Saves a rollback point and affects new model calls/Agent starts, not running work.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Inspect first. Apply a profile to future model calls and Agent starts. Saves a rollback point.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Profile id from model_profiles_list"
+          "description": "Saved profile ID"
         }
       },
       "additionalProperties": false,
@@ -2002,7 +2002,7 @@
   },
   {
     "name": "model_profile_rollback",
-    "description": "Undo the latest profile switch, restoring touched model settings only. Inspect the preview first; another rollback may redo it.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Preview and undo the latest switch's model changes. The last rollback can redo a switch.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "properties": {},
@@ -2012,19 +2012,39 @@
   },
   {
     "name": "model_profile_capture",
-    "description": "Capture current model fields into a profile with phone approval; does not apply them.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "With phone approval, save current model fields into a profile.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Existing profile id from model_profiles_list"
+          "description": "Saved profile ID"
         }
       },
       "additionalProperties": false,
       "required": [
         "id"
       ]
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "model_profile_deactivate",
+    "description": "With owner approval, turn off the active profile and keep current model settings.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "model_profile_clear",
+    "description": "With owner approval, delete all saved profiles and rollback history. Keep current model settings.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
     },
     "defer_loading": true
   },

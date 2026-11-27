@@ -2,6 +2,8 @@
 import { Component, createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ErrorInfo, type ReactNode, type RefObject } from "react";
 import { answerCard, usePendingLine, type AnswerFrom } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
+import { composing } from "../../lib/send-history";
+import { EDITABLE } from "../../lib/shortcuts";
 import { lazyPage } from "../../lib/lazy-page";
 import { mergeRefs } from "../../lib/tap-guard";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
@@ -335,11 +337,13 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
   useLayoutEffect(() => {
     if (draftKey) drafts?.set(draftKey, { version, page: qi, picks: picked, custom });
   }, [drafts, draftKey, version, qi, picked, custom]);
-  useEffect(() => () => clearTimeout(slide.current), []);
-  const advance = () => {
-    clearTimeout(slide.current);
-    setQi((i) => Math.min(qs.length - 1, i + 1));
+  const clearSlide = () => clearTimeout(slide.current);
+  useEffect(() => () => clearTimeout(slide.current), [ix.id]);
+  const goTo = (next: number | ((i: number) => number)) => {
+    clearSlide();
+    setQi(next);
   };
+  const advance = () => goTo((i) => Math.min(qs.length - 1, i + 1));
   // the card's own keys (a hook, so before the early return): digits pick this question's options, Enter is what the
   // send arrow does, Esc is the card's wherever in it focus sits
   const keys = useCardKeys({
@@ -361,20 +365,33 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
 
   useEffect(() => {
     if (!q || busy || (!canApprove && !localOnly)) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
-      if (e.key >= "1" && e.key <= "9") {
-        const opt = q.options?.[Number(e.key) - 1];
-        if (!opt || (localOnly && opt.action !== "defer")) return;
-        e.preventDefault();
-        toggleRef.current(opt.label);
+    const hidden = (el: Element): boolean => {
+      for (let c: HTMLElement | null = el as HTMLElement; c; c = c.parentElement) {
+        if (c.matches("[inert],[hidden],[aria-hidden=true],[data-chat-cards].hidden") || c.style.gridTemplateRows === "0fr") return true;
+        const cs = getComputedStyle(c);
+        if (cs.display === "none" || cs.visibility === "hidden") return true;
       }
+      return false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || composing(e) || e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
+      const root = keys.root.ref.current;
+      if (!root?.isConnected || root.closest("fieldset[disabled]") || hidden(root)) return;
+      for (const o of document.querySelectorAll("[role=dialog],[role=alertdialog],[role=menu],[aria-modal=true],dialog[open],aside[data-side-panel]")) {
+        if (o.contains(root) || o.closest("[data-closing]") || hidden(o)) continue;
+        if (o.tagName === "ASIDE" && (root.closest("[role=dialog],[aria-modal=true]") || getComputedStyle(o).position !== "fixed")) continue;
+        return;
+      }
+      const el = e.target instanceof Element ? e.target : null;
+      if (el && (el.closest(EDITABLE) || (el as HTMLElement).isContentEditable || (el.closest("[data-card-keys]") ?? root) !== root)) return;
+      const opt = q.options?.[Number(e.key) - 1];
+      if (!opt || (localOnly && opt.action !== "defer")) return;
+      e.preventDefault();
+      toggleRef.current(opt.label);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [q, busy, canApprove, localOnly]);
+  }, [q, busy, canApprove, localOnly, keys.root.ref]);
 
   if (!q) return null;
   const looking = isDelegating(ix);
@@ -393,6 +410,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
   const send = async (directLabel?: string) => {
     if (submitting.current || directLabel === undefined && !all) return;
     submitting.current = true;
+    clearSlide();
     setBusy(true);
     setSkipError(undefined);
     const answers: Record<string, string> = {};
@@ -418,7 +436,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
   const skip = async () => {
     if (!canSkip || submitting.current) return;
     submitting.current = true;
-    clearTimeout(slide.current);
+    clearSlide();
     setBusy(true);
     try {
       const result = await answerCard(ix, { cancel: true });
@@ -432,6 +450,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
   const toggle = (label: string) => {
     if (submitting.current) return;
     if (localOnly && !q.options?.some((o) => o.label === label && o.action === "defer")) return;
+    clearSlide();
     const singleChoice = qs.length === 1 && !q.multi_select;
     const hasCustomAnswer = singleChoice && Boolean(custom[qi]?.trim());
     setCustom((c) => ({ ...c, [qi]: "" }));
@@ -452,7 +471,10 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
       looking={looking}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={onAnswer || ix.no_hand_back ? undefined : () => resolve(ix, { dismiss: true })}
+      onDismiss={onAnswer || ix.no_hand_back ? undefined : () => {
+        clearSlide();
+        void resolve(ix, { dismiss: true });
+      }}
       skip={canSkip ? { run: skip, error: skipError } : undefined}
       busy={busy}
       footer={
@@ -460,7 +482,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
           <span className="flex items-center gap-2">
             {qs.length > 1 && (
               <>
-                <button type="button" aria-label={t("chat-interactions.previous_question")} disabled={qi === 0} onClick={() => setQi(qi - 1)} className="touch-hit flex size-6 items-center justify-center rounded-[5px] text-ink-3 enabled:hover:bg-hover disabled:opacity-35">
+                <button type="button" aria-label={t("chat-interactions.previous_question")} disabled={qi === 0} onClick={() => goTo(qi - 1)} className="touch-hit flex size-6 items-center justify-center rounded-[5px] text-ink-3 enabled:hover:bg-hover disabled:opacity-35">
                   <Icon name="chevronLeft" size={14} stroke={2.2} />
                 </button>
                 <span className="flex items-center gap-1">
@@ -469,13 +491,13 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
                       key={i}
                       type="button"
                       aria-label={t("chat-interactions.question_n", { n: i + 1 })}
-                      onClick={() => setQi(i)}
+                      onClick={() => goTo(i)}
                       className="rounded-full transition-all duration-300"
                       style={i === qi ? { width: 9, height: 9, border: "2.5px solid var(--ink)" } : answered(i) ? { width: 7, height: 7, background: "var(--ink-3)" } : { width: 7, height: 7, border: "1.5px solid var(--ink-3)" }}
                     />
                   ))}
                 </span>
-                <button type="button" aria-label={t("chat-interactions.next_question")} disabled={last} onClick={() => setQi(qi + 1)} className="touch-hit flex size-6 items-center justify-center rounded-[5px] text-ink-3 enabled:hover:bg-hover disabled:opacity-35">
+                <button type="button" aria-label={t("chat-interactions.next_question")} disabled={last} onClick={() => goTo(qi + 1)} className="touch-hit flex size-6 items-center justify-center rounded-[5px] text-ink-3 enabled:hover:bg-hover disabled:opacity-35">
                   <Icon name="chevronRight" size={14} stroke={2.2} />
                 </button>
               </>
@@ -520,12 +542,14 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
           <input
             value={custom[qi] ?? ""}
             disabled={localOnly}
+            onFocus={clearSlide}
             onChange={(e) => {
+              clearSlide();
               setCustom((c) => ({ ...c, [qi]: e.target.value }));
               if (e.target.value) setPicked((p) => ({ ...p, [qi]: [] }));
             }}
             {...ime.handlers}
-            onKeyDown={(e) => e.key === "Enter" && !ime.busy(e.nativeEvent) && (last ? all && void send() : answered(qi) && setQi(qi + 1))}
+            onKeyDown={(e) => e.key === "Enter" && !ime.busy(e.nativeEvent) && (last ? all && void send() : answered(qi) && allowed(qi) && advance())}
             placeholder={t("chat-interactions.custom_placeholder")}
             aria-label={t("chat-interactions.custom_answer")}
             // focused in a box that scrolls, it lands clear of the card's sticky answer row below and of a sticky title
@@ -855,9 +879,7 @@ function SecretHandoffCard({ ix }: { ix: Interaction }) {
   const ready = variables.length > 0;
   const go = async (body: Record<string, unknown>, key: "allow" | "always" | "deny") => {
     setBusy(key);
-    const r = await answerCard(ix, body, { handoffCard: true });
-    if (!r.ok) toast(r.error, "error");
-    else if (r.already) toast(t("chat-interactions.already_answered"), "info");
+    await resolve(ix, body, { handoffCard: true });
     setBusy(null);
   };
   const lead = agent
@@ -1156,7 +1178,7 @@ function MultiScreenCard({ ix }: { ix: Interaction }) {
     >
       {d.detail && <ScrollFold className={DETAIL_FOLD} data-screen-detail>{d.detail}</ScrollFold>}
       <div className="flex flex-col gap-0.5">
-        {options.filter((o) => !o.kind).map((o, i) => (
+        {plain.map((o, i) => (
           <button
             key={o.key}
             type="button"

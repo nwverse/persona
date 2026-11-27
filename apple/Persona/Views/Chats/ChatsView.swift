@@ -1112,7 +1112,7 @@ private struct AgentsList: View {
         let settings = projectionSettings()
         let partitions = AgentListProjectionCache.partitions(model)
         let follows = feed.following && feed.hasPartitions(partitions)
-        let asks = ChildSessions.asks(model.pendingInteractions)
+        let asks = ChildSessions.asks(model.aggregatePendingInteractions)
         let key = AgentListProjectionCache.Key(revision: feed.revision, partitions: partitions, settings: settings,
                                                workspaceRevision: workspaceCatalog.revision, asks: asks)
         return feed.projection.resolve(key, immediate: !follows || feed.immediateRevision == key.revision,

@@ -323,7 +323,7 @@ func TestInboxSoftMatchConfirmedHandoffWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := planOf(t, s, "chat").Tasks[0]
-	if got.InboxItem != it.ID || got.InboxHandoff != "confirmed-operation" || got.InboxMatch != "" {
+	if got.InboxItem != it.ID || got.InboxHandoff != "confirmed-operation" || got.InboxMatch == "" {
 		t.Fatalf("handoff lost precedence: %+v", got)
 	}
 }
@@ -437,5 +437,87 @@ func TestInboxSoftMatchMuteAndUnavailableConfig(t *testing.T) {
 	f.inbox.mu.Unlock()
 	if err := s.matchPlannedInbox(ctx, "box", "chat", &task); err != nil || task.InboxItem != "" {
 		t.Fatal("unavailable optional lookup blocked a task or linked a source")
+	}
+}
+
+func TestInboxInferredHandoffCannotOverwriteConcurrentTaskLink(t *testing.T) {
+	s, _, it := softTestService(t)
+	s.inbox.mu.Lock()
+	s.inbox.noteHandoff(it, SessionRef{MachineID: "box", SessionID: "chat"}, "confirmed-operation", time.Now())
+	s.inbox.mu.Unlock()
+	task := PlanTask{Title: "Example Review", Prompt: "Alice Example"}
+	if err := s.matchPlannedInbox(t.Context(), "box", "chat", &task); err != nil {
+		t.Fatal(err)
+	}
+	if task.InboxItem != it.ID {
+		t.Fatalf("matching handoff not selected: %+v", task)
+	}
+	s.inbox.mu.Lock()
+	defer s.inbox.mu.Unlock()
+	it.Agent = &InboxAgent{TodoID: "another-task"}
+	if err := s.inbox.checkTaskInbox("chat", task); err == nil {
+		t.Fatal("inferred handoff accepted a task link acquired after matching")
+	}
+}
+func TestInboxOmittedSourceDoesNotSelectHistoricalHandoff(t *testing.T) {
+	for _, continuation := range []string{"", "existing-task"} {
+		t.Run("continues="+continuation, func(t *testing.T) {
+			s, _, it := softTestService(t)
+			s.inbox.mu.Lock()
+			s.inbox.noteHandoff(it, SessionRef{MachineID: "box", SessionID: "chat"}, "confirmed-operation", time.Now())
+			s.inbox.mu.Unlock()
+			task := PlanTask{Title: "Unrelated maintenance", Prompt: "Check the sample output", Continues: continuation}
+			if continuation != "" {
+				task.Title, task.Prompt = "Example Review", "Alice Example"
+			}
+			if err := s.planInboxSource(t.Context(), "box", "chat", &task); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.matchPlannedInbox(t.Context(), "box", "chat", &task); err != nil {
+				t.Fatal(err)
+			}
+			if task.InboxItem != "" || task.InboxHandoff != "" {
+				t.Fatalf("omitted source acquired historical handoff: %+v", task)
+			}
+		})
+	}
+}
+
+func TestInboxInferredHandoffKeepsEquivalentTopicSelection(t *testing.T) {
+	s, _, it := softTestService(t)
+	other := softTestItem("example:earlier", it.ArrivedAt)
+	other.Source = "other"
+	s.inbox.mu.Lock()
+	s.inbox.items[other.ID] = other
+	s.inbox.noteHandoff(it, SessionRef{MachineID: "box", SessionID: "chat"}, "confirmed-operation", time.Now())
+	s.inbox.mu.Unlock()
+	task := PlanTask{Title: "Example Review", Prompt: "Alice Example"}
+	if err := s.matchPlannedInbox(t.Context(), "box", "chat", &task); err != nil {
+		t.Fatal(err)
+	}
+	if task.InboxItem != it.ID || task.InboxMatch == "" {
+		t.Fatalf("matching handoff lost: %+v", task)
+	}
+	s.inbox.mu.Lock()
+	defer s.inbox.mu.Unlock()
+	if err := s.inbox.checkTaskInbox("chat", task); err != nil {
+		t.Fatalf("equivalent topic rejected: %v", err)
+	}
+}
+
+func TestInboxInferredHandoffDoesNotBypassCompetingClaim(t *testing.T) {
+	s, _, it := softTestService(t)
+	other := softTestItem("example:claimed", it.ArrivedAt)
+	other.Agent = &InboxAgent{TodoID: "another-task"}
+	s.inbox.mu.Lock()
+	s.inbox.items[other.ID] = other
+	s.inbox.noteHandoff(it, SessionRef{MachineID: "box", SessionID: "chat"}, "confirmed-operation", time.Now())
+	s.inbox.mu.Unlock()
+	task := PlanTask{Title: "Example Review", Prompt: "Alice Example"}
+	if err := s.matchPlannedInbox(t.Context(), "box", "chat", &task); err != nil {
+		t.Fatal(err)
+	}
+	if task.InboxItem != "" {
+		t.Fatalf("competing ownership bypassed by inferred handoff: %+v", task)
 	}
 }

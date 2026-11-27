@@ -136,6 +136,10 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
         resolveOutcome(id, resolution, handoffCard = false)
     override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean) =
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution, handoffCard) }
+    override suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean) =
+        stacks.use(GroupKeys.namespaceOf(interaction.id)) {
+            it.repositories.interactions.resolveOccurrence(it.names.rawInteraction(interaction), resolution, handoffCard)
+        }
     override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) =
         stacks.use(GroupKeys.namespaceOf(interaction.id)) {
             it.repositories.interactions.replyOwnerApproval(it.names.rawInteraction(interaction), phrase)

@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/screen"
 	"github.com/nwverse/persona/server/internal/wireids"
 )
 
@@ -385,7 +386,7 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 					return
 				}
 			}
-			writeAssistantErr(w, err)
+			writeSendAssistantErr(w, err)
 			return
 		}
 		if target, _ := p["owner_approval_handled"].(string); target != "" {
@@ -598,10 +599,76 @@ func (h *Hub) deliverOnce(ctx context.Context, m *Machine, p map[string]any) (in
 	default:
 		if sid != "" && outcome == "" {
 			h.ttft.disarm(m.cfg.ID, sid, sentAt)
+			err = m.withSendDialog(ctx, sid, err)
+		}
+		if outcome == "" && errors.Is(err, errManagerOffline) {
+			rec := &bufferedResponse{header: http.Header{}, lang: h.contextLang(ctx)}
+			writeSendAssistantErr(rec, &rpc.Error{Code: assistantwire.CodeAssistantOffline, Message: errAssistantOffline.Error()})
+			return rec.status, rec.body.Bytes(), outcome
 		}
 		status, body := callErrBytes(h.contextLang(ctx), apierr.OnMachine(err, m.name())) // claude_missing on "<name>'s MacBook"
 		return status, body, outcome
 	}
+}
+
+// withSendDialog adds the terminal addressed by this send without replacing a target reported by the node.
+func (m *Machine) withSendDialog(ctx context.Context, sid string, err error) error {
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != screen.DialogOpen {
+		return err
+	}
+	var data map[string]any
+	if len(re.Data) != 0 && json.Unmarshal(re.Data, &data) != nil {
+		return err
+	}
+	if sidTarget, _ := data["session_id"].(string); sidTarget != "" && sidTarget != sid {
+		return err
+	}
+	if midTarget, _ := data["machine_id"].(string); midTarget != "" && midTarget != m.cfg.ID {
+		return err
+	}
+	if row, ok := m.session(sid); ok && row.Capabilities != nil && !row.Capabilities.Terminal {
+		return err
+	}
+	if data == nil {
+		data = map[string]any{}
+	}
+	data["machine_id"], data["session_id"] = m.cfg.ID, sid
+	// Some hosts refuse without a title. Only a full device can request a fresh look at the visible terminal.
+	if title, _ := data["dialog"].(string); strings.TrimSpace(title) == "" && principalOf(ctx).Role == roleFull {
+		if title = m.sendDialogHead(ctx, sid); title != "" {
+			data["dialog"] = title
+		}
+	}
+	raw, marshalErr := json.Marshal(data)
+	if marshalErr != nil {
+		return err
+	}
+	return &rpc.Error{Code: re.Code, Message: re.Message, Data: raw}
+}
+
+func (m *Machine) sendDialogHead(ctx context.Context, sid string) string {
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	var out struct {
+		Text string `json:"text"`
+	}
+	if err := m.call(ctx, "session.screen", map[string]any{"session_id": sid, "lines": 60}, &out); err != nil {
+		return ""
+	}
+	var title string
+	switch s := screen.ReadCodex(out.Text); s.View {
+	case screen.CodexApproval:
+		title = s.Approval.Title
+	case screen.CodexQuestion:
+		title = s.Question.Question
+	default:
+		title = cmp.Or(screen.CodexDialogHead(out.Text), screen.DialogHead(screen.Plain(out.Text)))
+	}
+	if runes := []rune(title); len(runes) > 120 {
+		return string(runes[:120]) + "…"
+	}
+	return title
 }
 
 func sendReturnedQueued(out json.RawMessage) bool {
@@ -809,6 +876,21 @@ func heldBody(err error) (int, []byte) {
 		_ = json.Unmarshal(re.Data, &held)
 	}
 	return laterBody(held.Undelivered)
+}
+
+// writeSendAssistantErr answers an assistant error during sendMessageOnce / todoHandoff (before ClaimSend and
+// deliverOnce touch a node): 503 assistant_offline explicitly states delivered:"none" and retryable:true so clients
+// know nothing was sent and can safely retry once the assistant is back.
+func writeSendAssistantErr(w http.ResponseWriter, err error) {
+	var re *rpc.Error
+	if errors.As(err, &re) && re.Code == assistantwire.CodeAssistantOffline {
+		body := apierr.CodeBody(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
+		body["delivered"] = "none"
+		body["retryable"] = true
+		writeErrorBody(w, http.StatusServiceUnavailable, body)
+		return
+	}
+	writeAssistantErr(w, err)
 }
 
 func rpcCodeOf(err error) string {

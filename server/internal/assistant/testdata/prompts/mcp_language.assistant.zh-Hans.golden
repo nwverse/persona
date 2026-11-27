@@ -1957,7 +1957,7 @@
   },
   {
     "name": "model_profiles_list",
-    "description": "List profiles, active profile, drift, rollback previews and audit events. Model settings only, never credentials.",
+    "description": "List saved profiles, active profile, drift, rollback previews and audit events.",
     "input_schema": {
       "type": "object",
       "properties": {},
@@ -1966,13 +1966,13 @@
   },
   {
     "name": "model_profile_get",
-    "description": "Inspect a profile. Edit bindings with persona_settings model_profiles.bindings, tiers with model_profiles.tiers, or capture with model_profile_capture. Saving does not apply purposes/launchers.",
+    "description": "Inspect a saved profile. Edit its bindings or tiers with persona_settings.",
     "input_schema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Profile id from model_profiles_list"
+          "description": "Saved profile ID"
         }
       },
       "additionalProperties": false,
@@ -1984,13 +1984,13 @@
   },
   {
     "name": "model_profile_switch",
-    "description": "Switch atomically to a profile by id; inspect first. Saves a rollback point and affects new model calls/Agent starts, not running work.",
+    "description": "Inspect first. Apply a profile to future model calls and Agent starts. Saves a rollback point.",
     "input_schema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Profile id from model_profiles_list"
+          "description": "Saved profile ID"
         }
       },
       "additionalProperties": false,
@@ -2002,7 +2002,7 @@
   },
   {
     "name": "model_profile_rollback",
-    "description": "Undo the latest profile switch, restoring touched model settings only. Inspect the preview first; another rollback may redo it.",
+    "description": "Preview and undo the latest switch's model changes. The last rollback can redo a switch.",
     "input_schema": {
       "type": "object",
       "properties": {},
@@ -2012,19 +2012,39 @@
   },
   {
     "name": "model_profile_capture",
-    "description": "Capture current model fields into a profile with phone approval; does not apply them.",
+    "description": "With phone approval, save current model fields into a profile.",
     "input_schema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Existing profile id from model_profiles_list"
+          "description": "Saved profile ID"
         }
       },
       "additionalProperties": false,
       "required": [
         "id"
       ]
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "model_profile_deactivate",
+    "description": "With owner approval, turn off the active profile and keep current model settings.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "model_profile_clear",
+    "description": "With owner approval, delete all saved profiles and rollback history. Keep current model settings.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
     },
     "defer_loading": true
   },

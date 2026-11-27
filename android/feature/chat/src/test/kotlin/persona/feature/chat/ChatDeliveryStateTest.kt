@@ -230,6 +230,21 @@ class ChatDeliveryStateTest {
         }
     }
 
+    @Test fun staleComposerDeliveryNeverMasksAuthoritativeRefusedOrRejectedState() {
+        for (authoritative in listOf(DeliveryState.Refused, DeliveryState.Rejected)) {
+            for (stale in listOf(null, DeliveryState.Unknown, DeliveryState.WaitingForNetwork,
+                DeliveryState.Queued, DeliveryState.Verifying, DeliveryState.NeedsConfirmation,
+                DeliveryState.Refused, DeliveryState.Rejected)) {
+                assertEquals("$authoritative with $stale", authoritative, effectiveOutboxState(authoritative, stale))
+            }
+            for (advancing in listOf(DeliveryState.Sending, DeliveryState.Sent, DeliveryState.Held)) {
+                assertEquals("$authoritative with $advancing", advancing, effectiveOutboxState(authoritative, advancing))
+            }
+        }
+        assertEquals(DeliveryState.NeedsConfirmation, effectiveOutboxState(DeliveryState.NeedsConfirmation, DeliveryState.Sending))
+        assertEquals(DeliveryState.WaitingForNetwork, effectiveOutboxState(DeliveryState.WaitingForNetwork, DeliveryState.Unknown))
+    }
+
     private class FakeSender : MessageSender {
         val message = OutboxMessage("message", SessionKey("machine", "session"), "原消息", DeliveryState.WaitingForNetwork)
         override val outbox = MutableStateFlow(listOf(message))

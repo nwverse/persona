@@ -435,12 +435,12 @@ The modules of this kind:
 
 **Controlling changes to the core (#14916).** Persona Core has no UI: it is the hub API and data model for Agents, sessions,
 tasks and to-dos, with the clients' headless code and the foundation interfaces. The clients' interface code is the default
-panel built on Core. `schema/core-paths.txt` has two tiers: `core` (strict: label + reason, owner review, no module
-references) and `panel` (only no module references); modules are free. The guards below keep modules and core apart; three
+panel built on Core. `schema/core-paths.txt` has two tiers: `core` (strict review, owner review, no module
+references; the label is recommended, not required since #17195) and `panel` (only no module references); modules are free. The guards below keep modules and core apart; three
 more pieces control changes to tier core itself, in this order of strength. The merge check: `scripts/hooks/core-change-check.py`, run by
-`scripts/hooks/merge-pr.sh`, refuses a PR that changes a tier-core path of `schema/core-paths.txt` (read by `scripts/test/core_paths.py`:
+`scripts/hooks/merge-pr.sh`, is advisory (#17195): it reports which tier-core paths of `schema/core-paths.txt` a PR changes (read by `scripts/test/core_paths.py`:
 the server units this file's classification calls `core`, the clients' headless directories and the foundation interfaces
-and guards named one by one; panel files and tests-only changes do not count) unless it has the label `core-change` and a `## Why this must change the core` section. CODEOWNERS:
+and guards named one by one; panel files and tests-only changes do not count) and whether a `core-change` label and a `## Why this must change the core` section are present, but no longer refuses the merge — Core changes get strict review instead of a required label. CODEOWNERS:
 the core block of `.github/CODEOWNERS` is generated from tier core of the same list (`scripts/hooks/codeowners.py --write`) and requests
 the owners' review; whether the review is required is a branch ruleset the administrator sets. The reference guard:
 `scripts/test/test_core_references_no_module.py` needs no toolchain and checks on every platform that the four guards'

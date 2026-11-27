@@ -125,7 +125,7 @@ test('session context_window persists across shared worker idle retirement', asy
   await until('prompt runs after the second worker is retired', () => calls().some((entry) => entry.method === 'session/prompt'))
   const requests = calls().slice(calls().findLastIndex((entry) => entry.method === 'initialize'))
   assert.equal(calls().filter((entry) => entry.method === 'initialize').length, 3)
-  const setModel = requests.findIndex((entry) => entry.method === 'session/set_model' && entry.params.modelId === entries[1].modelId)
+  const setModel = requests.findIndex((entry) => entry.method === 'session/set_model' && entry.params.modelId === entries[2].modelId)
   assert.ok(setModel > requests.findIndex((entry) => entry.method === 'session/resume'))
   assert.ok(setModel < requests.findIndex((entry) => entry.method === 'session/prompt'))
 })

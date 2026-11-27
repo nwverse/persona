@@ -98,6 +98,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/machines/{mid}/held-starts/{op}
 -                    DELETE /api/v1/machines/{mid}/launchers/{name}/models/custom
 -                    DELETE /api/v1/managers/{id}
+-                    DELETE /api/v1/model-profiles
 -                    DELETE /api/v1/model-profiles/{id}
 push.grading         DELETE /api/v1/push/grading/layer
 -                    DELETE /api/v1/push/web/{device}
@@ -725,6 +726,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/managers/{id}/code
 -                    POST /api/v1/managers/{id}/machines
 -                    POST /api/v1/managers/{id}/sources
+-                    POST /api/v1/model-profiles/deactivate
 -                    POST /api/v1/model-profiles/rollback
 -                    POST /api/v1/model-profiles/{id}/apply
 notify               POST /api/v1/notify

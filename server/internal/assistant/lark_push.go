@@ -94,12 +94,19 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 	defer cancel()
 	layer := s.larkModule()
 	f, ready := layer.Features(ctx)
-	if !ready || !(f.Sync || f.Pushes) {
+	if !ready {
 		return
 	}
 	main := s.isMainOn(ctx, machine, session)
-	task := s.taskOfConversation(ctx, machine, session)
-	if !(main && f.Sync || task != "" && f.Pushes) || f.Pushes && s.pushedLately(channel.Feishu, machine, session) {
+	task, delivery := s.taskDeliveryForConversation(ctx, machine, session)
+	if task == "" {
+		task = s.taskOfConversation(ctx, machine, session)
+	}
+	hasThreadDelivery := isFeishuThreadDelivery(delivery)
+	if !(f.Sync || f.Pushes || hasThreadDelivery) {
+		return
+	}
+	if !(main && f.Sync || task != "" && (f.Pushes || hasThreadDelivery)) || f.Pushes && !hasThreadDelivery && s.pushedLately(channel.Feishu, machine, session) {
 		return
 	}
 	sess, ok := s.session(ctx, machine, session)
@@ -123,30 +130,35 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 			return
 		}
 		if run != nil {
-			s.briefMirror(ctx, machine, session, label, run, answer, turn)
+			s.briefMirror(ctx, machine, session, label, run, answer, turn, delivery)
 			return
 		}
 	}
-	to := s.larkMirror(machine, session, label, main, answer, turn)
+	to := s.larkMirror(machine, session, label, main, answer, turn, delivery)
 	layer.Mirror(ctx, to, lang, assistantwire.LarkMirrorTurn{
 		Asked: asked, Question: clip(oneLine(stripContext(asked)), 80), Answer: answer, Turn: turn,
 	})
 }
 
 // larkMirror carries the latest-turn and push-ledger checks into a retry without exposing either ledger to the module.
-func (s *Service) larkMirror(machine, session, label string, main bool, answer, turn string) assistantwire.LarkMirror {
-	return assistantwire.LarkMirror{
+func (s *Service) larkMirror(machine, session, label string, main bool, answer, turn string, delivery *TaskDelivery) assistantwire.LarkMirror {
+	m := assistantwire.LarkMirror{
 		SessionRef: assistantwire.SessionRef{MachineID: machine, SessionID: session},
 		Main:       main,
 		Label:      label,
 		StillDue: func(ctx context.Context, pushes bool) bool {
-			if pushes && s.pushedLately(channel.Feishu, machine, session) {
+			if pushes && !isFeishuThreadDelivery(delivery) && s.pushedLately(channel.Feishu, machine, session) {
 				return false
 			}
 			_, current, last, ok := s.channelLastTurnOf(ctx, machine, session)
 			return ok && current == answer && last == turn
 		},
 	}
+	if isFeishuThreadDelivery(delivery) {
+		m.ThreadChatID = delivery.ChatID
+		m.ThreadID = delivery.ThreadID
+	}
+	return m
 }
 
 func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text, place string, redact bool) {

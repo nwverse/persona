@@ -15,8 +15,6 @@ func TestStripAssistantFieldsForPageKeepsSessionAndTaskNavigation(t *testing.T) 
 	for _, target := range []string{
 		"persona://session/machine-1/session-1",
 		"persona://task/todo-1",
-		"jarvis://session/machine-1/session-1",
-		"jarvis://task/todo-1",
 		"persona://session/a%252Fb/s1",
 		"persona://task/todo%3Fv1%23top",
 	} {
@@ -45,9 +43,7 @@ func TestStripAssistantFieldsForPageDropsOtherAndMalformedTargets(t *testing.T) 
 		"http://session/machine-1/session-1",
 		"mailto:user@example.com",
 		"persona://kb/projects/notes.md",
-		"jarvis://kb/projects/notes.md",
 		"persona://file/machine-1/%2Fetc%2Fhosts",
-		"jarvis://file/machine-1/%2Fetc%2Fhosts",
 		"persona://session",
 		"persona://session/only-one-segment",
 		"persona://task",

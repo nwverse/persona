@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
 )
@@ -264,7 +265,8 @@ func (h *Hub) handToManager(ctx context.Context, a devicewire.Accept) (*relayTak
 	to := h.machineOwner(a.MachineID)
 	return h.handToManagerVia(ctx, relayFor{manager: to, machine: a.MachineID}, func(ctx context.Context, id string) error {
 		a.ID = id
-		return h.callBus(ctx, to, devicewire.MethodAccept, a, nil)
+		_, err := buswire.Call(ctx, h.managerCaller(to), devicewire.AcceptMethod, a)
+		return err
 	})
 }
 

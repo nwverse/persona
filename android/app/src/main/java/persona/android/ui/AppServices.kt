@@ -164,6 +164,10 @@ class AppServices @Inject constructor(
                         try { interactions.resolveOutcome(id, resolution, handoffCard) }
                         catch (cancelled: CancellationException) { throw cancelled }
                         catch (error: Exception) { feedback.failure(error, true); throw error }
+                    override suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean) =
+                        try { interactions.resolveOccurrence(interaction, resolution, handoffCard) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (error: Exception) { feedback.failure(error, true); throw error }
                 }
                 // Share the group stack's single TasksStore so shell badges, To-dos and chat cards never run
                 // duplicate concurrent /api/v1/todos reads for the same hub. A new hub builds a new GroupStack

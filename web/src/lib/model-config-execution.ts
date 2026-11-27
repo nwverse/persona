@@ -178,10 +178,12 @@ export function permissionModesForLauncher(chosen: ModelProvider | undefined, ag
   return PERMISSION_MODES;
 }
 
-/** Permission mode options supported by `chosen` / `agent` for a launcher-backed purpose; empty for direct API, plugin,
- *  or agents without permission modes (omp, traex, pi, cursor). */
+/** Permission options for launcher-backed purposes. Inbox TRAE uses the app-server policies. */
 export function permissionModesForProvider(p: ModelPurpose, chosen: ModelProvider | undefined, agent: string): ModeOption[] {
   if (p.kind !== "launcher" || !supportsField(p, "permission_mode")) return [];
+  if (p.id === "inbox.agent" && agent === "traex") {
+    return PERMISSION_MODES.filter((mode) => mode.id !== "plan");
+  }
   return permissionModesForLauncher(chosen, agent);
 }
 

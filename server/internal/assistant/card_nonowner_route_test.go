@@ -113,6 +113,9 @@ func TestStandalonePermissionWaitsForBusyMain(t *testing.T) {
 	waitFor(t, "permission queued for the busy main conversation", func() bool {
 		return len(queuedRelays(e.s, "conv1")) == 1
 	})
+	if q := queuedRelays(e.s, "conv1"); !q[0].Internal {
+		t.Fatal("the routed permission relay is not marked internal")
+	}
 	if n := len(e.f.noticesTo("conv1")); n != 0 {
 		t.Fatalf("busy conversation received %d messages", n)
 	}
@@ -428,6 +431,11 @@ func TestAgentQuestionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	waitFor(t, "unsupervised question routed to main", func() bool {
 		return hasRelayFrom(e.s, "conv1", cardAgentQuestion, "interaction_id="+q.ID)
 	})
+	for _, msg := range laterFor(e.s, "conv1") {
+		if msg.From == cardAgentQuestion && !msg.Internal {
+			t.Fatal("the routed question relay is not marked internal")
+		}
+	}
 
 	// Unsupervised ordinary parsed IxScreen (e.g. default permission mode prompt) -> main conversation, no push.
 	scr := proto.Interaction{

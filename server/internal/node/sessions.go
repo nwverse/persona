@@ -355,10 +355,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Capabilities = caps
 			}
 			hasRuntimeRow := false
+			var companionPreview agyPreview
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
-				if runtimeRow, ok := n.runtimes.agyPaneRuntimeRow(runtimeID); ok {
+				if runtimeRow, preview, ok := n.runtimes.agyPaneRuntimeRow(runtimeID); ok {
 					hasRuntimeRow = true
+					companionPreview = preview
 					if s.Model == "" {
 						s.Model = runtimeRow.Model
 					}
@@ -374,9 +376,6 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.UpdatedAt.IsZero() && !runtimeRow.UpdatedAt.IsZero() {
 						s.UpdatedAt = runtimeRow.UpdatedAt
 					}
-					if s.LastText == "" && runtimeRow.LastText != "" {
-						s.LastText = runtimeRow.LastText
-					}
 					// The companion has already applied the native rewind cut.
 					agyBackgroundTasks{running: runtimeRow.Background, ended: runtimeRow.BackgroundEnded()}.apply(&s)
 					n.agyRuntimeTaskLogs(&s, agyConversations[id])
@@ -391,7 +390,23 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				conversation := agyConversations[id]
 				u, readable := n.agyTranscriptMeta(conversation)
 				if readable {
+					// Rev changes whenever the transcript does (its size), as on every transcript-backed row: the apps
+					// pull a session's new items from the light revs event, which carries only rows whose Rev changed
+					// (proto.Session.Rev, revsChanged). A pane the companion lists before its transcript is on this
+					// computer keeps Rev 0 until the file appears, so the pane's Rev only ever moves up from there.
+					if s.Rev == 0 && u.size > 0 {
+						s.Rev = u.size
+					}
+					transcriptAt := u.turn.lastTextAt
+					if transcriptAt.IsZero() {
+						transcriptAt = u.modTime
+					}
+					if u.turn.lastText != "" && companionPreview.text != "" && companionPreview.at.After(transcriptAt) {
+						u.turn.lastText = companionPreview.text
+					}
 					n.applyAgyTurnEvidence(&s, conversation, u.turn)
+				} else if s.LastText == "" && companionPreview.text != "" && n.agyConversation(id, a.PaneID) == conversation {
+					s.LastText = companionPreview.text
 				}
 				if hasRuntimeRow {
 					n.resolveAgyContext(&s, agyConversations[id])
