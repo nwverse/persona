@@ -23,5 +23,9 @@
   "images_too_large": "画像の合計が大きすぎて、まとめて送れません",
   "image_unreadable": "{name} を読み込めませんでした",
   "too_many_files": "1件のメッセージに添付できるファイルは{max}個までです",
-  "drop_here": "画像やファイルをここにドロップ"
+  "drop_here": "画像やファイルをここにドロップ",
+  "file_waiting": "待機中",
+  "file_failed": "失敗 · クリックして再試行",
+  "file_cancel": "{name}のアップロードをキャンセル",
+  "file_retry": "{name}を再試行"
 }

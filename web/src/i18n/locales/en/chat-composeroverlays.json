@@ -24,5 +24,9 @@
   "images_too_large": "These pictures are too large to send together",
   "image_unreadable": "Couldn't read {name}",
   "too_many_files": "Up to {max} files in one message",
-  "drop_here": "Drop images or files here"
+  "drop_here": "Drop images or files here",
+  "file_waiting": "Waiting",
+  "file_failed": "Failed · click to retry",
+  "file_cancel": "Cancel upload of {name}",
+  "file_retry": "Retry {name}"
 }

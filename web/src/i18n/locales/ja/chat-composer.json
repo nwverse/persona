@@ -37,10 +37,6 @@
   "cmd_permissions_desc": "権限モードを切り替え",
   "files_uploading": "ファイルをアップロード中です。完了してから送信してください",
   "see_files": "添付ファイルを見てください",
-  "file_waiting": "待機中",
-  "file_failed": "失敗 · クリックして再試行",
-  "file_cancel": "{name}のアップロードをキャンセル",
-  "file_retry": "{name}を再試行",
   "confirm_run_title": "{word} を実行しますか？",
   "confirm_ok": "確定",
   "confirm_cancel": "キャンセル"

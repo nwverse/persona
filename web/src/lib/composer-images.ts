@@ -21,7 +21,12 @@ export function fromDraftImage(image: DraftImage, id = uuid(), edited?: EditedIm
 }
 
 const EMPTY: Attachment[] = [];
-const drafts = new Map<string, { scope: string; images: Attachment[] }>();
+interface ImageDraft {
+  scope: string;
+  generation: number;
+  images: Attachment[];
+}
+const drafts = new Map<string, ImageDraft>();
 const listeners = new Set<() => void>();
 const sending = new Set<{ key: string; images: Attachment[] }>();
 const scope = () => `${credentialOwner()}/${conversationDeletionScope()}`;
@@ -42,32 +47,35 @@ const loadDisk = () => disk ??= import("./composer-images-idb").catch((error) =>
   throw error;
 });
 
-const pending = new Map<string, number>();
 let generation = 0;
 
+function putDraft(key: string, images: Attachment[]): ImageDraft {
+  const draft = { scope: scope(), generation: ++generation, images };
+  drafts.set(key, draft);
+  return draft;
+}
+
 // A later mutation supersedes both reads and writes, even if the draft is empty again by the time the read returns.
-async function withDisk(key: string, work: (store: Awaited<ReturnType<typeof loadDisk>>, current: () => boolean) => Promise<void>) {
-  const owner = scope();
-  const revision = ++generation;
-  pending.set(key, revision);
-  const current = () => pending.get(key) === revision && scope() === owner;
+async function withDisk(key: string, draft: ImageDraft, work: (store: Awaited<ReturnType<typeof loadDisk>>, current: () => boolean) => Promise<void>) {
+  const current = () => drafts.get(key)?.generation === draft.generation && scope() === draft.scope;
   try {
     const store = await loadDisk();
     if (current()) await work(store, current);
   } catch {
     // Storage is optional. The live draft is still usable.
   } finally {
-    if (pending.get(key) === revision) pending.delete(key);
+    if (!draft.images.length && drafts.get(key) === draft) drafts.delete(key);
   }
 }
 
 export function hydrateComposerImages(key: string) {
-  if (drafts.has(key) || pending.has(key) || conversationKeyDeleted(key) || !hasImageDraft(key)) return;
-  return withDisk(key, async (store, current) => {
+  if (drafts.has(key) || conversationKeyDeleted(key) || !hasImageDraft(key)) return;
+  const draft = putDraft(key, EMPTY);
+  return withDisk(key, draft, async (store, current) => {
     const images = await store.readImageDraft(key, current);
     if (!images.length) return;
     if (!current()) { releaseAttachments(images); return; }
-    drafts.set(key, { scope: scope(), images });
+    draft.images = images;
     emit();
   });
 }
@@ -79,11 +87,9 @@ export function useComposerImages(key: string | null): Attachment[] {
 }
 
 function put(key: string, images: Attachment[]) {
-  if (images.length) drafts.set(key, { scope: scope(), images });
-  else drafts.delete(key);
-  if (images.length || pending.has(key) || hasImageDraft(key)) {
-    void withDisk(key, (store, current) => store.writeImageDraft(key, images, current));
-  }
+  if (!images.length && !drafts.has(key) && !hasImageDraft(key)) return;
+  const draft = putDraft(key, images);
+  void withDisk(key, draft, (store, current) => store.writeImageDraft(key, images, current));
   emit();
 }
 
@@ -134,7 +140,6 @@ function clearOwner() {
   for (const send of sending) releaseAttachments(send.images);
   drafts.clear();
   sending.clear();
-  pending.clear();
   if (disk || imageDraftMarkers().length) {
     const owner = imageDraftOwner();
     void loadDisk().then((store) => store.removeOtherImageOwners(owner)).catch(() => {});
