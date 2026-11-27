@@ -98,6 +98,7 @@ type Facts struct {
 type Agent struct {
 	MachineID   string     `json:"machine_id"`
 	SessionID   string     `json:"session_id"`
+	LinkedAt    *time.Time `json:"linked_at,omitempty"`
 	ReleasedAt  *time.Time `json:"released_at,omitempty"`
 	Title       string     `json:"title"`
 	StartError  string     `json:"start_error,omitempty"`
@@ -137,24 +138,28 @@ type Supervision struct {
 	Parked       *Parked    `json:"parked,omitempty"`
 	Reviews      []Review   `json:"reviews"`
 	PendingSince *time.Time `json:"pending_since,omitempty"`
+	FollowedUpAt *time.Time `json:"followed_up_at,omitempty"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	Progress     *Progress  `json:"progress,omitempty"`
 }
 
 // Parked is what a parked task waits for: why, until when, on what kind of thing.
 type Parked struct {
-	Reason    string        `json:"reason"`
-	Until     time.Time     `json:"until"`
-	WaitingOn string        `json:"waiting_on"`
-	Evidence  *ParkEvidence `json:"evidence,omitempty"`
+	Reason    string                        `json:"reason"`
+	Until     time.Time                     `json:"until"`
+	WaitingOn string                        `json:"waiting_on"`
+	Evidence  *ParkEvidence                 `json:"evidence,omitempty"`
+	Handoff   *assistantwire.TodoHandoffRef `json:"handoff,omitempty"`
 }
 
-// ParkEvidence carries the fields of parked evidence the projection reads (owner-request link and shared-blocker root cause).
+// ParkEvidence carries the fields of parked evidence the projection reads (owner-request link, shared-blocker root cause, and waiting details).
 type ParkEvidence struct {
-	Kind          string `json:"kind,omitempty"`
-	Target        string `json:"target,omitempty"`
-	URL           string `json:"url,omitempty"`
-	InteractionID string `json:"interaction_id,omitempty"`
+	Kind          string                         `json:"kind,omitempty"`
+	Target        string                         `json:"target,omitempty"`
+	URL           string                         `json:"url,omitempty"`
+	Wake          string                         `json:"wake,omitempty"`
+	InteractionID string                         `json:"interaction_id,omitempty"`
+	Contact       *assistantwire.TodoWaitContact `json:"contact,omitempty"`
 }
 
 // Review is one review of the ledger: when, its verdict, its note (a cancellation's why), and a needs_user review's
@@ -162,6 +167,7 @@ type ParkEvidence struct {
 type Review struct {
 	At        time.Time `json:"at"`
 	Verdict   string    `json:"verdict"`
+	By        string    `json:"by,omitempty"`
 	Note      string    `json:"note,omitempty"`
 	Reason    string    `json:"reason,omitempty"`
 	Recommend string    `json:"recommend,omitempty"`
@@ -183,8 +189,12 @@ type Delivery struct {
 // PRStatus is an observation of one of the task's PRs.
 type PRStatus struct {
 	URL       string    `json:"url"`
+	Title     string    `json:"title,omitempty"`
 	State     string    `json:"state"`
 	Draft     bool      `json:"draft"`
+	Review    string    `json:"review,omitempty"`
+	Checks    string    `json:"checks,omitempty"`
+	Conflicts bool      `json:"conflicts,omitempty"`
 	CheckedAt time.Time `json:"checked_at"`
 }
 
@@ -198,13 +208,20 @@ const (
 
 	reviewPending   = "pending_review"
 	reviewAccepted  = "accepted"
-	reviewNeedsUser = "needs_user"
 	reviewUserCheck = "user_check"
+	reviewNeedsUser = "needs_user"
 	reviewCancelled = "cancelled"
 	reviewParked    = "parked"
 
 	parkSomeoneElse   = "someone_else"
 	parkExternalEvent = "external_event"
+	parkDate          = "date"
+	parkTodoHandoff   = "todo_handoff"
+
+	parkEvidencePersonReply   = "person_reply"
+	parkEvidenceMergeReview   = "merge_review"
+	parkEvidenceExternalEvent = "external_event"
+	parkEvidenceDate          = "date"
 
 	outcomeDone   = "done"
 	outcomeCannot = "cannot"

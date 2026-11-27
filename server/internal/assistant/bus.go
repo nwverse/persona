@@ -20,11 +20,13 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/memtrim"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -90,10 +92,19 @@ type BusHub struct {
 	// would be missing — they wait for it (waitHello).
 	helloed   chan struct{}
 	helloOnce sync.Once
+	// keptConn is the connection (conns as onHello counted it) whose hello's answer was kept last, and keptNext is
+	// closed when a later one's is (waitHelloAfter); both guarded by mu.
+	keptConn uint64
+	keptNext chan struct{}
+	// lossWaited, when not 0, is one more than the connection after which no hello was kept within helloWait of
+	// events lost on it: the line does not wait for it again (eventsLost). takeEvents' own.
+	lossWaited uint64
 
-	events  chan busEvent // the hub's events, taken in the order they came
+	events  *eventQueue   // the hub's events, taken in the order they came (bus_events.go)
 	conns   atomic.Uint64 // the connections whose hello was answered: the current one's number (busEvent.conn)
 	pending atomic.Int64  // events received and not yet taken
+	// taking, when set, sees each event as it is taken out of the line, before it is handled (tests).
+	taking func(busEvent)
 	// answering: the hub's requests being answered now (a tool call, an app's call): idle (idle.go) waits for them.
 	answering atomic.Int64
 	// pendingRestart: true while this manager has detected a replaced binary on disk and is waiting for idle before
@@ -113,6 +124,8 @@ type busEvent struct {
 	name   string
 	params json.RawMessage
 	conn   uint64 // the connection it came on (BusHub.conns as it was read)
+	key    string // of one of which only the newest matters and that came while the line was long (eventKey); else ""
+	lost   int    // not an event of the hub's: the note of this many that the full line did not keep (eventsLost)
 }
 
 // hubConnKey holds, in a ctx, the connection to the hub an event came on (busEvent.conn).
@@ -136,10 +149,12 @@ func NewBusHub(o BusOptions) *BusHub {
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
 	}
-	b := &BusHub{opts: o, events: make(chan busEvent, 1024), helloed: make(chan struct{}), out: newOutbox(o.Outbox)}
+	b := &BusHub{opts: o, events: newEventQueue(), helloed: make(chan struct{}), out: newOutbox(o.Outbox)}
 	if own, err := readOwnConfig(o.ConfigFile); err == nil { // it read as the manager started (moveConfig)
 		b.own = own
 	}
+	reviewEnabled := b.own.ProjectReview.Enabled
+	reviewAppInputs := reviewEnabled && b.own.ProjectReview.AppInputs
 	host, _ := os.Hostname()
 	id := o.ID
 	if id == "" {
@@ -149,25 +164,34 @@ func NewBusHub(o BusOptions) *BusHub {
 		// The manager's extensions stop waiting for a card when their caller does (extmgr's interactions.wait). A switch
 		// to Persona Link that gave up on the hub's begin (its time ran out) has the hub give it up too, so it changes
 		// nothing the manager no longer waits for (internal/devices link_switch.go).
-		Cancels: map[string]bool{assistantwire.MethodApp: true, devicewire.MethodLinkSwitchBegin: true},
-		Hub:     o.Hub, Token: o.Token, HTTPClient: o.HTTPClient, Logf: o.Logf, Backoff: o.Backoff,
+		// Retirement requests also end with their caller, so renewed activity can cancel the guarded stop.
+		Cancels: map[string]bool{
+			assistantwire.MethodApp:          true,
+			assistantwire.MethodDeviceRetire: true,
+			devicewire.MethodLinkSwitchBegin: true,
+		},
+		Hub: o.Hub, Token: o.Token, HTTPClient: o.HTTPClient, Logf: o.Logf, Backoff: o.Backoff,
 		StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.StopWhenRejected,
 		// The hub's own manager (its child, or the built-in one's service dialing the hub's local address) is on the
 		// hub's machine: compressing its messages saves no network, and costs both ends the compressor's state.
 		Uncompressed: o.Deploy == "child" || o.Deploy == DeployService && id == assistantwire.AssistantID && loopbackHub(o.Hub),
 		HelloMethod:  assistantwire.MethodHello,
 		HelloParams: func() any {
+			capabilities := []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
+				assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentSessionIdleArchive, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
+				assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
+				assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
+				assistantwire.CapabilityTaskInput, assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthTell, assistantwire.CapabilityAssistantSegments, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
+				assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityCountsView, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
+				assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability, devicewire.PublishedPackagesCapability}
+			if reviewEnabled {
+				capabilities = append(capabilities, assistantwire.CapabilityProjectReview)
+			}
 			b.mu.Lock()
 			svc := b.svc
 			b.mu.Unlock()
 			params := map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
-				"deploy": o.Deploy, "version": o.Version, "capabilities": withPages(withHealth(withRecording([]string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
-					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentSessionIdleArchive, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
-					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
-					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
-					assistantwire.CapabilityTaskInput, assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthTell, assistantwire.CapabilityAssistantSegments, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
-					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityCountsView, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
-					assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability}, svc), svc), id, svc)}
+				"deploy": o.Deploy, "version": o.Version, "capabilities": withPages(withHealth(withRecording(capabilities, svc), svc), id, svc), "project_review_app_inputs": reviewAppInputs}
 			if uid := b.machineUID(); uid != "" {
 				params["machine_uid"] = uid
 			}
@@ -231,6 +255,13 @@ func (b *BusHub) Serve(ctx context.Context, svc *Service) error {
 	if svc.devs != nil {
 		b.opts.Devices = svc.devs
 	}
+	if config := b.own.ProjectReview; config.Enabled {
+		store, ok := b.opts.Outbox.(*db.DB)
+		if !ok {
+			return errors.New("project_review requires the manager's Postgres store")
+		}
+		svc.projectReview = &projectReview{projectReviewConfig: config, db: store, wake: make(chan struct{}, 1)}
+	}
 	b.mu.Lock()
 	b.svc, b.ctx = svc, ctx
 	b.mu.Unlock()
@@ -272,7 +303,7 @@ func (b *BusHub) CredentialRevoked(ctx context.Context, id string) (bool, error)
 // onHello keeps the hub's answer to manager.hello. A new connection: the hub shows nothing of the assistant until it
 // reports the whole of it again.
 func (b *BusHub) onHello(res json.RawMessage) error {
-	b.conns.Add(1) // what the hub's events say of the hub is that connection's (busEvent.conn)
+	conn := b.conns.Add(1) // what the hub's events say of the hub is that connection's (busEvent.conn)
 	var h Hello
 	if err := json.Unmarshal(res, &h); err != nil {
 		return err
@@ -282,10 +313,12 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 			// Existing node connections survive a failed hub handshake. Keep its new
 			// restrictions before rejecting placement, so they cannot serve stale access.
 			b.setHello(h)
+			b.helloKept(conn)
 			return err
 		}
 	}
 	h = b.setHello(h)
+	b.helloKept(conn)
 	b.mu.Lock()
 	svc, ctx := b.svc, b.ctx
 	b.mu.Unlock()
@@ -342,11 +375,11 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 				svc.Resync(context.WithoutCancel(ctx))
 			}
 		}()
-		// The inbox's "Needs you" count, which the hub keeps of this connection only (inbox_store.go): what is stored
-		// is read now if nothing read it yet, so the roster has the number before the first round.
+		// The modules' handshake hooks (kernel/seam: the Inbox's "Needs you" count, which the hub keeps of this
+		// connection only), once the connection counts as up.
 		go func() {
-			if b.client.Wait(ctx) == nil && svc.inboxReady(context.WithoutCancel(ctx)) == nil {
-				svc.tellInboxNeedsYou()
+			if b.client.Wait(ctx) == nil {
+				svc.kernel.Connected(context.WithoutCancel(ctx))
 			}
 		}()
 		// The conversations the channels follow (channels_handler.go).
@@ -449,6 +482,47 @@ func (b *BusHub) waitHello(ctx context.Context) {
 	}
 }
 
+// helloKept says connection conn's hello answer is kept: what waited for one later than another's goes on.
+func (b *BusHub) helloKept(conn uint64) {
+	b.mu.Lock()
+	b.keptConn = conn
+	next := b.keptNext
+	b.keptNext = nil
+	b.mu.Unlock()
+	if next != nil {
+		close(next)
+	}
+}
+
+// waitHelloAfter returns true once the hello's answer of a connection made after conn is kept (at once when one
+// is), false after helloWait or ctx.
+func (b *BusHub) waitHelloAfter(ctx context.Context, conn uint64) bool {
+	var t *time.Timer
+	for {
+		b.mu.Lock()
+		if b.keptConn > conn {
+			b.mu.Unlock()
+			return true
+		}
+		if b.keptNext == nil {
+			b.keptNext = make(chan struct{})
+		}
+		next := b.keptNext
+		b.mu.Unlock()
+		if t == nil {
+			t = time.NewTimer(helloWait)
+			defer t.Stop()
+		}
+		select {
+		case <-next:
+		case <-t.C:
+			return false
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
 // ---- what the assistant asks of the hub ----
 
 func (b *BusHub) Hello(context.Context) (Hello, error) { return b.helloNow(), nil }
@@ -465,7 +539,11 @@ func (b *BusHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage,
 		return out, err
 	}
 	var out json.RawMessage
-	err := b.client.Call(ctx, assistantwire.MethodDevice, p, &out)
+	method := assistantwire.MethodDevice
+	if p.Method == nodeproto.StopIfIdle {
+		method = assistantwire.MethodDeviceRetire
+	}
+	err := b.client.Call(ctx, method, p, &out)
 	return out, busError(err)
 }
 
@@ -647,6 +725,12 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, err
 		}
 		return map[string]any{"session": sess}, nil
+	case assistantwire.MethodProjectReviewOwnerInput:
+		var p assistantwire.ProjectReviewOwnerInput
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return struct{}{}, s.projectReviewOwnerInput(ctx, p)
 	case assistantwire.MethodSendParams:
 		var p SendParams
 		if err := decode(&p); err != nil {
@@ -670,16 +754,15 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		}
 		if target, _ := params[ownerApprovalHandledParam].(string); target != "" {
 			s.notesOwnerRefused(ctx, carry) // an approval is not a model turn or a conversation message
+			s.forgetUnusedOwnerRelayLater(ctx, p.SessionID, msg)
 			return map[string]any{"params": params}, nil
 		}
-		laterDone, err := s.withOwnerRelayLater(ctx, p.MachineID, p.SessionID, msg, params, true)
-		if err != nil {
+		if _, err := s.withOwnerRelayLater(ctx, p.MachineID, p.SessionID, msg, params, true); err != nil {
 			s.notesOwnerRefused(ctx, carry)
 			s.appSendRefused(p.MachineID, p.SessionID, err)
 			return nil, err
 		}
 		s.notesOwnerSent(ctx, carry, msg)
-		s.relayLaterOwnerSent(p.SessionID, msg, laterDone)
 		if *note != "" {
 			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}
@@ -727,6 +810,12 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, err
 		}
 		return s.FeishuAction(ctx, p)
+	case assistantwire.MethodFeishuHandoff:
+		var p assistantwire.FeishuHandoff
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.larkModule().Handoff(ctx, p)
 	case assistantwire.MethodFeishuView:
 		return s.FeishuView(ctx), nil
 	case assistantwire.MethodFleetAsk:
@@ -756,7 +845,7 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	if out, ok, err := s.extensionEventRequest(ctx, method, params); ok { // extensions' assistant.event (extension_event.go)
 		return out, err
 	}
-	if out, ok, err := inboxRequest(ctx, s, method, decode); ok { // the inbox's (inbox_bus.go)
+	if out, ok, err := s.kernel.Answer(ctx, method, params); ok { // the modules' (kernel/seam: the Inbox's)
 		return out, err
 	}
 	if e := b.opts.Extensions; e != nil {
@@ -922,23 +1011,36 @@ func (b *BusHub) Settle() {
 	}
 }
 
-// takeEvents takes the hub's events one at a time, in order. A turn's end runs on its own: naming a conversation
-// asks a model and a task waits for its agents to settle, and the events after it must not wait for that.
+// takeEvents takes the hub's events one at a time, in order, until ctx ends: nothing else waits on the line, so
+// nothing is left waiting then. A turn's end runs on its own: naming a conversation asks a model and a task waits
+// for its agents to settle, and the events after it must not wait for that.
 func (b *BusHub) takeEvents(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case ev := <-b.events:
-			b.waitHello(ctx)
-			if ev.name == assistantwire.EventSessionDelta {
-				ev.params = b.takeDelta(ev.params)
+	for ctx.Err() == nil {
+		ev, ok := b.events.take()
+		if !ok {
+			select {
+			case <-ctx.Done():
+				return
+			case <-b.events.wake:
 			}
-			if err := b.event(ctx, ev); err != nil {
-				b.opts.Logf("assistant: %s: %v", ev.name, err)
-			}
-			b.pending.Add(-1)
+			continue
 		}
+		if f := b.taking; f != nil {
+			f(ev)
+		}
+		b.waitHello(ctx)
+		if ev.lost > 0 {
+			b.eventsLost(ctx, ev)
+			b.pending.Add(-1)
+			continue
+		}
+		if ev.name == assistantwire.EventSessionDelta {
+			ev.params = b.takeDelta(ev.params)
+		}
+		if err := b.event(ctx, ev); err != nil {
+			b.opts.Logf("assistant: %s: %v", ev.name, err)
+		}
+		b.pending.Add(-1)
 	}
 }
 
@@ -962,7 +1064,10 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 		if err := decode(&p); err != nil {
 			return err
 		}
-		s.userSpokeText(ctx, p.SessionRef, p.Text)
+		if p.Source != "" {
+			s.noteOwnerInstruction(ctx, p.SessionRef, p.Text, p.Source, p.ClientMsgID.String(), p.At)
+		}
+		s.userSpokeMessage(ctx, p.SessionRef, p.Text, p.ClientMsgID.String())
 	case assistantwire.EventUserStopped:
 		var p SessionRef
 		if err := decode(&p); err != nil {
@@ -1072,6 +1177,12 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 			return err
 		}
 		s.followedItems(p.MachineID, ev.params)
+	case assistantwire.EventInlineViewPage:
+		var p SessionItems
+		if err := decode(&p); err != nil {
+			return err
+		}
+		go s.repairInlineViewPage(context.WithoutCancel(ctx), p)
 	case assistantwire.EventSessionDelta:
 		var p SessionDelta
 		if err := decode(&p); err != nil {

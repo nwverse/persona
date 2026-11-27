@@ -33,7 +33,7 @@ func toBriefBoardRows(rows []boardRow) []modapi.BriefBoardRow {
 	for i, r := range rows {
 		out[i] = modapi.BriefBoardRow{
 			Blocking: r.blocking, Waited: r.waited, ID: r.id, Summary: r.summary,
-			From: r.from, Link: r.link, Nudged: r.nudged,
+			From: r.from, Link: r.link, Nudged: r.nudged, Detail: r.detail, EvidenceLink: r.evidenceLink,
 			Machine: r.machine, Session: r.session, Asked: r.asked,
 		}
 	}
@@ -493,17 +493,11 @@ func (p briefDeliveryPort) SendFallback(ctx context.Context, req modapi.BriefFal
 	ready := err == nil && st.Ready
 	s.larkModule().WorkbenchOn(st.Features, ready)
 	if ready && st.Features.Pushes {
-		mirror := &mirrorSend{
-			l: l, cards: cards,
-			target: botTarget{Kind: targetPersona, MachineID: req.Device.ID, SessionID: req.Run.SessionID},
-			label:  req.Label,
-			key:    "f" + req.ID,
-			sent:   func() { s.briefAsked(req.Facts, shown) },
-		}
 		// The fallback has no assistant answer of its own. Track the failed turn that is actually last, so a transient
 		// Feishu failure can retry, but a newer answer still makes this old occurrence too late to post.
-		_, mirror.answer, mirror.turn, _ = s.channelLastTurnOf(ctx, req.Device.ID, req.Run.SessionID)
-		s.feishuMirrorPost(ctx, mirror, 0)
+		_, answer, turn, _ := s.channelLastTurnOf(ctx, req.Device.ID, req.Run.SessionID)
+		to := s.larkMirror(req.Device.ID, req.Run.SessionID, req.Label, false, answer, turn)
+		s.postBriefMirror(ctx, to, l, cards, "f"+req.ID, func() { s.briefAsked(req.Facts, shown) })
 	}
 
 	// deliver preserves this stable notification ID (push/pushResult would replace it with a random one).

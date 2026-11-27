@@ -1755,6 +1755,8 @@ struct InboxDetailView: View {
                 slot.detailIdentityChanged(from: oldKey, to: newKey)
             }
             #endif
+            // Which knowledge base chat it came from, for Knowledge Page in More (#15356): asked once per item.
+            .task(id: Self.identity(for: item)) { await InboxKBChats.shared.load(current) }
             #if DEBUG
             // `-showInboxAction draft|handoff`: open that sheet (screenshots).
             .task {
@@ -1792,6 +1794,8 @@ struct InboxDetailView: View {
                         }
                         Button { sameMatter = true } label: { Label("Same matter as…", systemImage: Theme.Icon.link) }
                             .accessibilityIdentifier("inbox.detail.sameMatter")
+                        // Its chat's knowledge page, when its read names one (#15356).
+                        InboxKBChatButton(item: current)
                     } label: { ThemedIcon(Theme.Icon.moreMenu) }
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("inbox.detail.more")

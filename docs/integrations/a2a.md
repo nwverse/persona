@@ -50,7 +50,7 @@ themselves, and nodes with no verified absolute executable keep the plain
 
 | Tool | Purpose |
 | --- | --- |
-| `a2a_sessions` | Discover eligible session addresses, harnesses and states |
+| `a2a_sessions` | Discover eligible session addresses, harnesses and states; with `presets`, also the computers a subagent can start on and their Agent presets |
 | `a2a_read` | Read a session's recent conversation: the user's messages, its replies and one line per tool call |
 | `a2a_send` | Send a request to a session, start an Agent, or answer its request for input |
 | `a2a_get` | Get a task and its delivery receipts, or list the caller's incoming and outgoing tasks |
@@ -96,8 +96,9 @@ source-node permission attestation bound to the calling request (cached session
 snapshots are never trusted, and unmapped modes fail closed): `prompting`
 attestation allows at most `default`, while `bypass` attestation allows any
 supported mode. Launching subagents is enabled by default on the manager's
-confirmed personal computers, using the manager's Agent model and existing
-depth (1) and concurrency (`agents.dispatch.max_active`, default 3) limits. Set
+confirmed personal computers, using the manager's Agent model (or the Agent
+preset named below) and existing depth (1) and concurrency
+(`agents.dispatch.max_active`, default 3) limits. Set
 `agents.a2a.launch` to `false` in `manager.json` to disable launching new
 sessions while keeping peer messaging (queued launches that have not yet called
 `session.start` also recheck this switch and fail cleanly), or set
@@ -116,11 +117,37 @@ request and a reserved session ID before attempting the launch.
 personad tool a2a_send '{"machine_id":"box","cwd":"~/code/project","message_id":"request-002","text":"Inspect the failing integration test and explain the cause."}'
 ```
 
+Add `tier` to start a subagent on one of the owner's Agent presets: the tiers
+of the model profile in use ([model profiles](../assistant/model-profiles.md)
+"Agent presets (tiers)"), each with a description saying when to use it. The
+tier resolves as it does for the assistant's `agent_start`, before anything is
+recorded or started: an unknown tier is refused (`err_tier_not_found`, naming
+the tiers there are), and so is one whose launcher the target computer lacks
+(`launcher_not_on_machine`, naming the launchers it has). A `launcher` named
+with it that is not the tier's own wins, and the tier then gives nothing. The
+tier's launcher, model, effort and faster speed go to `session.start`, with the
+manager's Agent model filling in what the tier leaves out. Its
+`permission_mode` is not used: the launch keeps the mode described above,
+`plan` unless a higher one is requested and attested. This is deliberate. An
+owner's presets never raise what an Agent-started Agent may do. A retry with
+the same `message_id` must name the same tier; another tier is a conflict.
+
+To see the presets first, call `a2a_sessions` with `"presets": true`. It
+answers `{"sessions": […], "computers": […]}`: each computer a launch can go to,
+the caller's own included, whether it is online, and the presets it can run,
+with what each runs (launcher, model, effort, speed) and its description. The
+list is filtered as New Agent's is: only presets whose launcher that computer
+has, a preset whose launcher failed its latest check marked `unavailable`, and
+`presets_unread` on an online computer whose launcher list could not be read.
+
 When Agent dispatch is enabled, `dispatch_start` uses A2A for new tasks and
 keeps the existing launcher, worktree and supervision options. It returns the
 new session and task IDs. Supply a stable `message_id` when retrying a launch.
-`dispatch_read` accepts either ID for new dispatches and can still read the
-dispatch history created earlier.
+It takes `tier` too, resolved, refused and matched on retries the same way; the
+started Agent keeps the permission rule dispatch gives it.
+`dispatch_read` without arguments lists each computer a task can go to with
+the presets it can run. It accepts either ID for new dispatches and can still
+read the dispatch history created earlier.
 
 When the receiving Agent needs something from the sender, it reports an
 `input_required` event with the question. The sender responds with
