@@ -36,6 +36,9 @@ registerHooks({
     if (specifier.endsWith('/core/FleetLiveState')) {
       return { url: new URL('../core/FleetLiveState.ts', context.parentURL).href, shortCircuit: true };
     }
+    if (specifier.endsWith('/core/HubModules')) {
+      return { url: new URL('../core/HubModules.ts', context.parentURL).href, shortCircuit: true };
+    }
     if (context.parentURL?.endsWith('.ets') && specifier.startsWith('.')) {
       return { url: new URL(specifier + '.ets', context.parentURL).href, shortCircuit: true };
     }

@@ -267,9 +267,11 @@ func (n *Node) usageScan(ctx context.Context, files []backfillFile, queries []us
 		st, _ := n.state.get(session)
 		return st.Launcher
 	}
-	if n.usageDirs.get() != nil { // this connection's manager keeps directories (usage_dirs.go)
-		m.fileDir = n.usageFileDirs()
-		m.recordDir = func(q usageQuery, session string) string { return n.usageSessionDir(session, q.dir(session)) }
+	if dirs := n.usageDirs.get(); dirs != nil { // this connection's manager keeps directories (usage_dirs.go)
+		m.fileDir = n.usageFileDirs(dirs.temps)
+		m.recordDir = func(q usageQuery, session string) string {
+			return n.usageSessionDir(session, q.dir(session), dirs.temps)
+		}
 	}
 	for _, f := range files {
 		if !f.overlaps(start, end) {

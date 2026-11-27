@@ -302,10 +302,10 @@ export struct InboxWorkspacePage {
     if (this.active && this.visible && this.list) this.workspace.refresh().catch(() => undefined);
   }
   @Monitor('composeRevision') composeRequested():void {
-    if (this.active && this.visible && this.list && !this.sheetOpen && this.workspace.canComposeMail()) this.openMailCompose();
+    if (this.active && this.visible && this.list && !this.sheetOpen && this.model.mailModuleAllowed() && this.workspace.canComposeMail()) this.openMailCompose();
   }
-  @Monitor('visible','model.connected','workspace.filterAddresses','workspace.writeState','workspace.handoffBusy','workspace.attachmentBusy') composeAvailabilityChanged():void {
-    if (this.active && this.visible && this.list) this.onComposeAvailability(this.workspace.canComposeMail());
+  @Monitor('visible','model.connected','model.features','workspace.filterAddresses','workspace.writeState','workspace.handoffBusy','workspace.attachmentBusy') composeAvailabilityChanged():void {
+    if (this.active && this.visible && this.list) this.onComposeAvailability(this.model.mailModuleAllowed() && this.workspace.canComposeMail());
   }
   private acknowledged(changed: boolean): void { if (changed && this.active && this.visible) this.onChanged(); }
 
@@ -378,7 +378,10 @@ export struct InboxWorkspacePage {
     return !this.workspace.isHandled(row) && (Wire.bool(data, 'urgent') || inboxTier(data) === 'action');
   }
   private async refreshList(): Promise<void> { await this.workspace.refresh(); }
-  private openMailCompose(): void { this.activeSheet = 'mail'; this.sheetOpen = true; this.workspace.openMailCompose(); }
+  private openMailCompose(): void {
+    if (!this.model.mailModuleAllowed()) return;
+    this.activeSheet = 'mail'; this.sheetOpen = true; this.workspace.openMailCompose();
+  }
   private openHandoff(): void { if (!this.workspace.canWrite()) return; this.handoffText = this.workspace.handoffDraft || tr('inbox_handoff_preset_summary'); this.activeSheet = 'handoff'; this.sheetOpen = true; }
   private chain(): Record<string, Object>[] { return Wire.rows(this.workspace.detail, 'chain'); }
   private handling(): Record<string, Object> { return Wire.object(this.workspace.detail, 'handling'); }
@@ -562,7 +565,7 @@ export struct InboxWorkspacePage {
       }
       if (!this.toolbarActions) {
         MenuItem({content:tr('refresh')}).enabled(!this.workspace.loading).onClick(() => this.refreshList())
-        MenuItem({content:tr('compose')}).enabled(this.workspace.canComposeMail()).onClick(() => this.openMailCompose())
+        if (this.model.mailModuleAllowed()) MenuItem({content:tr('compose')}).enabled(this.workspace.canComposeMail()).onClick(() => this.openMailCompose())
       }
     }.width(Tokens.popupWidth)
   }
@@ -1047,9 +1050,18 @@ export struct InboxWorkspacePage {
 
   @Builder mailContent() {
     if (this.workspace.isMail()) {
-      Column({ space: Tokens.gap }) {
-        ForEach(this.workspace.mailMessages, (message: InboxMailMessage) => this.mailMessage(message), (message: InboxMailMessage) => String(message.uid))
-      }.width('100%').alignItems(HorizontalAlign.Start)
+      if (this.model.mailModuleAllowed()) {
+        Column({ space: Tokens.gap }) {
+          ForEach(this.workspace.mailMessages, (message: InboxMailMessage) => this.mailMessage(message), (message: InboxMailMessage) => String(message.uid))
+        }.width('100%').alignItems(HorizontalAlign.Start)
+      } else if (Wire.text(this.workspace.detail, 'context')) {
+        Column({ space: Tokens.gap }) {
+          MarkdownText({ text: Wire.text(this.workspace.detail, 'context'), onLink: (address: string) => this.onLink(address) })
+        }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start)
+          .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+          .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      }
     }
   }
 
@@ -1152,7 +1164,7 @@ export struct InboxWorkspacePage {
   }
 
   @Builder sheetContent() {
-    if (this.activeSheet === 'mail') this.mailComposer()
+    if (this.activeSheet === 'mail' && this.model.mailModuleAllowed()) this.mailComposer()
     else if (this.activeSheet === 'handoff') this.handoffComposer()
   }
 
