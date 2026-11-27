@@ -52,6 +52,11 @@ var sealedSettings = []SealedSetting{
 	{Key: larksyncwire.SettingPrefs, Fields: larksyncwire.SealedPrefsFields},
 	{Key: larksyncwire.SettingBots, List: true, Fields: larksyncwire.SealedBotsFields},
 	{Key: larksyncwire.SettingBindings, List: true, Fields: larksyncwire.SealedBindingsFields},
+	// internal/assistant: the managed channels (storedChannel), the channel ledger's points (ledgerChannel) and the
+	// launchers a channel replaced, kept for a rollback (ledgerLauncher).
+	{Key: "execution.channels", List: true, Fields: []string{"key_sealed", "headers_sealed"}},
+	{Key: "execution.channels.ledger", List: true, Fields: []string{"key_sealed", "headers_sealed"}},
+	{Key: "execution.channels.ledger_launchers", List: true, Fields: []string{"key_sealed", "headers_sealed", "env_sealed"}},
 }
 
 // SealedSettings are the settings values that hold sealed strings (the packages that write them check theirs is here).

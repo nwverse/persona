@@ -111,6 +111,11 @@ type ModelTier struct {
 	Description    string          `json:"description,omitempty"`
 	Candidates     []TierCandidate `json:"candidates,omitempty"`
 	Aliases        []string        `json:"aliases,omitempty"`
+	// Runtime and Channel are candidate 0's runtime and channel (docs/assistant/execution-spec.md): given with no
+	// launcher, a save fills the launcher alias that runs them. The launcher is what runs.
+	Runtime string `json:"runtime,omitempty"`
+	// Channel: see Runtime.
+	Channel string `json:"channel,omitempty"`
 }
 
 // TierCandidate is one launcher a tier may run on, with its model, effort, start speed and permission mode.
@@ -120,11 +125,16 @@ type TierCandidate struct {
 	Effort         string `json:"effort,omitempty"`
 	Speed          string `json:"speed,omitempty"`
 	PermissionMode string `json:"permission_mode,omitempty"`
+	// Runtime and Channel are the candidate's runtime and channel, as ModelTier's.
+	Runtime string `json:"runtime,omitempty"`
+	// Channel: see Runtime.
+	Channel string `json:"channel,omitempty"`
 }
 
 // first is candidate 0: the flat fields.
 func (t ModelTier) first() TierCandidate {
-	return TierCandidate{Launcher: t.Launcher, Model: t.Model, Effort: t.Effort, Speed: t.Speed, PermissionMode: t.PermissionMode}
+	return TierCandidate{Launcher: t.Launcher, Model: t.Model, Effort: t.Effort, Speed: t.Speed, PermissionMode: t.PermissionMode,
+		Runtime: t.Runtime, Channel: t.Channel}
 }
 
 // list is every candidate in the user's order; one (the flat fields) for a tier that lists none.
@@ -138,12 +148,14 @@ func (t ModelTier) list() []TierCandidate {
 // on is t run on candidate c alone: c's fields with t's description, no other candidate and no alias. A start uses it,
 // so the code after the pick sees the one-candidate tier it always did.
 func (t ModelTier) on(c TierCandidate) ModelTier {
-	return ModelTier{Launcher: c.Launcher, Model: c.Model, Effort: c.Effort, Speed: c.Speed, PermissionMode: c.PermissionMode, Host: t.Host, Description: t.Description}
+	return ModelTier{Launcher: c.Launcher, Model: c.Model, Effort: c.Effort, Speed: c.Speed, PermissionMode: c.PermissionMode, Host: t.Host, Description: t.Description,
+		Runtime: c.Runtime, Channel: c.Channel}
 }
 
 // setFirst replaces candidate 0 with c and keeps the others.
 func (t *ModelTier) setFirst(c TierCandidate) {
 	t.Launcher, t.Model, t.Effort, t.Speed, t.PermissionMode = c.Launcher, c.Model, c.Effort, c.Speed, c.PermissionMode
+	t.Runtime, t.Channel = c.Runtime, c.Channel
 	if len(t.Candidates) > 0 {
 		t.Candidates = slices.Clone(t.Candidates)
 		t.Candidates[0] = c

@@ -457,6 +457,8 @@ var Routes = []string{
 	"POST /api/v1/assistant/conversations/{id}/compact",
 	"PUT /api/v1/assistant/conversations/{id}/model", // the model a conversation's next messages run on (model_pick.go, #5033)
 	"DELETE /api/v1/assistant/conversations/{id}/model",
+	"GET /api/v1/assistant/conversations/{id}/model/last-good", // its last known good execution (execution_lastgood.go)
+	"POST /api/v1/assistant/conversations/{id}/model/restore",
 	"POST /api/v1/assistant/main/new",
 	"POST /api/v1/assistant/main/clear",
 	"POST /api/v1/assistant/origins/backfill",

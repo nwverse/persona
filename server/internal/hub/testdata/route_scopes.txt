@@ -76,6 +76,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/connectors/sent/chat-rules/{id}
 -                    DELETE /api/v1/connectors/{id}/archive
 -                    DELETE /api/v1/connectors/{id}/data
+-                    DELETE /api/v1/execution/channels/{name}
 -                    DELETE /api/v1/extensions/-/operations/{op}
 -                    DELETE /api/v1/extensions/{id}/-/dev
 -                    DELETE /api/v1/extensions/{id}/-/handoff-rules/{rule}
@@ -167,6 +168,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/conversations/{id}/always
 spaces               GET /api/v1/assistant/conversations/{id}/categories
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
+-                    GET /api/v1/assistant/conversations/{id}/model/last-good
 -                    GET /api/v1/assistant/conversations/{id}/segments
 -                    GET /api/v1/assistant/conversations/{id}/switch/{operation}
 -                    GET /api/v1/assistant/directions/offers
@@ -240,6 +242,8 @@ decisions.raise      GET /api/v1/decisions/{id}
 -                    GET /api/v1/devices/{id}/prefs
 -                    GET /api/v1/devices/{id}/sessions
 -                    GET /api/v1/endpoints
+-                    GET /api/v1/execution/catalog
+-                    GET /api/v1/execution/channels
 -                    GET /api/v1/extensions
 -                    GET /api/v1/extensions/-/audit
 -                    GET /api/v1/extensions/-/catalog/{mid}/{id}/icon
@@ -517,6 +521,7 @@ assistant.ask        POST /api/v1/assistant/conversations
 -                    POST /api/v1/assistant/conversations/{id}/archive
 -                    POST /api/v1/assistant/conversations/{id}/compact
 -                    POST /api/v1/assistant/conversations/{id}/inputs/resolve
+-                    POST /api/v1/assistant/conversations/{id}/model/restore
 -                    POST /api/v1/assistant/conversations/{id}/route
 assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/conversations/{id}/switch
@@ -601,6 +606,8 @@ decisions.raise      POST /api/v1/decisions/{id}/withdraw
 -                    POST /api/v1/devices/{id}/lock-tests
 -                    POST /api/v1/devices/{id}/lock-tests/{test_id}/receipt
 -                    POST /api/v1/error-reports
+-                    POST /api/v1/execution/channels/rollback
+-                    POST /api/v1/execution/validate
 -                    POST /api/v1/extensions/-/dev
 -                    POST /api/v1/extensions/-/install
 -                    POST /api/v1/extensions/-/operations/{op}/retry
@@ -875,6 +882,7 @@ spaces               PUT /api/v1/assistant/tracks/{slug}/space-md
 -                    PUT /api/v1/connectors/{id}/settings
 -                    PUT /api/v1/devices/{id}/prefs
 -                    PUT /api/v1/devices/{id}/widgets
+-                    PUT /api/v1/execution/channels/{name}
 -                    PUT /api/v1/extensions/-/upgrades
 -                    PUT /api/v1/extensions/{id}/-/auto-upgrade
 -                    PUT /api/v1/extensions/{id}/-/config
