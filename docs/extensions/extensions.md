@@ -3861,7 +3861,7 @@ Used to connect directly to a personal Agent service (e.g. one with real-time pu
 | Method | Parameters | Returns |
 | --- | --- | --- |
 | `status` | — | `{enabled?, setup?, providers?, accounts?}`: omitted `enabled` means `true`; `setup` is `no_accounts` etc. (see protocol.md); omitted `providers` uses the manifest's |
-| `sessions` | — | `{sessions: [{sessionKey, accountId?, provider, title, kind?, parentSessionKey?, canSend, unreadCount, rankTimeMs, avatarUrl?}]}` |
+| `sessions` | — | `{sessions: [{sessionKey, accountId?, provider, title, kind?, parentSessionKey?, canSend, unreadCount, rankTimeMs, avatarUrl?, previewText?, previewIsMine?, onTopRankTimeMs?}]}` |
 | `messages` | `session_key`, `cursor?`, `limit` | `{session?, messages: [{externalId, sessionKey, role, blocks, createTimeMs, position}], hasMore, nextCursor?}` |
 | `send` | `session_key`, `client_id` (UUID), `text` | Any JSON (passed unchanged to the app); deduplicate by `client_id`: the hub retries failures with the same id. `text` is what the user or a full-access caller sent, as it is: it may carry control characters (Unicode `Cc`), so a source that types it into a terminal makes them inert itself, as the node does for its agents (`inertControls`, `server/internal/node/hosts.go`) |
 | `delete_message` | `session_key`, `client_id` | `{}` |

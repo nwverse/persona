@@ -27,5 +27,9 @@
   "unhide_failed": "恢复失败：{error}",
   "prefs_save_failed": "列表设置保存失败：{error}",
   "removed_count": "已移除（{count}）",
-  "removed_footer": "移除的对话仍保留在飞书网关里，有新消息时会自动回到列表。"
+  "removed_footer": "移除的对话仍保留在飞书网关里，有新消息时会自动回到列表。",
+  "quota_left": "剩 {percent}% 额度",
+  "quota_exhausted": "额度已用完",
+  "quota_stale": "非最新",
+  "quota_resets": "{time} 重置"
 }
