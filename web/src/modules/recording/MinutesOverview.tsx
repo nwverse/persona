@@ -258,7 +258,7 @@ export function MinutesDebatesSection({
                                 aria-controls={decisionAnchor(decisionIdx)}
                                 aria-label={t("recording.minutes_debate_decision_jump", { decision: linkedDecision.text })}
                                 onClick={() => onDecisionJump(decisionIdx)}
-                                className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-control text-[11.5px] font-medium text-accent-ink hover:bg-hover"
+                                className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-control text-submeta font-medium text-accent-ink hover:bg-hover"
                               >
                                 <Icon name="flag" size={11} stroke={2.1} />
                                 {t("recording.minutes_decision")}
