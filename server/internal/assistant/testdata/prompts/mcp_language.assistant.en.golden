@@ -3477,7 +3477,7 @@
   },
   {
     "name": "task_start_screen",
-    "description": "Read the last 30 lines of the terminal tab a task's agent did not start in, while its computer keeps that tab (a 督办 message says until when): the question the tab's shell waits on, or where the agent's own screen stopped. Only for a task of this conversation whose start is being remedied; what it shows stays here, it is not kept with the task.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Read the last 30 lines of a failed startup's kept tab while the start is being remedied. A supervision message says how long the tab is kept. Only the main conversation or the task's current supervising conversation may read it. See what stopped the shell or Agent. The screen stays in this conversation.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3498,7 +3498,7 @@
   },
   {
     "name": "task_start_keys",
-    "description": "Type into the terminal tab a task's agent did not start in, while its computer keeps that tab and no agent runs there: text as is (no enter, at most 32 characters), then keys by name (\"enter\", \"esc\", \"ctrl+c\", \"y\", \"n\", \"up\", \"down\"…, at most 8). Use it to answer the question the tab's shell waits on, or to get past where the agent's screen stopped; read the tab first with task_start_screen and again after. The keys, the text and your reason are kept with the task's history. It starts nothing: start the agent again with task_retry.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Answer a failed startup's shell or Agent prompt in its kept terminal tab while no Agent runs there. Only the main conversation or the task's current supervising conversation may act. Read the tab with task_start_screen before and after. Send up to 32 characters without Enter, then up to 8 named keys (enter, esc, ctrl+c, y, n, up, down). The keys, text and reason go in the task history. Use task_retry to start again.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3533,7 +3533,7 @@
   },
   {
     "name": "task_retry",
-    "description": "Start a failed task's agent again: in its kept tab (once task_start_keys answered what stopped it), else in a new tab, reopening it; with launcher, on that launcher of the same computer and workspace. At most 3 retries; the hub never retries itself. Returns at once; the outcome comes as a 督办 message. Only this conversation's tasks; reason goes in their history.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Retry a failed task in its kept tab after clearing the blocker, or reopen it in a new tab. An optional launcher uses the same computer and workspace. The main conversation may retry any task. Other conversations may retry only tasks they supervise. Up to 3 manual retries. Returns at once. Look for the result in supervision. The task history records the reason.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
