@@ -1,8 +1,6 @@
 package extmgr
 
 import (
-	"github.com/nwverse/persona/server/internal/wireids"
-
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 const (
@@ -23,10 +22,6 @@ const (
 // The provider grant is attached to one installation and runtime. Neither a
 // generic KB reader nor a legacy hub token receives these import-specific calls.
 func (ps *extensions) kbProviderCall(ctx context.Context, p *extension.Extension, hp *hubExtension, epoch *uint64, method string, params json.RawMessage) (any, error) {
-	internal := assistantwire.MethodKBProviderCheckpoint
-	if method == kbSentMarkers {
-		internal = assistantwire.MethodKBProviderSentMarkers
-	}
 	check := func() error {
 		if ps.reg == nil || p == nil || hp == nil || epoch == nil || p.Record.Source != extension.SourceInstalled ||
 			p.Record.InstalledAt.IsZero() || p.Record.AttachedPackage() || p.Record.Remote != nil ||
@@ -75,7 +70,12 @@ func (ps *extensions) kbProviderCall(ctx context.Context, p *extension.Extension
 	call, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var result json.RawMessage
-	err := ps.h.kbAsk(call, internal, request, &result)
+	var err error
+	if method == kbSentMarkers {
+		result, err = callAssistantRaw(call, ps.h.kbAsk, assistantwire.KBProviderSentMarkersMethod, request)
+	} else {
+		result, err = callAssistantRaw(call, ps.h.kbAsk, assistantwire.KBProviderCheckpointMethod, request)
+	}
 	if revoked := check(); revoked != nil {
 		return nil, revoked
 	}

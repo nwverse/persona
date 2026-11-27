@@ -951,7 +951,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if guest != nil || !hasInput || execution.Public {
 		snapc <- contextAnswer{} // guests and public mentions get no owner state; empty starts leave it for the first real message
 	} else {
-		go func(id string) { snapc <- n.assistantContext(id) }(id)
+		go func(id, query string) { snapc <- n.assistantContextFor(id, query) }(id, text)
 	}
 	if id == "" { // a new Codex conversation: the thread's id is Codex's to pick
 		if p, err = n.spawnCodexWithMode("", cwd, launcher, false, false, mode, execution); err != nil {

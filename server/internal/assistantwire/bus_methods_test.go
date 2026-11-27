@@ -25,6 +25,21 @@ func TestExtensionBusMethodsWire(t *testing.T) {
 		`{"entries":[{"name":"example.md","size":3,"modified":"2026-01-02T00:00:00Z","content":"abc"}]}`)
 }
 
+func TestModelEntriesAndApprovalBusMethodsWire(t *testing.T) {
+	checkMethodWire(t, assistantwire.ModelsUsableMethod, "models.usable", `{"purpose":"inbox.triage"}`,
+		`{"usable":true,"provider":"Example API","model":"example"}`)
+	checkJSONRoundTrip[assistantwire.ModelsUsableResult](t, `{"usable":false}`)
+	checkMethodWire(t, assistantwire.ModelsLaunchersMethod, "models.launchers", `{}`,
+		`{"launchers":[{"name":"example","base_url":"https://api.example.com/v1"}]}`)
+	checkMethodWire(t, assistantwire.AssistantEntriesListMethod, "assistant.entries.list", `{"after":"example","by":"user"}`,
+		`{"entries":[],"after":"example","has_more":false}`)
+	checkMethodWire(t, assistantwire.FleetApprovalApplyMethod, "fleet.approval_apply",
+		`{"interaction_id":"example","resolution":{"allow":true}}`, `{"text":"applied"}`)
+	checkJSONRoundTrip[assistantwire.FleetApprovalApplyResult](t, `{"text":"","stale":true}`)
+	checkMethodWire(t, assistantwire.FleetApprovalDiscardMethod, "fleet.approval_discard",
+		`{"interaction_id":"example","status":"denied"}`, `{"ok":true}`)
+}
+
 func checkMethodWire[P, R any](t *testing.T, m buswire.Method[P, R], name, request, reply string) {
 	t.Helper()
 	t.Run(name, func(t *testing.T) {

@@ -596,13 +596,13 @@ describe("Persona's messages for the model (lib/injected.ts)", () => {
 });
 
 it("personaToolVerb names Persona's own tools by what they do, and nothing else", () => {
-  expect(personaToolVerb("mcp__persona__agent_read")).toEqual({ verb: "读 Agent 对话" });
+  expect(personaToolVerb("mcp__persona__agent_read")).toEqual({ verb: "读取 Agent 对话" });
   expect(personaToolVerb("mcp__plugin_persona__kb_update")).toEqual({ verb: "更新知识库" });
-  expect(personaToolVerb("mcp__persona__ask_user")).toEqual({ verb: "问你" });
+  expect(personaToolVerb("mcp__persona__ask_user")).toEqual({ verb: "向你提问" });
   expect(personaToolVerb("mcp__persona__send_to_agent")).toEqual({ verb: "给 Agent 发消息" });
-  expect(personaToolVerb("mcp__persona__conversation_new")).toEqual({ verb: "新开对话" });
-  expect(personaToolVerb("mcp__persona__computer_run")).toEqual({ verb: "操控电脑" });
-  expect(personaToolVerb("mcp__persona__secret_run")).toEqual({ verb: "用密码运行" });
+  expect(personaToolVerb("mcp__persona__conversation_new")).toEqual({ verb: "新建对话" });
+  expect(personaToolVerb("mcp__persona__computer_run")).toEqual({ verb: "操作电脑" });
+  expect(personaToolVerb("mcp__persona__secret_run")).toEqual({ verb: "使用密码运行" });
   expect(personaToolVerb("mcp__persona__phone_contacts_search")).toEqual({ verb: "iPhone", what: "contacts search" });
   expect(personaToolVerb("mcp__persona__mail_send")).toEqual({ verb: "邮件", what: "send" });
   // no verb of its own: keeps "Called Persona · …"

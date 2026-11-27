@@ -14,9 +14,9 @@ describe("workLine", () => {
   });
   it("says what it waits for, and when the hub acts", () => {
     expect(workLine(session({ work: { phase: "blocked", on: "user", line: "等你选 D2 / D4" } }), now)).toBe("等你选 D2 / D4");
-    expect(workLine(session({ work: { phase: "blocked", on: "external", line: "等部署跑完", wait: "部署", wake_at: at(12) } }), now)).toBe("等部署跑完（12 分钟后叫醒）");
-    expect(workLine(session({ work: { phase: "blocked", on: "transient", line: "模型服务暂时出错", wake_at: at(0.5) } }), now)).toBe("模型服务暂时出错（马上重试）");
-    expect(workLine(session({ work: { phase: "blocked", on: "external", line: "等", wake_at: at(65) } }), now)).toBe("等（1 小时 5 分后叫醒）");
+    expect(workLine(session({ work: { phase: "blocked", on: "external", line: "等部署跑完", wait: "部署", wake_at: at(12) } }), now)).toBe("等部署跑完（12 分钟后唤醒）");
+    expect(workLine(session({ work: { phase: "blocked", on: "transient", line: "模型服务暂时出错", wake_at: at(0.5) } }), now)).toBe("模型服务暂时出错（即将重试）");
+    expect(workLine(session({ work: { phase: "blocked", on: "external", line: "等", wake_at: at(65) } }), now)).toBe("等（1 小时 5 分后唤醒）");
   });
   it("is nothing while it works or before the hub triaged it", () => {
     expect(workLine(session({ state: "working", status: "working", work: { phase: "working" } }), now)).toBeUndefined();

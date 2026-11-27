@@ -37,7 +37,7 @@ func (s *Service) indexSessions(source string, list []Session) {
 		items = append(items, sessionlist.Item{
 			ID: row.ID, Source: source, Provider: row.Provider, Group: row.AccountID,
 			State: state, UpdatedAt: time.UnixMilli(row.RankTimeMs),
-			SearchText: strings.Join([]string{row.Title, row.Provider, row.AccountID}, "\n"),
+			SearchText: strings.Join([]string{row.Title, row.Provider, row.AccountID, row.PreviewText}, "\n"),
 			Summary:    json.RawMessage(raw), Full: json.RawMessage(raw),
 		})
 	}

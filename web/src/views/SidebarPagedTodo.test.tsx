@@ -113,7 +113,7 @@ describe("the sidebar's paged Agents by to-do", () => {
     expect(bar()!.querySelector('[aria-checked="true"]')!.textContent).toBe("待办");
     // the To-dos page's order (sortTodos), its titles
     expect(sections().map((s) => [heading(s).textContent, heading(s).getAttribute("aria-expanded")])).toEqual([
-      ["Submit for review", "true"], ["Ship 1.3", "true"], ["没挂待办的", "false"],
+      ["Submit for review", "true"], ["Ship 1.3", "true"], ["未关联待办", "false"],
     ]);
     const [review, ship, none] = sections();
     expect(rowTexts(ship)).toEqual([expect.stringMatching(/^Widget tests/)]);

@@ -49,7 +49,7 @@ describe("收件箱：扩展画的详情（inbox_item）", () => {
   it("offers Same matter as on open and done items without eagerly loading the picker", () => {
     for (const current of [item({}), item({ done_at: "2026-01-01T00:00:00Z", done_by: "user" })]) {
       const html = renderToStaticMarkup(<InboxDetail item={current} loaded />);
-      expect(html).toContain('aria-label="是同一件事…"');
+      expect(html).toContain('aria-label="关联为同一件事…"');
       expect(html).not.toContain("搜索标题和位置");
     }
   });

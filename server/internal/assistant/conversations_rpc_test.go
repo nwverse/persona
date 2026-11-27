@@ -229,6 +229,7 @@ func TestExtensionReadRPCRejectsUnknownParams(t *testing.T) {
 		assistantwire.MethodExtensionTrustForget,
 		assistantwire.MethodAssistantConversations,
 		assistantwire.MethodAssistantMessages,
+		assistantwire.MethodAssistantEntriesList,
 		assistantwire.MethodAssistantMemory,
 	} {
 		var out json.RawMessage

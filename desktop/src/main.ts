@@ -231,7 +231,7 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     title: "Persona",
     autoHideMenuBar: true,
     backgroundColor: windowBackground(),
-    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 19 }, visualEffectState: "active" as const } : {}),
+    ...(process.platform === "darwin" ? { transparent: true, titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 19 }, visualEffectState: "active" as const } : {}),
     webPreferences: {
       preload: join(import.meta.dirname, "preload.cjs"),
       contextIsolation: true,
