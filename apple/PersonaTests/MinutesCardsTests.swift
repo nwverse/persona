@@ -502,7 +502,8 @@ struct MinutesCardsTests {
         #expect(out.contains("### Ship cap per item? (" + String(localized: "settled") + ")"))
         #expect(out.contains("- Per item (Ann) [0:02]"))
         #expect(out.contains("- Per recording [0:21]"))
-        #expect(out.contains("- " + String(localized: "Outcome: Per item for now") + " [0:44]"))
+        let outcomeText = "Per item for now"
+        #expect(out.contains("- " + String(localized: "Outcome: \(outcomeText)") + " [0:44]"))
         // Unknown status has no status parentheses.
         #expect(out.contains("### Unknown status debate?\n"))
         #expect(!out.contains("### Unknown status debate? ("))
