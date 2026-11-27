@@ -104,15 +104,15 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
         update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } },
       },
     })
-    const brain = join(home, '.gemini', 'antigravity', 'brain', sid)
-    mkdirSync(brain, { recursive: true })
-    const transcriptFile = join(brain, 'transcript.json')
-    writeFileSync(transcriptFile, JSON.stringify({
-      steps: [
-        { step_index: 0, type: 'USER_INPUT', user_input: { items: [{ text: promptText }] } },
-        { step_index: 1, type: 'PLANNER_RESPONSE', planner_response: { response: reply } },
-      ],
-    }))
+    const logsDir = join(home, 'agy', 'brain', sid, '.system_generated', 'logs')
+    mkdirSync(logsDir, { recursive: true })
+    const rows = [
+      { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', content: promptText },
+      { step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', content: reply },
+    ]
+    const jsonl = rows.map((r) => JSON.stringify(r)).join('\\n') + '\\n'
+    writeFileSync(join(logsDir, 'transcript.jsonl'), jsonl)
+    writeFileSync(join(logsDir, 'transcript_full.jsonl'), jsonl)
     record({ kind: 'prompt_done', sessionId: sid, reply, authed, key: process.env.GEMINI_API_KEY || '' })
     send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } })
     return
@@ -142,6 +142,7 @@ async function poolFixture(t, options = {}) {
     socketPath: node.path,
     sharedAcpIdleMs: options.sharedAcpIdleMs ?? 300_000,
     assistantAcpIdleMs: options.assistantAcpIdleMs ?? 300_000,
+    exportPollMs: options.exportPollMs ?? 20,
     env: options.env ?? { ...process.env },
     log: (m) => logs.push(m),
   })
