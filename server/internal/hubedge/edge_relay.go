@@ -67,33 +67,31 @@ type relay struct {
 	client net.Conn
 	linger time.Duration // after the slot's half-close (zero: halfCloseLinger)
 
-	mu        sync.Mutex
-	up        net.Conn
-	kept      []byte
-	keeping   bool // until the slot's first byte
-	overflow  bool // more than replayLimit was sent before it: no replay
-	clientEOF bool
-	once      sync.Once
-	ended     atomic.Int32 // directions done: the second one closes both
+	mu             sync.Mutex
+	up             net.Conn
+	kept           []byte
+	stoppedKeeping bool // true once the slot answers its first byte or client bytes exceed replayLimit
+	overflow       bool // more than replayLimit was sent before it: no replay
+	closed         bool // true once closeAll has closed client and up
+	clientEOF      bool
+	once           sync.Once
+	ended          atomic.Int32 // directions done: the second one closes both
 }
 
 func (r *relay) fromClient() {
-	r.mu.Lock()
-	r.keeping = true
-	r.mu.Unlock()
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := r.client.Read(buf)
 		if n > 0 {
 			r.mu.Lock()
-			if r.keeping {
+			if !r.stoppedKeeping {
 				if len(r.kept)+n > replayLimit {
-					r.overflow, r.kept = true, nil
-				} else if !r.overflow {
+					r.overflow, r.stoppedKeeping, r.kept = true, true, nil
+				} else {
 					r.kept = append(r.kept, buf[:n]...)
 				}
 			}
-			up, keeping := r.up, r.keeping
+			up, keeping := r.up, !r.stoppedKeeping
 			r.mu.Unlock()
 			if _, werr := up.Write(buf[:n]); werr != nil && !keeping {
 				r.closeAll()
@@ -127,7 +125,7 @@ func (r *relay) toClient(next func() net.Conn) {
 			if first {
 				first = false
 				r.mu.Lock()
-				r.keeping, r.kept = false, nil
+				r.stoppedKeeping, r.kept = true, nil
 				r.mu.Unlock()
 			}
 			if _, werr := r.client.Write(buf[:n]); werr != nil {
@@ -151,22 +149,32 @@ func (r *relay) toClient(next func() net.Conn) {
 		}
 		if first {
 			r.mu.Lock()
-			replay := !r.overflow && replayable(r.kept)
+			replay := !r.closed && !r.overflow && replayable(r.kept)
 			r.mu.Unlock()
 			if replay {
 				if nc := next(); nc != nil {
 					r.mu.Lock()
+					if r.closed || r.overflow || !replayable(r.kept) {
+						r.mu.Unlock()
+						_ = nc.Close()
+						r.closeAll()
+						return
+					}
+					_, werr := nc.Write(r.kept)
+					if werr != nil {
+						r.mu.Unlock()
+						_ = nc.Close()
+						r.closeAll()
+						return
+					}
 					_ = r.up.Close()
 					r.up = nc
-					_, werr := nc.Write(r.kept)
 					eof := r.clientEOF
 					r.mu.Unlock()
-					if werr == nil {
-						if eof {
-							halfClose(nc)
-						}
-						continue
+					if eof {
+						halfClose(nc)
 					}
+					continue
 				}
 			}
 		}
@@ -202,6 +210,7 @@ func (r *relay) closeAll() {
 	r.once.Do(func() {
 		_ = r.client.Close()
 		r.mu.Lock()
+		r.closed = true
 		_ = r.up.Close()
 		r.mu.Unlock()
 	})

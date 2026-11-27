@@ -145,20 +145,61 @@ host `server/internal/node/hostorca.go`, fake test runtime `server/internal/orca
 | State | Agent row for this pane key in `worktree.ps` (matching type, `updatedAt` no earlier than 2 seconds before process start, or it may belong to the previous Agent): prefer `mainAgent.state` (main Agent's own state; row `state` includes children, remaining working if the main turn ended but background children run). Keep working / blocked / done, map waiting to blocked. Without a usable row, ask `terminal.agentStatus` (3-second cache): working unchanged, permission → blocked, idle → done; null `status` → unknown | ✅ Polling |
 | Map pane to session | Foreground claude pid for the pane → `sessions/<pid>.json` (shared "process identifies session" path). An `agy` pane's conversation comes from Persona's agy hooks (`ORCA_PANE_KEY`) or, on Linux, from the `presence/<conversation>.lock` its foreground process holds open, as for a classic herdr pane (#16531, [engines.md](../integrations/engines.md), "Capabilities by engine"). macOS uses two `ps` calls (above), Linux reads `/proc`, Windows reads process PEB ([windows.md](../operations/windows.md), "Orca"). Extract only `ORCA_PANE_KEY` / `ORCA_AGENT_PANE` and the two nested-host exclusion variables; never retain, log, or send environments to hub (they also contain Orca's hook token) | ✅ |
 | Spaces / slots | Space is worktree (`worktreeId`), named from branch (strip `refs/heads/`), falling back to path basename, ordered by `worktree.ps` (Orca sidebar order). Slots are tabs in `visualLayouts`, in layout-tree reading order (`first`, then `second` for splits), named by tab title or index if empty | ✅ |
-| Read screen | `terminal.read {terminal, screen:true}`: plain text, current screen only; rejoin soft wraps using `tailRows[].wrapped`; error on `source: screen-unavailable`. Host declares `host.PlainScreen`; `recent` also returns only the current screen | ✅ Plain text, no history |
+| Read screen | `terminal.read {terminal, screen:true}`: plain text, current screen only; rejoin soft wraps using `tailRows[].wrapped`; error on `source: screen-unavailable`. Host declares `host.PlainScreen`. The host's `recent` read also returns only the current screen, which the node's own checks read; what a client shows above the screen (`session.screen.before`, `session.screen` `recent`) comes from Orca's output tail and, where it agrees, its log by cursor (`host.Scrollbacker`, #17048, [terminal.md](../integrations/terminal.md) "31. Orca terminals: scrolling up, and a quicker plain view (#17048)"); the screen read is cheap, so a page polling it may read it four times a second while it changes (`host.QuickScreen`). Orca 1.4.277 lifts the text of an Agent's input box out of the rows into `draft`, leaving the prompt row as its bare glyph (`❯`, `›`): the read puts it back in that row (`orcart.Screen.Text`), or the node would take every box for empty and type `/effort` into a draft. The draft has no colors either: checked live on an isolated runtime with Claude Code 2.1.331, a typed draft and Claude's grey suggestion come back alike (Orca's own emulator knows which cells are dim, but no method on the local socket says so), so effort and speed changes are refused while the suggestion shows (#17042) | ✅ Plain text, scrollback |
 | Send message | Do not use Orca's `agentPrompt`: it bracket-pastes only to Agents it has "seen working". Newly launched claude receives raw text + `\r`, submitting a multiline message at its first newline (tested 2026-11-01). Rejections with `accepted:false` (`no-agent` / `permission`) require `requireAgentStatus:"sendable"`, which Orca always rejects alongside "text + Enter", so it is unusable here too. Follow herdr's `agent.prompt`: first verify a foreground Agent (process table has a recognized foreground Agent in the pane, not inside a host nested in it; `terminal.agentStatus` is asked too: permission status returns `dialog_open`, an error means not foreground; its `isRunningAgent` is not required since #5463, because Orca reports false while Claude Code has background tasks and still takes input; failed process scan means not foreground; refusals return `not_delivered` with no input and log the check that refused), then send bracketed paste ourselves: `terminal.send {text: ESC[200~ + text + ESC[201~}` (no `enter`; replace ESC in text with `<ESC>`, like Orca, to prevent premature paste termination). Wait 150 ms plus 10 ms per line, capped at 1 second; verify foreground Agent again, then send `\r` separately. Any failure after paste returns `delivered:unknown` (text may remain in input). Always pass `client: {id:"persona", type:"desktop"}` (`client.id` required; absent yields `invalid_argument`). Pre-send checks only detect dialogs (no color to distinguish drafts from gray text) | ✅ |
-| Session not running | When a session is no longer an Agent pane (exited, suspended, backgrounded), herdr resumes it in a new pane before sending (herdr-core too, since #2532). Orca rejects with no input: if its last pane still exists, `agent_not_in_front` ("Claude is not in the foreground; it may be suspended"); if gone, `not_running` ("…Reopen the Orca session on your computer"). Previously this looked up a launcher and returned the confusing `unsupported: orca cannot do this` | ✅ |
+| Session not running | When a session is no longer an Agent pane (exited, suspended, backgrounded), herdr resumes it in a new pane before sending (herdr-core too, since #2532). A message to it is refused with no input on Orca: if its last pane still exists, `agent_not_in_front` (the Agent is not in front; it may be suspended); if gone and Orca cannot continue it, `not_running` ("…reopen it on the computer"). Previously this looked up a launcher and returned the confusing `unsupported: orca cannot do this`. A stopped Agent's Resume opens a new Orca terminal for Claude Code, and since #17044 for Codex, TRAE CLI and pi (`docs/integrations/engines.md`, "Capabilities by engine") | ✅ |
 | Type without Enter | `terminal.send {text}` without `enter`: raw bytes, no paste, with the same foreground-Agent check (not permission: free-form dialog input needs it). Orca does not declare `TextTyper` | ✅ |
 | Special keys | Key names → xterm bytes: `enter` `\r`, `esc` `\x1b`, `shift+tab` `\x1b[Z`, `backspace` `\x7f`, `ctrl+<letter>` control characters, `ctrl+space` `\x00`, `alt+<character>` prefixed ESC. Modified arrows / Home / End / Insert / Delete / PageUp / PageDown / F1–F12 use xterm parameters (1 + shift 1 + alt 2 + ctrl 4, e.g. `alt+left` `\x1b[1;3D`, `ctrl+left` `\x1b[1;5D`). Send each key separately via `terminal.send`, 40 ms apart (cancel via caller ctx; concatenating `esc` with a following sequence can make an alt key). Reject unknown keys before sending any. Printable keys (letters, digits, space) first verify foreground Agent; Enter, esc, arrows, ctrl+c do not (stuck panes must remain interruptible/closable) | ✅ |
 | No input delivered | Foreground check fails; `terminal.send` returns `accepted:false` (permission → `dialog_open`, others → `not_delivered`); pre-write errors such as `terminal_handle_stale` (including incarnation mismatch), `terminal_not_writable`, `terminal_gone`, `terminal_exited`, `invalid_argument`, `runtime_busy`, `request_too_large` also return `not_delivered` (all `delivered:none`, safe to resend). Uncertain-write errors such as `runtime_error` remain errors | ✅ |
 | Close | Like herdr, send ctrl+c (`\x03`) twice, then `terminal.close` (Orca closes the pane, or tab if it was the last pane). An already absent terminal counts as closed | ✅ |
+| What runs in a terminal | `terminal.inspectProcess {terminal, expectedIncarnationId}` (`host.ForegroundNamer`, #17039): `foregroundProcess` names the program in front, `null` with `hasChildProcesses:false` is the shell itself (named from the evidence fence's `shellPid`); `idleShellProven` (1.4.277: shell in front, alone, no job behind it or stopped, no output since) is what the grace close needs. An answer whose `foregroundProcessEvidence.verdict` is not `live` (an incarnation that changed: `incarnation_mismatch`), or `childProcessEvidence:"unverifiable"`, says nothing. An Orca without the method (`method_not_found`) leaves the agent process scan, which names only a supported agent: anything else is "can't tell", which closes and types nothing. Orca 1.4.277's terminal daemon marks every answer on Windows unverifiable (`windows_ssh_foreground_unavailable`), so there nothing is closed or typed on its word | ✅ |
 | Rename | Orca owns worktree and tab names: `RenameSpace` / `RenameSlot` report `unsupported` ("Orca worktrees and tabs cannot be renamed from the phone yet") | ❌ |
 | Recognize hook pane | With no `HERDR_PANE_ID` or `HC_TERMINAL_ID`, `personad hook` reads `ORCA_PANE_KEY` (fallback `ORCA_AGENT_PANE`) and reports `orca:<tabId>:<leafId>`. node records these only on Orca-engine machines (herdr machines continue ignoring Orca panes). claude launched in Orca usually lacks Persona hooks (only Persona's own launches add them through `--settings`) | ✅ |
-| New sessions, mode / thinking-effort changes | Implements `host.Launcher`; `terminal.create` supports creation in registered worktrees or their subdirectories and attempts to register unregistered Git repositories automatically. A directory in no worktree (`~/.persona`, say) gets its terminal in the worktree Orca is showing (`isActive`), else the first local one, and the start `cd`s there: Orca's UI does not adopt a terminal made in a worktree it is not showing, which about 2 s later becomes `orphaned` with its `tabId` / `leafId` rewritten to `pty:<worktreeId>@@…`, the same handle and incarnation (#5547). The node keeps the pane key creation gave, and the host finds a terminal it made (a start's, or the one Orca opens in a new worktree) by its handle and incarnation: one Orca orphaned and re-keyed stays listed under that key, its processes and agent row looked up under both keys, so the start's typing, readiness wait, tab rename and closing still reach it; one the user moved to another tab is listed where it is now. `Run` accepts an orphaned terminal only when it is that re-keyed one; a terminal whose handle changed is not ours (#972). A start whose pane is gone for 6 looks in a row (3 s) fails saying so; mode menu needs further expansion | ✅ New sessions supported |
-| Live terminal, colored screen reads, takeover dimensions | Only over paired encrypted WebSocket; hub falls back to screen reads | Phase 3 |
+| New sessions, mode / thinking-effort changes | Implements `host.Launcher`; `terminal.create` supports creation in registered worktrees or their subdirectories and attempts to register unregistered Git repositories automatically. A directory in no worktree (`~/.persona`, say) gets its terminal in the worktree Orca is showing (`isActive`), else the first local one, and the start `cd`s there: Orca's UI does not adopt a terminal made in a worktree it is not showing, which about 2 s later becomes `orphaned` with its `tabId` / `leafId` rewritten to `pty:<worktreeId>@@…`, the same handle and incarnation (#5547). The node keeps the pane key creation gave, and the host finds a terminal it made (a start's, or the one Orca opens in a new worktree) by its handle and incarnation: one Orca orphaned and re-keyed stays listed under that key, its processes and agent row looked up under both keys, so the start's typing, readiness wait, tab rename and closing still reach it; one the user moved to another tab is listed where it is now. `Run` accepts an orphaned terminal only when it is that re-keyed one; a terminal whose handle changed is not ours (#972). A start whose pane is gone for 6 looks in a row (3 s) fails saying so. A start's terminal is created with the start environment as `terminal.create`'s `env` (`PERSONA_AGENT=1` and the startup switches, `host.EnvLauncher`; an Orca that refuses the field gets the create again without it, #17036). `terminal.create`'s `cwd` is not honoured for this create (Orca 1.4.277), so the start `cd`s through its launch grant, and New Terminal / Open Terminal Here for a folder asks for the terminal with `command: "cd <folder>"` and `startupCommandDelivery: "shell-ready"` (Orca types it into that new shell once it is ready; no launch grant for a user's shell). Mode menu needs further expansion | ✅ New sessions supported |
+| Live terminal, colored screen reads, takeover dimensions | Only over paired encrypted WebSocket; hub falls back to screen reads ("Streaming transport" below: no-go until Orca adds a method) | ❌ |
 | Push changes | Not on the socket (all `*.subscribe` methods are streaming) | — |
 
-Two options for phase 3: propose an Orca "colored screen read" method callable on the socket (preferred), or implement Orca pairing and encrypted WebSocket in Persona.
+### Streaming transport (#17048)
+
+Investigated on Orca 1.4.277 (its runtime bundle, `orcad-server.js`, and an isolated headless runtime with its own HOME
+and profile): can Persona use the transport that `terminal.subscribe` and `agentSession.subscribeStatus` need, without
+weakening security and without pairing the user has to repeat? **No-go for now**; the node keeps polling, and the plain
+view reads faster instead (`docs/integrations/terminal.md`, "31. Orca terminals: scrolling up, and a quicker plain view (#17048)").
+
+- **The local socket refuses streaming methods**: the dispatcher answers `method_not_supported` "Method terminal.subscribe
+  requires a streaming transport" (measured), whatever the token.
+- **The WebSocket transport** (`ws://127.0.0.1:<port>`, listed in `orca-runtime.json` next to the socket) starts with
+  `e2ee_hello`: v1 sends the client's X25519 key and both sides seal with a NaCl box (the server's key is
+  `publicKeyB64` in `orca-e2ee-keypair.json`, 0600), v2 adds a transcript hash; within 10 s the client sends a sealed
+  `e2ee_auth` with a **paired device's** token (or, v2, a device-key proof). `handleAuth` resolves the token in Orca's
+  device registry (`orca-devices.json`) only. Measured: the handshake completes with the key Persona can read, and
+  `e2ee_auth` with the local socket's own token answers `e2ee_error {code: "unauthorized"}` and closes 4001.
+- **Getting a device token** without a person: `pairing.createOffer` is callable on the local socket (permission
+  `pairing-admin`) and returns a pairing URL carrying a device token, but for both scopes it first calls
+  `ensureNetworkExposure()`, rebinding the WebSocket listener to every interface. Measured on the isolated runtime
+  (`--refuse-public`): `{available: false, reason: "network_exposure_failed"}`. On a desktop Orca it would expose a
+  full-control endpoint to the network, and a device seen with `pairingReach: "network"` makes Orca bind all interfaces
+  again at every start unless `--bind` pins it (`resolveInitialWebSocketBindHost`). It also lists a paired device in
+  Orca. That weakens security: not used. A loopback-only offer (`reach: "this-computer"`) exists inside Orca but no RPC
+  parameter reaches it.
+- **With a person**: `orca serve` prints a pairing offer at start (none with `--no-pairing`: `disabled_by_operator`), and
+  the desktop app pairs phones by QR code. Persona would have to ask for that pairing on every computer, keep a device
+  credential per Orca, and pair again whenever the user revokes or resets it: the churn this was to avoid.
+- **Writing a device into `orca-devices.json`** (Orca adopts external edits) would grant access behind Orca's back: not
+  considered.
+
+What Orca would need to add, any one of which Persona would adopt behind a capability probe (`status.get`
+capabilities, or falling back on `method_not_supported`), with a `host.Watcher` and a `host.Streamer`:
+
+1. **A streaming subscription on the local socket** (preferred): `terminal.subscribe` and `agentSession.subscribeStatus`
+   (or one `events.subscribe`) accepted on the authenticated local socket, as notifications on the same connection, as
+   herdr-core's `events.subscribe` does. The socket already grants full control to its token's holder, so this adds no
+   new trust.
+2. **A colored screen read**: `terminal.read {screen: true, format: "ansi"}` with SGR rows, the cursor and the grid size,
+   plus a long-poll for change (`terminal.wait {for: "output", afterSequence}`), so the plain view gets colors, a cursor
+   and push refresh without a stream.
+3. **Loopback pairing for a local client**: `pairing.createOffer {scope: "runtime", reach: "this-computer"}` over the
+   local socket without network exposure, so a same-account client can pair itself once, silently and revocably.
 
 ### Findings
 
@@ -173,7 +214,8 @@ Two options for phase 3: propose an Orca "colored screen read" method callable o
 - **Bracketed-paste conditions**: requires `agentPrompt`, text, `enter`, `client.type: desktop`, and a foreground Agent recognized by Orca **and previously seen working**.
   The reply includes a `send.prompt` receipt. Newly launched claude that has not worked yet does not qualify; Orca writes raw text followed by `\r`. Persona therefore performs bracketed paste itself (see "Send message").
   Text without `enter` is written raw. `client` requires `id` (Persona uses `"persona"`, as Orca CLI does); `type` alone returns `invalid_argument`.
-- **Default screen reads switch sources**: `terminal.read` without `screen` reads the output-stream tail (`source: stream`); always pass `screen:true`.
+- **Default screen reads switch sources**: `terminal.read` without `screen` reads the output-stream tail (`source: stream`); always pass `screen:true` for the screen.
+- **Two kinds of kept output** (Orca 1.4.277, #17048): the output tail (`terminal.read {limit}`) keeps rows a program redrew in place as they ended, as a scrollback does (2000 lines and 256 KiB kept, at most 32 KiB a read, the screen instead on the alternate screen); the log by cursor (`terminal.read {cursor, limit}`, `oldestCursor` / `latestCursor`) is every completed line, each redraw of an agent's live rows included, so it is shown only where it agrees with the tail. `cursor` together with `screen:true` is refused.
 
 ### Cautions
 
@@ -198,18 +240,44 @@ their rows in `worktree.ps` have pane keys `structured-agent-session-<session-id
 They are now integrated by the Orca bridge in node (`server/internal/node/orcabridge.go`, client `server/internal/orcart/session.go`) through the
 runtime protocol (`docs/integrations/runtimes.md`), like the Paseo bridge but inside node (`net.Pipe` connects to `RuntimeHost`):
 
-- **Activation**: enabled for the Orca engine, closed when switching away. Lists only structured sessions with `agentType: claude` in local worktrees (`hostId: local`);
-  this version does not list structured Codex sessions.
-- **Session ID**: Claude's own ID (`providerSession.id` from `agentSession.history`); history reads the usual Claude transcript.
-  Sessions with no first message lack this ID and appear only after sending one (within 10 seconds). Space is worktree (`worktreeId`), named from branch as for terminal sessions;
-  child worktrees carry `parent_space_id` and collapse under their parent on the web, like terminal sessions (#2073).
-- **State**: poll `worktree.ps` every 1.5 seconds, using row `mainAgent.state` (working / blocked / done); push to hub only when the list changes.
+- **Activation**: enabled for the Orca engine, closed when switching away. Lists every structured session in local worktrees (`hostId: local`), whatever its provider (`agentType`).
+- **Which chats**: the agent rows of `worktree.ps`, and the chat tabs of `session.tabs.listAll` (`type: agent-session`) that `worktree.ps` does not list: Orca reports a
+  chat's row only once it has had a turn, so a chat opened and not written to yet is found only among the tabs. The tabs are read every 5 seconds; an Orca without the method
+  (`method_not_found`) adds none. Checked on Orca 1.4.277.
+- **Content**: a Claude chat's is its Claude transcript (`transcript`, `providerSession.id` from `agentSession.history`), read by the node as usual. A Codex chat is its Codex thread
+  (`codex_thread`, the same field), so the node does not list the thread a second time from Codex's history; its content, like every other provider's chat's and a Claude chat's
+  before its transcript is written, is Orca's own journal (`agentSession.history`, `orcabridge_items.go`): an item's `seq` is its journal sequence, a message's blocks its items
+  `<seq>#<index>` (the user's and the agent's words, reasoning as thinking, tool calls and their results, Orca's warnings and errors as notices; turns, prompts and Orca's
+  bookkeeping left out), `history` the journal's epoch (`orca:<epoch>`, which a rewind changes), `before_seq` / `after_seq` page with Orca's own `before` / `after` cursors.
+  A provider the apps do not know is named in `agent_label` (Antigravity, Gemini, OpenCode…). Rows carry `host: "orca"`, so the apps ask the Orca engine about their worktree.
+- **Session IDs**:
+  - A Claude chat whose Claude session the bridge knows when it first lists it: that Claude session id, the id the same conversation has in a terminal or "Not running"
+    (as before this version, so every link, pin and read state stays).
+  - A chat Persona started (#17047) is `persona-<id>` in Orca and `<id>` in Persona: the id the hub named for it.
+  - Any other chat (Codex, another provider, a Claude chat seen before its first message): Orca's own session id. A Claude chat listed so keeps that id once its Claude
+    session appears; its row names the transcript from then on, and the node lists the transcript under no second id but names it in the row's `aliases`
+    (`docs/integrations/runtimes.md`, "Runtimes that run Claude Code").
+  - The bridge keeps the id it gave each chat in its **book** (`orcabridge_book.go`): `<user cache>/persona/orca/chats.json` (0600, in the node's private cache folder, the 300
+    chats seen last), so a node that restarts gives each chat the same id. A book that is lost loses only the third rule's memory: such a Claude chat comes back under its
+    Claude session id. Space is worktree (`worktreeId`), named from branch as for terminal sessions; child worktrees carry `parent_space_id` and collapse under their parent on
+    the web, like terminal sessions (#2073).
+- **Closed chats**: a chat closed in Orca (its tab gone; its record and journal stay) is listed from the book, not running (`offline`), the latest 80 of the last 7 days, as Paseo
+  lists its archived agents. Its content is read as when it was open. A message to it opens it in Orca again (`agentSession.reveal`) and goes there, never to a terminal;
+  modes are refused until then (`orca_closed`), and closing it in Persona takes it off the list. One Orca no longer has (deleted) answers `session_gone` and leaves the book.
+  While Orca is not running every chat of the book is listed this way. So no chat's Claude transcript is left to the node as an ordinary session not running, which a Resume
+  would open in an Orca terminal: the bridge sends `unlisted_transcripts: []` (it lists its closed chats itself and names none).
+- **State**: poll `worktree.ps` every 1.5 seconds, using row `mainAgent.state` (working / blocked / done); a tab without a turn is idle. Push to hub only when the list changes.
 - **Actions**: send text/images (messages sent while working queue after this turn, `delivery: queue-if-active`), interrupt (`agentSession.cancel`),
   close (`agentSession.close`, like Orca's close button; records remain), change permission mode and thinking effort (`agentSession.setOption`; Orca has no plan mode,
   so plan returns `unsupported`). No terminal, screen reads, keys, or live terminal.
 - **Cards**: when blocked, read `agentSession.currentRequests`, mapping pending approvals to permission cards (if `detail` is tool-input JSON,
   show commands/files like hook cards), plan approvals to plan cards, and questions to question cards. Return answers with Orca option IDs and `expectedRevision`.
-  Cards disappear from the phone if answered on the computer first.
+  Cards disappear from the phone if answered on the computer first. Every answer of a question goes: Orca 1.4.277 takes at most four in one reply and refuses more, which
+  then counts as an answer not taken. An answer Orca did not take (refused, or its outcome unknown) is never dropped: while Orca still waits on the prompt it goes on the phone
+  again as a new card (its own id), a permission card with Orca's words on why in its `reason`.
+- **Errors**: the bridge's refusals keep their codes (`runtime_away`, `refused` and `session_gone` with `delivered: none`, `unknown` with `delivered: unknown`) and carry a
+  `reason` (`orca_away`, `orca_refused`, `orca_unknown`, `orca_session_gone`, `orca_closed`) the hub words in the request's language (`rpc-errors.<reason>`), Orca's own
+  words as the detail.
 - **Write envelope**: every write carries `envelope {sessionId, clientOperationId, expectedRuntimeFence, payloadFingerprint}`.
   `clientOperationId` is `<13-digit-milliseconds>-<32-hex-digits>`; the same message (same `client_msg_id`) reuses it, so Orca returns the original result on resend, never sends twice.
   `payloadFingerprint` is SHA-256 of canonical JSON `{method, sessionId, fields}` (sorted keys, no spaces, escaping as JavaScript `JSON.stringify`).

@@ -51,7 +51,7 @@ CATALOG = os.environ.get("MOCK_SESSIONS_CATALOG") == "1" and os.environ.get("MOC
 
 def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
-    return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
+    base = ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload", "upload_attachment",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["session_review"] if os.environ.get("MOCK_AGENT_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
@@ -70,6 +70,7 @@ def features():
                  ["look_uploads"] if os.environ.get("MOCK_LOOK_UPLOADS") == "basic" else
                  ["look_uploads", "look_uploads_states"])) + (
                 [] if os.environ.get("MOCK_TODO_IMAGES") == "off" else ["todo_images"])
+    return text_lookup_mock.features(base)
 
 
 def identity():
@@ -498,6 +499,7 @@ if RESUME_TERMINAL:  # the Mac mini (#5521)
 if os.path.dirname(os.path.abspath(__file__)) not in sys.path:  # python3 -I leaves the script's folder out
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine_alerts  # noqa: E402
+import text_lookup_mock  # noqa: E402  the dictionary a tapped word asks (#10977)
 MACHINE_ALERT_METRICS = machine_alerts.install_machines(MACHINES, SYSTEMS) if machine_alerts.ON else {}
 # The hub's own build (hello server_version, /api/v1/health version): a dated build in that mode, so the alert sheet
 # can say how far apart a node's build is.
@@ -21890,9 +21892,21 @@ def personal_rows():
     rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
             ("grok_bot", "健身记录", 80, 0), ("cue", "菜谱整理", 200, 0)]
     if os.environ.get("MOCK_PERSONAL_UPGRADE"): rows[0] = ("muse", "Upgrade preference fixture", 0.1, 2)
-    return [{"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
-             "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
-            for i, (prov, title, hours, unread) in enumerate(rows)]
+    # What the Messages page draws beside each (docs/extensions/lark-migration.md "Personal Agents in Messages"): the
+    # latest message, and the allowance at its service as a charge: plenty (show false, an older account's default, still
+    # drawn), low, used up, none, an old reading.
+    previews = [("周报草稿好了", False), ("帮我再找找周末的票", True), ("第三章的要点整理完了", False), ("", False), ("", False), ("", False)]
+    quotas = [{"state": "ok", "percent": 70, "show": False, "resetsAt": now + 5 * 3600 * 1000}, {"state": "low", "remaining": 0.15},
+              {"state": "exhausted", "remaining": 0}, None, {"state": "ok", "percent": 55, "stale": True}, None]
+    out = []
+    for i, (prov, title, hours, unread) in enumerate(rows):
+        row = {"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
+               "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
+        text, mine = previews[i]
+        if text: row.update(previewText=text, previewIsMine=mine)
+        if quotas[i]: row["quota"] = quotas[i]
+        out.append(row)
+    return out
 def personal_listed(hidden):
     return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_STATE["state"] in ("configured", "partial", "partial_setup") else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made
@@ -28003,6 +28017,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(listing)
         if doctor_route(self, p, "GET"): return
         if machine_alerts.route(self, "GET", MACHINES, SYSTEMS, metric_latest, broadcast): return
+        if text_lookup_mock.route(self, "GET", p, q, b"", broadcast): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
             mid = p.split("/")[4]
             return self.send_json(with_own_service_unavailable({"launchers": machine_launchers(mid)}, mid, self.headers.get("Accept-Language")))
@@ -28356,6 +28371,7 @@ class H(BaseHTTPRequestHandler):
         if chat_pins_route(self, p, parse_qs(urlparse(self.path).query)): return
         if doctor_route(self, p, "POST"): return
         if self.command == "POST" and machine_alerts.route(self, "POST", MACHINES, SYSTEMS, metric_latest, broadcast): return
+        if text_lookup_mock.route(self, self.command, p, {}, self.last_body, broadcast): return
         if history_route(self, p, parse_qs(urlparse(self.path).query)): return
         if plugins_route(self, p, self.last_body): return
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|close_finished|split|agent|git)|tabs/(close|rename))", p):
@@ -33793,6 +33809,16 @@ def features():
 import todo_view_mock  # noqa: E402
 MOCK_HELP.extend(todo_view_mock.HELP)
 _todo_view = todo_view_mock if todo_view_mock.install(globals()) else None
+
+
+# MOCK_TEXT_LOOKUP=1|off (#10977, scripts/mock/text_lookup_mock.py): an Inbox row with English text to tap.
+if text_lookup_mock.ENABLED:
+    INBOX.insert(0, text_lookup_mock.inbox_row(ago(minutes=5)))
+
+
+MOCK_HELP.append("MOCK_TEXT_LOOKUP=1|off  Word lookup (#10977): features carry text_lookup; 1: Relingo answers GET/POST "
+                 "/api/v1/text-lookup… from a made-up dictionary (context, deploy, latency…); off: available false. "
+                 "MOCK_TEXT_LOOKUP_UNDERLINE=1, MOCK_TEXT_LOOKUP_LATENCY=S; GET /mock/text-lookup?available=&underline=&fail=&latency=")
 
 
 if __name__ == "__main__":

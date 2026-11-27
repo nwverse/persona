@@ -82,7 +82,7 @@ export type TextSize = (typeof TEXT_SIZES)[number];
 /** Window material style (#16607): "default" keeps the opaque surface intact; "liquid-glass" is opt-in under Appearance. */
 export const SURFACE_STYLES = ["default", "liquid-glass"] as const;
 export type SurfaceStyle = (typeof SURFACE_STYLES)[number];
-export const DEFAULT_GLASS_TRANSLUCENCY = 68;
+export const DEFAULT_GLASS_TRANSLUCENCY = 75;
 
 // ── the saved choices ─────────────────────────────────────
 

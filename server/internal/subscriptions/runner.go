@@ -103,7 +103,7 @@ func (s *Service) startDue(ctx context.Context) *sync.WaitGroup {
 		if IsPush(sub) {
 			continue // filled by its device, never pulled
 		}
-		asked := s.asked[sub.ID] || s.kickDue(sub.ID, now) && pullScheduled(sub)
+		asked := s.askedDue(sub.ID, now) || s.kickDue(sub.ID, now) && pullScheduled(sub)
 		if !asked && (!pullScheduled(sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
 			continue
 		}
@@ -123,7 +123,11 @@ func (s *Service) startDue(ctx context.Context) *sync.WaitGroup {
 		}
 		subs := due[id]
 		sort.SliceStable(subs, func(i, j int) bool {
-			return s.asked[subs[i].ID] && !s.asked[subs[j].ID] || before(subs[i].NextRunAt, subs[j].NextRunAt)
+			ai, aj := s.askedDue(subs[i].ID, now), s.askedDue(subs[j].ID, now)
+			if ai != aj {
+				return ai
+			}
+			return before(subs[i].NextRunAt, subs[j].NextRunAt)
 		})
 		s.busy[id] = true
 		s.running++
@@ -158,6 +162,12 @@ func before(a, b *time.Time) bool {
 	return a.Before(*b)
 }
 
+// askedDue says whether a RunNow request for subscription id is due by now; under s.mu.
+func (s *Service) askedDue(id string, now time.Time) bool {
+	at, ok := s.asked[id]
+	return ok && !now.Before(at)
+}
+
 // kickDue says whether a changed event has made subscription id due by now (ConnectorChanged); under s.mu.
 func (s *Service) kickDue(id string, now time.Time) bool {
 	at, ok := s.kicked[id]
@@ -171,9 +181,9 @@ func (s *Service) runOne(ctx context.Context, id string) {
 		return
 	}
 	s.mu.Lock()
-	asked := s.asked[id]
 	g := s.gateOf(sub.Connector)
 	now := s.now()
+	asked := s.askedDue(id, now)
 	kicked := s.kickDue(id, now) && pullScheduled(*sub) // still on: a changed event brought its run forward
 	g.prune(now)
 	perHour := defaultPerHour
@@ -190,32 +200,54 @@ func (s *Service) runOne(ctx context.Context, id string) {
 		// subscriptions' budget and gap; a pause the connector asked for still holds.
 		full, wait = false, 0
 	}
-	resume := g.paused
-	if full {
-		resume = g.calls[0].Add(time.Hour)
-	}
-	s.mu.Unlock()
 	if !asked && !kicked && (!pullScheduled(*sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
 		if !pullScheduled(*sub) {
-			s.mu.Lock()
 			delete(s.kicked, id) // switched off since (a kick not due yet stays)
-			s.mu.Unlock()
 		}
+		s.mu.Unlock()
 		return
 	}
 	if paused || full {
-		s.mu.Lock()
+		var resume, pausedUntil time.Time
+		if paused {
+			pausedUntil = g.paused
+			resume = pausedUntil
+		}
+		if full {
+			budgetUntil := g.calls[0].Add(time.Hour)
+			if budgetUntil.After(resume) {
+				resume = budgetUntil
+			}
+		}
+		if asked {
+			if cur, ok := s.asked[id]; ok && !resume.Before(cur) {
+				s.asked[id] = resume // keep RunNow pending until the connector's limits allow it
+			}
+		}
 		delete(s.kicked, id) // held back by the connector's limits: the schedule runs it
 		s.mu.Unlock()
 		// Not a run: the connector's limits hold it back. A pause shows; the hourly budget only moves the run.
 		next := *sub
 		next.NextRunAt = &resume
 		if paused {
-			next.RunState, next.PausedUntil = StateRateLimited, &resume
+			next.RunState, next.PausedUntil = StateRateLimited, &pausedUntil
+		} else {
+			next.PausedUntil = nil
+			if next.RunState == StateRateLimited {
+				if next.FailCount > 0 {
+					next.RunState = StateFailing
+				} else {
+					next.RunState = StateOK
+				}
+				if next.Error != nil && next.Error.Code == CodeRateLimited {
+					next.Error = nil
+				}
+			}
 		}
 		s.commit(ctx, *sub, next, nil, nil, now, false)
 		return
 	}
+	s.mu.Unlock()
 	if wait > 0 && s.o.Clock.Sleep(ctx, wait) != nil {
 		return
 	}
@@ -226,6 +258,8 @@ func (s *Service) runOne(ctx context.Context, id string) {
 	s.mu.Lock()
 	if asked {
 		delete(s.asked, id) // a scheduled run must not consume a RunNow made after the snapshot above
+	} else if cur, ok := s.asked[id]; ok && !cur.IsZero() {
+		delete(s.asked, id) // this run satisfies an earlier rate-limit-deferred RunNow
 	}
 	delete(s.kicked, id)
 	s.mu.Unlock()

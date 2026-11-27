@@ -6,11 +6,11 @@ Started tasks keep a hub brief (owner request or started_why). Give goal, done_w
 
 Edits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.
 
-Resolve repository via repositories_list (repository_get when useful); an explicit repository URL or path takes precedence. Saved bindings are references only; never infer machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Closing terminal on acceptance is owner-only.
+Use repositories_list or repository_get when needed; an explicit repository URL or path takes precedence. Bindings never imply machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.
 
 Saved workspace naming plan on existing todo: {"backend":{"operation_id":"<id>"}}. Multi-repo container: {"container":{"selected_repo_ids":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.
 
-Workspace: "new" isolates checkout; {"new":{"branch":"task/my-change"}} names branch; {"existing":"<cwd or id>","queue":true} picks one (queue:true or owner in after queues FIFO, else busy refuses); "none" creates nothing. Omitted: readonly=none; writable Git follows assistant.task_workspace_preference, busy cwd uses new. Explicit existing never switches silently. Reusing explicit new branch needs clean checkout, no live Agent/owner. Engine owns creation; never run git worktree add. Default branch: task/<todo id>. Failed creation starts no Agent; workspaces stay after acceptance. Follow org read-only refusals.
+Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default task/<todo id>); reuse needs a clean, unused checkout. {"existing":"<cwd or id>","queue":true} selects it without switching; busy queues FIFO only if requested or owner waits. "none" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.
 
 `wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.{{template "shared/mcp_language" .}}
 
@@ -111,6 +111,7 @@ Workspace: "new" isolates checkout; {"new":{"branch":"task/my-change"}} names br
             "type": "string",
             "description": "model id/alias; empty: launcher default"
           },
+          "model_aliases": {"type":"object","description":"Claude Code IDs: sonnet_model, haiku_model, opus_model, fable_model, subagent_model.","additionalProperties":{"type":"string"}},
           "permission": {
             "type": "string",
             "enum": [

@@ -40,7 +40,8 @@ fun EngineSelectionScreen(
     // Built once the machine is known; pushes about it keep the picker in step until the user picks something.
     val model = remember(machineId, management, machine != null) {
         if (machine == null || management == null) null
-        else EngineSelectionModel(machine, put = management::setEngine, applied = sessions::applyMachine)
+        else EngineSelectionModel(machine, put = management::setEngine, applied = sessions::applyMachine,
+            putDefault = management::setEngineHosts, pairing = pairing)
     }
     LaunchedEffect(machine) { machine?.let { model?.synchronize(it) } }
     val state = model?.state?.collectAsState()?.value ?: EngineSelectionState()
@@ -74,12 +75,13 @@ fun EngineSelectionScreen(
                 JButton(stringResource(label), {
                     scope.launch {
                         if (model.save(machine.id)) {
-                            if (!pairing) feedback?.notice(Engines.saved(machine).shown)
+                            if (!pairing) feedback?.notice(Engines.saved(machine, model.lastSaved).shown)
                             onDone()
                         }
                     }
                 }, Modifier.fillMaxWidth(), loading = state.saving,
-                    enabled = !state.saving && Engines.canSelect(state.selected, machine))
+                    // Outside pairing only a change can be saved (#17052): an unchanged Save would rewrite a set chosen elsewhere.
+                    enabled = !state.saving && Engines.canSave(state.selected, machine, pairing))
             }
         }),
     ) {
@@ -99,6 +101,10 @@ fun EngineSelectionScreen(
                 }
             }
             return@EnginePage
+        }
+        // Several engines no option stands for (set up on the web): which ones, the default, and where to change the set.
+        Engines.setNotice(machine)?.let { notice ->
+            item("set") { JNotice(notice.text(), Modifier.padding(vertical = Tokens.Space.s)) }
         }
         if (!pairing) item("title") { JSectionHeader(machine.displayName) }
         val options = Engines.options(machine)

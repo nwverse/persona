@@ -302,8 +302,8 @@ describe("an unread Persona chat's sidebar mark (#13425)", () => {
     expect(tallied(personaHeading())).toBe("2");
     // the unread mark beside the number, the words for a screen reader and the tooltip naming chats, not agents
     expect(tally.querySelector(':scope > [data-state="unread"] [data-shape="glow"]')).not.toBeNull();
-    expect(tally.querySelector(".sr-only")!.textContent).toBe("收起的对话：2 个完成未看");
-    expect(tally.getAttribute("title")).toBe("收起的对话：2 个完成未看");
+    expect(tally.querySelector(".sr-only")!.textContent).toBe("已收起的对话：2 个完成未看");
+    expect(tally.getAttribute("title")).toBe("已收起的对话：2 个完成未看");
 
     // opening one takes it off the count at once
     open("trip");

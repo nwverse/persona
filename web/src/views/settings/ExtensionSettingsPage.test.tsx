@@ -63,7 +63,7 @@ describe("host-owned extension settings", () => {
     expect(button("卸载").disabled).toBe(!supported);
     expect(button("自动升级").disabled).toBe(!supported);
     expect(host.querySelectorAll('[role="switch"][aria-label="启用"]')).toHaveLength(1);
-    if (!supported) expect(host.querySelector('[data-extension-section="danger"]')!.textContent).toMatch(/不能卸载|来源端|没有提供/);
+    if (!supported) expect(host.querySelector('[data-extension-section="danger"]')!.textContent).toMatch(/无法卸载|来源端|未提供/);
   });
 
   it.each(["builtin", "installed", "hub.json", "dev"])("all %s settings enter the common component through Extensions", async (source) => {
@@ -78,7 +78,7 @@ describe("host-owned extension settings", () => {
     render({ ...BASE, auto_upgrade: undefined }); await flush();
     expect(button("检查更新").disabled).toBe(false);
     expect(button("自动升级").disabled).toBe(true);
-    expect(host.querySelector('[data-extension-section="updates"]')?.textContent).toContain("没有提供此操作");
+    expect(host.querySelector('[data-extension-section="updates"]')?.textContent).toContain("未提供此操作");
     expect(host.querySelector('[data-extension-section="updates"]')?.textContent).not.toContain("不由扩展市场管理");
   });
 
@@ -92,14 +92,14 @@ describe("host-owned extension settings", () => {
     render({ ...BASE, enabled: false, auto_upgrade_paused: "disabled" }); await flush();
     expect(button("自动升级").getAttribute("aria-checked")).toBe("true");
     expect(button("自动升级").disabled).toBe(true);
-    expect(host.textContent).toContain("扩展关闭期间暂停自动升级");
+    expect(host.textContent).toContain("扩展停用期间会暂停自动升级");
     expect(document.getElementById(button("自动升级").getAttribute("aria-describedby")!)?.textContent).toContain("自动升级");
   });
 
   it("distinguishes a removed market from a disabled extension", async () => {
     render({ ...BASE, auto_upgrade_paused: "market_removed" }); await flush();
-    expect(host.textContent).toContain("扩展市场已删除，自动升级暂停");
-    expect(host.textContent).not.toContain("扩展关闭期间");
+    expect(host.textContent).toContain("市场已被删除，自动升级已暂停");
+    expect(host.textContent).not.toContain("扩展停用期间");
   });
 
   it("says how a removed market's upgrades come back, and checks nothing until then (#1895)", async () => {
@@ -108,10 +108,10 @@ describe("host-owned extension settings", () => {
     // the switch keeps the saved preference, greyed out; its footer says the way back
     expect(button("自动升级").getAttribute("aria-checked")).toBe("true");
     expect(button("自动升级").disabled).toBe(true);
-    expect(document.getElementById(button("自动升级").getAttribute("aria-describedby")!)?.textContent).toContain("用同样的地址把市场加回来后恢复");
+    expect(document.getElementById(button("自动升级").getAttribute("aria-describedby")!)?.textContent).toContain("使用相同地址重新添加该市场后将自动恢复");
     // a check would only read a market the hub no longer has
     expect(button("检查更新").disabled).toBe(true);
-    expect(updates).toContain("用同样的地址把市场加回来，才能检查新版本");
+    expect(updates).toContain("请使用相同地址重新添加该市场后，再检查新版本");
     expect(updates).not.toContain("扩展市场暂不可用");
     expect(requests.some((r) => r.url.includes("/-/catalog"))).toBe(false);
   });
@@ -121,7 +121,7 @@ describe("host-owned extension settings", () => {
     render(BASE, { manager: "example-manager" }); await flush();
     expect(requests.find((r) => r.url.endsWith("/-/upgrades"))?.manager).toBe("example-manager");
     expect(button("自动升级").getAttribute("aria-checked")).toBe("true");
-    expect(host.textContent).toContain("助手已关闭自动升级");
+    expect(host.textContent).toContain("助手已关闭扩展自动升级");
   });
 
   it.each([true, false])("greys out the switch while the master switch is off, keeping its value (%s), and frees it once it is on (#1828)", async (own) => {
@@ -131,7 +131,7 @@ describe("host-owned extension settings", () => {
     expect(button("自动升级").disabled).toBe(true);
     act(() => button("自动升级").click());
     expect(callbacks.onAutoUpgrade).not.toHaveBeenCalled();
-    expect(document.getElementById(button("自动升级").getAttribute("aria-describedby")!)?.textContent).toContain("重新打开后恢复");
+    expect(document.getElementById(button("自动升级").getAttribute("aria-describedby")!)?.textContent).toContain("重新开启后将自动恢复");
     // the master switch back on: the page opened again reads it and the extension's own value applies
     act(() => root.unmount()); root = createRoot(host);
     globalAuto = true;
@@ -140,14 +140,14 @@ describe("host-owned extension settings", () => {
     expect(button("自动升级").disabled).toBe(false);
     act(() => button("自动升级").click());
     expect(callbacks.onAutoUpgrade).toHaveBeenCalledWith(!own);
-    expect(host.textContent).not.toContain("重新打开后恢复");
+    expect(host.textContent).not.toContain("重新开启后将自动恢复");
   });
 
   it("leaves the switch alone on a hub without the master switch (#1828)", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => (url.endsWith("/-/upgrades") ? { ok: false, status: 404, text: async () => "", headers: new Headers() } : reply(BASE))));
     render(); await flush();
     expect(button("自动升级").disabled).toBe(false);
-    expect(host.textContent).not.toContain("助手已关闭自动升级");
+    expect(host.textContent).not.toContain("助手已关闭扩展自动升级");
   });
 
   it("checks the selected manager's market without installing and refreshes the detail", async () => {
@@ -179,7 +179,7 @@ describe("host-owned extension settings", () => {
     expect(host.querySelector('[role="alert"]')).toBeNull();
     expect(host.textContent).toContain("1.1.0");
     // never "upgrades automatically later": a new ID waits for the owner's confirmation
-    expect(host.textContent).toContain(`将 ${BASE.id} 重命名为 example-successor 并升级`);
+    expect(host.textContent).toContain(`将 ${BASE.id} 更名为 example-successor 并升级`);
     expect(host.textContent).not.toContain("稍后自动升级");
     act(() => button("去确认").click()); expect(callbacks.onUpgrade).toHaveBeenCalledWith("official", "example-successor");
   });
@@ -212,7 +212,7 @@ describe("host-owned extension settings", () => {
     const info = host.querySelector('[data-extension-section="information"]')!;
     expect(info.textContent).toContain("扩展类型");
     expect(info.textContent).toContain("连接器");
-    expect(info.textContent).toContain("hub 没有提供这个扩展程序的运行方式");
+    expect(info.textContent).toContain("hub 未提供该扩展程序的运行方式信息");
     expect(info.textContent).not.toContain("connectors");
   });
 
@@ -221,9 +221,9 @@ describe("host-owned extension settings", () => {
       { key: "network", title: "访问网络", detail: "notes.example.com（在沙箱里时只能连这些）" },
       { key: "agent_runtimes", title: "接入节点", detail: "在沙箱里只多一个通到节点 runtime.sock 的口子" },
     ]} />);
-    expect(html).toContain("它可联系的网站");
-    expect(html).toContain("这些地址是扩展声明的外部服务");
-    expect(html).toContain("在 Agents 里显示它的 Agent");
+    expect(html).toContain("可访问的外部网站");
+    expect(html).toContain("这些地址是扩展声明需要访问的外部服务");
+    expect(html).toContain("在 Agents 中显示其管理的 Agent");
     expect(html).toContain("Persona 的本地 Agent 服务");
     expect(html).not.toContain("runtime.sock");
   });
@@ -232,11 +232,11 @@ describe("host-owned extension settings", () => {
     render({ ...BASE, source: "installed", origin: "file:/example/package", auto_upgrade: undefined }); await flush();
     const info = host.querySelector('[data-extension-section="information"]')!;
     expect(info.querySelectorAll("[data-extension-source-notice]")).toHaveLength(1);
-    expect(info.textContent).toContain("这个扩展不是从扩展市场安装的");
+    expect(info.textContent).toContain("此扩展并非通过扩展市场安装");
     const updates = host.querySelector('[data-extension-section="updates"]')!;
-    expect(updates.textContent?.match(/请到来源端查看新版本/g)).toHaveLength(1);
+    expect(updates.textContent?.match(/请前往来源端查看新版本/g)).toHaveLength(1);
     expect(host.querySelector('[data-extension-section="danger"]')?.textContent).toContain("请在来源端移除");
-    expect(host.textContent?.match(/这个扩展不是从扩展市场安装的/g)).toHaveLength(1);
+    expect(host.textContent?.match(/此扩展并非通过扩展市场安装/g)).toHaveLength(1);
   });
 
   it("opens the common uninstall confirmation with version and keeps data unless explicitly changed", async () => {
@@ -258,7 +258,7 @@ describe("host-owned extension settings", () => {
   it("disables lifecycle actions while offline without hiding the configuration", async () => {
     const callbacks = render(BASE, { offline: true }); await flush();
     for (const label of ["启用", "自动升级", "检查更新", "卸载"]) expect(button(label).disabled).toBe(true);
-    expect(host.textContent).toContain("助手离线"); expect(host.textContent).toContain("Example configuration");
+    expect(host.textContent).toContain("助手当前离线"); expect(host.textContent).toContain("Example configuration");
     act(() => button("卸载").click()); expect(callbacks.onUninstall).not.toHaveBeenCalled();
   });
 });

@@ -44,6 +44,10 @@ final class AppModel {
     var config: ServerConfig? { hub?.config }
     /// Persona's looks (docs/apple/persona.md): the chosen one, what the hub offers, the packages on the phone.
     let personas: PersonaStore
+    /// Word lookup through a `text_lookup` extension (#10977, docs/apple/ios.md "Word lookup (text_lookup)"): inert until
+    /// the hub-level hub says one answers.
+    @ObservationIgnored private(set) lazy var textLookup = TextLookupModel(deps: .init(
+        api: { [weak self] in self?.api }, features: { [weak self] in self?.hubFeatures ?? [] }))
     /// Which paths conversations mention are there on their machines (only those are linked).
     let filePresence = FilePresence()
     /// Which machine ports links point at are listening (docs/operations/ports.md).
@@ -587,6 +591,8 @@ final class AppModel {
             #endif
             // The shell routes it now, not when a view is next drawn (docs/apple/shell.md).
             if selectedTab != oldValue { tabRouter?.route(selectedTab, in: self) }
+            // A to-dos push held while the Persona tab was not in front is read as it comes back.
+            if selectedTab != oldValue { TodoStore.frontChanged() }
             #if os(visionOS)
             // The Inbox's own tab, which the TabView keeps up: picked, or routed to again while in front (a widget).
             if selectedTab == .mail { inboxEntries += 1 }
@@ -667,6 +673,10 @@ final class AppModel {
     private(set) var assistantConfigLoadFailed = false
     /// Distinguishes visits to the same hub and assistant when an earlier request is still in flight.
     @ObservationIgnored private var assistantPageGeneration = 0
+    /// The conversation-backed directions the settings were read again for because the page's conversations did not
+    /// list them (`refreshDirectionTree`): once each. One the hub never lists there (archived, on another computer, in
+    /// another space) read them again on every tree push before.
+    @ObservationIgnored private var directionsReadFor: Set<String> = []
     /// The directions' names by leader conversation id (`GET /api/v1/assistant/leaders`): the sidebar's Directions group
     /// shows these instead of the conversations' titles. Read again with the assistant; empty without leaders.
     private(set) var directionNames: [String: String] = [:]
@@ -1340,6 +1350,7 @@ final class AppModel {
     /// Sign Out of everything: every group, every hub (Settings › Disconnect with one group, a revoked credential of this device).
     func unpair() {
         assistantPageGeneration += 1
+        directionsReadFor = []
         directionNames = [:]
         forgetSeen()
         updateHeldRetryReceipts { _ in [] }
@@ -1578,7 +1589,8 @@ final class AppModel {
             let st = try await api.assistant()
             guard isCurrent() else { return } // another group or manager was picked meanwhile
             let previousMain = assistantMain
-            assistantConfig = st
+            // Unchanged settings tell no reader (and write no snapshot): the tree's pushes used to read them again.
+            if st != assistantConfig { assistantConfig = st }
             // A different main for the manager that was cleared: the empty page is over, and someone looking at it
             // sees what the hub has. Another manager's refresh does not drop this one's flag.
             if mainClear.note(group: api.group, manager: assistantManagerID ?? "", mainSessionID: st.main),
@@ -1718,9 +1730,14 @@ final class AppModel {
         }
         // An unlisted conversation-backed direction needs the whole settings read so its row appears without a relaunch.
         // An outside direction is already complete here: treating its opaque id as a missing conversation would reread
-        // the assistant after every tree push (#8236).
+        // the assistant after every tree push (#8236). Each is read for once: a direction whose conversation the settings
+        // never list (archived, on another computer, in another space) would otherwise reread them on every push.
         let known = Set((assistantConfig?.conversations ?? []).map(\.sessionID))
-        if followLeaders, tree.hasUnlistedConversation(known: known) { await refreshAssistant() }
+        let unread = tree.unlistedConversations(known: known).subtracting(directionsReadFor)
+        if followLeaders, !unread.isEmpty {
+            directionsReadFor.formUnion(unread)
+            await refreshAssistant()
+        }
     }
 
     /// The Couldn't Load Settings retry: the page flips back to Reading at once, and repeated taps share the one request (#4200).
@@ -3359,6 +3376,8 @@ final class AppModel {
             // Whether this hub lists one manager's sessions may have come with this hello (`sessions_manager`).
             Task { await sessionLists.rescope(group, model: self) }
             if isHub { PersonalAgentSync.shared.received([]) }
+            // Whether words can be looked up may have changed while the socket was down, or with this hello's features.
+            if isHub { textLookup.refresh() }
             // The direction tree changes while the socket is down: read it again on every (re)connect (#4352).
             if isHub, let hubAPI = api { Task { await refreshDirectionTree(hubAPI) } }
             // Its features say again whether this hub's filing routes are there (#11516), whichever hub is picked now; a
@@ -3471,7 +3490,8 @@ final class AppModel {
         case .inbox:
             if isHub { InboxStore.shared.reload() }
         case .todos:
-            if isHub { TodoStore.shared.reload() }
+            // Every report of a running Agent pushes this: the store spaces its reads and asks the revision first.
+            if isHub { TodoStore.shared.pushed() }
         case .savedPrompts(let manager):
             // another device changed the list: only the shown assistant's is read again (#9436)
             if isHub, SavedPromptStore.concerns(eventManager: manager, shownManager: api?.shownManager) { SavedPromptStore.shared.reload() }
@@ -3479,6 +3499,8 @@ final class AppModel {
             #if os(iOS)
             if isHub { StarredStore.shared.invalidate(manager: manager) }
             #endif
+        case .textLookupChanged:
+            if isHub { textLookup.refresh() }
         case .personas:
             // The new tier's package is downloaded whole before the face changes. The list changed
             // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
@@ -3491,6 +3513,7 @@ final class AppModel {
         case .managers:
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
+            if isHub { textLookup.refresh() }
             Task { await refreshManagerRoster(group) }
         case .directions:
             // The direction tree changed (#4352): read it again. Its answer is the default manager's alone, so another
@@ -3532,6 +3555,8 @@ final class AppModel {
             // counts only for the copy of the manager that sent it.
             op.manager = pushedBy(manager)
             if isHub { ExtensionOperations.shared.received(op) }
+            // An install, upgrade or uninstall that ended may add or take away the lookup extension.
+            if isHub, !op.isActive { textLookup.refresh() }
         case .extensionAuth(let id, let auth, let manager):
             if isHub { ExtensionAuthStore.shared.received(id, auth, manager: pushedBy(manager)) }
         case .pluginBadge(let plugin, let id, let badge, let manager):
@@ -3539,6 +3564,7 @@ final class AppModel {
             if isHub, pushedBy(manager) == nil { ExtensionSlots.shared.received(plugin: plugin, id: id, badge: badge) }
         case .extensionInvalidate(let ext, let id):
             ExtensionUIRegistry.shared.invalidate(extension: ext, ui: id, group: group)
+            if isHub, ext == textLookup.state.extensionID { textLookup.refresh() }
             if ext == SubscriptionsUI.id { SubscriptionsRefresh.shared.changed() } // the entry rows' counts
             ExtensionWidgetReconciliation.invalidate(group: group, owner: ext, contribution: id)
         #if os(iOS)
@@ -3665,6 +3691,7 @@ final class AppModel {
         case .todos: "todos"
         case .savedPrompts: "assistant_saved_prompts"
         case .starredMessages: "assistant_starred"
+        case .textLookupChanged: "text_lookup_changed"
         case .personas: "personas"
         case .look: "look"
         case .managers: "managers"
@@ -5202,6 +5229,7 @@ final class AppModel {
     /// Another group was picked for the hub-level pages: their data starts over from that group's.
     func hubChanged() {
         assistantPageGeneration += 1
+        directionsReadFor = []
         directionNames = [:]
         ModuleState.shared.follow(hub?.group ?? "", features: hub?.features ?? []) // the modules this hub allows (#13849)
         RecordingModule.tellSurfaces()
@@ -5209,6 +5237,7 @@ final class AppModel {
             assistantConfig = heldAssistant(g)
         }
         directionTree = nil // the other hub's to-dos and sessions; `refreshAssistant` below reads this one's
+        textLookup.reset() // the other hub's lookup extension, or none; nothing of the last hub's carries over
         outsideDirections = [:]
         outsideDirectionFallback = [:]
         directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
@@ -5254,7 +5283,10 @@ final class AppModel {
         assistantLauncherRequestRevision += 1
         assistantConfig = heldAssistant(hub?.group ?? "")
         // The tree is the default manager's: kept through a re-read of it, dropped for any other.
-        if switched { assistantPageGeneration += 1 }
+        if switched {
+            assistantPageGeneration += 1
+            directionsReadFor = []
+        }
         if switched || !assistantShows(nil) {
             directionNames = [:]
             directionTree = nil // the other manager's; `refreshAssistant` below reads this one's
