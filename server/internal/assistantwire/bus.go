@@ -496,6 +496,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/segments",
 	"PUT /api/v1/assistant/segments",
 	"GET /api/v1/assistant/conversations/{id}/segments",
+	"POST /api/v1/assistant/conversations/{id}/inputs/resolve",
 	"POST /api/v1/assistant/conversations/{id}/switch",
 	"GET /api/v1/assistant/conversations/{id}/switch/{operation}",
 	// A batch of those switches (conversations_switch.go there, docs/assistant/assistant.md, #14222).
