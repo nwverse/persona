@@ -2144,12 +2144,14 @@ data class ExtensionSecretsResolveResult(
 )
 
 /**
- * A public field name/type; never a value or source path.
+ * A public field name/type or edit action (delete, keep_value); never a value or source path.
  */
 @Serializable
 data class ExtensionSecretStoreField(
     val name: String = "",
-    val type: String = "",
+    val type: String? = null,
+    val delete: Boolean? = null,
+    @SerialName("keep_value") val keepValue: Boolean? = null,
 )
 
 /**
