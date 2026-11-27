@@ -185,6 +185,8 @@ var modelRoutes = []string{
 	"POST /api/v1/execution/channels/rollback",
 	"GET /api/v1/execution/catalog",
 	"POST /api/v1/execution/validate",
+	"GET /api/v1/assistant/conversations/{id}/model/last-good", // a conversation's last known good execution (execution_lastgood.go)
+	"POST /api/v1/assistant/conversations/{id}/model/restore",
 	"GET /api/v1/launchers",
 	"GET /api/v1/launchers/presets",
 	"POST /api/v1/launchers/test",
