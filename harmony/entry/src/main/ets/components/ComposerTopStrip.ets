@@ -1,5 +1,6 @@
+import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
-import { ComposerQueueState, QueuedComposerItem } from '../core/ComposerQueue';
+import { canMutateQueueIndex, ComposerQueueState, QueuedComposerItem } from '../core/ComposerQueue';
 import { Colors } from '../design/Colors';
 import { IconActions } from '../design/IconActions';
 import { Motion } from '../design/Motion';
@@ -20,6 +21,9 @@ export struct ComposerTopStrip {
   @Require @Param queue: ComposerQueueState;
   @Param busy: boolean = false;
   @Event onSendNow: () => void = () => {};
+  @Event onEditQueued: (index: number) => void = () => {};
+  @Event onDeleteQueued: (index: number) => void = () => {};
+  @Event onMoveQueued: (index: number, delta: -1 | 1) => void = () => {};
   @Local private env: NativeEnvironment = nativeEnvironment;
   @Local private expanded: boolean = false;
   @Local private copiedItemId: string = '';
@@ -60,6 +64,64 @@ export struct ComposerTopStrip {
 
   private countBadgeLabel(): string {
     return tr('composer_queued_count').replace('{count}', String(this.queue.items.length));
+  }
+
+  @Builder ownItemMenu(item: QueuedComposerItem, index: number) {
+    Menu() {
+      MenuItem({
+        content: tr('composer_queue_edit'),
+        symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.square_and_pencil'))
+      })
+        .enabled(!this.busy)
+        .onClick(() => {
+          Haptics.tap();
+          this.onEditQueued(index);
+        })
+        .id('composer.queue.edit.' + item.id)
+
+      if (this.queue.steersQueue && this.queue.ownCount > 1) {
+        MenuItem({
+          content: tr('composer_queue_move_up'),
+          symbolStartIcon: new SymbolGlyphModifier(Symbols.up)
+        })
+          .enabled(index > 0 && !this.busy)
+          .onClick(() => {
+            Haptics.tap();
+            this.onMoveQueued(index, -1);
+          })
+          .id('composer.queue.move_up.' + item.id)
+
+        MenuItem({
+          content: tr('composer_queue_move_down'),
+          symbolStartIcon: new SymbolGlyphModifier(Symbols.down)
+        })
+          .enabled(index < this.queue.ownCount - 1 && !this.busy)
+          .onClick(() => {
+            Haptics.tap();
+            this.onMoveQueued(index, 1);
+          })
+          .id('composer.queue.move_down.' + item.id)
+      }
+
+      MenuItem({
+        content: tr('copy'),
+        symbolStartIcon: new SymbolGlyphModifier(IconActions.symbol('copy'))
+      })
+        .onClick(() => this.copyItem(item))
+        .id('composer.queue.copy.' + item.id)
+
+      MenuItem({
+        content: tr('delete'),
+        symbolStartIcon: new SymbolGlyphModifier(IconActions.symbol('delete'))
+      })
+        .contentFontColor(Colors.danger)
+        .enabled(!this.busy)
+        .onClick(() => {
+          Haptics.tap();
+          this.onDeleteQueued(index);
+        })
+        .id('composer.queue.delete.' + item.id)
+    }
   }
 
   build() {
@@ -196,24 +258,50 @@ export struct ComposerTopStrip {
                       }
                     }
                   }
+                  if (item.relayed || index >= this.queue.ownCount) {
+                    Text(tr(item.noWake ? 'composer_queue_arrives_next' : 'composer_queue_arrives_turn_end'))
+                      .fontSize(Tokens.typeLabel)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                      .fontColor(Colors.secondary)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  }
                 }
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)
 
-                Button({ type: ButtonType.Circle }) {
-                  SymbolGlyph(this.copiedItemId === item.id ? Symbols.check : IconActions.symbol('copy'))
-                    .fontSize('13vp')
-                    .fontColor([this.copiedItemId === item.id ? Colors.positive : Colors.secondary])
+                if (canMutateQueueIndex(this.queue.ownCount, index) && !item.relayed) {
+                  Button({ type: ButtonType.Circle }) {
+                    SymbolGlyph($r('sys.symbol.more'))
+                      .fontSize('14vp')
+                      .fontColor([Colors.secondary])
+                  }
+                  .width(28)
+                  .height(28)
+                  .padding(0)
+                  .backgroundColor(Color.Transparent)
+                  .responseRegion({ x: -8, y: -8, width: Tokens.controlBar, height: Tokens.controlBar })
+                  .accessibilityText(tr('more'))
+                  .bindTips(tr('more'))
+                  .enabled(!this.busy)
+                  .bindMenu(this.ownItemMenu(item, index))
+                  .id('composer.queue.more.' + item.id)
+                } else {
+                  Button({ type: ButtonType.Circle }) {
+                    SymbolGlyph(this.copiedItemId === item.id ? Symbols.check : IconActions.symbol('copy'))
+                      .fontSize('13vp')
+                      .fontColor([this.copiedItemId === item.id ? Colors.positive : Colors.secondary])
+                  }
+                  .width(28)
+                  .height(28)
+                  .padding(0)
+                  .backgroundColor(Color.Transparent)
+                  .responseRegion({ x: -8, y: -8, width: Tokens.controlBar, height: Tokens.controlBar })
+                  .accessibilityText(tr('copy'))
+                  .bindTips(tr('copy'))
+                  .onClick(() => this.copyItem(item))
+                  .id('composer.queue.copy.' + item.id)
                 }
-                .width(28)
-                .height(28)
-                .padding(0)
-                .backgroundColor(Color.Transparent)
-                .responseRegion({ x: -8, y: -8, width: Tokens.controlBar, height: Tokens.controlBar })
-                .accessibilityText(tr('copy'))
-                .bindTips(tr('copy'))
-                .onClick(() => this.copyItem(item))
-                .id('composer.queue.copy.' + item.id)
               }
               .width('100%')
               .padding({ left: 10, right: Tokens.spaceS, top: 7, bottom: 7 })
