@@ -1613,11 +1613,13 @@ export interface SecretsResolveResult {
 }
 
 /**
- * A public field name/type; never a value or source path.
+ * A public field name/type or edit action (delete, keep_value); never a value or source path.
  */
 export interface SecretStoreField {
   name: string;
-  type: string;
+  type?: string;
+  delete?: boolean;
+  keep_value?: boolean;
 }
 
 /**
