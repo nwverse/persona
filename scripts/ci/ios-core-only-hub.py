@@ -136,7 +136,7 @@ def core_reads(base, token):
 
 def seed_main(container):
     """Seed a synthetic idle main session in the real manager store, after the fresh-empty page evidence is complete."""
-    machine, session = "assistant", "main-fixture"
+    machine, session = "fixture-machine", "main-fixture"
     dbs = run([smoke.DOCKER, "exec", container, "psql", "-U", "persona", "-d", "persona", "-Atc",
                "select datname from pg_database where not datistemplate"], 30).stdout.split()
     wrote = []
@@ -157,6 +157,40 @@ def seed_main(container):
         wrote.append(name)
     check(wrote, "no manager database accepted the synthetic main fixture")
     return machine + "/" + session
+
+
+def start_fixture_node(base, bindir, work, master):
+    """Pair a short-lived real Link/node into the sandbox, with a short socket path and no service installation."""
+    node_home = Path("/tmp") / f"pn-{secrets.token_hex(5)}"
+    node_home.mkdir()
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(node_home),
+           "PERSONA_HOME": str(node_home / ".persona"), "LANG": "C.UTF-8"}
+    prefix = ["env", "-i"] + [f"{key}={value}" for key, value in env.items()]
+    status, answer = request(base, "/api/v1/auth/pair-codes", master, "POST", {"machine": "fixture-machine"})
+    check(status == 200 and answer.get("pair_url"), f"node pair-code returned {status}")
+    result = subprocess.run(prefix + [str(bindir / "persona-link"), "pair", "-"], input=answer["pair_url"],
+                            text=True, capture_output=True, env={"PATH": env["PATH"]}, timeout=30)
+    check(result.returncode == 0, f"pairing the sandbox Link exited {result.returncode}")
+    processes = []
+    try:
+        for program, args, name in ((bindir / "persona-link", ["run"], "link"),
+                                    (bindir / "persona-node", ["node", "--attach"], "node")):
+            with open(work / f"fixture-{name}.log", "a") as output:
+                process = subprocess.Popen(prefix + [str(program)] + args, cwd=node_home, env={"PATH": env["PATH"]},
+                                           stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                                           start_new_session=True)
+            processes.append(process)
+        wait_for(None, "the synthetic computer online", 45, lambda: any(
+            row.get("id") == "fixture-machine" and row.get("online") is True
+            for row in (request(base, "/api/v1/machines", master)[1].get("machines") or [])) or None)
+        return processes, node_home
+    except Exception:
+        for process in processes:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(10)
+        shutil.rmtree(node_home, ignore_errors=True)
+        raise
 
 
 def prepare_app(source, work, simulator, readings):
@@ -364,7 +398,7 @@ def settings(ctl, key):
                  lambda: (ctl.call("state").get("settingsDepth") or 0) > 0 or None)
 
 
-def exercise_app(ctl, base, code, edition, shots, container, master):
+def exercise_app(ctl, base, code, edition, shots, container, master, start_node):
     full = edition == "full"
     proof = {"schema": 1, "run_id": ctl.run_id, "edition": edition, "core_reads": core_reads(base, code)}
     ctl.hub = base
@@ -492,7 +526,9 @@ def exercise_app(ctl, base, code, edition, shots, container, master):
     # Fresh-hub evidence above intentionally has no session. Seed only a synthetic idle main record now, then open it
     # through the real assistant route; no model or Agent execution is claimed.
     main_session = seed_main(container)
+    start_node()
     proof["main_fixture"] = "synthetic-idle-record-in-real-postgres"
+    proof["fixture_node"] = "real sandbox Link/node online; no model execution"
     launch(ctl, ["-tab", "assistant", "-openAssistant", main_session,
                  "-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
     ctl.online(timeout=30)
@@ -558,15 +594,21 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
     container = f"persona-ios-{run_id}-{edition}"
     hub = None
     ctl = None
+    nodes = []
+    node_home = None
     try:
         readings.append({"build": f"server-{edition}", **idle_reading()})
         smoke.build("persona_core_only" if edition == "core-only" else "", bindir)
+        readings.append({"build": f"link-{edition}", **idle_reading()})
+        run_log(["go", "build", "-trimpath", "-o", bindir / "persona-link", "./cmd/persona-link"],
+                work / "link-build.log", 300, ROOT / "server")
         database = smoke.postgres(container)
         port, master = smoke.free_port(), secrets.token_hex(24)
         smoke.write_hub_json(home, port, master, database)
         config_path = home / ".persona/hub.json"
         config = json.loads(config_path.read_text())
-        config["machines"] = [{"id": "assistant", "name": "Fixture Computer", "kind": "link", "icon": "server"}]
+        config["machines"] = [{"id": "fixture-machine", "name": "Fixture Computer", "kind": "link", "icon": "server"}]
+        config["public"] = {"tls_listen": f"127.0.0.1:{smoke.free_port()}"}
         config_path.write_text(json.dumps(config))
         config_path.chmod(0o600)
         base = f"http://127.0.0.1:{port}"
@@ -590,7 +632,12 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
         run_log(["xcrun", "simctl", "install", simulator, app], work / "install.log", 120, env=client_env)
         ctl = Ctl(udid=simulator, bundle="org.example.persona.ci", port=smoke.free_port())
         ctl.run_id = run_id
-        proof = exercise_app(ctl, base, pair_code(base, master), edition, shots, container, master)
+
+        def start_node():
+            nonlocal nodes, node_home
+            nodes, node_home = start_fixture_node(base, bindir, work, master)
+
+        proof = exercise_app(ctl, base, pair_code(base, master), edition, shots, container, master, start_node)
         proof["hub_id"] = health["hub_id"]
         proof["module_flags"] = sorted(f for f in features if f == "modules" or f.startswith("module."))
         validate_proof(proof, edition, run_id, shots)
@@ -615,6 +662,16 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
             sys.stderr.write(log.read_text()[-4000:])
         raise
     finally:
+        for process in nodes:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(10)
+        if node_home is not None:
+            shutil.rmtree(node_home, ignore_errors=True)
         if hub is not None and hub.poll() is None:
             os.killpg(hub.pid, signal.SIGKILL)
             hub.wait(10)

@@ -840,7 +840,9 @@ Mail and Lark entry assertions are checked against the full-hub positive control
 available in both editions. Each hub declares only a synthetic offline computer named `Fixture Computer`. After the initial
 core-page checks, the driver inserts a clearly marked synthetic idle main-session
 record into the real manager's Postgres store and opens it through the app's real assistant route for the composer comparison;
-this does not claim model or Agent execution.
+a short-lived real Link/node pair, in its own short-path temporary home and without any service installation, keeps that
+computer online while the app reads the session. The driver stops both processes and removes the node home. This does not
+claim model or Agent execution.
 
 Light/dark PNGs, including Settings › Advanced at the largest accessibility text size, per-edition sanitized proofs and
 `evidence.json` (commit, Xcode and pre-build local-time / idle readings) are
