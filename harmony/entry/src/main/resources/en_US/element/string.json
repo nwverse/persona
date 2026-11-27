@@ -9111,6 +9111,14 @@
     {
       "name": "knowledge_minutes_writing",
       "value": "Writing the minutes…"
+    },
+    {
+      "name": "agents_use_herdr_tab_name",
+      "value": "Use the herdr tab name as the session name"
+    },
+    {
+      "name": "agents_use_herdr_tab_name_hint",
+      "value": "Shows the tab name first and syncs this preference across devices on this hub."
     }
   ]
 }
