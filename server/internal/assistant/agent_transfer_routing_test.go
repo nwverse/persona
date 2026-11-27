@@ -286,7 +286,10 @@ func TestAgentTransferDeliversIssueSignalsOnlyOnceAcrossRestart(t *testing.T) {
 					if !ok {
 						t.Fatal("planned task did not produce all_stopped")
 					}
+				case sigIdle:
+					state = ""
 				case sigOrphaned:
+					state = ""
 					s.orphans.mu.Lock()
 					s.orphans.now = map[string]TodoOrphan{task.ID: {Reason: orphanOffline, key: g.Key}}
 					s.orphans.mu.Unlock()
