@@ -1227,11 +1227,7 @@ func feedbackTestSendReceipt(f *fakeHub, reply agentSendReply) {
 
 func storedFeedbackTestCursor(t *testing.T, st Store, task Todo) prFeedbackCursor {
 	t.Helper()
-	var saved prFeedbackCursors
-	if _, err := st.Setting(t.Context(), prFeedbackCursorsKey, &saved); err != nil {
-		t.Fatal(err)
-	}
-	c, ok := saved[prFeedbackKey(task.ID, task.PRURL)][prFeedbackReviews]
+	c, ok := feedbackTestCursors(t, st, task)[prFeedbackReviews]
 	if !ok {
 		t.Fatal("missing persisted reviews cursor")
 	}
@@ -1367,7 +1363,7 @@ func TestPRFeedbackIssueCommentRoutesOnReadyAndDraft(t *testing.T) {
 		for _, mode := range []string{"idle", "working", "stopped"} {
 			t.Run(fmt.Sprintf("draft=%t/%s", draft, mode), func(t *testing.T) {
 				now := time.Now().UTC().Truncate(time.Second)
-				st := &feedbackTestFaultStore{memStore: &memStore{}, key: relayKey}
+				st := &feedbackTestFaultStore{Store: &memStore{}, key: relayKey}
 				agent := feedbackTestAgent(now, mode == "stopped")
 				if mode == "working" {
 					agent.Status, agent.State = proto.StatusWorking, proto.StateWorking
@@ -1375,7 +1371,9 @@ func TestPRFeedbackIssueCommentRoutesOnReadyAndDraft(t *testing.T) {
 				s, f, task := newBoundPRTask(t, st, agent)
 				feedbackTestSendReceipt(f, agentSendReply{OK: mode == "idle", Queued: mode == "working"})
 				source, forge := newFeedbackTestForge(t)
+				source.mu.Lock()
 				source.draft = draft
+				source.mu.Unlock()
 				s.deploy.forge = forge
 				beforeStarts, beforeSends := len(startCalls(f)), len(sentToAgent(f))
 				s.sweepPRStatuses(t.Context(), now)
@@ -1398,13 +1396,13 @@ func TestPRFeedbackIssueCommentRoutesOnReadyAndDraft(t *testing.T) {
 					if pending := storedSupervisePending(t, s); len(pending) != 0 {
 						t.Fatalf("failed outbox write persisted a signal: %+v", pending)
 					}
-					if cursor := feedbackTestCursors(t, st, task)["issue_comments"]; !cursor.At.IsZero() {
+					if cursor := feedbackTestCursors(t, st, task)[prFeedbackIssueComments]; !cursor.At.IsZero() {
 						t.Fatalf("failed outbox write consumed the comment: %+v", cursor)
 					}
 					st.fail.Store(false)
 					s.sweepPRStatuses(t.Context(), now.Add(3*deployRecheck))
 					pending := storedSupervisePending(t, s)
-					sig := superviseSignal{Todo: task.ID, Kind: sigPREvent, PRURL: task.PRURL, Report: "pr_comment", PREventID: "issue_comment:81"}
+					sig := superviseSignal{Todo: task.ID, Kind: sigPREvent, PRURL: task.PRURL, Report: prEventKindComment, PREventID: "issue_comment:81"}
 					sig, found := pending[sig.id()]
 					if len(pending) != 1 || !found {
 						t.Fatalf("want one durable PR comment signal: %+v", pending)
@@ -1419,6 +1417,17 @@ func TestPRFeedbackIssueCommentRoutesOnReadyAndDraft(t *testing.T) {
 					}
 					if len(sentToAgent(f)) != beforeSends || len(startCalls(f)) != beforeStarts {
 						t.Fatal("PR comment reached a stopped Agent")
+					}
+					source.mu.Lock()
+					source.head = "head-two"
+					source.mu.Unlock()
+					s.sweepPRStatuses(t.Context(), now.Add(4*deployRecheck))
+					pending = storedSupervisePending(t, s)
+					if cur := pending[sig.id()]; len(pending) != 1 || cur.Key != sig.Key {
+						t.Fatalf("new head replaced or duplicated pending discussion: %+v", pending)
+					}
+					if _, ok := s.digestEntry(t.Context(), sig, ""); !ok {
+						t.Fatal("pushing a commit invalidated a pending discussion comment")
 					}
 				} else {
 					sent := sentToAgent(f)[beforeSends:]
@@ -1435,7 +1444,7 @@ func TestPRFeedbackIssueCommentRoutesOnReadyAndDraft(t *testing.T) {
 						}
 					}
 				}
-				if cursor := feedbackTestCursors(t, st, task)["issue_comments"]; !cursor.At.Equal(now) || !slices.Equal(cursor.IDsAt, []string{"issue_comment:81"}) {
+				if cursor := feedbackTestCursors(t, st, task)[prFeedbackIssueComments]; !cursor.At.Equal(now) || !slices.Equal(cursor.IDsAt, []string{"issue_comment:81"}) {
 					t.Fatalf("cursor did not record the handled comment: %+v", cursor)
 				}
 			})
@@ -1443,13 +1452,60 @@ func TestPRFeedbackIssueCommentRoutesOnReadyAndDraft(t *testing.T) {
 	}
 }
 
-func feedbackTestCursors(t *testing.T, st Store, task Todo) map[prFeedbackStream]prFeedbackCursor {
+func feedbackTestCursors(t *testing.T, st Store, task Todo) map[string]prFeedbackCursor {
 	t.Helper()
 	var saved prFeedbackCursors
 	if _, err := st.Setting(t.Context(), prFeedbackCursorsKey, &saved); err != nil {
 		t.Fatal(err)
 	}
 	return saved[prFeedbackKey(task.ID, task.PRURL)]
+}
+
+func TestPRFeedbackIssueCommentFilters(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	s, f, task := newBoundPRTask(t, &memStore{}, feedbackTestAgent(now, false))
+	turnPREventsRouteOn(t, s)
+	feedbackTestSendReceipt(f, agentSendReply{OK: true})
+	source, forge := newFeedbackTestForge(t)
+	s.deploy.forge = forge
+	s.sweepPRStatuses(t.Context(), now)
+	before := len(sentToAgent(f))
+
+	const finding = "Please make the retry idempotent."
+	const findingAfterAck = "LGTM, but please handle cancellation."
+	const ciDiagnosis = "CI failed because a retry reuses the request body."
+	cases := []struct{ login, kind, association, body string }{
+		{"PR-Author", "User", "OWNER", finding},
+		{"Hub-Poster", "User", "MEMBER", finding},
+		{"automated-review", "Bot", "COLLABORATOR", finding},
+		{"automated-review[BOT]", "User", "COLLABORATOR", finding},
+		{"visitor", "User", "CONTRIBUTOR", finding},
+		{"", "User", "COLLABORATOR", finding},
+		{"reviewer", "User", "MEMBER", " \n "},
+		{"reviewer", "User", "COLLABORATOR", " **LGTM!**\nApproved."},
+		{"reviewer", "User", "MEMBER", "All CI checks are green.\nCoverage: 98.5%"},
+		{"reviewer", "User", "COLLABORATOR", "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed."},
+		{"reviewer", "User", "OWNER", "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head."},
+		{"reviewer", "User", "MEMBER", "Automated independent semantic review at `abcdef123` found no blocking defects.\n\nLocal checks completed:\n- `privacy scan`"},
+		{"reviewer", "User", "OWNER", findingAfterAck},
+		{"reviewer", "User", "COLLABORATOR", ciDiagnosis},
+	}
+	source.mu.Lock()
+	for i, tc := range cases {
+		row := feedbackTestComment(int64(i+1), now, tc.body)
+		row["user"] = map[string]string{"login": tc.login, "type": tc.kind}
+		row["author_association"] = tc.association
+		source.comments = append(source.comments, row)
+	}
+	source.mu.Unlock()
+	s.sweepPRStatuses(t.Context(), now.Add(deployRecheck))
+	if got := sentToAgent(f)[before:]; len(got) != 2 || !strings.Contains(got[0], findingAfterAck) || !strings.Contains(got[1], ciDiagnosis) {
+		t.Fatalf("only trusted, substantive comments should route: %q", got)
+	}
+	c := feedbackTestCursors(t, s.store(), task)[prFeedbackIssueComments]
+	if !c.At.Equal(now) || len(c.IDsAt) != len(cases) {
+		t.Fatalf("filtered comments did not advance the cursor: %+v", c)
+	}
 }
 
 func TestPRFeedbackPaginationRetry(t *testing.T) {
@@ -1527,7 +1583,7 @@ func TestPRFeedbackHeadChange(t *testing.T) {
 }
 
 type feedbackTestFaultStore struct {
-	*memStore
+	Store
 	key  string
 	fail atomic.Bool
 }
@@ -1536,12 +1592,94 @@ func (s *feedbackTestFaultStore) PutSetting(ctx context.Context, key string, v a
 	if key == s.key && s.fail.Load() {
 		return errors.New("injected write failure")
 	}
-	return s.memStore.PutSetting(ctx, key, v)
+	return s.Store.PutSetting(ctx, key, v)
+}
+
+func TestPRFeedbackIssueCommentConcurrentAndRestartDedupAcrossHeads(t *testing.T) {
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+	st := &feedbackTestFaultStore{Store: &memStore{}, key: prFeedbackCursorsKey}
+	agent := feedbackTestAgent(now, false)
+	s, f, task := newBoundPRTask(t, st, agent)
+	turnPREventsRouteOn(t, s)
+	feedbackTestSendReceipt(f, agentSendReply{OK: true})
+	source, forge := newFeedbackTestForge(t)
+	s.deploy.forge = forge
+	s.sweepPRStatuses(ctx, now)
+
+	source.mu.Lock()
+	source.comments = []map[string]any{feedbackTestComment(81, now, "Please preserve the receipt.")}
+	source.mu.Unlock()
+	var observed prFeedback
+	status, err := forge.readPRStatus(ctx, "example/app", 12, &observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status.URL, status.CheckedAt = task.PRURL, now.Add(deployRecheck)
+	if err := s.applyPRStatus(ctx, task, status); err != nil {
+		t.Fatal(err)
+	}
+	before := len(sentToAgent(f))
+	st.fail.Store(true)
+	var group sync.WaitGroup
+	for range 4 {
+		group.Go(func() {
+			if err := s.routePRFeedback(ctx, task.ID, status, forge, observed); err == nil {
+				t.Error("cursor write failure was reported as handled")
+			}
+		})
+	}
+	group.Wait()
+	if got := sentToAgent(f)[before:]; len(got) != 1 || !strings.Contains(got[0], "#issuecomment-81") {
+		t.Fatalf("concurrent attempts duplicated or lost the comment: %q", got)
+	}
+	if c := feedbackTestCursors(t, st, task)[prFeedbackIssueComments]; !c.At.IsZero() {
+		t.Fatalf("failed write advanced the cursor: %+v", c)
+	}
+
+	st.fail.Store(false)
+	source.mu.Lock()
+	source.head = "head-two"
+	source.comments[0]["updated_at"] = now.Add(time.Minute)
+	source.mu.Unlock()
+	restarted, rf := newQuietServiceOn(t, st)
+	holdDigest(restarted)
+	turnPREventsRouteOn(t, restarted)
+	restarted.deploy.forge = forge
+	if err := restarted.ensureTodosLoaded(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Reload the bound task snapshot alongside the settings the in-memory store persisted.
+	restored := todoNow(s, task.ID)
+	restarted.todos.mu.Lock()
+	restarted.todos.todos[restored.ID] = &restored
+	restarted.todos.activeBySession[[2]string{agent.MachineID, agent.SessionID}] = restored.ID
+	restarted.todos.mu.Unlock()
+	rf.setSessions(agent.MachineID, agent)
+	feedbackTestSendReceipt(rf, agentSendReply{OK: true})
+	restarted.sweepPRStatuses(ctx, now.Add(2*deployRecheck))
+	if p := todoNow(restarted, task.ID).PRStatus; p == nil || p.HeadOID != "head-two" {
+		t.Fatalf("restarted poll did not observe the new head: %+v", p)
+	}
+	if got := sentToAgent(rf); len(got) != 0 {
+		t.Fatalf("new head and restarted service replayed a handled comment: %q", got)
+	}
+	if c := feedbackTestCursors(t, st, task)[prFeedbackIssueComments]; !c.At.Equal(now) || !slices.Equal(c.IDsAt, []string{"issue_comment:81"}) {
+		t.Fatalf("cross-head delivery receipt did not restore the cursor: %+v", c)
+	}
+
+	source.mu.Lock()
+	source.comments = append(source.comments, feedbackTestComment(82, now, "Please capture the timeout."))
+	source.mu.Unlock()
+	restarted.sweepPRStatuses(ctx, now.Add(3*deployRecheck))
+	if got := sentToAgent(rf); len(got) != 1 || !strings.Contains(got[0], "#issuecomment-82") {
+		t.Fatalf("new same-second comment was lost after restart: %q", got)
+	}
 }
 
 func TestPRFeedbackConcurrentAndRestartDedup(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	st := &feedbackTestFaultStore{memStore: &memStore{}, key: prFeedbackCursorsKey}
+	st := &feedbackTestFaultStore{Store: &memStore{}, key: prFeedbackCursorsKey}
 	agent := feedbackTestAgent(now, false)
 	agent.State, agent.Status = proto.StateWorking, proto.StatusWorking
 	s, f, task := newBoundPRTask(t, st, agent)
@@ -1632,7 +1770,7 @@ func TestPRFeedbackConcurrentAndRestartDedup(t *testing.T) {
 
 func TestPREventsRouteStoppedAgentNotResumedForPlainCommentedReview(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	st := &feedbackTestFaultStore{memStore: &memStore{}, key: relayKey}
+	st := &feedbackTestFaultStore{Store: &memStore{}, key: relayKey}
 	s, f, task := newBoundPRTask(t, st, feedbackTestAgent(now, true))
 	turnPREventsRouteOn(t, s)
 	source, forge := newFeedbackTestForge(t)

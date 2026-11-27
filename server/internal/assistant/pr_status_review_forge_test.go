@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -321,4 +322,77 @@ func (f *feedbackTestForge) calls(uri string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.requests[uri]
+}
+
+func TestPRFeedbackIssueCommentPaginationAndUpgradeBaseline(t *testing.T) {
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+	st := &memStore{}
+	s, f, task := newBoundPRTask(t, st, feedbackTestAgent(now, false))
+	turnPREventsRouteOn(t, s)
+	feedbackTestSendReceipt(f, agentSendReply{OK: true})
+	reviewCursor := prFeedbackCursor{At: now.Add(-time.Minute), IDsAt: []string{"review:11"}}
+	// Seed the persisted shape that PR 1 wrote, before the issue-comments stream existed.
+	prOneCursors := map[string]map[string]prFeedbackCursor{prFeedbackKey(task.ID, task.PRURL): {"reviews": reviewCursor}}
+	if err := st.PutSetting(ctx, prFeedbackCursorsKey, prOneCursors); err != nil {
+		t.Fatal(err)
+	}
+	source, forge := newFeedbackTestForge(t)
+	s.deploy.forge = forge
+	const pageTwo = feedbackTestCommentsPath + "?per_page=100&page=2"
+	source.mu.Lock()
+	for i := range 99 {
+		source.comments = append(source.comments, feedbackTestComment(int64(i+1), now.Add(-time.Second), "Historical finding."))
+	}
+	source.comments = append(source.comments, feedbackTestComment(100, now, "Last second, first finding."), feedbackTestComment(101, now, "Last second, second finding."))
+	source.failRequest = pageTwo
+	source.mu.Unlock()
+	before := len(sentToAgent(f))
+	s.sweepPRStatuses(ctx, now)
+	if _, ok := feedbackTestCursors(t, st, task)[prFeedbackIssueComments]; ok {
+		t.Fatal("partial history initialized the comment cursor")
+	}
+	source.mu.Lock()
+	source.failRequest = ""
+	source.mu.Unlock()
+	s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+	if got := sentToAgent(f)[before:]; len(got) != 0 {
+		t.Fatalf("initial complete read replayed historical comments: %q", got)
+	}
+	base := feedbackTestCursors(t, st, task)[prFeedbackIssueComments]
+	if !base.At.Equal(now) || !slices.Equal(base.IDsAt, []string{"issue_comment:100", "issue_comment:101"}) {
+		t.Fatalf("baseline should keep only the most recent second across both pages: %+v", base)
+	}
+
+	source.mu.Lock()
+	// Two old comments were deleted. The new comments land at the end of page one and on page two.
+	source.comments = append(source.comments[2:], feedbackTestComment(102, now, "Keep the write receipt."), feedbackTestComment(103, now, "Check the retry limit."))
+	source.failRequest = pageTwo
+	source.mu.Unlock()
+	s.sweepPRStatuses(ctx, now.Add(2*deployRecheck))
+	if got := sentToAgent(f)[before:]; len(got) != 0 {
+		t.Fatalf("an incomplete observation delivered comments: %q", got)
+	}
+	if c := feedbackTestCursors(t, st, task)[prFeedbackIssueComments]; !c.At.Equal(base.At) || !slices.Equal(c.IDsAt, base.IDsAt) {
+		t.Fatalf("failed page moved the cursor: %+v", c)
+	}
+	source.mu.Lock()
+	source.failRequest = ""
+	source.mu.Unlock()
+	s.sweepPRStatuses(ctx, now.Add(3*deployRecheck))
+	s.sweepPRStatuses(ctx, now.Add(4*deployRecheck))
+	if got := sentToAgent(f)[before:]; len(got) != 2 || !strings.Contains(got[0], "#issuecomment-102") || !strings.Contains(got[1], "#issuecomment-103") {
+		t.Fatalf("complete retry did not deliver both same-second comments once: %q", got)
+	}
+	cursors := feedbackTestCursors(t, st, task)
+	if c := cursors[prFeedbackIssueComments]; !c.At.Equal(now) ||
+		!slices.Equal(c.IDsAt, []string{"issue_comment:100", "issue_comment:101", "issue_comment:102", "issue_comment:103"}) {
+		t.Fatalf("same-second IDs were lost: %+v", c)
+	}
+	if c := cursors[prFeedbackReviews]; !c.At.Equal(reviewCursor.At) || !slices.Equal(c.IDsAt, reviewCursor.IDsAt) {
+		t.Fatalf("comment cursor changed the existing review cursor: %+v", c)
+	}
+	if n := source.calls(pageTwo); n != 5 {
+		t.Fatalf("issue comment page two read %d times, want 5", n)
+	}
 }
