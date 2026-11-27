@@ -1203,6 +1203,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.sessionSkillCatalog(ctx, p.SkillOwner, p.SessionID)
 	}
 	if devicewire.IsSessionStart(method) && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(withStartHost(ctx, p.Host), p.ResumeSessionID) { // codex_resume.go
+		if src, ok := n.codexSource(p.ResumeSessionID); ok && codexAppOrigin(src) {
+			if running, _ := n.codexAppRunningNow(src.home); running {
+				return nil, refusal("codex_read_only", i18n.T(i18n.From(ctx), "codex-takeover.app_running"), nil)
+			}
+		}
 		return nil, refusal("codex_read_only", "外部 Codex 会话只能接入原 app-server，不能用启动器恢复", nil)
 	}
 	// session.modes with a launcher (launcher_switch.go): a switch to another launcher is checked and kept here, before
@@ -1797,7 +1802,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				return nil, err
 			}
 		}
-		if n.stopCause(p.ResumeSessionID).AllowsSupervisorResume() {
+		if n.effectiveStopCause(p.ResumeSessionID).AllowsSupervisorResume() {
 			// Consume the old stop before starting: a failed/interrupted resume is not another confirmed idle stop.
 			if err := n.saveStopCause(ctx, p.ResumeSessionID, proto.StopUnknown); err != nil {
 				return nil, err
@@ -2858,6 +2863,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "computer.status", "computer.call", "computer.install", "computer.grant", "computer.cancel", "computer.clipboard",
 		"computer.cursor", "computer.nolock", "computer.lock",
 		"browser.status", "browser.install", "browser.open", "browser.cancel", "browser.call",
+		"browser.download_info", "browser.download_chunk",
 		"browser.cookies.list", "browser.cookies.import", "browser.cookies.clear":
 		return legacyBuiltinCall(ctx, method, params, n.lcuComputerCall)
 	case methodFsStat: // detail: the Info sheet (files_info.go)
@@ -3186,7 +3192,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 				n.codexDesktopEffortRow(&row, src, quickMeta{})
 				model, effort = row.Model, row.Effort
 			}
-			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": model, "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.stopCause(id)}, nil
+			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": model, "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.effectiveStopCause(id)}, nil
 		}
 		return nil, err
 	}
@@ -3221,7 +3227,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 		"git_branch": m.GitBranch, "version": m.Version, "permission_mode": mode, "effort": effort,
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,
-		"stop_cause": st.StopCause,
+		"stop_cause": n.effectiveStopCause(id),
 		"task_id":    st.TaskID, "task_workspace_id": st.WorkspaceID, "workspace_label": st.WorkspaceLabel,
 	}, nil
 }

@@ -1,4 +1,5 @@
 {
+  "workers_accepted": "{count} 个子任务已全部验收，负责的 Agent 已停止。请查看父任务及已记录的决定，处理剩余工作。",
   "investigation_handoff_open": "关闭这个后续待办前，请先完成或重新交接这条调研发现：{finding}",
   "investigation_review_required": "请确认本轮调研发现清单，再搁置或关闭这项工作。",
   "investigation_findings_open": "请先为这些调研发现安排后续待办、请你决定，或补充完成证据：{findings}",

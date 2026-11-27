@@ -213,7 +213,7 @@ struct NewChatView: View {
         return LauncherModelChoice(list: models ?? LauncherModels(agent: startAgent, models: []),
                                    picked: pickedModel, configured: followsModelSettings ? configuredModel : "",
                                    presetDefault: pickedTier != nil, startLauncher: runEntry,
-                                   startsInHerdr: machine?.startsInHerdr(host: targetPreset?.host) == true)
+                                   startsInOmpModelHost: machine?.supportsOmpStartModel(host: targetPreset?.host) == true)
     }
     private var modelChoice: LauncherModelChoice? { models == nil ? nil : startModelChoice }
 

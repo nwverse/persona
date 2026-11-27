@@ -268,7 +268,15 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 				ctx = connector.WithoutOwnerCaller(ctx)
 			}
 		}
-		if res, ok := s.ext.CallTool(ctx, machine, session, name, args, assistant); ok {
+		callerMachine := machine
+		if name == "browser_fetch_download" {
+			// The file belongs on the machine running this turn. Approval still belongs to the logical conversation.
+			if caller, ok := ctx.Value(logicalAuthenticatedKey{}).(logicalAuthenticated); ok &&
+				caller.Machine == machine && caller.Session == session && caller.Lease != nil && caller.Lease.Load() {
+				callerMachine = caller.PhysicalMachine
+			}
+		}
+		if res, ok := s.ext.CallTool(ctx, callerMachine, session, name, args, assistant); ok {
 			return res
 		}
 	}

@@ -19175,7 +19175,7 @@ def session_catalog(rows, revision, state_of):
     """catalog=1 (sessions_catalog): the filtered rows' projects and spaces, as the hub's sessionCatalogOf builds them.
     A directory whose computer names a network remote (CATALOG_ORIGINS) is that repository's project wherever it is
     checked out; any other goes by its folder's name. needs_you (left out when 0) is by the state the list filters by."""
-    places, groups, names = {}, {}, {}
+    places, groups, names, folders = {}, {}, {}, {}
     waiting = lambda n: {"needs_you": n} if n else {}
     for s in rows:
         needs = 1 if state_of(s) == "needs_you" else 0
@@ -19187,6 +19187,11 @@ def session_catalog(rows, revision, state_of):
         at[0] += 1; at[1] += needs
         if group and s.get("space_name"):
             names.setdefault((s["machine_id"], group), s["space_name"])
+        # a space's folder: the one most of its rows are in (workspace_cwd, else cwd), the first among equals
+        folder = s.get("workspace_cwd") or s.get("cwd") or ""
+        if group and folder:
+            tally = folders.setdefault((s["machine_id"], group), {})
+            tally[folder] = tally.get(folder, 0) + 1
     projects = {}
     for (mid, path), (n, needs) in places.items():
         origin = CATALOG_ORIGINS.get((mid, path), "")
@@ -19205,7 +19210,11 @@ def session_catalog(rows, revision, state_of):
             project["name"] = origin.rsplit("/", 1)[-1] if origin else folder_name(first["path"])
         if origin:
             project["origin"] = origin
-    spaces = [{"machine_id": mid, "id": group, "name": names.get((mid, group), group), "total": n, **waiting(needs)} for (mid, group), (n, needs) in groups.items()]
+    def space_path(key):
+        tally = folders.get(key)
+        return {"path": max(tally, key=tally.get)} if tally else {}  # max keeps the first of equals
+    spaces = [{"machine_id": mid, "id": group, "name": names.get((mid, group), group), **space_path((mid, group)), "total": n, **waiting(needs)}
+              for (mid, group), (n, needs) in groups.items()]
     return {"revision": revision, "total": len(rows),
             "projects": sorted(projects.values(), key=lambda p: (not p["id"], -p["total"], p["name"].lower(), p["id"])),
             "spaces": sorted(spaces, key=lambda p: (not p["id"], -p["total"], p["name"].lower(), p["machine_id"], p["id"]))}

@@ -21,7 +21,7 @@ function StoppedTerminalControls({ mid, sid, onTerminal }: StoppedCodexTerminal)
   const resume = useResume(mid, sid);
   return (
     <>
-      <Button tone="quiet" icon="terminal" onClick={onTerminal}>{t("chat-chatview.terminal")}</Button>
+      <Button tone="quiet" icon="terminal" onClick={onTerminal}>{t("lib-terminals.terminal")}</Button>
       <Button
         tone="secondary"
         icon="play"

@@ -11,6 +11,7 @@ Persona integrates with HarmonyOS 7 (API 26) and Huawei XiaoYi across four compl
 | Intents Kit & Suggestions | `harmony/entry/src/main/ets/xiaoyi/intents/` + `harmony/entry/src/main/resources/base/profile/insight_intent.json` | Ten `@InsightIntentEntry` executors, API 26 `AppIntentEntity` queries (`PersonaMachineEntity`, `PersonaSessionEntity`), and opt-in `IntentSuggestionsService` |
 | API 26 Skills & System Share | `harmony/entry/skills/persona-assistant/` + `harmony/entry/skills/persona-workspace/` + `harmony/entry/src/main/ets/xiaoyi/ShareReceiver.ets` | Declared `skillProfiles` (`SKILL.md` + ArkTS scripts) and `ohos.want.action.sendData` share-to-draft handoff |
 | OpenClaw Outbound WS Bridge | `harmony/scripts/xiaoyi-openclaw-bridge.mjs` | Zero-dependency Node 24 outbound WebSocket bridge for immediate personal developer account testing via XiaoYi Open Platform OpenClaw mode |
+| Cloud A2A v1.0 & Streamable HTTP MCP Server | `harmony/scripts/xiaoyi-cloud-server.mjs` | Zero-dependency Node 24 HTTPS-proxy-ready A2A v1.0 (`/.well-known/agent-card.json`, `/a2a` JSON-RPC + SSE) and Streamable HTTP MCP (`/mcp`) server backed by Persona Hub |
 
 All HarmonyOS entry points share `harmony/entry/src/main/ets/xiaoyi/HeadlessHubService.ets`, `harmony/entry/src/main/ets/core/XiaoYiActions.ts`, and `harmony/entry/src/main/ets/core/XiaoYiRoutes.ts`. `CredentialVault` and `LocalStore` accept `common.Context` so extensions and intent executors read the paired Hub profile and Asset Store device token directly without launching the full UI.
 
@@ -44,6 +45,32 @@ Once you have signed the XiaoYi Open Platform agreement and verified your develo
 
    Alternatively, place those fields (`ak`, `sk`, `agentId`, `hubUrl`, `hubToken`, optional `manager` and `wsUrl`) in a `0600` JSON file outside the repository and run `node harmony/scripts/xiaoyi-openclaw-bridge.mjs --config /path/to/xiaoyi-openclaw.json --check --check-ws`. The bridge signs WebSocket upgrades with Huawei OpenClaw headers (`x-access-key`, `x-ts`, `x-sign`, `x-agent-id`, `x-hag-trace-id`), sends `clawd_bot_init` and periodic `heartbeat` frames, and wraps streaming replies in `agent_response` envelopes.
 3. Open XiaoYi on your HarmonyOS phone (signed into the whitelisted Huawei ID) and invoke your test agent with everyday prompts such as `"Check status"`, `"Add a to-do: review weekly notes"`, `"Log water 350 ml"`, `"Send to agent: run unit tests"`, `"Search knowledge: release"`, or any Persona question.
+
+## Cloud A2A v1.0 & Streamable HTTP MCP server
+
+For XiaoYi Cloud Agent (A2A v1.0) and Cloud MCP (Streamable HTTP) integrations behind a TLS reverse proxy, run `harmony/scripts/xiaoyi-cloud-server.mjs` (zero npm dependencies, Node 24 built-ins only):
+
+1. Configure credentials via environment variables or a `0600` JSON file outside the repository (`--config /path/to/cloud-config.json` or `XIAOYI_CONFIG_FILE`):
+   - Required: `XIAOYI_CLOUD_TOKEN` / `cloudToken` (minimum 24 characters), `PERSONA_HUB_URL` / `hubUrl`, `PERSONA_HUB_TOKEN` / `hubToken`.
+   - Optional: `XIAOYI_CLOUD_HOST` / `host` (default `127.0.0.1`), `XIAOYI_CLOUD_PORT` / `port` (default `18790`), `XIAOYI_PUBLIC_BASE_URL` / `publicBaseUrl` (no trailing slash, advertised in the AgentCard `url` and `interfaces`), `PERSONA_MANAGER` / `manager`, `XIAOYI_ASK_TIMEOUT_MS` / `askTimeoutMs` (default `24000`).
+2. Run preflight validation (`--check`) and start the server:
+
+   ```sh
+   node harmony/scripts/xiaoyi-cloud-server.mjs --check --config /path/to/cloud-config.json
+   node harmony/scripts/xiaoyi-cloud-server.mjs --config /path/to/cloud-config.json
+   ```
+
+3. Exposed endpoints:
+   - `GET /healthz`: unauthenticated liveness probe (`{"ok":true,"service":"persona-xiaoyi-cloud"}`).
+   - `GET /.well-known/agent-card.json`: A2A v1.0 AgentCard with Bearer security scheme and 6 skills (`ask_persona`, `check_status`, `send_agent_task`, `add_todo`, `log_water`, `search_knowledge`).
+   - `POST /a2a` (Bearer auth required): A2A JSON-RPC 2.0 (`message/send`, `SendMessage`, `tasks/send`, SSE `message/stream` / `SendStreamingMessage` / `tasks/sendSubscribe`, `tasks/get`, `tasks/cancel`).
+   - `POST /mcp` (Bearer auth required): Streamable HTTP MCP JSON-RPC 2.0 (`initialize` protocol `2025-03-26`, `notifications/initialized` returning HTTP `202`, `ping`, `tools/list`, `tools/call` across all 6 tools).
+4. Security boundaries:
+   - Fail-closed Bearer verification requires `>= 24` characters and uses constant-time SHA-256 `crypto.timingSafeEqual`; unauthorized requests receive HTTP `401` with `WWW-Authenticate: Bearer`.
+   - Request bodies are capped at `1 MiB` (`413 Payload Too Large`), and neither `cloudToken` nor `hubToken` is ever logged or printed in `--check` output.
+   - Cloud approval requests always refuse (`approval_requires_phone`, A2A state `input-required` / MCP `isError: true`) so approvals stay on the user's unlocked phone.
+   - Recording requests enforce the `#15985` Hub `module.recording` guard and fail closed with `"Meeting recording is off on this hub."` when recording is disabled.
+5. **XiaoYi Console Skill draft import**: In the XiaoYi Open Platform console, import the `SKILL.md` drafts from `harmony/entry/skills/persona-assistant/` and `harmony/entry/skills/persona-workspace/` alongside your `https://<public-host>/a2a` or `https://<public-host>/mcp` endpoint and Bearer credential.
 
 ## HarmonyOS developer publishing checklist (On-Device A2A, Intents Kit, Skills)
 

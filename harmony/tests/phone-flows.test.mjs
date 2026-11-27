@@ -5,7 +5,7 @@ import test from 'node:test';
 
 registerHooks({
   resolve(spec, ctx, next) {
-    if (spec === '../core/PhoneSearchExcerpt' && ctx.parentURL?.endsWith('.ets'))
+    if ((spec === '../core/PhoneSearchExcerpt' || spec === '../core/SessionNaming') && ctx.parentURL?.endsWith('.ets'))
       return {url:new URL(spec+'.ts',ctx.parentURL).href,shortCircuit:true};
     if (spec.startsWith('.') && ctx.parentURL?.endsWith('.ets'))
       return {url:new URL(spec+'.ets',ctx.parentURL).href,shortCircuit:true};
