@@ -284,11 +284,11 @@ func TestExternalLookupProjectsExistingRepositoryLinksAndLiveEdits(t *testing.T)
 	if matches := lookup(t, d.Store, pr).Matches; len(matches) != 2 || matches[0].Source != "explicit" || matches[1].TargetID != "direction_repo" {
 		t.Fatalf("removed links stayed in projection: %+v", matches)
 	}
-	summary, err := d.ExternalSourceSummary(ctx, "github", new(assistantwire.ExternalChannelID("")))
+	summary, err := d.ExternalSourceSummary(ctx, "github", new(assistantwire.ExternalChannelID("")), false)
 	if err != nil || len(summary.Bindings) != 3 {
 		t.Fatalf("summary for the public GitHub channel: %+v, %v", summary, err)
 	}
-	summary, err = d.ExternalSourceSummary(ctx, "github", new(assistantwire.ExternalChannelID("https://git.example.com")))
+	summary, err = d.ExternalSourceSummary(ctx, "github", new(assistantwire.ExternalChannelID("https://git.example.com")), false)
 	if err != nil || len(summary.Bindings) != 1 || summary.Bindings[0].TargetID != enterprise {
 		t.Fatalf("summary for the enterprise GitHub channel: %+v, %v", summary, err)
 	}
