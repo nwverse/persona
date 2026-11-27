@@ -46,10 +46,20 @@ func TestSplitUsage(t *testing.T) {
 	}
 }
 
+// clearResplit drops machine's re-split record, which open does not clear: a test that reads it runs again on the
+// same database (-count) as it ran the first time.
+func clearResplit(t *testing.T, d *DB, machine string) {
+	t.Helper()
+	if _, err := d.pool.Exec(context.Background(), `DELETE FROM usage_resplit WHERE machine_id = $1`, machine); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A machine's usage stored without directories is split by what its node re-read, every key's sums (and so the
 // calendar's) unchanged; a key with nothing re-read stays not split, and a second re-split changes nothing.
 func TestResplitUsage(t *testing.T) {
 	d, ctx := open(t), context.Background()
+	clearResplit(t, d, "m")
 	now := time.Now().Truncate(10 * time.Minute)
 	slot := now.Add(-3 * 24 * time.Hour)
 	b := func(at time.Time, dir, model string, out int64) proto.UsageBucket {
@@ -115,9 +125,7 @@ func TestResplitUsage(t *testing.T) {
 func TestResplitUsageTemp(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	const machine = "temp-pass"
-	if _, err := d.pool.Exec(ctx, `DELETE FROM usage_resplit WHERE machine_id = $1`, machine); err != nil { // not cleared by open
-		t.Fatal(err)
-	}
+	clearResplit(t, d, machine)
 	now := time.Now().Truncate(10 * time.Minute)
 	slot := now.Add(-4 * 24 * time.Hour)
 	edge := slot.Add(10 * time.Minute)
