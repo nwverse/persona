@@ -73,10 +73,14 @@ import (
 // Antigravity keep_always declaration, Assistant allow_once-absent fail-closed guard, and MultiEdit/NotebookEdit tool mapping add 101 B (291,116 B).
 // Treating epoch-zero resetTime on untouched Antigravity quota buckets as unset and emitting a SHA-256 account_key for
 // signed-in Antigravity accounts add 180 B (291_296 B).
-// Antigravity idle auto-compaction `/compact` divider mapping and empty-prompt exemption (#16604) add 178 B (291,474 B).
+// Antigravity unknown-status jitter fixes (CANCELING/BUSY native working, empty 0-step idle, fresh empty-transcript
+// start, settled-turn recovery across transient empty/UNSPECIFIED summary_not_idle and tool-only turns with
+// autonomous-wake cleanup, cached GetCascadeTrajectory idle verification for summary_behind, last_modified_time
+// listed cache invalidation, and sanitized unrecognized-status logging) add 1,066 B (292,362 B).
+// Antigravity idle auto-compaction `/compact` divider mapping and empty-prompt exemption (#16604) add 188 B (292,550 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 291_474
+	const budget = 292_550
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
