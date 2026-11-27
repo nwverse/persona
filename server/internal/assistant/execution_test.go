@@ -263,8 +263,6 @@ func TestChannelLedgerRollback(t *testing.T) {
 	}
 }
 
-func jsonInt(n int64) string { b, _ := json.Marshal(n); return string(b) }
-
 // A channel's own quota source is its aliases' usage pool; an admission group's quota_pool still wins.
 func TestChannelQuotaHeadroom(t *testing.T) {
 	s, d := routingRig(t)
