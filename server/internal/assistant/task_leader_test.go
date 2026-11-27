@@ -305,6 +305,30 @@ func TestTaskLeaderTaskPlanCallEnforcement(t *testing.T) {
 	refused("a closed task's leader", call("s1", workerArgs(nil)))
 }
 
+func TestLeaderTaskPlanStartHost(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f := newQuietServiceOn(t, st)
+	f.launcherList = companionLaunchers()
+	startTaskLeader(t, s, f)
+
+	args := workerArgs(map[string]any{"launcher": "agy", "host": "tmux"})
+	res := s.mcpCall(context.Background(), "box", "s1", "task_plan", args, false)
+	if !res.IsError || !strings.Contains(res.Content[0].Text, `host "tmux" is not where an Agent can start`) {
+		t.Fatalf("invalid host: %+v", res)
+	}
+	if got := startHosts(f); !slices.Equal(got, []string{""}) {
+		t.Fatalf("session.start hosts after refusal = %q, want only the leader's start", got)
+	}
+
+	planWorker(t, s, f, map[string]any{"launcher": "agy", "host": " herdr "})
+	putTierProfiles(t, s, "economy", map[string]ModelTier{"agy-work": {Launcher: "agy", Host: new(proto.EngineHerdr)}}, nil)
+	planWorker(t, s, f, map[string]any{"tier": "agy-work"})
+	planWorker(t, s, f, map[string]any{"tier": "agy-work", "host": "agy"})
+	if got := startHosts(f); !slices.Equal(got, []string{"", "herdr", "herdr", "agy"}) {
+		t.Fatalf("session.start hosts = %q, want leader followed by explicit, inherited and overridden worker hosts", got)
+	}
+}
+
 // A worker whose own supervision ledger cannot be stored never starts. The leader is linked directly so its setup
 // does not depend on the deliberately failing worker ledger.
 func TestTaskLeaderWorkerStopsWhenSupervisionCannotBeStored(t *testing.T) {
