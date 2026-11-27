@@ -21,23 +21,30 @@ func newSpaceThreadEnv(t *testing.T, spaceSlug string) (*threadEnv, *fleetDevs) 
 		{Slug: spaceSlug, Kind: trackKindSpace, Title: "Research Space", Template: trackTemplateSpace, Revision: 1},
 	}}}
 	env := newTodoEnv(t, st)
-	env.f.devices[0].Online = true
-	env.f.devices[0].Home = "/home/me"
+	env.f.devices = []Device{
+		{ID: "server", Name: "server", Kind: "local", Home: "/home/me", Online: true},
+		{ID: "box", Name: "box", Kind: "remote", Home: "/home/box", Online: true},
+	}
 	fd := newFleetDevs()
+	forward := func(dev string) func(string, json.RawMessage) (any, error) {
+		return func(method string, params json.RawMessage) (any, error) {
+			raw, err := env.f.DeviceCall(context.Background(), DeviceCall{Device: dev, Method: method, Params: params})
+			if err != nil || len(raw) == 0 {
+				return map[string]any{}, err
+			}
+			return raw, nil
+		}
+	}
 	srv := fd.add("server", "server")
 	srv.home = "/home/me"
-	srv.call = func(method string, params json.RawMessage) (any, error) {
-		return env.f.DeviceCall(context.Background(), DeviceCall{Device: "server", Method: method, Params: params})
-	}
+	srv.call = forward("server")
 	box := fd.add("box", "box")
-	box.call = func(method string, params json.RawMessage) (any, error) {
-		return env.f.DeviceCall(context.Background(), DeviceCall{Device: "box", Method: method, Params: params})
-	}
+	box.call = forward("box")
 	env.s.devs = spaceDevs{fleetDevs: fd}
 	e := withFeishuThread(env)
 	fd.setSessions("server", []proto.Session{
-		{SessionID: "m1", MachineID: "server", Assistant: true},
-		{SessionID: "c1x1x1", MachineID: "server", Assistant: true},
+		{SessionID: "m1", MachineID: "server", Cwd: "/home/me/.persona/assistant", Assistant: true},
+		{SessionID: "c1x1x1", MachineID: "server", Cwd: "/home/me/.persona/assistant", Assistant: true},
 	})
 	fd.setSessions("box", []proto.Session{{SessionID: "agent01", MachineID: "box", Title: "修发版"}})
 	e.topicModes = map[string]assistantwire.TopicTodoMode{testChat: assistantwire.TopicAnswerOnly}
@@ -109,8 +116,8 @@ func TestFeishuSpaceBoundTopicGroupOneConversationPerTopic(t *testing.T) {
 
 	// Register the newly started session on the fake node so follow-up lookup finds it.
 	sessList := []proto.Session{
-		{SessionID: "m1", MachineID: "server", Assistant: true},
-		{SessionID: sess1, MachineID: "server", Assistant: true, Space: "research"},
+		{SessionID: "m1", MachineID: "server", Cwd: "/home/me/.persona/assistant", Assistant: true},
+		{SessionID: sess1, MachineID: "server", Cwd: "/home/me/.persona/tracks/research", Assistant: true, Space: "research"},
 	}
 	fd.setSessions("server", sessList)
 	e.sessions("server", sessList...)
