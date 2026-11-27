@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -57,44 +58,28 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 		}
 		return map[string]any{}, true, d.Reconnect(p.MachineID)
 	case devicewire.MethodMachinesPut:
-		var p devicewire.MachinePut
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		return map[string]any{}, true, d.putMachine(ctx, p.Entry)
+		return handleDeviceRequest(devicewire.MachinesPutMethod, decode, func(p devicewire.MachinePut) (buswire.None, error) {
+			return buswire.None{}, d.putMachine(ctx, p.Entry)
+		})
 	case devicewire.MethodMachinesRemove:
-		var p devicewire.MachineRef
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		removed, err := d.removeMachine(ctx, p.MachineID)
-		return devicewire.MachineRemoved{Removed: removed}, true, err
+		return handleDeviceRequest(devicewire.MachinesRemoveMethod, decode, func(p devicewire.MachineRef) (devicewire.MachineRemoved, error) {
+			removed, err := d.removeMachine(ctx, p.MachineID)
+			return devicewire.MachineRemoved{Removed: removed}, err
+		})
 	case devicewire.MethodMachinesGet:
-		var p devicewire.MachineRef
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		entry, err := d.machineEntry(p.MachineID)
-		if err != nil {
-			return nil, true, err
-		}
-		return devicewire.MachineEntry{Entry: entry}, true, nil
+		return handleDeviceRequest(devicewire.MachinesGetMethod, decode, func(p devicewire.MachineRef) (devicewire.MachineEntry, error) {
+			entry, err := d.machineEntry(p.MachineID)
+			return devicewire.MachineEntry{Entry: entry}, err
+		})
 	case devicewire.MethodEngineGet:
-		var p devicewire.MachineRef
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		c, err := d.engineChoiceToMove(p.MachineID)
-		return devicewire.MachineEngine{MachineID: p.MachineID, Choice: c}, true, err
+		return handleDeviceRequest(devicewire.EngineGetMethod, decode, d.engineChoiceToMove)
 	case devicewire.MethodEnginePut:
-		var p devicewire.MachineEngine
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		if p.MachineID == "" || p.Choice == nil {
-			return nil, true, &rpc.Error{Code: "invalid_params", Message: method + ": machine_id and choice are required"}
-		}
-		return map[string]any{}, true, d.setEngineHosts(ctx, p.MachineID, p.Choice.Hosts, p.Choice.Default)
+		return handleDeviceRequest(devicewire.EnginePutMethod, decode, func(p devicewire.MachineEngine) (buswire.None, error) {
+			if p.MachineID == "" || p.Choice == nil {
+				return buswire.None{}, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": machine_id and choice are required"}
+			}
+			return buswire.None{}, d.setEngineHosts(ctx, p.MachineID, p.Choice.Hosts, p.Choice.Default)
+		})
 	case devicewire.MethodUpdateNodes:
 		go d.updateNodes(context.WithoutCancel(ctx))
 		return map[string]any{}, true, nil
@@ -112,6 +97,19 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 		return map[string]any{"address": addr, "version": version}, true, nil
 	}
 	return nil, false, nil
+}
+
+// handleDeviceRequest checks a handler against its descriptor and keeps Request's lenient decoder.
+func handleDeviceRequest[P, R any](_ buswire.Method[P, R], decode func(any) error, run func(P) (R, error)) (any, bool, error) {
+	var p P
+	if err := decode(&p); err != nil {
+		return nil, true, err
+	}
+	out, err := run(p)
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
 }
 
 // Event takes the hub's devices.* and credential revocation events; false: not one of them.
@@ -166,8 +164,8 @@ func (d *Devices) hubConnected(ctx context.Context, m *Machine, at time.Time) (r
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	var out devicewire.ConnectedReply
-	if err := d.opts.Hub.Call(cctx, devicewire.MethodConnected, devicewire.Connected{MachineID: m.cfg.ID, ConnectedAt: at}, &out); err != nil {
+	out, err := buswire.Call(cctx, d.opts.Hub, devicewire.ConnectedMethod, devicewire.Connected{MachineID: m.cfg.ID, ConnectedAt: at})
+	if err != nil {
 		d.logf("[%s] the hub's part of the connection: %v", m.cfg.ID, err)
 		var re *rpc.Error
 		return nil, errors.As(err, &re) && re.Code == devicewire.CodeNoDevice
