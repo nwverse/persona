@@ -484,6 +484,7 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		Clear  []string `json:"clear"` // what to drop from the shell's env first (envClearFor)
 		Args   []string `json:"args"`
 		Error  string   `json:"error"`
+		Config string   `json:"config_fingerprint"`
 		// the provider's models that take no thinking level: Effort is not passed when the session runs one
 		// (launchEffort); and its models' reported reply limits, for the limit of the model the session runs
 		// (sessionOutput). An older node sends neither: Effort and Env as before.
@@ -560,6 +561,10 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		catalog = ""
 	}
 	argv := launchArgv(agent, args, resp.Args, launchEffort(resp.Effort, resp.NoEffort, sessionModel(args, resp.Args, resp.Env)), resp.Model, resp.Env, catalog)
+	if agent == "claude" && resp.Config != "" && os.Getenv("PERSONA_ASSISTANT") != "1" {
+		stamp := managedLaunchStamp(name, resp.Config, settingsArg(argv), filepath.Dir(nodeclient.SocketPath()))
+		env = append(withoutEnv(env, []string{managedLaunchConfigEnv}), managedLaunchConfigEnv+"="+stamp)
+	}
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
 		argv = codexBypassArgs(argv)
 	}
@@ -861,19 +866,23 @@ func (n *Node) launcherEnv(name string) map[string]any {
 	}
 	if l.Withheld {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := n.ensureManaged(ctx, name)
+		var err error
+		l, err = n.readyManagedLauncher(ctx, name)
 		cancel()
 		if err != nil {
 			return map[string]any{"error": err.Error()}
 		}
-		if l, _ = n.managedLauncher(name); l.Withheld {
-			return map[string]any{"error": errManagerAway(name).Error()}
-		}
+	}
+	if l.Name == "" { // removed from the catalog while its settings were being fetched
+		return map[string]any{"error": "no managed launcher " + name + " on this computer"}
 	}
 	if strings.TrimSpace(l.Headers) != "" && !l.CustomHeadersSupported() {
 		return map[string]any{"error": "custom_headers_unsupported: this runtime cannot send provider headers on the selected model path; clear them in Settings › Model Providers"}
 	}
 	out := map[string]any{"env": managedEnv(l), "clear": envClearFor(l), "args": l.Args, "agent": l.AgentType(), "model": l.Model}
+	if l.AgentType() == "claude" {
+		out["config_fingerprint"] = managedClaudeFingerprint(l)
+	}
 	if effort := launcherDefaultEffort(l); effort != "" {
 		out["effort"] = effort
 		if ids := noEffortModels(l); len(ids) > 0 { // the models it is not passed for (launchEffort)
