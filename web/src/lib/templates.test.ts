@@ -4,7 +4,7 @@ import type { PhoneNavMode } from "./phone-nav";
 import type { SidebarIconMode } from "./sidebar-icons";
 import type { SidebarPrefs } from "./sidebar-pages";
 import {
-  applyTemplate, builtInTemplates, CONSOLE_HIDDEN_PAGES, localized, parseTemplate, planTemplate, readTemplateInput, templateLink,
+  applyTemplate, builtInTemplates, localized, parseTemplate, planTemplate, readTemplateInput, templateLink,
   type PersonaTemplate, type TemplateHost, type TemplateSetting,
 } from "./templates";
 
@@ -85,13 +85,11 @@ describe("templates: the format", () => {
     }
   });
 
-  it("ships built-ins that read back as themselves; the console puts the other pages under More", () => {
+  it("ships Default as the only built-in, and it reads back as itself", () => {
     const builtIns = builtInTemplates((k) => k);
-    expect(builtIns.map((b) => b.id)).toEqual(["default", "agent-console"]);
+    expect(builtIns.map((b) => b.id)).toEqual(["default"]);
     for (const b of builtIns) expect(parseTemplate(JSON.parse(JSON.stringify(b)))).toEqual({ template: b });
-    expect(builtIns[1].browser?.phone_nav).toBe("tabs");
-    expect(builtIns[1].navigation?.pages?.hidden).toEqual(CONSOLE_HIDDEN_PAGES);
-    expect(CONSOLE_HIDDEN_PAGES).not.toContain("settings");
+    expect(builtIns[0].browser).toEqual({ phone_nav: "switch", sidebar_icons: "monochrome", modules_off: [] });
     expect(builtIns[0].navigation).toEqual({ pages: null });
   });
 });
@@ -102,10 +100,11 @@ describe("templates: links", () => {
   if (!("template" in mine)) throw new Error("fixture");
 
   it("names a built-in by its id and carries any other template whole", () => {
-    expect(templateLink("https://hub.example", builtIns[1], true)).toBe("https://hub.example/settings?tab=general&template=agent-console");
+    expect(templateLink("https://hub.example", builtIns[0], true)).toBe("https://hub.example/settings?tab=general&template=default");
     const link = templateLink("https://hub.example", mine.template, false);
     expect(readTemplateInput(link, builtIns)).toEqual({ template: mine.template, builtIn: false });
-    expect(readTemplateInput("agent-console", builtIns)).toEqual({ template: builtIns[1], builtIn: true });
+    expect(readTemplateInput("default", builtIns)).toEqual({ template: builtIns[0], builtIn: true });
+    expect("error" in readTemplateInput("agent-console", builtIns)).toBe(true);
     expect(readTemplateInput(JSON.stringify(mine.template), builtIns)).toEqual({ template: mine.template, builtIn: false });
   });
 

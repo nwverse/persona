@@ -2,8 +2,8 @@
 
     python3 scripts/test/test_template_schema.py
 
-The valid cases are the shapes of the built-in templates (web/src/lib/templates.ts builtInTemplates) and a template
-with every part; the invalid ones must be refused. The validator is the one of test_extension_schema.py.
+The valid cases are the built-in Default's shape (web/src/lib/templates.ts builtInTemplates), a template of one's own
+and a template with every part; the invalid ones must be refused. The validator is the one of test_extension_schema.py.
 """
 
 import json
@@ -25,7 +25,7 @@ VALID = {
     "default": {**BASE, "id": "default", "name": "Default", "description": "As it comes",
                 "browser": {"phone_nav": "switch", "sidebar_icons": "monochrome", "modules_off": []},
                 "navigation": {"pages": None}},
-    "agent console": {**BASE, "id": "agent-console", "name": {"en": "Agent console", "zh-Hans": "Agent 控制台"},
+    "tab bar": {**BASE, "id": "my-console", "name": {"en": "My console", "zh-Hans": "我的控制台"},
                       "browser": {"phone_nav": "tabs", "modules_off": ["health"]},
                       "navigation": {"pages": {"order": [], "shown": [], "hidden": ["home", "todos"]}}},
     "every part": {**BASE, "navigation": {"start": "p:example/today"},

@@ -45,7 +45,7 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.appearance"), anchor: "appearance" },
   { tab: "general", group: words(t("settings.theme_light"), t("settings.theme_dark")), hint: t("language.system"), anchor: "theme" },
   { tab: "general", group: t("ui-look.text_size"), anchor: "text-size" },
-  { tab: "general", group: t("settings-templates.title"), hint: words(t("settings-templates.default_name"), t("settings-templates.console_name"), t("settings-templates.import")), anchor: "templates" },
+  { tab: "general", group: t("settings-templates.title"), hint: words(t("settings-templates.default_name"), t("settings-templates.import")), anchor: "templates" },
   { tab: "general", group: t("language.label"), anchor: "language" },
   { tab: "general", group: t("settings.reply_motion"), anchor: "reply-motion" },
   { tab: "general", group: t("settings.starred_messages"), anchor: "starred-messages" },

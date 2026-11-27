@@ -190,10 +190,8 @@ export function readTemplateInput(input: string, builtIns: readonly PersonaTempl
 
 // ── the built-ins ──
 
-/** The built-in pages the Agent console puts under More (lib/persona-nav.ts NAV_PAGES, and the health module's). */
-export const CONSOLE_HIDDEN_PAGES = ["home", "inbox", "health", "starred", "workspace-board", "todos", "routines", "kb", "machines"];
-
-/** Default: every part a built-in template touches back to its default. Names come from the catalog at call time. */
+/** The built-in templates: Default, Persona as it comes (the top switch, every optional web module on, the sidebar's
+ *  default pages). Any other setup is a template of its own, shared as a link or JSON. Names come from the catalog. */
 export function builtInTemplates(name: (key: string) => string): PersonaTemplate[] {
   return [
     {
@@ -203,14 +201,6 @@ export function builtInTemplates(name: (key: string) => string): PersonaTemplate
       description: name("default_description"),
       browser: { phone_nav: "switch", sidebar_icons: "monochrome", modules_off: [] },
       navigation: { pages: null },
-    },
-    {
-      persona_template: TEMPLATE_VERSION,
-      id: "agent-console",
-      name: name("console_name"),
-      description: name("console_description"),
-      browser: { phone_nav: "tabs", modules_off: ["health"] },
-      navigation: { pages: { order: [], shown: [], hidden: CONSOLE_HIDDEN_PAGES } },
     },
   ];
 }

@@ -3,8 +3,6 @@
   "footer": "模版是一组一次生效的配置：这个浏览器的外观、侧栏页面、扩展和助手设置。应用前你会看到每一项改动。",
   "default_name": "默认",
   "default_description": "Persona 原本的样子：手机上用顶部切换，可选功能全部打开，侧栏页面在默认位置。",
-  "console_name": "Agent 控制台",
-  "console_description": "主要用来管理 Agent：手机底部标签栏放主对话、Agents、外部和设置；关闭健康，其他页面收进侧栏的“更多”。",
   "use": "使用",
   "in_use": "使用中",
   "in_use_named": "使用中：{name}",
