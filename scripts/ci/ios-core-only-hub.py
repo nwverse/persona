@@ -136,7 +136,7 @@ def core_reads(base, token):
 
 def seed_main(container):
     """Seed a synthetic idle main session in the real manager store, after the fresh-empty page evidence is complete."""
-    machine, session = "fixture-machine", "main-fixture"
+    machine, session = "assistant", "main-fixture"
     dbs = run([smoke.DOCKER, "exec", container, "psql", "-U", "persona", "-d", "persona", "-Atc",
                "select datname from pg_database where not datistemplate"], 30).stdout.split()
     wrote = []
@@ -352,7 +352,7 @@ def settings(ctl, key):
                  lambda: (ctl.call("state").get("settingsDepth") or 0) > 0 or None)
 
 
-def exercise_app(ctl, base, code, edition, shots, container):
+def exercise_app(ctl, base, code, edition, shots, container, master):
     full = edition == "full"
     proof = {"schema": 1, "run_id": ctl.run_id, "edition": edition, "core_reads": core_reads(base, code)}
     ctl.hub = base
@@ -494,7 +494,7 @@ def exercise_app(ctl, base, code, edition, shots, container):
     capture_both(ctl, shots, edition, "composer", proof)
 
     ctl.call("ping", _timeout=5)
-    status, devices = request(base, "/api/v1/devices", code)
+    status, devices = request(base, "/api/v1/devices", master)
     check(status == 200 and isinstance(devices.get("devices"), list) and devices["devices"],
           f"{edition}: the hub lists no paired device")
     proof["paired_devices"] = len(devices["devices"])
@@ -573,7 +573,7 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
         run_log(["xcrun", "simctl", "install", simulator, app], work / "install.log", 120, env=client_env)
         ctl = Ctl(udid=simulator, bundle="org.example.persona.ci", port=smoke.free_port())
         ctl.run_id = run_id
-        proof = exercise_app(ctl, base, pair_code(base, master), edition, shots, container)
+        proof = exercise_app(ctl, base, pair_code(base, master), edition, shots, container, master)
         proof["hub_id"] = health["hub_id"]
         proof["module_flags"] = sorted(f for f in features if f == "modules" or f.startswith("module."))
         validate_proof(proof, edition, run_id, shots)
