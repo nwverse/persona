@@ -18,6 +18,8 @@
 
 ## Persona's own agy hooks: report only, own one key, prove the pane (#13729)
 
+- A herdr-core OSC 7501 blocked can outlive an AGY turn. Heal it only when matching hooks, an idle summary without
+  `not_fully_idle`, and a fresh dialog-free input screen agree; recent sends must never hide real permission dialogs.
 - agy's global `hooks.json` is shared: herdr, Moshi and Orca each own a top-level group. Write only the `persona` key through the ordered-object editor (`editSettings`), never rewrite the others, and treat a changed command (moved binary) as stale, not as foreign.
 - agy runs the hook with the terminal's environment, which has no `PERSONA_HOME`: a node with a non-default directory must put `--persona-home <dir>` in the command, or the hook dials the default node's socket.
 - The hook must print `{}` and exit fast on every path (no node, unknown pane, bad input), or agy waits on it. Subagent conversations inherit the pane's environment and report too, so the node still has to prove the conversation is not a subagent's (#13336) before it reads or resumes.

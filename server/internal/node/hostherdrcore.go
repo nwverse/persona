@@ -374,7 +374,7 @@ var hcAgents = map[string]string{
 }
 
 // hcStatus maps OSC 7501 states to the node's; error has no counterpart (the program said something failed, not what
-// it does now).
+// it does now). Keep blocked here: liveStatus cross-checks AGY hooks, summary and screen before healing it.
 var hcStatus = map[string]string{
 	"idle": proto.StatusIdle, "working": proto.StatusWorking, "blocked": proto.StatusBlocked, "done": proto.StatusDone,
 }

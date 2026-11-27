@@ -25,14 +25,16 @@ func (n *Node) agent(id string) (host.Agent, bool) {
 }
 
 // liveStatus is an agent's status with its own signs of work over its host's: a Claude's as claudeStatus says, a
-// Codex's as codexStatus says; any other agent's is its host's.
+// Codex's as codexStatus says, AGY's as agyStatus says; other agents use their host or send grace.
 func (n *Node) liveStatus(id string, a host.Agent, now time.Time) string {
 	switch a.Agent {
 	case "claude":
 		return n.claudeStatus(id, a, now)
 	case "codex":
 		return n.codexStatus(id, a)
-	case cursorAgent, agyAgent:
+	case agyAgent:
+		return n.agyStatus(id, a, now)
+	case cursorAgent:
 		return n.workAgentStatus(a, now)
 	}
 	return a.AgentStatus
