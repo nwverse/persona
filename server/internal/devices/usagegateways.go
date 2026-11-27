@@ -70,9 +70,21 @@ type UsageSourceConfig struct {
 
 // DirectUsageSource is an installed contribution, separate from persisted manager settings.
 type DirectUsageSource struct {
-	Extension, Contribution, Name string
-	UpdatedAt                     time.Time
+	extension    string
+	contribution string
+	name         string
+	updatedAt    time.Time
 }
+
+// NewDirectUsageSource describes an installed direct usage contribution at a settings revision.
+func NewDirectUsageSource(extension, contribution, name string, updatedAt time.Time) DirectUsageSource {
+	return DirectUsageSource{extension: extension, contribution: contribution, name: name, updatedAt: updatedAt}
+}
+
+func (s DirectUsageSource) Extension() string    { return s.extension }
+func (s DirectUsageSource) Contribution() string { return s.contribution }
+func (s DirectUsageSource) Name() string         { return s.name }
+func (s DirectUsageSource) UpdatedAt() time.Time { return s.updatedAt }
 
 // UnmarshalJSON reads a source as manager.json has it, older type names included (usagesource.StoredType): a section
 // written before the relay type had its name keeps working, and the next edit of the source saves the new name.
@@ -102,7 +114,7 @@ func (c UsageConfig) interval() time.Duration {
 func (s UsageSourceConfig) fingerprint() string {
 	sum := sha256.Sum256([]byte(s.Type + "\x00" + s.URL + "\x00" + s.Key + "\x00" + s.Extension + "\x00" + s.Launcher))
 	if s.direct != nil {
-		sum = sha256.Sum256([]byte(s.ID + "\x00" + s.direct.UpdatedAt.Format(time.RFC3339Nano)))
+		sum = sha256.Sum256([]byte(s.ID + "\x00" + s.direct.updatedAt.Format(time.RFC3339Nano)))
 	}
 	return hex.EncodeToString(sum[:8])
 }
@@ -245,8 +257,8 @@ func (g *usageGateways) pollDue(ctx context.Context, now time.Time) {
 	if g.discoverDirect != nil {
 		for _, d := range g.discoverDirect() {
 			direct = append(direct, UsageSourceConfig{
-				ID: "extension:" + d.Extension + "/" + d.Contribution, Name: d.Name, Type: usagesource.TypeExtension,
-				Extension: d.Extension, direct: &d,
+				ID: "extension:" + d.extension + "/" + d.contribution, Name: d.name, Type: usagesource.TypeExtension,
+				Extension: d.extension, direct: &d,
 			})
 		}
 	}

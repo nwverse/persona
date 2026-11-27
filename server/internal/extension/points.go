@@ -149,6 +149,9 @@ type QuotaItem struct {
 	Hosts []string `json:"hosts,omitempty"`
 }
 
+// MethodUsageQuery is the RPC method an extension contributing usage answers (docs/extensions/extensions.md "Usage").
+const MethodUsageQuery = "usage.query"
+
 // UsageItem is a contribution to usage: a gateway whose accounts' subscription usage the plugin turns into the usage
 // bars' accounts and windows (docs/extensions/extensions.md "Usage").
 type UsageItem struct {

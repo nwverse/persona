@@ -56,12 +56,8 @@ func (h *Manager) UsageQuery(ctx context.Context, id, launcher string) (json.Raw
 	qid := hex.EncodeToString(b[:])
 	quotaQueries.Store(qid, &quotaQuery{extension: id, send: gw.send})
 	defer quotaQueries.Delete(qid)
-	params, _ := extension.Targeted(map[string]string{"query_id": qid, "base_url": root.String(), "tz": h.userTZName(), "lang": string(h.contextLang(ctx))}, item.ID)
-	var res json.RawMessage
-	if err := hp.proc.Call(ctx, "usage.query", params, &res); err != nil {
-		return nil, err
-	}
-	return res, nil
+	params := map[string]string{"query_id": qid, "base_url": root.String(), "tz": h.userTZName(), "lang": string(h.contextLang(ctx))}
+	return callUsageQuery(ctx, hp, params, item.ID)
 }
 
 // DirectUsageSources discovers installed and enabled contributions. Their settings version
@@ -77,9 +73,7 @@ func (h *Manager) DirectUsageSources() []devices.DirectUsageSource {
 		}
 		for _, item := range p.Manifest.Usages() {
 			if item.Direct {
-				out = append(out, devices.DirectUsageSource{
-					Extension: p.Record.ID, Contribution: item.ID, Name: item.Name, UpdatedAt: p.Record.UpdatedAt,
-				})
+				out = append(out, devices.NewDirectUsageSource(p.Record.ID, item.ID, item.Name, p.Record.UpdatedAt))
 			}
 		}
 	}
@@ -91,24 +85,31 @@ func (h *Manager) DirectUsageQuery(ctx context.Context, source devices.DirectUsa
 	if h == nil || h.extensions == nil {
 		return nil, errors.New("no extensions")
 	}
-	p := h.directUsageRegistry().SnapshotExact(source.Extension)
-	if p == nil || !p.Record.Enabled || p.Problem != "" || p.Manifest == nil || !p.Record.UpdatedAt.Equal(source.UpdatedAt) {
+	p := h.directUsageRegistry().SnapshotExact(source.Extension())
+	if p == nil || !p.Record.Enabled || p.Problem != "" || p.Manifest == nil || !p.Record.UpdatedAt.Equal(source.UpdatedAt()) {
 		return nil, errors.New("direct usage source is no longer active")
 	}
-	hp := h.extensions.get(source.Extension)
-	if hp == nil || hp.proc == nil || !hp.recordUpdatedAt.Equal(source.UpdatedAt) || !hp.proc.Ready() {
+	hp := h.extensions.get(source.Extension())
+	if hp == nil || hp.proc == nil || !hp.recordUpdatedAt.Equal(source.UpdatedAt()) || !hp.proc.Ready() {
 		return nil, errors.New("direct usage source is not ready")
 	}
 	for _, item := range p.Manifest.Usages() {
-		if !item.Direct || item.ID != source.Contribution {
+		if !item.Direct || item.ID != source.Contribution() {
 			continue
 		}
-		params, _ := extension.Targeted(map[string]string{"tz": h.userTZName(), "lang": string(h.contextLang(ctx))}, item.ID)
-		var res json.RawMessage
-		err := hp.proc.Call(ctx, "usage.query", params, &res)
-		return res, err
+		params := map[string]string{"tz": h.userTZName(), "lang": string(h.contextLang(ctx))}
+		return callUsageQuery(ctx, hp, params, item.ID)
 	}
 	return nil, errors.New("direct usage contribution is not enabled")
+}
+
+func callUsageQuery(ctx context.Context, hp *hubExtension, params map[string]string, contribution string) (json.RawMessage, error) {
+	targeted, _ := extension.Targeted(params, contribution)
+	var res json.RawMessage
+	if err := hp.proc.Call(ctx, extension.MethodUsageQuery, targeted, &res); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 func (h *Manager) directUsageRegistry() *extension.Registry {

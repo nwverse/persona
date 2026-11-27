@@ -598,7 +598,7 @@ func f64(v float64) *float64 { return &v }
 
 func TestDirectUsageDiscoveryNeedsNoSavedSource(t *testing.T) {
 	now := time.Now()
-	source := DirectUsageSource{Extension: "example-usage", Contribution: "pool", Name: "Direct pool", UpdatedAt: now}
+	source := NewDirectUsageSource("example-usage", "pool", "Direct pool", now)
 	installed := true
 	var g usageGateways
 	g.discoverDirect = func() []DirectUsageSource {
@@ -620,8 +620,8 @@ func TestDirectUsageDiscoveryNeedsNoSavedSource(t *testing.T) {
 	if rows := g.accounts(now); len(rows) != 1 || rows[0].Sources[0] != "Direct pool" || calls != 1 || len(g.config().Sources) != 0 {
 		t.Fatalf("rows=%+v calls=%d config=%+v", rows, calls, g.config())
 	}
-	source.UpdatedAt = now.Add(time.Second)
-	g.pollDue(context.Background(), source.UpdatedAt)
+	source = NewDirectUsageSource(source.Extension(), source.Contribution(), source.Name(), now.Add(time.Second))
+	g.pollDue(context.Background(), source.UpdatedAt())
 	if calls != 2 {
 		t.Fatal("changed settings must invalidate and repoll the source")
 	}
