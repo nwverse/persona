@@ -89,7 +89,7 @@ describe("New agent on a launcher that lists its permission modes", () => {
     await open("grok", "b");
     act(() => button("完全访问").click());
     expect(choices(providerField())).toEqual([["跟随启动器", "false"], ["完全访问", "true"]]);
-    expect(providerField()!.parentElement!.textContent).toContain("完全访问：改文件、跑命令都不问你");
+    expect(providerField()!.parentElement!.textContent).toContain("完全访问：编辑文件和执行命令均不会向你确认");
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ launcher: "grok", permissionMode: "bypassPermissions" });
     expect(localStorage.getItem("new.mode.mac")).toBe("plan");

@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/builtinext"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -189,8 +190,8 @@ func (ps *extensions) volcView(ctx context.Context, p *extension.Extension, v *E
 
 // volcMeetings is whether meetings transcribe with the extension now: the assistant's choice names it.
 func (h *Manager) volcMeetings(ctx context.Context) (on, known bool) {
-	var res assistantwire.MeetingTranscriptionChoice
-	if err := h.callAssistant(ctx, assistantwire.MethodMeetingTranscriptionChoice, assistantwire.MeetingTranscriptionChoose{}, &res); err != nil {
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.MeetingTranscriptionChoiceMethod, assistantwire.MeetingTranscriptionChoose{})
+	if err != nil {
 		return false, false
 	}
 	return res.Extension == volcRef(h.modules()), true
@@ -222,9 +223,8 @@ func (h *Manager) volcConfigWrite(ctx context.Context, p *extension.Extension, r
 	if on, known := h.volcMeetings(ctx); known && on == want {
 		return rest, changed, nil
 	}
-	var res assistantwire.MeetingTranscriptionChoice
-	err := h.callAssistant(ctx, assistantwire.MethodMeetingTranscriptionChoice,
-		assistantwire.MeetingTranscriptionChoose{Set: true, Use: want, Extension: volcRef(h.modules())}, &res)
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.MeetingTranscriptionChoiceMethod,
+		assistantwire.MeetingTranscriptionChoose{Set: true, Use: want, Extension: volcRef(h.modules())})
 	if err != nil {
 		return nil, false, err
 	}

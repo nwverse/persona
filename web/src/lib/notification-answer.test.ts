@@ -100,7 +100,7 @@ describe("页面收到 worker 的消息", () => {
     deliver(note("allow"));
     answers[0]!({ ok: false, error: "这个请求已经过期，回答没有送到" });
     await settle();
-    expect(posted).toEqual([expect.objectContaining({ title: "没能允许", body: "这个请求已经过期，回答没有送到", url: "/s/m/a" })]);
+    expect(posted).toEqual([expect.objectContaining({ title: "无法允许", body: "这个请求已经过期，回答没有送到", url: "/s/m/a" })]);
     expect(toasts).toEqual([]);
   });
 

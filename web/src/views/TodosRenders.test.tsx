@@ -249,7 +249,7 @@ describe("todo rows on a sessions push", () => {
     await load([reported]);
     expect(title()).toContain("刚做完");
     await load([live]);
-    expect(title()).toContain("已交付·待看");
+    expect(title()).toContain("已交付 · 待看");
     await load([reported, live]);
     expect(title()).toContain("刚做完");
   });
