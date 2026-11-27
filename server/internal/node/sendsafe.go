@@ -542,8 +542,8 @@ func deliveredOf(e *rpc.Error) string {
 	return d.Delivered
 }
 
-// Herdr resumes offline sessions in a new pane, and so does Orca (#5548, #17044) once nothing has the session open: a
-// Claude session once its last pane runs no agent (suspended, in the background) and start's openElsewhereRefusal finds
+// Herdr resumes offline sessions in a new pane, and so does Orca (all but Claude Code since #17044) once nothing has
+// the session open: a Claude session once its last pane runs no agent (suspended, in the background) and start's openElsewhereRefusal finds
 // no live claude on it; a Codex thread once no process holds its rollout (codex_resume.go); a TRAE CLI session once no
 // pane runs it.
 const (
@@ -584,7 +584,7 @@ func (n *Node) notRunningRefusal(ctx context.Context, id string) error {
 }
 
 // orcaContinues: Orca can continue session id once its agent is gone, in a new terminal as herdr does: a Claude
-// session (its own <id>.jsonl), a Codex thread (its rollout) or a TRAE CLI session (#5548, #17044). A pi session is its
+// session (its own <id>.jsonl), and since #17044 a Codex thread (its rollout) or a TRAE CLI session. A pi session is its
 // runtime's, resumed through the runtime's resume_argv (pi.go); an omp session is not resumed in Orca (ompresume.go).
 func (n *Node) orcaContinues(id string) bool {
 	return n.claudeTranscript(id, true) != "" || n.codexPath(id) != "" || n.traexPath(id) != ""
@@ -600,7 +600,7 @@ func notRunningOn(ctx context.Context, engine string) error {
 // resumeEngineRefusal is a resume's check of the start's engine (resumeOtherWith): one that opens terminals (herdr,
 // Orca, Tern) brings the session back in a new one, or in the shell its agent left (stopped.go). The pane the agent was
 // last seen in does not stop it as it stops a message on Orca (notRunningRefusal): a stopped agent leaves its shell
-// there (#4754), and a writer still holding the conversation (a Codex suspended there, holding its rollout) is kept out
+// there (stopped.go), and a writer still holding the conversation (a Codex suspended there, holding its rollout) is kept out
 // by the conversation's own check before this one (codexHeldNow). An engine that cannot start sessions refuses as
 // notRunningRefusal does.
 func (n *Node) resumeEngineRefusal(ctx context.Context, id string) error {

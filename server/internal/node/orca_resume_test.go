@@ -43,7 +43,7 @@ func orcaCodexNode(t *testing.T, launcher string) (*Node, *orcarttest.Fake, *fak
 	fixtureCodexIndex(n.codices)
 	n.configureCodex(proto.CodexConfig{})
 	o.SetWorktrees(orcarttest.Worktree("wt-proj", cwd, "refs/heads/main"))
-	// The terminal the stopped Codex ran in, its shell in front again: a resume does not stop at it (#4754).
+	// The terminal the stopped Codex ran in, its shell in front again: a resume does not stop at it (stopped.go).
 	o.SetTerminals(orcarttest.Terminal("term_old", "tabOld", "leafOld", "wt-proj", cwd, "refs/heads/main", "zsh", ""))
 	n.state.put(startThread, sessionState{Launcher: launcher, Cwd: cwd, Pane: "orca:tabOld:leafOld", StartedAt: time.Now().Add(-time.Hour)})
 	n.mu.Lock()
@@ -200,7 +200,7 @@ func TestOrcaCodexResumeRefusesWhileAWriterHoldsIt(t *testing.T) {
 	}
 }
 
-// The assistant's explicit resume (session.start with resume_automatic, #8099) of a Codex the task closer stopped
+// The assistant's explicit resume (session.start with resume_automatic, assistant agent_resume.go) of a Codex the task closer stopped
 // (task_completed) goes the same way on Orca: a new terminal, the launcher's resume command with the text.
 func TestOrcaSupervisorResumesAStoppedCodex(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"cx": {"codex"}})

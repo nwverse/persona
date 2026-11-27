@@ -91,7 +91,7 @@ func TestStartOpensInTheNamedHost(t *testing.T) {
 		t.Errorf("default start: herdr asked %d, orca asked %d (%v)", hh.asked(), oh.asked(), err)
 	}
 	// A TRAE CLI resume named into Orca opens there as on herdr (#17044), and so does a Claude resume of a session this
-	// computer has a record of (#5548).
+	// computer has a record of.
 	const id = "0d000000-0000-4000-8000-0000000000ee"
 	n.state.put(id, sessionState{Launcher: "claude", Cwd: t.TempDir()})
 	if _, err := n.start(withStartHost(context.Background(), "orca"), t.TempDir(), traexAgent, "", id, "", "", "", "", "", ""); isRefusal(err, "orca_resume") || oh.asked() != 2 || hh.asked() != 1 {

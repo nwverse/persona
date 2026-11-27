@@ -237,7 +237,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		}
 		// A claude still alive on the session (Claude's desktop app, another terminal, suspended there) refuses: two
 		// writers would corrupt its transcript. Otherwise the session resumes in the start's host, Orca like herdr: a
-		// terminal opened in the session's worktree, a Claude session (#5548) and a TRAE CLI one (#17044) alike; a Codex
+		// terminal opened in the session's worktree, a Claude session and, since #17044, a TRAE CLI one alike; a Codex
 		// thread was resumed above (codex_resume.go), and a TRAE CLI that still runs in a pane is the running agent.
 		if r := n.openElsewhereRefusal(resume); r != nil { // open in Claude's desktop app or a terminal (openelsewhere.go)
 			return nil, r
