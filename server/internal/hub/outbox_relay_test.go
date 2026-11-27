@@ -114,8 +114,8 @@ func TestHandedOverIsBounded(t *testing.T) {
 	for i := range handedOverMost + 10 {
 		s.first(string(rune('A'+i%26))+time.Duration(i).String(), now)
 	}
-	if len(s.order) > handedOverMost || len(s.at) > handedOverMost {
-		t.Fatalf("kept %d / %d", len(s.order), len(s.at))
+	if s.order.Len() > handedOverMost || len(s.entries) > handedOverMost || s.order.Len() != len(s.entries) {
+		t.Fatalf("kept %d / %d", s.order.Len(), len(s.entries))
 	}
 }
 
@@ -490,5 +490,148 @@ func TestPauseBetweenHandOverClaimAndFailedDeliveryDoesNotStrandItem(t *testing.
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("retried push was stranded after pause between claim and failed delivery")
+	}
+}
+
+func TestSeenItemsForgetAndReinsertDoesNotEvictFreshKey(t *testing.T) {
+	var s seenItems
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	if !s.first("anchor", now) {
+		t.Fatal("anchor should be new")
+	}
+	// Item fails once and is forgotten, then retries and succeeds shortly after.
+	// If forget leaves a stale slot in order, capacity eviction of the stale slot
+	// deletes the freshly accepted key from the map.
+	if !s.first("flaky", now) {
+		t.Fatal("flaky initial attempt should be new")
+	}
+	s.forget("flaky")
+	later := now.Add(time.Minute)
+	if !s.first("flaky", later) {
+		t.Fatal("flaky retry after forget should be new")
+	}
+
+	// Fill capacity and push eviction past anchor and the stale forgotten slot.
+	for i := range handedOverMost - 1 {
+		key := "filler-" + time.Duration(i).String()
+		if !s.first(key, later) {
+			t.Fatalf("%s should be new", key)
+		}
+	}
+	// Freshly delivered "flaky" must still be deduplicated.
+	if s.first("flaky", later) {
+		t.Fatal("freshly accepted key was evicted by its stale forgotten order entry")
+	}
+	if s.order.Len() != len(s.entries) || len(s.entries) > handedOverMost {
+		t.Fatalf("invariant broken: order=%d entries=%d", s.order.Len(), len(s.entries))
+	}
+}
+
+func TestSeenItemsRepeatedForgetsDoNotStarveLiveEntries(t *testing.T) {
+	var s seenItems
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	if !s.first("anchor", now) || !s.first("live", now) {
+		t.Fatal("initial keys should be new")
+	}
+	for range handedOverMost {
+		if !s.first("retrying", now) {
+			t.Fatal("forgotten retrying key should be accepted again")
+		}
+		s.forget("retrying")
+	}
+	if s.first("live", now) {
+		t.Fatal("repeated forgets evicted an unrelated live entry")
+	}
+	if s.order.Len() != len(s.entries) || len(s.entries) != 2 {
+		t.Fatalf("invariant broken: order=%d entries=%d, want 2", s.order.Len(), len(s.entries))
+	}
+}
+
+func TestSeenItemsDuplicateLookupAtCapacityDoesNotEvict(t *testing.T) {
+	var s seenItems
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	for i := range handedOverMost {
+		key := "k-" + time.Duration(i).String()
+		if !s.first(key, now) {
+			t.Fatalf("%s should be new", key)
+		}
+	}
+	// Checking an already-seen key at capacity must not evict the oldest live entry.
+	newest := "k-" + time.Duration(handedOverMost-1).String()
+	if s.first(newest, now) {
+		t.Fatal("newest should already be seen")
+	}
+	if s.first("k-0s", now) {
+		t.Fatal("duplicate lookup at capacity evicted oldest live entry")
+	}
+	if s.order.Len() != len(s.entries) || len(s.entries) != handedOverMost {
+		t.Fatalf("invariant broken: order=%d entries=%d, want %d", s.order.Len(), len(s.entries), handedOverMost)
+	}
+}
+
+func TestSeenItemsForgetAndReinsertDoesNotStallExpiration(t *testing.T) {
+	var s seenItems
+	t0 := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	if !s.first("anchor", t0) {
+		t.Fatal("anchor should be new")
+	}
+	if !s.first("reused", t0.Add(time.Minute)) {
+		t.Fatal("reused first try should be new")
+	}
+	s.forget("reused")
+	for i := range 100 {
+		key := "old-" + time.Duration(i).String()
+		if !s.first(key, t0.Add(2*time.Minute)) {
+			t.Fatalf("%s should be new", key)
+		}
+	}
+	// Re-insert "reused" near the end of the original TTL window.
+	tReused := t0.Add(handedOverFor - 10*time.Minute)
+	if !s.first("reused", tReused) {
+		t.Fatal("reused retry should be new")
+	}
+	// After anchor and all 100 old-* keys have expired, "reused" is still fresh.
+	// Inserting handedOverMost-1 fresh keys brings live entries to exactly handedOverMost.
+	tLate := t0.Add(handedOverFor + 5*time.Minute)
+	for i := range handedOverMost - 1 {
+		key := "fresh-" + time.Duration(i).String()
+		if !s.first(key, tLate) {
+			t.Fatalf("%s should be new", key)
+		}
+	}
+	if s.first("reused", tLate) {
+		t.Fatal("freshly reinserted key was evicted because expired entries stalled behind its ghost")
+	}
+	if s.first("fresh-0s", tLate) {
+		t.Fatal("fresh entry was evicted because expired entries stalled behind a forgotten ghost")
+	}
+	if s.order.Len() != len(s.entries) || len(s.entries) != handedOverMost {
+		t.Fatalf("invariant broken: order=%d entries=%d, want %d", s.order.Len(), len(s.entries), handedOverMost)
+	}
+}
+
+func TestSeenItemsZeroValueForgetAndNonMonotonicExpiry(t *testing.T) {
+	var s seenItems
+	// Zero-value forget must be a safe no-op.
+	s.forget("missing")
+
+	t0 := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	// Front has a later timestamp than a subsequent entry (e.g., clock stepped backward).
+	if !s.first("front-newer", t0.Add(10*time.Minute)) {
+		t.Fatal("front-newer should be new")
+	}
+	if !s.first("behind-older", t0) {
+		t.Fatal("behind-older should be new")
+	}
+	// At t0 + handedOverFor + 1m, front-newer is still unexpired, while behind-older has expired.
+	tCheck := t0.Add(handedOverFor + time.Minute)
+	if !s.first("behind-older", tCheck) {
+		t.Fatal("expired key behind an unexpired front should be accepted again")
+	}
+	if s.first("behind-older", tCheck) {
+		t.Fatal("re-accepted key should now be deduplicated")
+	}
+	if s.order.Len() != len(s.entries) || len(s.entries) != 2 {
+		t.Fatalf("invariant broken: order=%d entries=%d, want 2", s.order.Len(), len(s.entries))
 	}
 }

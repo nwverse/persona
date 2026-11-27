@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -420,6 +421,13 @@ func (h *Hub) fleetLiveOf() (FleetState, FleetStats, string) {
 // write or two clocks a little apart.
 const cardAnswerGrace = 30 * time.Second
 
+// callAssistantAsIs uses the caller's deadline, if any, for a typed assistant call.
+func callAssistantAsIs[P, R any](ctx context.Context, a assistantRemote, method buswire.Method[P, R], params P) (R, error) {
+	caller := managerBusCaller{id: a.to(ctx), call: a.h.callBusAsIs}
+	result, err := buswire.Call(ctx, caller, method, params)
+	return result, assistantOffline(err)
+}
+
 // waitInteraction asks the user on the phone for one of the hub's own features (a mail send, Cua's apps, ego's
 // scripts, persona_settings): the manager shows the card and waits for its answer (fleet.ask). Without the manager
 // nothing can be asked: a dismiss.
@@ -437,8 +445,9 @@ func (h *Hub) waitInteraction(ctx context.Context, ix proto.Interaction) (proto.
 		ctx, cancel = context.WithDeadline(ctx, ix.ExpiresAt.Add(cardAnswerGrace))
 		defer cancel()
 	}
-	var r proto.Resolution
-	if err := h.asstOf(h.machineOwner(ix.MachineID)).callAsIs(ctx, assistantwire.MethodFleetAsk, map[string]any{"interaction": ix}, &r); err != nil {
+	r, err := callAssistantAsIs(ctx, h.asstOf(h.machineOwner(ix.MachineID)), assistantwire.FleetAskMethod,
+		assistantwire.FleetAskParams{Interaction: ix})
+	if err != nil {
 		h.logf("[%s] ask %s: %v", ix.MachineID, ix.ToolName, err)
 		return proto.Resolution{Dismiss: true}, nil
 	}
