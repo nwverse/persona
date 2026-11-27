@@ -12,6 +12,42 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func (n *Node) claudeModelAliasSettings(ctx context.Context, launcher, cwd, settings string, aliases proto.ModelAliases) (string, error) {
+	if len(aliases) == 0 {
+		return settings, nil
+	}
+	if err := aliases.Validate(); err != nil {
+		return "", err
+	}
+	if settings == "" {
+		if _, managed := n.managedLauncher(launcher); managed {
+			return "", errors.New("cannot prepare managed Claude settings for model_aliases")
+		}
+		settings = n.launcherOwnSettings(ctx, launcher)
+	}
+	merged := map[string]any{}
+	if settings != "" {
+		var err error
+		merged, err = readLauncherSettings(settings, cwd, n.home)
+		if err != nil {
+			return "", errors.New("cannot read Claude settings for model_aliases")
+		}
+	}
+	env, _ := merged["env"].(map[string]any)
+	if env == nil {
+		env = map[string]any{}
+	}
+	for key, model := range aliases.Env() {
+		env[key] = model
+	}
+	merged["env"] = env
+	raw, err := json.Marshal(merged)
+	if err != nil {
+		return "", errors.New("cannot encode Claude settings for model_aliases")
+	}
+	return writeSettings(n.dir, "model-aliases-"+newUUID()+".json", raw)
+}
+
 // A launcher alias can bring its own settings (`alias work="claude --settings ~/.claude/settings.work.json …"`, with
 // the gateway, its token and the model in that file's env). Every claude start Persona makes adds its own --settings
 // after the launcher's words (the hooks that bring questions, permission requests and turn ends to the phone), and

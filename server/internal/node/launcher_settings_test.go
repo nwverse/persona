@@ -13,6 +13,34 @@ import (
 	"time"
 )
 
+func TestModelAliasSettingsArePrivateAndIsolated(t *testing.T) {
+	home := t.TempDir()
+	n := &Node{home: home, dir: filepath.Join(home, ".persona")}
+	base := filepath.Join(home, "base.json")
+	writeFile(t, base, `{"model":"main","env":{"ANTHROPIC_DEFAULT_SONNET_MODEL":"original","ANTHROPIC_DEFAULT_HAIKU_MODEL":"default-fast","EXAMPLE_AUTH":"test-value"}}`)
+	start := func(model string) string {
+		t.Helper()
+		path, err := n.claudeModelAliasSettings(t.Context(), "claude", home, base, proto.ModelAliases{"sonnet_model": model})
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("settings must be private: %v", err)
+		}
+		settings := readSettings(t, path)
+		env, _ := settings["env"].(map[string]any)
+		if settings["model"] != "main" || env["ANTHROPIC_DEFAULT_SONNET_MODEL"] != model ||
+			env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "default-fast" || env["EXAMPLE_AUTH"] != "test-value" {
+			t.Fatal("override lost inherited settings or modified the main model")
+		}
+		return path
+	}
+	if start("vendor/one") == start("vendor/two") || readSettings(t, base)["env"].(map[string]any)["ANTHROPIC_DEFAULT_SONNET_MODEL"] != "original" {
+		t.Fatal("a start overwrote shared settings")
+	}
+}
+
 // An alias's own --settings is found as the shell would pass it: either form, the last of several, ~ and $HOME
 // left for the node to expand. One without, or a function, has none.
 func TestAliasOwnSettings(t *testing.T) {

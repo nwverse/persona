@@ -934,69 +934,70 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.codexTakeoverCall(ctx, method, params)
 	}
 	var p struct {
-		Path                    string        `json:"path"`
-		SessionID               string        `json:"session_id"`
-		CreationID              string        `json:"creation_id"`
-		Incarnation             string        `json:"incarnation"`
-		OpID                    string        `json:"op_id"`
-		CodexEffortFallback     string        `json:"codex_effort_fallback"`
-		TaskTerminalToken       string        `json:"task_terminal_token"`
-		Cwd                     string        `json:"cwd"`
-		Launcher                string        `json:"launcher"`
-		RequireLauncher         bool          `json:"require_launcher"`
-		AgentType               string        `json:"agent_type"`
-		Model                   string        `json:"model"`
-		ModelFingerprint        string        `json:"model_fingerprint"`
-		SupervisionInstructions *string       `json:"supervision_instructions"`
-		ConfigDir               string        `json:"config_dir"`
-		Prompt                  string        `json:"prompt"`
-		ResumeSessionID         string        `json:"resume_session_id"`
-		ResumeAutomatic         bool          `json:"resume_automatic"`
-		A2AWakeOnSend           bool          `json:"a2a_wake_on_send"`
-		ResumeOutsideHealth     bool          `json:"resume_outside_health"` // session.start: an extension's resume the hub does not list (resumeOutsideHealth)
-		Host                    string        `json:"host"`                  // session.start: the enabled host to open in ("" the default host, #2576)
-		TaskID                  string        `json:"task_id"`
-		WorkspaceID             string        `json:"workspace_id"`
-		WorkspaceLabel          string        `json:"workspace_label"`
-		ReopenWorktreeWorkspace bool          `json:"reopen_worktree_workspace"`
-		NameHint                string        `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
-		Text                    string        `json:"text"`
-		SkillOwner              string        `json:"skill_owner"` // manager-owned identity for explicit skill selections
-		Images                  []proto.Image `json:"images"`
-		PreKeys                 []string      `json:"pre_keys"`
-		Keys                    []string      `json:"keys"`
-		Lines                   int           `json:"lines"`
-		BeforeSeq               int           `json:"before_seq"`
-		AfterSeq                *int          `json:"after_seq"`
-		Limit                   int           `json:"limit"`
-		SinceSeq                int           `json:"since_seq"`
-		Source                  string        `json:"source"`
-		Format                  string        `json:"format"`
-		Turns                   int           `json:"turns"`
-		LazyImages              bool          `json:"lazy_images"`
-		UserInputs              bool          `json:"user_inputs"`
-		MetaOnly                bool          `json:"meta_only"`
-		StrictRead              bool          `json:"strict_read"`
-		FoldWork                bool          `json:"fold_work"`
-		FromSeq                 int           `json:"from_seq"`
-		ThroughSeq              int           `json:"through_seq"`
-		Name                    string        `json:"name"`
-		Pane                    string        `json:"pane"`      // panes.*: a pane the host lists
-		InPane                  string        `json:"in_pane"`   // session.start: a failed start's kept tab to start in (startremedy.go)
-		Direction               string        `json:"direction"` // panes.split: right or down
-		TabID                   string        `json:"tab_id"`    // tabs.*, guarded session tab rename
-		Label                   string        `json:"label"`     // tabs.rename
-		Kind                    string        `json:"kind"`      // tabs.*, panes.git: the host kind ("" the engine's)
-		Op                      string        `json:"op"`        // panes.git: fetch, pull or push
-		Action                  string        `json:"action"`    // launchers.repair: which of its fixed repairs
-		TabName                 *string       `json:"tab_name"`
-		ExpectedTabName         string        `json:"expected_tab_name"` // guarded session tab rename from automatic naming
-		TZ                      string        `json:"tz"`                // the user's time zone
-		DesktopApp              string        `json:"desktop_app"`
-		DesktopProjectID        string        `json:"desktop_project_id"`
-		CreateDirectory         bool          `json:"create_directory"`
-		IdempotencyKey          string        `json:"idempotency_key"`
-		BoundDirectories        []string      `json:"bound_directories"`
+		Path                    string             `json:"path"`
+		SessionID               string             `json:"session_id"`
+		CreationID              string             `json:"creation_id"`
+		Incarnation             string             `json:"incarnation"`
+		OpID                    string             `json:"op_id"`
+		CodexEffortFallback     string             `json:"codex_effort_fallback"`
+		TaskTerminalToken       string             `json:"task_terminal_token"`
+		Cwd                     string             `json:"cwd"`
+		Launcher                string             `json:"launcher"`
+		RequireLauncher         bool               `json:"require_launcher"`
+		AgentType               string             `json:"agent_type"`
+		Model                   string             `json:"model"`
+		ModelAliases            proto.ModelAliases `json:"model_aliases"`
+		ModelFingerprint        string             `json:"model_fingerprint"`
+		SupervisionInstructions *string            `json:"supervision_instructions"`
+		ConfigDir               string             `json:"config_dir"`
+		Prompt                  string             `json:"prompt"`
+		ResumeSessionID         string             `json:"resume_session_id"`
+		ResumeAutomatic         bool               `json:"resume_automatic"`
+		A2AWakeOnSend           bool               `json:"a2a_wake_on_send"`
+		ResumeOutsideHealth     bool               `json:"resume_outside_health"` // session.start: an extension's resume the hub does not list (resumeOutsideHealth)
+		Host                    string             `json:"host"`                  // session.start: the enabled host to open in ("" the default host, #2576)
+		TaskID                  string             `json:"task_id"`
+		WorkspaceID             string             `json:"workspace_id"`
+		WorkspaceLabel          string             `json:"workspace_label"`
+		ReopenWorktreeWorkspace bool               `json:"reopen_worktree_workspace"`
+		NameHint                string             `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
+		Text                    string             `json:"text"`
+		SkillOwner              string             `json:"skill_owner"` // manager-owned identity for explicit skill selections
+		Images                  []proto.Image      `json:"images"`
+		PreKeys                 []string           `json:"pre_keys"`
+		Keys                    []string           `json:"keys"`
+		Lines                   int                `json:"lines"`
+		BeforeSeq               int                `json:"before_seq"`
+		AfterSeq                *int               `json:"after_seq"`
+		Limit                   int                `json:"limit"`
+		SinceSeq                int                `json:"since_seq"`
+		Source                  string             `json:"source"`
+		Format                  string             `json:"format"`
+		Turns                   int                `json:"turns"`
+		LazyImages              bool               `json:"lazy_images"`
+		UserInputs              bool               `json:"user_inputs"`
+		MetaOnly                bool               `json:"meta_only"`
+		StrictRead              bool               `json:"strict_read"`
+		FoldWork                bool               `json:"fold_work"`
+		FromSeq                 int                `json:"from_seq"`
+		ThroughSeq              int                `json:"through_seq"`
+		Name                    string             `json:"name"`
+		Pane                    string             `json:"pane"`      // panes.*: a pane the host lists
+		InPane                  string             `json:"in_pane"`   // session.start: a failed start's kept tab to start in (startremedy.go)
+		Direction               string             `json:"direction"` // panes.split: right or down
+		TabID                   string             `json:"tab_id"`    // tabs.*, guarded session tab rename
+		Label                   string             `json:"label"`     // tabs.rename
+		Kind                    string             `json:"kind"`      // tabs.*, panes.git: the host kind ("" the engine's)
+		Op                      string             `json:"op"`        // panes.git: fetch, pull or push
+		Action                  string             `json:"action"`    // launchers.repair: which of its fixed repairs
+		TabName                 *string            `json:"tab_name"`
+		ExpectedTabName         string             `json:"expected_tab_name"` // guarded session tab rename from automatic naming
+		TZ                      string             `json:"tz"`                // the user's time zone
+		DesktopApp              string             `json:"desktop_app"`
+		DesktopProjectID        string             `json:"desktop_project_id"`
+		CreateDirectory         bool               `json:"create_directory"`
+		IdempotencyKey          string             `json:"idempotency_key"`
+		BoundDirectories        []string           `json:"bound_directories"`
 		// HTTP is a quota plugin's request to send to a launcher's gateway (launchers.http); nil asks for the gateway.
 		HTTP             *quota.Request                `json:"http,omitempty"`
 		Async            bool                          `json:"async"`
@@ -1738,6 +1739,19 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, p.Host, p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		var modelAliases *proto.ModelAliases
+		if err := p.ModelAliases.Validate(); err != nil {
+			return nil, err
+		}
+		if len(p.ModelAliases) != 0 {
+			_, onRuntime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]
+			runtime, _ := n.startRuntimeIn(withStartHost(ctx, p.Host), p.Launcher)
+			if p.ResumeSessionID != "" || onRuntime || runtime != nil || isDesktopLauncher(p.Launcher) ||
+				isCodexAppLauncher(p.Launcher) || n.startAgentType(p.Launcher, p.AgentType) != "claude" {
+				return nil, refusal("model_aliases_unsupported", "model_aliases require a new Claude Code terminal session", nil)
+			}
+			modelAliases = &p.ModelAliases
+		}
 		if p.ResumeSessionID == "" && p.OpID != "" {
 			existing, finishOp, err := n.beginStartOp(ctx, p.OpID)
 			if err != nil {
@@ -1977,12 +1991,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		// Only Claude Code has a session id before it starts; another agent picks its own (start_agent.go).
 		asyncAgent := n.startAgentType(p.Launcher, p.AgentType)
 		if p.Async && p.ResumeSessionID == "" && asyncAgent == "claude" {
-			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace})
+			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{ModelAliases: modelAliases, CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace})
 			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 		}
 		r := resumed{cwd: p.Cwd, launcher: p.Launcher, mode: p.PermissionMode, effort: p.Effort, tab: tab,
 			taskID: p.TaskID, workspaceID: p.WorkspaceID, workspaceLabel: p.WorkspaceLabel,
-			execution: modelExecution{CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace}}
+			execution: modelExecution{ModelAliases: modelAliases, CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace}}
 		if p.ResumeSessionID != "" {
 			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
