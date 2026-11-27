@@ -79,7 +79,8 @@ func TestReportTaskRuntimeSurvivesToggleAndReload(t *testing.T) {
 	}
 	for _, on := range []bool{false, true} {
 		setSettings(t, s, func(v *Settings) { v.TodosV2 = boolPtr(on) })
-		s = newServiceOn(t, f, st)
+		// Start without applying the fake hub's default settings over the stored toggle.
+		s = New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)})
 		if err := s.ensureTodosLoaded(t.Context()); err != nil {
 			t.Fatal(err)
 		}
