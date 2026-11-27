@@ -1792,9 +1792,12 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // reloads, #16214), or keeps it when the read failed: its unanswered last turn may have a reply the page has not read
   // yet, and Retry there sent the question again (#16286).
   const stale = !detached && (!live.firstRead || Boolean(live.error));
+  const hasOwnPendingInteraction = (session?.pending_interactions ?? 0) > 0 ||
+    interactions.some((ix) => ix.machine_id === mid && ix.session_id === sid);
+  const waitingOnUser = !detached && (state === "needs_you" || hasOwnPendingInteraction);
   const allLines = useMemo(
-    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale })),
-    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale],
+    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale, needsYou: waitingOnUser })),
+    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale, waitingOnUser],
   );
   lastLines.current = allLines;
   // The timeline split and the assistant display use the same history boundary: one feed walk per items change.
@@ -2289,7 +2292,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     await deliver(resolved.payload, uuid());
     return true;
   }, [deliver, mid, sid]);
-  const emptyAction = canCompose && !working && !gate.blocked && !stoppedLine ? retryEmpty : undefined;
+  const emptyAction = canCompose && !working && !waitingOnUser && !gate.blocked && !stoppedLine ? retryEmpty : undefined;
   // the failure notice "Retry" was pressed on: kept here, not in the note, so it stays gone while the session goes through
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();

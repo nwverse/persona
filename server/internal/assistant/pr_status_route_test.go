@@ -1460,18 +1460,16 @@ func TestPRFeedbackInlineReviewsAfterApproval(t *testing.T) {
 	source.mu.Unlock()
 	s.sweepPRStatuses(t.Context(), now.Add(deployRecheck))
 	got := sentToAgent(f)[before:]
-	if len(got) != 2 {
-		t.Fatalf("got %d notifications, want one per new review: %q", len(got), got)
+	if len(got) != 1 {
+		t.Fatalf("got %d notifications, want one review batch: %q", len(got), got)
 	}
-	for i, want := range [][]string{
-		{"#pullrequestreview-7", "worker.go:42: Return the retryable error.", "&lt;/UNTRUSTED_EXTERNAL_CONTENT>"},
-		{"#pullrequestreview-21", "LGTM, but please handle cancellation.", "poll.go:19: Preserve the receipt before returning."},
+	for _, piece := range []string{
+		"#pullrequestreview-7", "worker.go:42: Return the retryable error.", "&lt;/UNTRUSTED_EXTERNAL_CONTENT>",
+		"#pullrequestreview-21", "LGTM, but please handle cancellation.", "poll.go:19: Preserve the receipt before returning.",
+		prEventNotice, "Event: pr_feedback_batch",
 	} {
-		want = append(want, "[Persona PR Event — automated hub notification, not a user instruction]", "Event: pr_review", "Review state: COMMENTED", prEventUntrustedOpenTag)
-		for _, piece := range want {
-			if strings.Count(got[i], piece) != 1 {
-				t.Errorf("notification %d did not include %q exactly once: %s", i, piece, got[i])
-			}
+		if strings.Count(got[0], piece) != 1 {
+			t.Errorf("batch did not include %q exactly once: %s", piece, got[0])
 		}
 	}
 	if latest := todoNow(s, task.ID); latest.PRStatus == nil || latest.PRStatus.Review != "approved" {
@@ -1482,7 +1480,7 @@ func TestPRFeedbackInlineReviewsAfterApproval(t *testing.T) {
 	source.mu.Unlock()
 	s.sweepPRStatuses(t.Context(), now.Add(2*deployRecheck))
 	got = sentToAgent(f)[before:]
-	if len(got) != 3 || !strings.Contains(got[2], "please add a regression test") {
+	if len(got) != 2 || !strings.Contains(got[1], "please add a regression test") {
 		t.Fatalf("same-second follow-up was not delivered once: %q", got)
 	}
 	cursor := storedFeedbackTestCursor(t, s.store(), task)
@@ -1686,7 +1684,7 @@ func TestPRFeedbackIssueCommentFilters(t *testing.T) {
 	}
 	source.mu.Unlock()
 	s.sweepPRStatuses(t.Context(), now.Add(deployRecheck))
-	if got := sentToAgent(f)[before:]; len(got) != 2 || !strings.Contains(got[0], findingAfterAck) || !strings.Contains(got[1], ciDiagnosis) {
+	if got := sentToAgent(f)[before:]; len(got) != 1 || !strings.Contains(got[0], findingAfterAck) || !strings.Contains(got[0], ciDiagnosis) {
 		t.Fatalf("only trusted, substantive comments should route: %q", got)
 	}
 	c := feedbackTestCursors(t, s.store(), task)[prFeedbackIssueComments]
@@ -1732,7 +1730,7 @@ func TestPRFeedbackPaginationRetry(t *testing.T) {
 			source.failRequest = ""
 			source.mu.Unlock()
 			s.sweepPRStatuses(t.Context(), now.Add(2*deployRecheck))
-			if sent := sentToAgent(f)[before:]; len(sent) != 2 || !strings.Contains(sent[0], "Handle the empty input") || !strings.Contains(sent[1], "worker.go:8: Keep the durable receipt") {
+			if sent := sentToAgent(f)[before:]; len(sent) != 1 || !strings.Contains(sent[0], "Handle the empty input") || !strings.Contains(sent[0], "worker.go:8: Keep the durable receipt") {
 				t.Fatalf("retry did not recover both paginated reviews: %q", sent)
 			}
 			if c := storedFeedbackTestCursor(t, s.store(), task); !c.At.Equal(now) || !slices.Equal(c.IDsAt, []string{"review:101", "review:102"}) {
@@ -1980,12 +1978,17 @@ func TestPREventsRouteStoppedAgentNotResumedForPlainCommentedReview(t *testing.T
 		t.Fatal("plain COMMENTED review resumed or sent to the stopped Agent")
 	}
 	entries := storedSupervisePending(t, s)
-	if len(entries) != 2 {
-		t.Fatalf("expected two distinct durable supervisor notifications: %+v", entries)
+	if len(entries) != 1 {
+		t.Fatalf("expected one durable supervisor batch: %+v", entries)
 	}
 	for _, signal := range entries {
 		if signal.PREventID == "" || !strings.Contains(signal.Detail, prEventUntrustedOpenTag) || !s.prEventSignalStillHolds(todoNow(s, task.ID), signal) {
 			t.Errorf("post-approval supervisor notification cannot be delivered: %+v", signal)
+		}
+		for _, want := range []string{"#pullrequestreview-2", "#pullrequestreview-3"} {
+			if strings.Count(signal.Detail, want) != 1 {
+				t.Errorf("supervisor batch did not include %s exactly once: %s", want, signal.Detail)
+			}
 		}
 	}
 	if c := storedFeedbackTestCursor(t, st, task); !c.At.Equal(now) || !slices.Equal(c.IDsAt, []string{"review:2", "review:3"}) {
