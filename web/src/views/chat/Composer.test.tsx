@@ -503,6 +503,7 @@ describe("Composer image object URLs", () => {
   it("are freed for a picked file whose read finishes after the box unmounted", async () => {
     render("a");
     await pickFile(new File(["png"], "b.png", { type: "image/png" }));
+    await until(() => expect(reads).toHaveLength(1));
     act(() => root.unmount());
     await settle(0);
     expect(revoke).toHaveBeenCalledWith("blob:test/1");
