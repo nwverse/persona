@@ -477,18 +477,19 @@ func (s *Service) directionOwners() *treeBuild {
 
 // treeBuild is one build of the tree: the to-dos placed, the sessions by machine and id, and what is nested where.
 type treeBuild struct {
-	s        *Service
-	main     string
-	leads    []string
-	todosV2  bool
-	todos    map[string]listedTodo
-	placed   map[string]todoTriage
-	views    map[string]assistantwire.TodoSummary
-	carried  map[string]bool    // open PartOf steps already rolled up onto an open top-level parent
-	heldOnly map[[2]string]bool // canonical (machine, session) waiting only on Delegating cards
-	open     []string           // the ids the To-dos page counts open, by id
-	reached  map[string]bool
-	now      time.Time
+	s             *Service
+	main          string
+	leads         []string
+	todosV2       bool
+	effectiveDirs map[string]string // todos_v2 effective direction_id by todo id
+	todos         map[string]listedTodo
+	placed        map[string]todoTriage
+	views         map[string]assistantwire.TodoSummary
+	carried       map[string]bool    // open PartOf steps already rolled up onto an open top-level parent
+	heldOnly      map[[2]string]bool // canonical (machine, session) waiting only on Delegating cards
+	open          []string           // the ids the To-dos page counts open, by id
+	reached       map[string]bool
+	now           time.Time
 
 	sessions map[[2]string]proto.Session
 	lists    map[string][]proto.Session    // the complete lists read once for this build, by machine
@@ -571,6 +572,29 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 			if projectionViewCountsAsOpen(projViews[i]) {
 				tb.open = append(tb.open, t.ID)
 			}
+		}
+		if len(tb.leads) > 0 {
+			leadDirs := make(map[string]string, len(tb.leads))
+			for _, id := range tb.leads {
+				leadDirs[id] = id
+			}
+			effectiveInput := make([]listedTodo, len(all))
+			copy(effectiveInput, all)
+			for i := range effectiveInput {
+				t := effectiveInput[i].Todo
+				if strings.TrimSpace(t.DirectionID) != "" || t.Supervision == nil {
+					continue
+				}
+				if _, _, ok := parseLeaderRef(t.Supervision.Supervisor); !ok {
+					continue
+				}
+				if owner := tb.taskOwner(t); owner != "" {
+					sup := *t.Supervision
+					sup.Supervisor = owner
+					effectiveInput[i].Supervision = &sup
+				}
+			}
+			tb.effectiveDirs = resolveEffectiveDirections(effectiveInput, leadDirs)
 		}
 	} else {
 		tb.placed = triagePlace(all, look, now, loc)
@@ -701,11 +725,11 @@ func (tb *treeBuild) taskOwner(t Todo) string {
 	return sup
 }
 
-// directionOf is the group a listed task is in: under todos_v2=true, an explicit direction_id takes precedence
-// (matching board.direction_groups as the single source of truth; an explicit direction_id that is not a current
-// leader stays in the secretary group rather than falling back to supervisor/origin). When direction_id is unset
-// (or todos_v2=false), it falls back to the existing supervisor rule (and origin under todos_v2=true), else the
-// secretary ("").
+// directionOf is the group a listed task is in: under todos_v2=true, it aligns with resolveEffectiveDirections
+// (explicit direction_id precedence, supervisor/taskOwner, origin, cycle-safe part_of ancestor inheritance, and
+// unanimous subtree child fallback for undirected umbrella parents), limited to current leaders (tb.leads). An
+// explicit direction_id that is not a current leader stays in the secretary group ("") rather than falling back to
+// supervisor, origin, or part_of inheritance. Under todos_v2=false, it uses only the legacy taskOwner rule.
 func (tb *treeBuild) directionOf(t Todo) string {
 	if tb.todosV2 {
 		if dirID := strings.TrimSpace(t.DirectionID); dirID != "" {
@@ -714,14 +738,22 @@ func (tb *treeBuild) directionOf(t Todo) string {
 			}
 			return ""
 		}
-	}
-	if sup := tb.taskOwner(t); sup != "" && slices.Contains(tb.leads, sup) {
-		return sup
-	}
-	if tb.todosV2 {
+		if dirID := tb.effectiveDirs[t.ID]; dirID != "" {
+			if slices.Contains(tb.leads, dirID) {
+				return dirID
+			}
+			return ""
+		}
+		if sup := tb.taskOwner(t); sup != "" && slices.Contains(tb.leads, sup) {
+			return sup
+		}
 		if origin := strings.TrimSpace(t.Origin); origin != "" && slices.Contains(tb.leads, origin) {
 			return origin
 		}
+		return ""
+	}
+	if sup := tb.taskOwner(t); sup != "" && slices.Contains(tb.leads, sup) {
+		return sup
 	}
 	return ""
 }

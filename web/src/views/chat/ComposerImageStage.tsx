@@ -5,9 +5,8 @@
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type HTMLAttributes, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../i18n";
-import { base64File } from "../../lib/attachments";
 import { useCloseOnBack } from "../../lib/back-close";
-import type { Attachment } from "./Composer";
+import type { DraftImage } from "../../lib/drafts";
 import {
   handleCursor,
   IMAGE_EDIT,
@@ -65,7 +64,7 @@ export interface ComposerImageStageProps {
   dragging: boolean;
   drag: Pick<HTMLAttributes<HTMLDivElement>, "onDragOver" | "onDragLeave" | "onDrop">;
   onSelect: (id: string) => void;
-  onUpdateAttachment: (id: string, build: (old: Attachment) => Attachment) => void;
+  onUpdateAttachment: (id: string, img: DraftImage, state: EditState) => void;
   onClose: () => void;
   onCloseComplete: () => void;
 }
@@ -213,13 +212,7 @@ export function ComposerImageStage({
             toast(t(res.reason === "too_large" ? "chat-imageeditor.too_large" : "chat-imageeditor.save_failed"), "error");
             return;
           }
-          latest.current.onUpdateAttachment(targetId, (old) => {
-            // Keep the original source URL untouched while revoking any superseded encoded preview URL.
-            const source = old.edited?.source ?? old.url;
-            const url = URL.createObjectURL(base64File(res.image.name, res.image.mime, res.image.data));
-            if (old.url !== source) URL.revokeObjectURL(old.url);
-            return { ...res.image, id: old.id, url, edited: { source, ...nextState } };
-          });
+          latest.current.onUpdateAttachment(targetId, res.image, nextState);
         } catch {
           if (!aliveRef.current || latestReqById.current.get(targetId) !== reqId) return;
           toast(t("chat-imageeditor.save_failed"), "error");

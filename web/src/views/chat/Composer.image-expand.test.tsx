@@ -6,6 +6,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { COMPOSER_INPUT } from "../../lib/dock-focus";
+import { setComposerImages } from "../../lib/composer-images";
 import { sendDraft } from "../../lib/drafts";
 import { COMPOSITION_TAIL_MS } from "../../lib/ime";
 import { loadPages } from "../../lib/lazy-page";
@@ -48,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  setComposerImages("expand-test", []);
   host.remove();
   document.body.replaceChildren();
   vi.unstubAllGlobals();

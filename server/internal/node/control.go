@@ -153,7 +153,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			// session.start holds n.recovery.lock(resume) (node.go), as a send to a stopped row does (ompcalls.go): a
 			// second start or send waits for this resume and finds the session running above, so no second omp runs.
 			// The guards a resume of any other agent passes (below): a session open elsewhere or owned by a runtime
-			// is not started again, and not on Orca.
+			// is not started again. And not on Orca: an omp is resumed only in herdr (ompresume.go, #13597).
 			if r := n.openElsewhereRefusal(resume); r != nil {
 				return nil, r
 			}
@@ -163,7 +163,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 				return nil, refusal("runtime_session", "这个会话属于另一个工具（例如 Orca 的原生对话），请在那里继续，这次没有启动。", nil)
 			}
 			if n.startKind(ctx) == proto.EngineOrca {
-				return nil, refusal("orca_resume", "Orca 上只能从手机继续 Claude 会话：其它 Agent 请在电脑上恢复，这次没有启动。", nil)
+				return nil, orcaResumeRefusal(ctx)
 			}
 			if _, err := n.resumeOmp(ctx, resume, ompResumeParams(ctx, resume, prompt)); err != nil { // ompresume.go
 				return nil, err
@@ -235,16 +235,14 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			return n.sessionFor(resume, a), nil // already running
 		}
 		// A claude still alive on the session (Claude's desktop app, another terminal, suspended there) refuses: two
-		// writers would corrupt its transcript. Otherwise a Claude session resumes in the start's host, Orca like herdr: a
-		// terminal opened in the session's worktree (#5548).
+		// writers would corrupt its transcript. Otherwise the session resumes in the start's host, Orca like herdr: a
+		// terminal opened in the session's worktree, a Claude session and, since #17044, a TRAE CLI one alike; a Codex
+		// thread was resumed above (codex_resume.go), and a TRAE CLI that still runs in a pane is the running agent.
 		if r := n.openElsewhereRefusal(resume); r != nil { // open in Claude's desktop app or a terminal (openelsewhere.go)
 			return nil, r
 		}
 		if _, _, known := n.runtimes.belongs(resume); known { // an Orca native chat and the like: its runtime's, not a terminal's
 			return nil, refusal("runtime_session", "这个会话属于另一个工具（例如 Orca 的原生对话），请在那里继续，这次没有启动。", nil)
-		}
-		if n.startKind(ctx) == proto.EngineOrca && kind != "claude" { // the start's host
-			return nil, refusal("orca_resume", "Orca 上只能从手机继续 Claude 会话：其它 Agent 请在电脑上恢复，这次没有启动。", nil)
 		}
 		// An id this computer has no transcript, record or start of is not one to resume, as `claude --resume` would
 		// say: started under it, a new conversation would be listed under the id of another, which the manager tells
@@ -311,7 +309,8 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	if work := workAgentKind(launcher, kind); work != "" { // workagent.go
 		if resume != "" {
-			return nil, refusal("work_agent_resume", "这个会话不能用启动器接着：pi 在它原来的标签里继续，cursor 和 agy 请在电脑上恢复。这次没有启动。", nil)
+			// Every engine alike: pi comes back through its runtime (pi.go), agy through its companion (agystopped.go).
+			return nil, refusal("work_agent_resume", i18n.T(i18n.From(ctx), "rpc-errors.work_agent_resume"), nil)
 		}
 		return n.startWorkAgent(ctx, launch, cwd, launcher, work, execution.Model, effort, mode, prompt, ws, tabName)
 	}

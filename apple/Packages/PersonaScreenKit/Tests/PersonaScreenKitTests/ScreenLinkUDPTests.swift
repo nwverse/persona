@@ -86,7 +86,14 @@ final class UDPRouteNode: @unchecked Sendable {
     var udpSilent: Bool { get { lock.withLock { mute } } set { lock.withLock { mute = newValue } } }
     private var mute = false
     /// Where the stream goes on after a give-up.
-    var resetTo: UInt64 = 0
+    var resetTo: UInt64 { get { lock.withLock { resetOffset } } set { lock.withLock { resetOffset = newValue } } }
+    private var resetOffset: UInt64 = 0
+    /// Per-skip-offset reset targets so a late skip retry for an earlier frame never receives a later round's reset.
+    private var resetBySkipOffset: [UInt64: UInt64] = [:]
+    func setReset(for skipOffset: UInt64, to target: UInt64) { lock.withLock { resetBySkipOffset[skipOffset] = target } }
+    /// How many incoming `skip` packets to ignore before replying with `reset` (simulates lost skip/reset datagrams).
+    var dropSkips: Int { get { lock.withLock { ignoredSkips } } set { lock.withLock { ignoredSkips = newValue } } }
+    private var ignoredSkips = 0
 
     init(tls: PipeEnd, udp: DatagramEnd) {
         self.tls = tls
@@ -149,8 +156,15 @@ final class UDPRouteNode: @unchecked Sendable {
                         send(.data(h, fragment: frag))
                     }
                 }
-            case let .skip(ch, _):
-                send(.reset(channel: ch, offset: resetTo))
+            case let .skip(ch, off):
+                let replyOffset: UInt64? = lock.withLock {
+                    if ignoredSkips > 0 {
+                        ignoredSkips -= 1
+                        return nil
+                    }
+                    return resetBySkipOffset[off] ?? resetOffset
+                }
+                if let replyOffset { send(.reset(channel: ch, offset: replyOffset)) }
             default:
                 break
             }
@@ -363,6 +377,65 @@ final class ScreenLinkUDPTests: XCTestCase {
         r.route.video(c, ch: 2, at: r.route.resetTo)
         let next = try await r.video.receive()
         XCTAssertEqual(next, c, "the stream goes on at the reset")
+    }
+
+    /// Retrying `skip` for the same single given-up frame while waiting for `reset` must not count as additional
+    /// given-up frames and prematurely tear down the UDP flow as degraded.
+    func testSkipRetriesForASingleFrameDoNotLeaveTheFlowAsDegraded() async throws {
+        let r = try await rig()
+        await until("the video on the flow") { r.route.usedOnUDP() }
+        let got = Received(r.video)
+        let a = frame(1, size: 400), lost = frame(2, size: 5000), b = frame(3, size: 400)
+        r.route.video(a, ch: 2, at: 0)
+        await until("first frame delivered", timeout: 3) { got.data == a }
+        let lostAt = UInt64(a.count)
+        // Drop more skip datagrams than flowGiveUps (2) so the receiver must resend skip for the same frame.
+        r.route.dropSkips = ScreenLinkSession.flowGiveUps + 1
+        let resetAt = lostAt + UInt64(lost.count) + 1000
+        r.route.setReset(for: lostAt, to: resetAt)
+        r.route.video(lost, ch: 2, at: lostAt, lose: Set(0 ..< 4), keep: false)
+        r.route.video(b, ch: 2, at: lostAt + UInt64(lost.count))
+        await until("skip retried past flowGiveUps without leaving UDP", timeout: 3) {
+            let skips = r.route.udpMessages().filter { if case .skip(2, lostAt) = $0 { true } else { false } }.count
+            return skips >= ScreenLinkSession.flowGiveUps + 2
+        }
+        let c = frame(4, size: 600)
+        r.route.video(c, ch: 2, at: resetAt)
+        await until("the stream recovers on UDP once reset arrives", timeout: 3) { got.data == a + c }
+        XCTAssertFalse(r.events.moves().contains { $0.reason == .degraded }, "skip retries for one frame must not degrade the flow")
+        XCTAssertFalse(r.events.moves().contains { $0.from?.transport == .udp && $0.to.transport == .tcp }, "the video stays on UDP instead of falling back to TLS")
+    }
+
+    /// More than `flowGiveUps` distinct given-up frames within `flowGiveUpWindow` still leave the UDP flow as degraded.
+    func testDistinctGivenUpFramesOverThresholdLeaveTheFlowAsDegraded() async throws {
+        let r = try await rig()
+        await until("the video on the flow") { r.route.usedOnUDP() }
+        let got = Received(r.video)
+        var expected = Data()
+        var off: UInt64 = 0
+        for i in 0 ..< (ScreenLinkSession.flowGiveUps + 1) {
+            let lost = frame(i * 3 + 1, size: 5000), later = frame(i * 3 + 2, size: 400)
+            let lostAt = off
+            let nextOff = lostAt + UInt64(lost.count) + 1000
+            r.route.setReset(for: lostAt, to: nextOff)
+            r.route.video(lost, ch: 2, at: lostAt, lose: Set(0 ..< 4), keep: false)
+            r.route.video(later, ch: 2, at: lostAt + UInt64(lost.count))
+            if i < ScreenLinkSession.flowGiveUps {
+                await until("skip \(i + 1) sent", timeout: 3) {
+                    r.route.udpMessages().contains { if case .skip(2, lostAt) = $0 { true } else { false } }
+                }
+                let after = frame(i * 3 + 3, size: 400)
+                r.route.video(after, ch: 2, at: nextOff)
+                expected += after
+                await until("frame after reset \(i + 1)", timeout: 3) { got.data == expected }
+                off = nextOff + UInt64(after.count)
+            }
+        }
+        await until("flow left as degraded", timeout: 3) {
+            r.events.moves().contains { $0.from?.transport == .udp && $0.to.transport == .tcp && $0.reason == .degraded }
+        }
+        XCTAssertGreaterThan(off, 0)
+        await until("back on TLS after degraded fallback", timeout: 3) { r.route.usedOnTLS(2) == off }
     }
 
     /// #10005 over TCP: a reset the node owes again goes out on the new route, and its copy on the route the channel

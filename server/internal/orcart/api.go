@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strconv"
 	"strings"
 )
 
@@ -331,6 +332,84 @@ func (c *Client) Read(ctx context.Context, t Target) (*Screen, error) {
 		s.Wrapped = append(s.Wrapped, r.Wrapped)
 	}
 	return s, nil
+}
+
+// TailLimit is the most lines one tail or log read returns.
+const TailLimit = 2000
+
+// ReadTail is terminal.read {limit}: the last limit lines (at most TailLimit) of the terminal's output tail, which is
+// the newest lines its program wrote, escapes stripped, rows it redrew in place kept as they ended, the line it is
+// still writing last. truncated: Orca let older output go (its tail keeps at most 2000 lines and 256 KiB). limited:
+// it keeps more than the lines sent (one read sends at most 2000 lines and 32 KiB; the first line may then be the end
+// of a longer one). source is "stream" for the tail, "screen" when Orca answered with the screen instead (a program on
+// the alternate screen: nothing is above it).
+func (c *Client) ReadTail(ctx context.Context, t Target, limit int) (lines []string, truncated, limited bool, source string, err error) {
+	var res struct {
+		Terminal struct {
+			Tail      []string `json:"tail"`
+			Truncated bool     `json:"truncated"`
+			Limited   bool     `json:"limited"`
+			Source    string   `json:"source"`
+		} `json:"terminal"`
+	}
+	p := t.params()
+	p["limit"] = min(max(limit, 1), TailLimit)
+	if err := c.Call(ctx, CallTimeout, "terminal.read", p, &res); err != nil {
+		return nil, false, false, "", err
+	}
+	r := res.Terminal
+	if r.Source == "screen-unavailable" {
+		return nil, false, false, "", fmt.Errorf("orca terminal.read: %w", ErrNoScreen)
+	}
+	return r.Tail, r.Truncated, r.Limited, r.Source, nil
+}
+
+// ErrNoCursor: this Orca reads no output by cursor (an older one answers a cursor read without cursors).
+var ErrNoCursor = errors.New("orca reads no output by cursor")
+
+// ReadLog is terminal.read {cursor, limit}: up to limit lines (at most TailLimit) of the terminal's log from cursor
+// on, starting at the oldest line Orca keeps when cursor is older; oldest is that line's cursor (0: Orca let none go).
+// The log is every line the terminal's program completed, in order, escapes stripped: rows a program redrew in place
+// come again each time (a spinner, an agent's input box), so it is a record of the output, not what the terminal
+// shows (ReadTail is that). A cursor counts the completed lines since Orca began keeping the terminal's output.
+func (c *Client) ReadLog(ctx context.Context, t Target, cursor int64, limit int) (lines []string, oldest int64, err error) {
+	var res struct {
+		Terminal struct {
+			Tail   []string     `json:"tail"`
+			Oldest outputCursor `json:"oldestCursor"`
+			Latest outputCursor `json:"latestCursor"`
+		} `json:"terminal"`
+	}
+	p := t.params()
+	p["cursor"] = max(cursor, 0)
+	p["limit"] = min(max(limit, 1), TailLimit)
+	if err := c.Call(ctx, CallTimeout, "terminal.read", p, &res); err != nil {
+		return nil, 0, err
+	}
+	r := res.Terminal
+	if !r.Oldest.ok || !r.Latest.ok {
+		return nil, 0, fmt.Errorf("orca terminal.read: %w", ErrNoCursor)
+	}
+	return r.Tail, r.Oldest.n, nil
+}
+
+// outputCursor is a cursor as Orca sends it: a decimal string ("501"), or a number.
+type outputCursor struct {
+	n  int64
+	ok bool
+}
+
+func (c *outputCursor) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" || s == "null" {
+		return nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return nil // not a cursor Persona can page by: as if none came
+	}
+	c.n, c.ok = n, true
+	return nil
 }
 
 // AgentStatus is terminal.agentStatus: whether an agent Orca recognises is running in front in the terminal, and its

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -223,6 +224,53 @@ func TestRead(t *testing.T) {
 	})
 	if _, err := c.Read(context.Background(), orcart.Target{Handle: "term_1"}); !errors.Is(err, orcart.ErrNoScreen) {
 		t.Errorf("no screen: %v", err)
+	}
+}
+
+// The output tail is the read without screen or cursor; the log pages by cursor, from the oldest line Orca keeps when
+// the cursor is older. An Orca that answers without cursors reads no log.
+func TestReadTailAndLog(t *testing.T) {
+	f := orcarttest.New(t)
+	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "", "x", "claude"))
+	log := make([]string, 0, 2000)
+	for i := 501; i <= 2500; i++ {
+		log = append(log, fmt.Sprintf("line-%d", i))
+	}
+	f.SetOutput("term_1", append(slices.Clone(log), "$ "), true, log, 2500)
+	c := client(f, nil)
+	ctx := context.Background()
+	tg := orcart.Target{Handle: "term_1", Incarnation: "inc-term_1"}
+	tail, truncated, limited, source, err := c.ReadTail(ctx, tg, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"line-2497", "line-2498", "line-2499", "line-2500", "$ "}; !slices.Equal(tail, want) ||
+		!truncated || !limited || source != "stream" {
+		t.Errorf("tail = %q truncated %v limited %v source %q", tail, truncated, limited, source)
+	}
+	lines, oldest, err := c.ReadLog(ctx, tg, 0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"line-501", "line-502", "line-503"}; !slices.Equal(lines, want) || oldest != 500 {
+		t.Errorf("log = %q from %d", lines, oldest)
+	}
+	if lines, _, err := c.ReadLog(ctx, tg, 1<<53, 10); err != nil || len(lines) != 0 {
+		t.Errorf("past the newest: %q, %v", lines, err)
+	}
+	if got := f.Trace("terminal.read"); !slices.Equal(got, []string{
+		`terminal.read {"limit":5,"terminal":"term_1"}`,
+		`terminal.read {"cursor":0,"limit":3,"terminal":"term_1"}`,
+		`terminal.read {"cursor":9007199254740992,"limit":10,"terminal":"term_1"}`,
+	}) {
+		t.Errorf("reads: %q", got)
+	}
+	if inv := f.Invalid(); len(inv) != 0 {
+		t.Errorf("invalid requests: %v", inv)
+	}
+	f.SetOldOutput("term_1", []string{"$ "})
+	if _, _, err := c.ReadLog(ctx, tg, 0, 10); !errors.Is(err, orcart.ErrNoCursor) {
+		t.Errorf("no cursors: %v", err)
 	}
 }
 

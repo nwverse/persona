@@ -8,6 +8,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { COMPOSER_INPUT } from "../../lib/dock-focus";
+import { setComposerImages } from "../../lib/composer-images";
 import { sendDraft } from "../../lib/drafts";
 import { noEdits, noHistory, record, type EditState, type ImageEdits } from "../../lib/image-edit";
 import { loadPages } from "../../lib/lazy-page";
@@ -130,6 +131,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  for (const key of ["inline-edit", "hub/first", "hub/second"]) setComposerImages(key, []);
   host.remove();
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -206,6 +208,38 @@ const turned = (turns: number, before: EditState = { edits: noEdits(), history: 
 });
 
 describe("inline image editing inside ComposerImageStage", () => {
+  it("restores the same preview and edit history on the first render after navigation", async () => {
+    mount({ draftKey: "hub/first" });
+    attachDraft("image.png", "original", undefined, "hub/first");
+    await expand("image.png");
+    act(() => btn("composer-image-tool-crop").click());
+    await flush();
+    act(() => btn("composer-image-rotate").click());
+    await flush();
+    const preview = tile("image.png").querySelector("img")!.getAttribute("src");
+    expect(preview).toBe("blob:edit/2");
+
+    act(() => root.render(null));
+    mount({ draftKey: "hub/second" });
+    expect(tile("image.png")).toBeNull();
+    attachDraft("other.png", "other", undefined, "hub/second");
+    mount({ draftKey: "hub/first" });
+
+    expect(tile("image.png")?.querySelector("img")?.getAttribute("src")).toBe(preview);
+    expect(tile("other.png")).toBeNull();
+    expect(revoke).not.toHaveBeenCalled();
+
+    await expand("image.png");
+    await flush();
+    expect(btn("composer-image-undo").disabled).toBe(false);
+    act(() => btn("composer-image-undo").click());
+    await flush();
+    expect(encoder.calls.at(-1)?.src).toBe("blob:edit/1");
+    expect(encoder.calls.at(-1)?.edits.turns).toBe(0);
+    mount({ draftKey: "hub/second" });
+    expect(tile("other.png")).not.toBeNull();
+  });
+
   it("opens in preview mode, switches inline to Box / Pen / Crop without a modal dialog, and keeps the live Composer interactive", async () => {
     mount();
     attachDraft("shot.png", "SRC");
