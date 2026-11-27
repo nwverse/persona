@@ -205,6 +205,10 @@ def has(ctl, element_id):
     return bool(matches(elements(ctl), element_id=element_id))
 
 
+def has_label(ctl, label):
+    return bool(matches(elements(ctl), label=label))
+
+
 def ensure_active(ctl):
     """Dismiss a SpringBoard permission/notice alert on this run's synthetic simulator, never on a physical device."""
     state = ctl.call("state")
@@ -364,18 +368,18 @@ def exercise_app(ctl, base, code, edition, shots):
 
     settings(ctl, "openConnectors")
     require(ctl, element_id="connectors-list")
-    for entry in ("settings-mail", "settings.feishu", "settings-feishu-bot", "settings.feishuBot"):
-        proof["entries"][entry] = has(ctl, entry)
-    # settingsListRow uses the page's stable route spelling; one of these is the Lark connection on each build.
-    lark = proof["entries"]["settings.feishu"] or has(ctl, "settings-feishu")
-    bot = proof["entries"]["settings-feishu-bot"] or proof["entries"]["settings.feishuBot"]
-    check(proof["entries"]["settings-mail"] == full, f"{edition}: wrong Mail connector visibility")
-    check(lark == full, f"{edition}: wrong Lark connector visibility")
-    check(bot == full, f"{edition}: wrong Lark Bot connector visibility")
+    # Connector rows use visible titles, not registry accessibility identifiers.
+    mail = has_label(ctl, "Mail")
+    lark = has_label(ctl, "Lark")
+    bot = has_label(ctl, "Lark Bot")
+    proof["entries"]["settings-mail"] = mail
     proof["entries"]["connector-lark"] = lark
     proof["entries"]["connector-lark-bot"] = bot
-    no_errors(ctl, "Connectors")
     capture_both(ctl, shots, edition, "connectors", proof)
+    check(mail == full, f"{edition}: wrong Mail connector visibility")
+    check(lark == full, f"{edition}: wrong Lark connector visibility")
+    check(bot == full, f"{edition}: wrong Lark Bot connector visibility")
+    no_errors(ctl, "Connectors")
 
     settings(ctl, "openChannels")
     require(ctl, label="Channels")
