@@ -133,7 +133,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
     const bubble = <BubbleText text={text} quotes={split?.quotes} forwards={forwards} blocks={msg.contexts} fromCard={fromCard?.view}
       ts={pending || starting ? undefined : msg.ts} mid={mid} sid={sid} own={own} pending={pending && !starting} inline={inline} />;
     return (
-      <div className="ml-auto flex max-w-[min(100%,488px)] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-source-fingerprint={msg.rawInput?.[0]?.source_fingerprint} data-send-state={sendState} data-items={pending || starting ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
+      <div className="ml-auto flex max-w-[min(100%,488px)] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-source-fingerprint={msg.rawInput?.[0]?.source_fingerprint} data-send-state={sendState} data-items={pending || starting || sendState ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
         {msg.images.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {msg.images.map((im) => (
