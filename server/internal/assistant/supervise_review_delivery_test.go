@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -22,7 +23,12 @@ import (
 // delivery_gate=live (legacy done_needs_delivery=true) unless off (delivery_gate=off).
 func deliveryReviewService(t *testing.T, forge *fakeForge, hub *runningHub, off bool) (*Service, Todo) {
 	t.Helper()
-	s, _, todo := newSupervisedService(t)
+	return deliveryReviewServiceOn(t, forge, hub, off, nil)
+}
+
+func deliveryReviewServiceOn(t *testing.T, forge *fakeForge, hub *runningHub, off bool, st Store) (*Service, Todo) {
+	t.Helper()
+	s, _, todo := newSupervisedServiceOn(t, st)
 	s.deploy.forge = forge
 	if hub != nil {
 		s.deploy.hubBuild = hub.build
@@ -226,12 +232,12 @@ func TestAcceptedDoesNotDiscardUnconfirmedPR(t *testing.T) {
 }
 
 func TestAcceptedNonPRCannotHideEarlierRealPR(t *testing.T) {
-	s, todo := deliveryReviewService(t, &fakeForge{}, &runningHub{commit: oldHub}, false)
+	s, todo := deliveryReviewServiceOn(t, &fakeForge{}, &runningHub{commit: oldHub}, false, repositorystore.New(todoTestDB(t)))
 	ctx := context.Background()
 	s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/10")
-	s.hub.(*fakeHub).setItems(proto.Item{Role: "assistant", Kind: proto.KindText,
+	s.hub.(*fakeHub).setItems(append(artifactCreationItems(todo, "https://github.com/o/r/pull/9"), proto.Item{Role: "assistant", Kind: proto.KindText, TS: artifactTurnAt(todo),
 		Text: "<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\n" +
-			"artifact: pr https://github.com/o/r/pull/9\n</closeout>"})
+			"artifact: pr https://github.com/o/r/pull/9\n</closeout>"})...)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/o/r/issues/10":

@@ -559,7 +559,7 @@ example configs and services) and both watcher skills under `.claude/skills/`. T
   Xcode after `sim.sh`, run `native/app-core/scripts/build-apple.sh` with no flag:** a simulator-only framework has no
   device slice, so Xcode stops with "no library for this platform was found", which looks like a broken build. The
   script prints the same reminder whenever it leaves the simulator slice only.
-- **The Rust core on Linux, for a Linux Apple toolchain** (such as nwverse/apple-build, #16944). The same
+- **The Rust core on Linux, for a Linux Apple toolchain** (one that builds the iOS app without Xcode, #16944). The same
   `native/app-core/scripts/build-apple.sh` (with or without `--simulator`) needs no Xcode there: it builds the device
   and arm64 simulator slices as static libraries whatever the machine's architecture, writes the XCFramework in the
   layout `xcodebuild -create-xcframework` produces, and builds no macOS slice (it says so in one line: macOS

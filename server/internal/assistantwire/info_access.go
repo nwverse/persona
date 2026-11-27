@@ -23,6 +23,8 @@ func init() { Routes = append(Routes, infoAccessRoutes...) }
 // extension's trust and grants. The plain methods are read as a third party's with no grant.
 const MethodAssistantExtensionRead = "assistant.extension_read"
 
+var AssistantExtensionReadMethod = buswire.Method[AssistantExtensionRead, json.RawMessage]{Name: MethodAssistantExtensionRead}
+
 // AssistantExtensionRead is assistant.extension_read's params. Extension is the extension manager's word, never the
 // extension's own.
 type AssistantExtensionRead struct {

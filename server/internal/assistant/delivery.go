@@ -139,13 +139,17 @@ func hasDefaultOffGate(text string) bool {
 // judgedDelivery is the delivery of a finished stretch of work: what the judge said (state, gate, unblock as it
 // answered), else the agents' own line, else nothing to ship; held at the PR when that says live but the replies name
 // a PR and say nothing of a deploy.
-func judgedDelivery(state, gate, unblock string, replies []prompts.TaskDoneReply) TodoDelivery {
+func judgedDelivery(state, gate, unblock string, replies []taskDoneReply) TodoDelivery {
 	var mark TodoDelivery
-	marked := false
+	marked, excludedPR := false, false
 	stage := ""
 	for _, r := range replies {
-		if m, ok := deliveryMark(r.Text); ok {
+		if m, ok := deliveryMark(r.Text); ok && (!r.otherPR || m.State == deliveryNone) {
 			mark, marked = m, true
+		}
+		if r.otherPR {
+			excludedPR = true
+			continue
 		}
 		st, _ := stageOf(r.Text)
 		if buildNumbers.MatchString(r.Text) {
@@ -171,7 +175,7 @@ func judgedDelivery(state, gate, unblock string, replies []prompts.TaskDoneReply
 	case deliveryLive, deliveryPR, deliveryMerged, deliveryOff, deliveryNone:
 	default:
 		d, judged = mark, false // a state it made up, or none: the agent's own line
-		if !marked {
+		if !marked && !excludedPR {
 			d.State = deliveryNone
 		}
 	}

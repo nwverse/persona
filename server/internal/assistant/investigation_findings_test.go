@@ -233,12 +233,12 @@ func TestInvestigationFindingsFreshReportAndOwnerDrop(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.supervisedWorking(ctx, todoNow(s, todo.ID))
-	if _, err := confirmTestFindings(s, todo.ID, first.Version); err == nil {
-		t.Fatal("closed an earlier report version after new work began")
-	}
 	next := reportFindings(t, s, todo, []investigationFinding{})
 	if next.Version <= first.Version || len(next.Items) != 1 {
 		t.Fatalf("new report lost its earlier unresolved finding: %+v", next)
+	}
+	if _, err := confirmTestFindings(s, todo.ID, first.Version); err == nil {
+		t.Fatal("confirmed a superseded version after a new report was recorded")
 	}
 	writeDrop := func(id, source string) {
 		t.Helper()
@@ -293,7 +293,7 @@ func TestInvestigationFindingsExplicitEmptyAndLegacy(t *testing.T) {
 	}
 }
 
-func TestInvestigationFindingsStaleDeadWorkerRecoveryAndLiveSafety(t *testing.T) {
+func TestInvestigationFindingsStaleDeadWorkerRecovery(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("orphaned_stale_findings_allow_review_and_brief_accept_422_then_200", func(t *testing.T) {
@@ -376,27 +376,69 @@ func TestInvestigationFindingsStaleDeadWorkerRecoveryAndLiveSafety(t *testing.T)
 		}
 	})
 
-	t.Run("live_worker_keeps_stale_findings_and_cancel_blocked", func(t *testing.T) {
-		s, f, todo := findingTaskWithHub(t, todoTestDB(t))
-		r := reportFindings(t, s, todo, []investigationFinding{investigateLogs})
-		s.supervisedWorking(ctx, todoNow(s, todo.ID))
-		worker := todoNow(s, todo.ID).Agents[0]
-		f.mu.Lock()
-		f.sessions[worker.MachineID] = []proto.Session{{SessionID: worker.SessionID, Status: proto.StatusWorking}}
-		f.mu.Unlock()
+}
 
-		if _, err := confirmTestFindings(s, todo.ID, r.Version); err == nil {
-			t.Fatal("live worker must block confirming stale findings")
-		}
-		if _, err := reviewErr(s, todo.ID, map[string]any{"verdict": reviewCancelled, "note": "Cancel while live"}); err == nil {
-			t.Fatal("live worker must block cancelling stale investigation")
-		}
-		if _, err := reviewErr(s, todo.ID, map[string]any{"verdict": reviewAccepted, "note": "Accept while live"}); err == nil {
-			t.Fatal("live worker must block accepting stale investigation")
-		}
-		yes := true
-		if _, err := s.editTodo(ctx, todo.ID, db.TodoEdit{Done: &yes}); err == nil {
-			t.Fatal("live worker must block manual completion on stale investigation")
-		}
-	})
+func TestInvestigationFindingsStaleLiveWorkerReview(t *testing.T) {
+	s, todo, report := staleFindingsWithLiveWorker(t)
+	accept := map[string]any{"verdict": reviewAccepted, "note": "Accept reviewed findings"}
+	if _, err := reviewErr(s, todo.ID, accept); err == nil || !strings.Contains(err.Error(), "Review the current investigation") {
+		t.Fatalf("accepting unreviewed stale findings: %v", err)
+	}
+	if _, err := confirmTestFindings(s, todo.ID, report.Version+1); err == nil || !strings.Contains(err.Error(), "current version") {
+		t.Fatalf("review with a mismatched version: %v", err)
+	}
+	if got := todoNow(s, todo.ID).Supervision.Investigation; !got.Stale || got.Confirmed == report.Version {
+		t.Fatalf("mismatched review changed findings: %+v", got)
+	}
+	const evidence = "Verified the log source."
+	completeTestFinding(t, s, todo.ID, report.Version, investigateLogs, evidence)
+	conflicting := findingDisposition{ID: investigateLogs.ID, Done: evidence, WaitTarget: "another team"}
+	if _, err := confirmTestFindings(s, todo.ID, report.Version, conflicting); err == nil ||
+		!strings.Contains(err.Error(), "only one disposition") {
+		t.Fatalf("review with an invalid disposition: %v", err)
+	}
+	got := todoNow(s, todo.ID).Supervision.Investigation
+	if got.Stale || got.Confirmed != report.Version || got.Items[0].Disposition.Done != evidence {
+		t.Fatalf("expected confirmed findings with a disposition: %+v", got)
+	}
+}
+
+func TestInvestigationFindingsStaleLiveWorkerCancel(t *testing.T) {
+	s, todo, _ := staleFindingsWithLiveWorker(t)
+	yes := true
+	if _, err := s.editTodo(context.Background(), todo.ID, db.TodoEdit{Done: &yes}); err == nil {
+		t.Fatal("manual completion bypassed the stale findings guard")
+	}
+	if _, err := reviewErr(s, todo.ID, map[string]any{"verdict": reviewCancelled, "note": "Stop this investigation"}); err != nil {
+		t.Fatalf("cancelling stale investigation with a live worker: %v", err)
+	}
+	closed := todoNow(s, todo.ID)
+	if closed.DoneAt == nil || closed.DoneBy != db.DoneByCancelled || !closed.Supervision.Investigation.Stale {
+		t.Fatalf("expected cancelled to-do preserving stale findings, got done_at=%v done_by=%q findings=%+v",
+			closed.DoneAt, closed.DoneBy, closed.Supervision.Investigation)
+	}
+}
+
+func staleFindingsWithLiveWorker(t *testing.T) (*Service, Todo, *investigationFindings) {
+	t.Helper()
+	ctx := context.Background()
+	s, f, todo := findingTaskWithHub(t, todoTestDB(t))
+	worker := todo.Agents[0]
+	f.mu.Lock()
+	f.sessions[worker.MachineID] = []proto.Session{{SessionID: worker.SessionID, Status: proto.StatusWorking}}
+	f.mu.Unlock()
+	report := reportFindings(t, s, todo, []investigationFinding{investigateLogs})
+	cancel := map[string]any{"verdict": reviewCancelled, "note": "Stop this investigation"}
+	if _, err := reviewErr(s, todo.ID, cancel); err == nil || !strings.Contains(err.Error(), "Review the current investigation") {
+		t.Fatalf("cancelling a current unreviewed report: %v", err)
+	}
+	s.supervisedWorking(ctx, todoNow(s, todo.ID))
+	todo = todoNow(s, todo.ID)
+	if got := todo.Supervision.Investigation; !got.Stale || got.Version != report.Version {
+		t.Fatalf("expected the recorded version to become stale: %+v", got)
+	}
+	if _, gone := s.investigationWorkerGone(ctx, todo); gone {
+		t.Fatal("test requires a worker that is still live")
+	}
+	return s, todo, report
 }

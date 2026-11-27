@@ -153,7 +153,7 @@ Server state is stored in the hub's Postgres database (read/written by the assis
   `stage_done` (#11590) is worked out when the to-do is listed and never stored: the to-do is closed as done (not cancelled, not a failed start), its kind is not `general`, its stage is short of deploy, and nothing waits to ship (no delivery held at a PR, a merge or a switch; with a PR, only a delivery that says nothing ships). The clients then end the strip with Done after the steps it went through ("Plan ✓ — Develop ✓ — Done ✓") instead of leaving a current step. Work that went out keeps Deploy, or Verified once a check confirmed it (#3240): acceptance alone is no check of a deployment, so it never shows Verified, and a step the work never took is not ticked. Older clients ignore it and show the stored stage.
   Mid-task replies (session lists, full followed items and supervisor progress reports) and final handoffs update the same forward-only progress. List snippets ending in an ellipsis and followed items marked with `FullSize` are skipped, without fetching transcripts from the session-list handler. GitHub `/pull/N` and any host's `/merge_requests/N` or `/-/merge_requests/N` links count; bare `MR !N` does not. Web links use `PR #N` or `MR !N` respectively.
   A pending `IxPlan` approval temporarily shows `plan` before review; answering it restores the stored stage, without recording a backwards progress change. Agent-link changes recompute pending plans for both the old and new task. Other permissions and questions never imply plan approval.
-  `pr_status` is additive forge evidence, not another task state: `url`, `head_oid` (the PR head commit), `state` (`open`, `merged`, `closed`), `draft`, `review`, `checks`, `conflicts`, and `checked_at`. The existing minute deployment pass reads GitHub PRs at most once per ten minutes per open to-do, independently of whether the running hub reports its commit, after its deploy checks and on a deadline of its own (one minute), so slow forge reads never delay a deploy. Failed reads never refresh old facts. After the current task/stage PR facts are saved, an open PR with merge conflicts and a known head emits an urgent, actionable `pr_conflict` supervision event, even with no running Agent. Pending conflict signals recheck the task/stage URL, head, open state and conflict before being rendered, so a resolved or replaced conflict is dropped. A digest containing a conflict stays in the existing pending-signal queue while its supervisor is busy or dispatch fails; it is never folded into a rendered relay, which cannot refresh the facts before draining. Other entries batched with that conflict wait with it until dispatch can revalidate the batch. The existing `assistant.supervision_dedup` setting keeps one permanent fingerprint per task/PR URL/head, independent of Agent text and the ordinary thirty-minute expiry; a new head can notify once, but returning to an already-told head cannot. Deferred or failed dispatch releases the existing reservation. Web uses matching facts no older than fifteen minutes and no active Agent or owner decision to show **Waiting for merge**, outside **In progress** but still open, with the existing PR link and blocker labels. A known open PR becoming merged or closed returns an external-event/someone-else hold to the same supervisor's `pending_review`; merging alone never accepts or closes it. Only that hold wakes: a to-do at work, in rework or under review keeps its state. A typed wait must record `merge_review`, `ready` and the matching GitHub PR object in `evidence.url`; its reason is not an observation binding. A different typed source or kind never falls back to prose. Only legacy parks without evidence match a reason containing a PR link or `#N` (`parkWaitsOnPR`). The park identity comes from the task snapshot before the forge request and is rechecked when its ledger changes, so an old response cannot end a park created or replaced during that request. The stage's PR is checked under the stage lock first, so a PR replaced while it was read changes neither the facts nor the supervision. Older `checked_at` observations cannot replace newer facts. Typed terminal waits reconcile again if a supervision write failed after saving PR facts, including after restart; they do not require another open-to-terminal transition. The existing review signal is queued after the ledger commits, not a new delivery outbox. A merged observation moves the stage to merge only while the open to-do and its stage still name that PR, checked under the stage lock (`setTaskStageOn`). A personal priority/date hold or an unrelated post-deployment hold is not disturbed. Work that spans several PRs (#7935): the pass also reads up to four of the to-do's earlier PRs (`PRs`, newest first, skipping ones already known merged or closed), kept per PR in the stage record (`prs_status`) and published as `other_prs` (the same fields, newest first). The to-do waits for merge while any of its PRs is fresh, open and non-draft, and each open one shows with its own blockers; only the current PR raises `pr_conflict`. A PR becoming merged or closed wakes the supervisor only once no other PR it follows is open or still unread, and only a park whose reason names one of its PRs. Older clients ignore these facts.
+  `pr_status` is additive forge evidence, not another task state: `url`, `head_oid` (the PR head commit), `state` (`open`, `merged`, `closed`), `draft`, `review`, `checks`, `conflicts`, and `checked_at`. The existing minute deployment pass reads GitHub PRs at most once per ten minutes per open to-do, independently of whether the running hub reports its commit, after its deploy checks and on a deadline of its own (one minute), so slow forge reads never delay a deploy. Failed reads never refresh old facts. After a followed delivery PR's facts are saved, an open PR with merge conflicts and a known head routes directly to the bound Agent when `assistant.pr_events_route_to_agent` is enabled (falling back cleanly on delivery failure) or emits an urgent, actionable `pr_conflict` supervision event—including while the task is parked waiting for merge—even with no running Agent (an `external_event` PR park also wakes on open conflicts when not routed to the bound Agent). Pending conflict signals recheck the followed PR's URL, head, open state, delivery role and conflict before being rendered, so a resolved, closed, unfollowed or reference-downgraded conflict is dropped. A digest containing a conflict stays in the existing pending-signal queue while its supervisor is busy or dispatch fails; it is never folded into a rendered relay, which cannot refresh the facts before draining. Other entries batched with that conflict wait with it until dispatch can revalidate the batch. The existing `assistant.supervision_dedup` setting keeps one permanent fingerprint per task/PR URL/head, independent of Agent text and the ordinary thirty-minute expiry; a new head can notify once, but returning to an already-told head cannot. Deferred or failed dispatch releases the existing reservation. Web uses matching facts no older than fifteen minutes and no active Agent or owner decision to show **Waiting for merge**, outside **In progress** but still open, with the existing PR link and blocker labels. A known open PR becoming merged or closed returns an external-event/someone-else hold to the same supervisor's `pending_review`; merging alone never accepts or closes it. Only that hold wakes: a to-do at work, in rework or under review keeps its state. A typed wait must record `merge_review`, `ready` and the matching GitHub PR object in `evidence.url`; its reason is not an observation binding. A different typed source or kind never falls back to prose. Only legacy parks without evidence match a reason containing a PR link or `#N` (`parkWaitsOnPR`). The park identity comes from the task snapshot before the forge request and is rechecked when its ledger changes, so an old response cannot end a park created or replaced during that request. The stage's PR is checked under the stage lock first, so a PR replaced while it was read changes neither the facts nor the supervision. Older `checked_at` observations cannot replace newer facts. Typed terminal waits reconcile again if a supervision write failed after saving PR facts, including after restart; they do not require another open-to-terminal transition. The existing review signal is queued after the ledger commits, not a new delivery outbox. A merged observation moves the stage to merge only while the open to-do and its stage still name that PR, checked under the stage lock (`setTaskStageOn`). A personal priority/date hold or an unrelated post-deployment hold is not disturbed. Work that spans several PRs (#7935): the pass also reads up to four of the to-do's earlier PRs (`PRs`, newest first, skipping ones already known merged or closed), kept per PR in the stage record (`prs_status`) and published as `other_prs` (the same fields, newest first). The to-do waits for merge while any of its PRs is fresh, open and non-draft, and each open one shows with its own blockers; any followed open delivery PR can raise `pr_conflict` or route a merge conflict to the bound Agent (#15611). A PR becoming merged or closed wakes the supervisor only once no other PR it follows is open or still unread, and only a park whose reason names one of its PRs. Older clients ignore these facts.
 
   Terminal-PR binding reuses the existing supervisor-review handoff; it does not directly send the Agent an acceptance instruction. The bound source can be an earlier, already terminal PR when the last other followed PR resolves. A terminal fact from before the active park cannot resolve its typed source indirectly: the source is rechecked, so a reopened source is not mistaken for an ended wait. The existing current-PR plus four-earlier-PR sample stays intact; a bound source outside it adds at most one read per existing poll interval, rather than displacing another open or unknown PR. New GitHub comments/reviews still use the existing task-linked Inbox path and its opt-in `assistant.inbox_signals`; this change neither enables that switch nor adds participant-specific reply, CI/run, deployed-version or GitLab observers. Aggregate review/check labels alone have no event identity or submission time and are not treated as fresh wake events.
 
@@ -1000,9 +1000,10 @@ tracked follow-up. An owner's explicit drop can be recorded in the to-do's decis
 `Drop investigation finding <id>?`, choice `Drop`, and a reason, then referenced by `owner_drop_decision_id`.
 
 Manual and automatic parking, final acceptance, owner Pass and other completion paths check the current report. A
-new working turn requires a fresh declaration and review, while keeping the disposition history. A follow-up with
-an outstanding finding stays open until the exact action is confirmed complete or its handoff is moved. Ordinary
-tasks keep their existing workflow.
+new working turn can mark a recorded report stale while keeping its disposition history. On an open task, the current
+supervisor can review that exact recorded version with the same disposition checks, or cancel the investigation with
+`task_review` and keep the report as history. A follow-up with an outstanding finding stays open until the exact
+action is confirmed complete or its handoff is moved. Ordinary tasks keep their existing workflow.
 
 ## Parked tasks
 
@@ -1616,24 +1617,54 @@ Existing `pr_url` / `prs` references are imported once before the first interact
 association read or edit. During a meeting turn, `todo_get` and
 `todo_repositories_get` read only saved associations: they never import links or
 write association data, revisions or receipts. An ordinary user turn retains the
-historical import behavior. New Agent reports append every supported PR URL to this same store,
-including self-hosted instances; old stage and delivery fields retain their existing
+historical import behavior. PR URLs in progress reports, closeouts and structured
+work artifacts are candidates, not ownership evidence. Automatic imports require
+a successful native PR-create tool outcome after the Agent's task link, or a node
+read of its actual checkout: the published PR head branch and commit must match,
+and its author must be the node's signed-in account (or a successful native push
+must name that branch). A deployment or review report mentioning another task's
+PRs does not claim them, even when every Agent uses the same account.
+Missing node identity, an older node or an unpublished head leaves the link unclaimed.
+An automatic import also skips any PR already associated with another open to-do;
+that exclusion is transactional across concurrent reports. Explicit user/Agent
+association tools remain the deliberate way to share a reference. Rejected PRs
+cannot enter legacy `pr_url` / PR history through stage updates.
+If a conflicting link is already saved on both open to-dos, the automatic claim
+fails without deleting either association or treating the old duplicate as accepted.
+Persisted work artifacts retry the same ownership check without requiring a live
+transcript subscription. Turns predating that Agent's task link, retired turns and
+released or dismissed Agents contribute nothing.
+An association-store failure leaves the saved artifacts retryable on the next Inbox
+linking pass, including after a manager restart. The deterministic Inbox linker
+reads these saved links as well as legacy task references, so a comment or review
+on any linked PR can return to the existing task Agent even when `pr_url` names
+another PR. Ambiguous or closed tasks are not selected.
+Old stage and delivery fields retain their existing
 judgment semantics. A stored receipt prevents historical imports and repeated reports
 from restoring links removed by the user. An explicit additive call can restore them.
 Imports and interactive edits lock the same Todo and commit atomically; changes
 broadcast the existing `todos` event even when stage and legacy PR stay unchanged.
-Metadata import errors are logged without blocking the legacy progress path; explicit
-tool and HTTP failures remain errors. Link-derived repositories absent from the
-catalog have `catalog_state: "unlisted"`; recording a GitHub or GitLab URL performs
-no repository verification, remote lookup or catalog mutation. In a report, a
+Metadata import errors are logged and leave non-PR progress intact, but cannot
+admit an unverified PR into legacy progress. Explicit tool and HTTP failures remain
+errors. Link-derived repositories absent from the catalog have
+`catalog_state: "unlisted"`; the association-store write itself performs no remote
+lookup or catalog mutation. Recording a GitHub or GitLab association makes no
+provider call; automatic imports still require the ownership proof above. In a report, a
 provider extension's URL that is new is read by that extension in the background,
 and not again on that to-do for 5 minutes once it has answered (an attempt that
-failed or found it unavailable is tried on the next reply). That covers every address on its hosts in
-an Agent's reply, even one that is then not kept (a file page, an issue, another repository),
-so the extension learns the addresses you and your Agents mention in a to-do's work,
-as its install permission says. Reports skip such addresses while the extension is
+failed or found it unavailable is tried on the next reply). Automatic PR imports
+establish ownership before making that query; merely mentioning another PR, or
+marking a reference as a PR artifact, does not send its address to the provider.
+The provider may still reject a proven address as the wrong kind.
+Reports skip such addresses while the extension is
 unavailable, and the one-time import of older `pr_url` / `prs` references never
-asks an extension.
+asks an extension. A provider's resolved URL, kind and title are not ownership
+evidence: its background result passes the same requested-kind, report-turn and active Agent
+checks before the transaction can record it. A successful resolution may be reused
+during the cooldown, but each new report checks ownership again; an earlier report
+without proof cannot suppress a later report's valid creation evidence.
+A newer report arriving during a provider call is checked when that same
+resolution completes, without making a second provider call.
 
 Task repository storage uses manager migration `0516_todo_repositories.sql`.
 Earlier branch builds recorded it as `0513` or `0514`; the existing migration
