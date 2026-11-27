@@ -57,11 +57,6 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if proto.IsExternalLauncher(launcher) {
 		return nil, externalRefusal(ctx, "adapter_purpose_unsupported")
 	}
-	if resume != "" {
-		if st, ok := n.state.get(resume); ok {
-			execution.TaskInstructions = st.TaskInstructions
-		}
-	}
 	// A start named to a failed start's kept tab holds it from here, sync and async alike: newTab uses it, else it is
 	// kept again when the start returns (startremedy.go).
 	claim, claimErr := n.claimKeptTab(execution.InPane)
@@ -230,6 +225,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			return nil, errors.New("普通 Agent 的启动只支持 Claude Code 或 Codex 启动器")
 		}
 	}
+	resumeWithTranscript := false
 	if resume != "" {
 		if a, ok := n.agent(resume); ok {
 			if mode == "plan" && a.Agent == "codex" {
@@ -252,8 +248,19 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		// say: started under it, a new conversation would be listed under the id of another, which the manager tells
 		// conversations by (a health chat's: #10941). A first start that failed keeps its start or its record (#861)
 		// and starts under its id below.
-		if kind == "claude" && !codex && !n.resumeKnown(ctx, resume) {
-			return nil, resumeUnknown()
+		if kind == "claude" && !codex {
+			if !n.resumeKnown(ctx, resume) {
+				return nil, resumeUnknown()
+			}
+			n.healClaudeRefusalTranscript(resume)
+		}
+		// Healing can remove the only turn. Use the same transcript decision for the launch flags and whether
+		// to carry task instructions into the conversation (#12216).
+		resumeWithTranscript = n.transcriptPath(resume) != ""
+		if !resumeWithTranscript {
+			execution.TaskInstructions = ""
+		} else if st, ok := n.state.get(resume); ok {
+			execution.TaskInstructions = st.TaskInstructions
 		}
 	}
 
@@ -377,14 +384,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		_ = renameSlot(ctx, launch, created.SlotID, name)
 	}
 
-	// A trailing refused turn would be merged into the first new prompt of a resume, so it is cut first: the file's
-	// last turn is then clean again. A session whose only turn was refused loses its file and starts under its id.
-	if resume != "" {
-		n.healClaudeRefusalTranscript(id)
-	}
-	// A session whose first start failed (claude never came up) has no transcript to resume: start it under its id.
+	// A session without a usable transcript starts again under its id.
 	args := "--session-id " + id
-	if resume != "" && n.transcriptPath(id) != "" {
+	if resumeWithTranscript {
 		args = "--resume " + id
 	}
 	planThen := planThenOf(mode, execution.PlanThen)
@@ -407,6 +409,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if !prev.StartedAt.IsZero() { // a branch (fork.go) has none: it starts now
 			st.StartedAt = prev.StartedAt
 		}
+		st.Cwd = keepSpaceCwd(prev.Cwd, st.Cwd)
 		st.Ultracode = prev.Ultracode
 		// A switch to another launcher still waits for the next message (launcher_switch.go): a Resume on the launcher
 		// the agent ran on keeps it; the switch's own start leaves it for the switch to clear.
@@ -574,6 +577,14 @@ func (n *Node) resumeOutsideHealth(ctx context.Context, id string) bool {
 		}
 	}
 	return started
+}
+
+// keepSpaceCwd keeps a session record's folder inside its space when a resume names a directory outside that space (#12216).
+func keepSpaceCwd(prevCwd, cwd string) string {
+	if space := identity.SpaceAt(prevCwd); space != "" && identity.SpaceAt(cwd) != space {
+		return prevCwd
+	}
+	return cwd
 }
 
 // retypeStart types a start's line again into pane once its shell is at rest (settleShell), after leaving the

@@ -141,5 +141,10 @@
   "effort_input_draft": "The terminal’s input box has text that hasn’t been sent (“{draft}”), so the effort wasn’t changed and nothing was typed. Clear it on the computer and try again.",
   "effort_input_draft_plain": "The terminal’s input box shows text (“{draft}”), so the effort wasn’t changed and nothing was typed. This terminal is read without colors, so Claude’s grey suggested message counts as text too. Clear it on the computer and try again.",
   "speed_input_draft": "The terminal’s input box has text that hasn’t been sent (“{draft}”), so the speed wasn’t changed and nothing was typed. Clear it on the computer and try again.",
-  "speed_input_draft_plain": "The terminal’s input box shows text (“{draft}”), so the speed wasn’t changed and nothing was typed. This terminal is read without colors, so Claude’s grey suggested message counts as text too. Clear it on the computer and try again."
+  "speed_input_draft_plain": "The terminal’s input box shows text (“{draft}”), so the speed wasn’t changed and nothing was typed. This terminal is read without colors, so Claude’s grey suggested message counts as text too. Clear it on the computer and try again.",
+  "orca_away": "Orca isn’t running on that computer, so nothing was sent. Open Orca there and try again.",
+  "orca_refused": "Orca turned this down, and nothing was changed: {detail}",
+  "orca_unknown": "It’s not clear whether Orca did this. Check the chat in Orca on that computer before you try again.",
+  "orca_session_gone": "This chat is no longer in Orca.",
+  "orca_closed": "This chat is closed in Orca. Send it a message to open it again, then change its settings."
 }

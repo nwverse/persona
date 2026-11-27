@@ -109,6 +109,9 @@ nonisolated enum ServerEvent: Sendable {
     /// An extension's data changed (`ui.invalidate`, docs/extensions/extensions.md「ui.invalidate」): its interface `id` (nil: all of
     /// them) is drawn again where it is shown.
     case extensionInvalidate(extension: String, id: String?)
+    /// The text_lookup extension point changed (turned on or off, another contribution, its saved words or its
+    /// underline setting, #10977): the app reads `GET /api/v1/text-lookup` again.
+    case textLookupChanged
     /// A meeting's conversation changed (#3862, docs/assistant/meeting-minutes.md「The `meeting_live` event」): content-free,
     /// only the parts that changed (an open set) and their revisions; the app reads the newer parts with `GET …/live?parts=`.
     case meetingLive(recordingID: String, changed: [String], revs: [String: Int64])
@@ -320,6 +323,7 @@ nonisolated enum ServerEvent: Sendable {
         case "todos": return .todos
         case "assistant_saved_prompts": return .savedPrompts(manager: e.manager?.string)
         case "assistant_starred": return .starredMessages(manager: e.manager?.string)
+        case "text_lookup_changed": return .textLookupChanged
         case "personas": return .personas
         case "look":
             guard (e.effective ?? e.id).map({ !$0.isEmpty }) == true else { return nil }
@@ -405,7 +409,8 @@ nonisolated extension ServerEvent {
         case .sendReceipt(let receipt): var receipt = receipt; receipt.key.group = group; return .sendReceipt(receipt)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
              .personas, .look, .managers, .directions, .healthIntake, .healthItems, .healthStrength, .assistantPages, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
-             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall, .savedPrompts, .starredMessages: return self
+             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall, .savedPrompts, .starredMessages,
+             .textLookupChanged: return self
         }
     }
 }
