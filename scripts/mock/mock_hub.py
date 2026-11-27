@@ -24761,22 +24761,6 @@ if ENGINE_SETS:
     for _s in SESSIONS:
         if _s.get("session_id") == WIDGET:
             _s["host"], _s["also_open_in"] = "herdr", ["herdr-core"]
-# MOCK_ORCA_STOPPED=1 (#17037, docs/integrations/engines.md "When Orca is not running"): Orca's rows say what the node found of
-# it (`state`): installed and not running on the Mac Studio (its Agents list shows "Orca isn't running" there when Orca is in
-# its engine set, as with MOCK_ENGINE_SETS=1), an incompatible version on the server (its version and the catalog's note).
-if os.environ.get("MOCK_ORCA_STOPPED") == "1":
-    for _m in MACHINES:
-        for _e in _m.get("engines", []):
-            if _e["id"] != "orca":
-                continue
-            if _m["id"] == "studio":
-                _e.update({"available": False, "version": "1.4.277", "state": "stopped"})
-                _e.pop("note", None)
-            elif _m["id"] == "server":
-                _e.update({"available": False, "version": "1.4.100", "state": "incompatible",
-                           "note": "This version of Orca doesn’t work with Persona. Update both to the latest version"})
-            else:
-                _e["state"] = "missing"
 if os.environ.get("MOCK_PASEO"):  # the server enables Paseo beside herdr: its workspaces are the catalog's (#6295)
     for _m in MACHINES:
         if _m["id"] == "server" and _m.get("online"):
