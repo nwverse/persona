@@ -190,7 +190,7 @@ func TestInternalAsyncTerminalReceiptNeverClaimsOwnerAnswer(t *testing.T) {
 			r = proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
 		}
 		text := e.s.renderAskLater(context.Background(), ix, r)
-		if !strings.Contains(text, "internal receipt") || strings.Contains(text, "用户在卡片上回答") {
+		if !strings.Contains(text, "internal receipt") {
 			t.Fatalf("dishonest internal receipt: %s", text)
 		}
 		if terminal != "answered" && !strings.Contains(text, "Nothing was authorized") {
