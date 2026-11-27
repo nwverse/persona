@@ -125,6 +125,23 @@ final class TasksStore {
         }
     }
 
+    /// The detail asked for (`detailTask` with its dispatch's Agent, or `detailAgent`) as a value for a stack's path, the
+    /// request taken (#13156): the Sidebar layout's page pushes it on its path, so it stays with the root it was opened
+    /// on (`SidebarPageRoots`) instead of being pushed by view over whatever the sidebar picks next. Nil when none is asked.
+    func takeDetail() -> TaskDetailRoute? {
+        let route: TaskDetailRoute
+        if let id = detailTask {
+            route = TaskDetailRoute(todo: id, taskAgent: detailTaskAgent)
+        } else if let key = detailAgent {
+            route = TaskDetailRoute(agent: key)
+        } else {
+            return nil
+        }
+        detailTask = nil
+        detailAgent = nil
+        return route
+    }
+
     // MARK: Loading
 
     func reloadTodos(api: APIClient? = nil) {
@@ -743,4 +760,12 @@ nonisolated enum FeedPaging {
         if let since, newest <= since { return nil }
         return newest
     }
+}
+
+/// A task's detail page (or an Agent's no task stands for) pushed by value (`TasksStore.takeDetail`, #13156).
+nonisolated struct TaskDetailRoute: Hashable, Sendable {
+    var todo: String?
+    var agent: SessionKey?
+    /// A dispatch's resolved Agent, shown first on the task's page.
+    var taskAgent: SessionKey?
 }
