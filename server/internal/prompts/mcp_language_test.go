@@ -25,7 +25,7 @@ func TestMCPLegacyBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Tools added after the legacy inventory was frozen include to-do split and merge and browser_fetch_download.
-	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image", "ask_user_withdraw", "conversations_switch", "health_strength", "file_transfer", "a2a_read", "page", "model_profile_capture", "model_probe", "launcher_import", "external_sources_read", "external_sources_write", "bot_group_reply", "todo_split", "todo_merge", "browser_fetch_download"}
+	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image", "ask_user_withdraw", "conversations_switch", "health_strength", "file_transfer", "a2a_read", "page", "model_profile_capture", "model_probe", "launcher_import", "external_sources_read", "external_sources_write", "bot_group_reply", "todo_split", "todo_merge", "browser_fetch_download", "orca_bot_list", "orca_bot_read", "orca_bot_send"}
 	for _, name := range newTools {
 		if _, exists := expected[name]; exists {
 			t.Fatalf("%s is not a legacy tool", name)
