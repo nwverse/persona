@@ -60,7 +60,7 @@ type conversationSwitchItem struct {
 	// Cancel marks a restore of an item whose switch has not activated: it cancels the original operation
 	// OperationID instead of starting a switch back. It is saved with its batch before the cancel runs, so a restart
 	// finishes it (runConversationSwitchCancel).
-	Cancel bool `json:"cancel,omitempty"`
+	Cancel       bool                  `json:"cancel,omitempty"`
 	BlockedInput *db.ConversationInput `json:"blocked_input,omitempty"`
 }
 

@@ -465,7 +465,7 @@ func (d *DB) ResolveConversationPreparation(ctx context.Context, machine, sessio
 type switchSettlement struct {
 	keepHandoff     bool
 	preparationOnly bool
-	manual bool
+	manual          bool
 }
 
 // An idle acceptance keeps its handoff for the conversation's next input. Accepting a switch discards
@@ -667,18 +667,18 @@ func (d *DB) ObserveConversationRevision(ctx context.Context, machine, session s
 }
 
 type ConversationInput struct {
-	ClientMsgID string `json:"client_msg_id"`
-	Position int64 `json:"position"`
-	Epoch int64 `json:"epoch"`
-	Payload json.RawMessage `json:"-"`
-	State string `json:"state"`
-	DispatchSegment string `json:"dispatch_segment"`
-	DispatchMachine string `json:"dispatch_machine"`
-	DispatchSession string `json:"dispatch_session"`
-	DispatchEpoch int64 `json:"dispatch_epoch"`
-	Version int64 `json:"version"`
-	BlockedReason string `json:"blocked_reason,omitempty"`
-	LastReconciledAt *time.Time `json:"last_reconciled_at"`
+	ClientMsgID      string          `json:"client_msg_id"`
+	Position         int64           `json:"position"`
+	Epoch            int64           `json:"epoch"`
+	Payload          json.RawMessage `json:"-"`
+	State            string          `json:"state"`
+	DispatchSegment  string          `json:"dispatch_segment"`
+	DispatchMachine  string          `json:"dispatch_machine"`
+	DispatchSession  string          `json:"dispatch_session"`
+	DispatchEpoch    int64           `json:"dispatch_epoch"`
+	Version          int64           `json:"version"`
+	BlockedReason    string          `json:"blocked_reason,omitempty"`
+	LastReconciledAt *time.Time      `json:"last_reconciled_at"`
 }
 
 // Enqueue is idempotent by the original client message ID, not its text.

@@ -830,13 +830,13 @@ func TestZeroTurnSlowListLagDoesNotRollbackOrTriggerRecovery(t *testing.T) {
 // is not execution evidence, but the persisted first-message state is required.
 func TestZeroTurnPreparedEmptyGenerationNeedsExplicitStateAndNoDelivery(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		awaiting bool
-		tail int
-		receipt bool
-		dispatch bool
+		name       string
+		awaiting   bool
+		tail       int
+		receipt    bool
+		dispatch   bool
 		unresolved bool
-		want bool
+		want       bool
 	}{
 		{name: "empty_agy_generation", awaiting: true, want: true},
 		{name: "revision_one_is_not_proof"},

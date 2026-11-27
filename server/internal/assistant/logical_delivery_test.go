@@ -12,8 +12,8 @@ import (
 type historicalReceiptStore struct {
 	*db.DB
 	historical string
-	current bool
-	blocked string
+	current    bool
+	blocked    string
 }
 
 func (st *historicalReceiptStore) ResolveHistoricalConversationDelivery(_ context.Context, _, _ string, epoch int64, input db.ConversationInput, outcome string) error {

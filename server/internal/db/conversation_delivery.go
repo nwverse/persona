@@ -96,11 +96,11 @@ func (d *DB) ResolveHistoricalConversationDelivery(ctx context.Context, machine,
 }
 
 type ConversationInputResolution struct {
-	RequestID string `json:"request_id"`
-	ExpectedEpoch int64 `json:"expected_epoch"`
-	Input ConversationInput `json:"input"`
-	Action string `json:"action"`
-	Reason string `json:"reason"`
+	RequestID     string            `json:"request_id"`
+	ExpectedEpoch int64             `json:"expected_epoch"`
+	Input         ConversationInput `json:"input"`
+	Action        string            `json:"action"`
+	Reason        string            `json:"reason"`
 }
 
 // ResolveConversationInputManually is the only ambiguous replay entry point.

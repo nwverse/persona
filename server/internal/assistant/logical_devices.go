@@ -618,8 +618,8 @@ func (s *Service) isZeroTurnPreparedSegment(ctx context.Context, c *db.LogicalCo
 		return false
 	}
 	var state struct {
-		Awaiting *bool `json:"awaiting_first_message"`
-		Inputs []string `json:"segment_inputs"`
+		Awaiting *bool    `json:"awaiting_first_message"`
+		Inputs   []string `json:"segment_inputs"`
 	}
 	_, err = s.store().Setting(ctx, "node_model."+seg.MachineID+"."+seg.SessionID, &state)
 	if err != nil || len(state.Inputs) != 0 || state.Awaiting != nil && !*state.Awaiting {
