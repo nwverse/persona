@@ -61,6 +61,10 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         proof["module_flags"].append("module.voice")
         with self.assertRaises(DRIVER.Failed):
             DRIVER.validate_proof(proof, "core-only", "run", self.shots)
+        proof = self.proof("core-only")
+        proof["entries"]["connector-lark"] = True
+        with self.assertRaises(DRIVER.Failed):
+            DRIVER.validate_proof(proof, "core-only", "run", self.shots)
 
     def test_rejects_missing_captures_and_unproven_device_exchange(self):
         proof = self.proof("full")

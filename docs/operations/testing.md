@@ -837,7 +837,9 @@ real hello's module registry, the empty Agents / Inbox / To-dos pages, the drawe
 Channels, Extensions, Devices and the main-chat composer. The current device must be marked in Devices, a second exchange of
 the pair code must answer 401, and the app must still answer at the end. Health, Screen Share, Voice, recording-write,
 Mail and Lark entry assertions are checked against the full-hub positive control. The recording archive's read entry remains
-available in both editions.
+available in both editions. After those fresh-empty checks, the driver inserts a clearly marked synthetic idle main-session
+record into the real manager's Postgres store and opens it through the app's real assistant route for the composer comparison;
+this does not claim model or Agent execution.
 
 Light/dark PNGs, including Settings › Advanced at the largest accessibility text size, per-edition sanitized proofs and
 `evidence.json` (commit, Xcode and pre-build local-time / idle readings) are

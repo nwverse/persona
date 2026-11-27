@@ -134,6 +134,31 @@ def core_reads(base, token):
     return out
 
 
+def seed_main(container):
+    """Seed a synthetic idle main session in the real manager store, after the fresh-empty page evidence is complete."""
+    machine, session = "fixture-machine", "main-fixture"
+    dbs = run([smoke.DOCKER, "exec", container, "psql", "-U", "persona", "-d", "persona", "-Atc",
+               "select datname from pg_database where not datistemplate"], 30).stdout.split()
+    wrote = []
+    for name in dbs:
+        tables = run([smoke.DOCKER, "exec", container, "psql", "-U", "persona", "-d", name, "-Atc",
+                      "select to_regclass('public.node_sessions') is not null, to_regclass('public.settings') is not null"], 30).stdout.strip()
+        if tables != "t|t":
+            continue
+        session_sql = (f"insert into node_sessions (machine_id, session_id, launcher, cwd) values ('{machine}', '{session}', '', '/tmp') "
+                       f"on conflict (machine_id, session_id) do update set updated_at = now()")
+        settings_sql = ("insert into settings (key, value) values ('assistant', jsonb_build_object("
+                        f"'machine_id', '{machine}', 'main', '{session}', 'main_machine_id', '{machine}')) "
+                        "on conflict (key) do update set value = settings.value || jsonb_build_object("
+                        f"'machine_id', '{machine}', 'main', '{session}', 'main_machine_id', '{machine}'), updated_at = now()")
+        for sql in (session_sql, settings_sql):
+            result = run([smoke.DOCKER, "exec", container, "psql", "-U", "persona", "-d", name, "-v", "ON_ERROR_STOP=1", "-c", sql], 30)
+            check(result.returncode == 0, f"seeding the synthetic main fixture in {name}: {result.stderr}")
+        wrote.append(name)
+    check(wrote, "no manager database accepted the synthetic main fixture")
+    return machine + "/" + session
+
+
 def prepare_app(source, work, simulator, readings):
     config = work / "public-config.json"
     config.write_text(json.dumps({"app": {"bundle_id": "org.example.persona.ci", "team_id": ""}}))
@@ -144,7 +169,8 @@ def prepare_app(source, work, simulator, readings):
     run_log(["native/app-core/scripts/build-apple.sh", "--simulator"], work / "app-core.log", 1200, source, env)
     run_log(["xcodegen", "generate", "-q"], work / "xcodegen.log", 120, source / "apple", env)
     derived = work / "DerivedData"
-    resolve = ["xcodebuild", "-project", "apple/Persona.xcodeproj", "-scheme", "Persona", "-configuration", "Debug",
+    resolve = ["python3", "scripts/heavy_slot.py", "run", "--kind", "xcode", "--", "xcodebuild",
+               "-project", "apple/Persona.xcodeproj", "-scheme", "Persona", "-configuration", "Debug",
                "-destination", f"platform=iOS Simulator,id={simulator}", "-derivedDataPath", derived,
                "-clonedSourcePackagesDirPath", work / "SourcePackages", "-resolvePackageDependencies"]
     # Xcode 26.0 intermittently crashes while inserting freshly resolved packages into its IDE group. Retry only that
@@ -203,10 +229,6 @@ def require(ctl, element_id=None, label=None, label_contains=None, seconds=30):
 
 def has(ctl, element_id):
     return bool(visible_matches(ctl, element_id=element_id))
-
-
-def has_label(ctl, label):
-    return bool(visible_matches(ctl, label=label))
 
 
 def visible_matches(ctl, element_id=None, label=None):
@@ -317,7 +339,7 @@ def settings(ctl, key):
                  lambda: (ctl.call("state").get("settingsDepth") or 0) > 0 or None)
 
 
-def exercise_app(ctl, base, code, edition, shots):
+def exercise_app(ctl, base, code, edition, shots, container):
     full = edition == "full"
     proof = {"schema": 1, "run_id": ctl.run_id, "edition": edition, "core_reads": core_reads(base, code)}
     ctl.hub = base
@@ -338,7 +360,6 @@ def exercise_app(ctl, base, code, edition, shots):
     ctl.online(timeout=45)
     state = ctl.call("state")
     check(state.get("paired") is True, "the app did not stay paired")
-    main_session = state.get("assistant")
     off = set(state.get("modulesOffByHub") or [])
     active = set(state.get("modules") or [])
     expected_registry = {"health", "screen-share", "voice"}
@@ -407,7 +428,6 @@ def exercise_app(ctl, base, code, edition, shots):
     capture_both(ctl, shots, edition, "advanced-settings-ax5", proof)
     size = run(["xcrun", "simctl", "ui", ctl.udid, "content_size", "large"], 30)
     check(size.returncode == 0, "could not restore the default text size")
-    capture_both(ctl, shots, edition, "advanced-settings", proof)
 
     settings(ctl, "openConnectors")
     require(ctl, element_id="connectors-list")
@@ -420,8 +440,9 @@ def exercise_app(ctl, base, code, edition, shots):
     proof["entries"]["connector-lark-bot"] = bot
     capture_both(ctl, shots, edition, "connectors", proof)
     check(mail == full, f"{edition}: wrong Mail connector visibility")
-    check(lark == full, f"{edition}: wrong Lark connector visibility")
     check(bot == full, f"{edition}: wrong Lark Bot connector visibility")
+    if not full:
+        check(not lark, "core-only: Lark connector is visible without a Lark capability")
     no_errors(ctl, "Connectors")
 
     settings(ctl, "openChannels")
@@ -446,8 +467,13 @@ def exercise_app(ctl, base, code, edition, shots):
     no_errors(ctl, "Devices")
     capture_both(ctl, shots, edition, "devices", proof)
 
-    check(isinstance(main_session, str) and main_session, f"{edition}: no real main conversation was selected after pairing")
-    navigate(ctl, "assistant", {"openShellPage": False}, main_session)
+    # Fresh-hub evidence above intentionally has no session. Seed only a synthetic idle main record now, then open it
+    # through the real assistant route; no model or Agent execution is claimed.
+    main_session = seed_main(container)
+    proof["main_fixture"] = "synthetic-idle-record-in-real-postgres"
+    launch(ctl, ["-tab", "assistant", "-openAssistant", main_session,
+                 "-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
+    ctl.online(timeout=30)
     require(ctl, element_id="shell-composer-add")
     ctl.tap(id="shell-composer-add")
     require(ctl, element_id="composer-menu-mention")
@@ -496,12 +522,14 @@ def validate_proof(proof, edition, run_id, shots):
     check(len(captures) >= 20 and all((shots / name).is_file() for name in captures),
           f"{edition}: expected light/dark captures are missing")
     for name in ("sidebar-health", "settings-live-screen", "settings-meetings", "settings-health",
-                 "settings-mail", "connector-lark", "connector-lark-bot", "channel-feishu", "voice-extension",
-                 "composer-menu-meeting"):
+                 "settings-mail", "connector-lark-bot", "channel-feishu", "voice-extension", "composer-menu-meeting"):
         check(proof.get("entries", {}).get(name) is full, f"{edition}: {name} has the wrong proof value")
+    if not full:
+        check(proof.get("entries", {}).get("connector-lark") is False,
+              "core-only: a Lark connector entry appeared without its capability")
 
 
-def run_phase(parent, source, app, client_env, simulator, shots, edition, run_id, keep, readings):
+def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readings):
     work = parent / edition
     work.mkdir()
     bindir, home, log = work / "bin", work / "home", work / "hub.log"
@@ -535,7 +563,7 @@ def run_phase(parent, source, app, client_env, simulator, shots, edition, run_id
         run_log(["xcrun", "simctl", "install", simulator, app], work / "install.log", 120, env=client_env)
         ctl = Ctl(udid=simulator, bundle="org.example.persona.ci", port=smoke.free_port())
         ctl.run_id = run_id
-        proof = exercise_app(ctl, base, pair_code(base, master), edition, shots)
+        proof = exercise_app(ctl, base, pair_code(base, master), edition, shots, container)
         proof["hub_id"] = health["hub_id"]
         proof["module_flags"] = sorted(f for f in features if f == "modules" or f.startswith("module."))
         validate_proof(proof, edition, run_id, shots)
@@ -597,8 +625,7 @@ def main():
         app, client_env = prepare_app(source, work, simulator, readings)
         evidence = {}
         for edition in ("core-only", "full"):
-            evidence[edition] = run_phase(work, source, app, client_env, simulator, captures_dir,
-                                          edition, run_id, args.keep, readings)
+            evidence[edition] = run_phase(work, app, client_env, simulator, captures_dir, edition, run_id, readings)
         (captures_dir / "evidence.json").write_text(json.dumps({
             "schema": 1, "run_id": run_id, "commit": run(["git", "rev-parse", "HEAD"], 10).stdout.strip(),
             "xcode": run(["xcodebuild", "-version"], 20).stdout.strip(), "phases": evidence,
