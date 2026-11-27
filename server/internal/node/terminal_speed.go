@@ -116,13 +116,13 @@ func (n *Node) setClaudeTerminalSpeed(ctx context.Context, id, pane, tier string
 	if err := n.checkPaneFor(ctx, pane, "claude", sendOpts{readBox: true}); err != nil {
 		return err
 	}
-	if n.plainScreen(pane) {
-		draft, err := n.promptHasDraft(ctx, pane)
+	if n.plainScreen(pane) { // checkPaneFor reads the box with colors elsewhere; a plain screen's is read here
+		text, draft, err := n.promptDraft(ctx, pane)
 		if err != nil {
 			return err
 		}
 		if draft {
-			return refusal(screen.InputDraft, "The terminal input box is not empty.", nil)
+			return n.inputDraftRefusal(pane, "speed", text)
 		}
 	}
 	before, err := n.readPane(ctx, pane, "visible", 60)
