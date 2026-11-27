@@ -13,13 +13,10 @@ import (
 	"time"
 )
 
-const prFeedbackCursorsKey = "assistant.pr_feedback_cursors"
-
-type prFeedbackStream string
-
 const (
-	prFeedbackReviews       prFeedbackStream = "reviews"
-	prFeedbackIssueComments prFeedbackStream = "issue_comments"
+	prFeedbackCursorsKey    = "assistant.pr_feedback_cursors"
+	prFeedbackReviews       = "reviews"
+	prFeedbackIssueComments = "issue_comments"
 )
 
 // A cursor remembers every handled ID at its newest timestamp. Feedback from that same second
@@ -29,7 +26,7 @@ type prFeedbackCursor struct {
 	IDsAt []string  `json:"ids_at,omitempty"`
 }
 
-type prFeedbackCursors map[string]map[prFeedbackStream]prFeedbackCursor // (todo, normalized PR URL) -> stream -> cursor
+type prFeedbackCursors map[string]map[string]prFeedbackCursor // (todo, normalized PR URL) -> stream -> cursor
 
 type prFeedbackItem struct {
 	githubPRFeedbackPost
@@ -58,7 +55,7 @@ func (c *prFeedbackCursor) advance(at time.Time, id string) {
 	c.IDsAt = append(c.IDsAt, id)
 }
 
-func (s *Service) savePRFeedbackCursor(ctx context.Context, st Store, key string, stream prFeedbackStream, cursor prFeedbackCursor) error {
+func (s *Service) savePRFeedbackCursor(ctx context.Context, st Store, key, stream string, cursor prFeedbackCursor) error {
 	s.prFeedback.writeMu.Lock()
 	defer s.prFeedback.writeMu.Unlock()
 	var cursors prFeedbackCursors
@@ -69,7 +66,7 @@ func (s *Service) savePRFeedbackCursor(ctx context.Context, st Store, key string
 		cursors = make(prFeedbackCursors)
 	}
 	if cursors[key] == nil {
-		cursors[key] = make(map[prFeedbackStream]prFeedbackCursor)
+		cursors[key] = make(map[string]prFeedbackCursor)
 	}
 	cursors[key][stream] = cursor
 	if err := st.PutSetting(ctx, prFeedbackCursorsKey, cursors); err != nil {
@@ -80,18 +77,18 @@ func (s *Service) savePRFeedbackCursor(ctx context.Context, st Store, key string
 
 func prReviewEventID(id int64) string { return "review:" + strconv.FormatInt(id, 10) }
 
-func (stream prFeedbackStream) eventID(id int64) string {
+func prFeedbackEventID(stream string, id int64) string {
 	if stream == prFeedbackIssueComments {
 		return "issue_comment:" + strconv.FormatInt(id, 10)
 	}
 	return prReviewEventID(id)
 }
 
-func (stream prFeedbackStream) pending(items []prFeedbackItem, cursor prFeedbackCursor) []prFeedbackItem {
+func pendingPRFeedback(stream string, items []prFeedbackItem, cursor prFeedbackCursor) []prFeedbackItem {
 	var pending []prFeedbackItem
 	seen := make(map[int64]bool)
 	for _, item := range items {
-		if item.ID > 0 && !item.at.IsZero() && !seen[item.ID] && !cursor.handled(item.at, stream.eventID(item.ID)) {
+		if item.ID > 0 && !item.at.IsZero() && !seen[item.ID] && !cursor.handled(item.at, prFeedbackEventID(stream, item.ID)) {
 			seen[item.ID] = true
 			pending = append(pending, item)
 		}
@@ -107,9 +104,22 @@ func (stream prFeedbackStream) pending(items []prFeedbackItem, cursor prFeedback
 
 func (s *Service) prFeedbackTarget(todoID, url, head string, checkedAt time.Time) (Todo, bool) {
 	t, ok := s.todoNow(todoID)
-	return t, ok && taskOpen(t) && !needsUserWakeEligible(t) && t.PRURL == url && s.stagePR(todoID) == url &&
-		t.PRStatus != nil && t.PRStatus.URL == url && t.PRStatus.State == "open" && t.PRStatus.HeadOID == head &&
-		t.PRStatus.CheckedAt.Equal(checkedAt)
+	if !ok {
+		return t, false
+	}
+	p := s.prFeedbackBinding(t, url)
+	return t, p != nil && p.HeadOID == head && p.CheckedAt.Equal(checkedAt)
+}
+
+func (s *Service) prFeedbackBinding(t Todo, url string) *TodoPRStatus {
+	if !taskOpen(t) || t.PRURL != url || s.stagePR(t.ID) != url {
+		return nil
+	}
+	p := t.PRStatus
+	if p == nil || p.URL != url || p.State != "open" || p.HeadOID == "" {
+		return nil
+	}
+	return p
 }
 
 func (s *Service) routePRFeedback(ctx context.Context, todoID string, status TodoPRStatus, g githubForge, feedback prFeedback) error {
@@ -130,9 +140,9 @@ func (s *Service) routePRFeedback(ctx context.Context, todoID string, status Tod
 	if _, err := st.Setting(ctx, prFeedbackCursorsKey, &saved); err != nil {
 		return fmt.Errorf("read feedback cursors: %w", err)
 	}
-	route := func(stream prFeedbackStream, items []prFeedbackItem) error {
+	route := func(stream string, items []prFeedbackItem) error {
 		cursor, initialized := saved[key][stream]
-		pending := stream.pending(items, cursor)
+		pending := pendingPRFeedback(stream, items, cursor)
 		if initialized && len(pending) == 0 {
 			return nil
 		}
@@ -168,7 +178,7 @@ func (s *Service) routePRFeedback(ctx context.Context, todoID string, status Tod
 		// Baseline the first complete list, keeping only its newest timestamp and IDs. An empty saved
 		// cursor distinguishes an observed empty stream from one this hub has never read.
 		for _, item := range pending {
-			cursor.advance(item.at, stream.eventID(item.ID))
+			cursor.advance(item.at, prFeedbackEventID(stream, item.ID))
 		}
 		return s.savePRFeedbackCursor(ctx, st, key, stream, cursor)
 	}
@@ -188,7 +198,7 @@ func (s *Service) routePRFeedback(ctx context.Context, todoID string, status Tod
 	return errors.Join(reviewErr, route(prFeedbackIssueComments, comments))
 }
 
-func (f *prFeedback) events(ctx context.Context, todoID string, status TodoPRStatus, g githubForge, stream prFeedbackStream, items []prFeedbackItem) ([]prRoutedEvent, error) {
+func (f *prFeedback) events(ctx context.Context, todoID string, status TodoPRStatus, g githubForge, stream string, items []prFeedbackItem) ([]prRoutedEvent, error) {
 	var events []prRoutedEvent
 	reviews := stream == prFeedbackReviews
 	for _, item := range items {
@@ -222,7 +232,7 @@ func (f *prFeedback) events(ctx context.Context, todoID string, status TodoPRSta
 		}
 		events = append(events, prRoutedEvent{
 			TodoID: todoID, PRURL: status.URL, HeadSHA: status.HeadOID, Kind: kind,
-			EventID: stream.eventID(item.ID), ReviewState: reviewState, Author: author, Body: body,
+			EventID: prFeedbackEventID(stream, item.ID), ReviewState: reviewState, Author: author, Body: body,
 			EventURL:  cmp.Or(strings.TrimSpace(item.HTMLURL), triageNormalizePRURL(status.URL)+anchor+strconv.FormatInt(item.ID, 10)),
 			CheckedAt: status.CheckedAt,
 		})

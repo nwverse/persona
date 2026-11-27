@@ -79,6 +79,7 @@ type prEventRouteRecord struct {
 	Outcome         string    `json:"outcome"`
 	At              time.Time `json:"at"`
 	FallbackPending bool      `json:"fallback_pending,omitempty"`
+	NeedsUserRound  string    `json:"needs_user_round,omitempty"`
 }
 
 type prEventRouteBook struct {
@@ -396,30 +397,50 @@ func (s *Service) deliverPRFeedback(ctx context.Context, t Todo, ev prRoutedEven
 	if prior.Outcome == prRouteOutcomeUncertain {
 		cause = errors.New("delivery to Agent is unconfirmed")
 	}
-	if !handled {
+	if !handled && !needsUserWakeEligible(t) {
 		outcome, err := s.deliverPREventToAgent(ctx, t, ev, key)
 		if err == nil {
 			return s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: outcome})
 		}
 		cause = err
-		pending := prEventRouteRecord{TodoID: t.ID, Outcome: prRouteOutcomeFallback, FallbackPending: true}
-		if sendUnknown(err) {
+	}
+	t, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA, ev.CheckedAt)
+	if !ok {
+		return errors.New("PR feedback no longer matches the task")
+	}
+	final := prEventRouteRecord{TodoID: t.ID, Outcome: prRouteOutcomeFallback}
+	round := prior.NeedsUserRound
+	if !handled {
+		if needsUserWakeEligible(t) {
+			round = s.needsUserRoundKey(t)
+		}
+		pending := final
+		pending.FallbackPending = true
+		pending.NeedsUserRound = round
+		if sendUnknown(cause) {
 			pending.Outcome = prRouteOutcomeUncertain
 		} else if t.Supervision == nil {
-			return err
+			return cause
 		}
-		// Hold the fallback route across retries even if the Agent comes back while the outbox is being saved.
+		// Keep the selected supervisor route and decision round stable if an outbox or receipt write fails.
 		if err := s.recordPREventRoute(ctx, key, pending); err != nil {
 			return err
 		}
 	}
-	if _, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA, ev.CheckedAt); !ok {
-		return errors.New("PR feedback no longer matches the task")
+	var queued bool
+	if round != "" {
+		if !needsUserWakeEligible(t) || s.needsUserRoundKey(t) != round {
+			// The round ended while this event waited on storage. Its pending signal is stale.
+			return s.recordPREventRoute(ctx, key, final)
+		}
+		queued = s.maybeWakeNeedsUserForPRFeedback(ctx, t, ev, round)
+	} else if t.Supervision != nil {
+		queued = s.signalReplacing(nil, prEventFallbackSignal(t.ID, ev, cause))
 	}
-	if t.Supervision == nil || !s.signalReplacing(nil, prEventFallbackSignal(t.ID, ev, cause)) {
+	if !queued {
 		return fmt.Errorf("could not enqueue PR feedback %s for the supervisor: %w", ev.EventID, cause)
 	}
-	return s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: prRouteOutcomeFallback})
+	return s.recordPREventRoute(ctx, key, final)
 }
 
 // routePREvents routes actionable PR events directly to the bound Agent when assistant.pr_events_route_to_agent is on.
@@ -549,6 +570,11 @@ func prEventFallbackSignal(todoID string, ev prRoutedEvent, cause error) supervi
 }
 
 func (s *Service) prEventSignalStillHolds(t Todo, g superviseSignal) bool {
+	if g.Report == prEventKindComment {
+		ev := prRoutedEvent{PRURL: g.PRURL, Kind: prEventKindComment, EventID: g.PREventID}
+		return g.PREventID != "" && g.Key == ev.supervisorKey() && s.prFeedbackBinding(t, g.PRURL) != nil &&
+			!needsUserWakeEligible(t)
+	}
 	if t.PRURL != g.PRURL && !slices.Contains(t.PRs, g.PRURL) {
 		return false
 	}
@@ -558,11 +584,6 @@ func (s *Service) prEventSignalStillHolds(t Todo, g superviseSignal) bool {
 	p := prFacts(t, g.PRURL)
 	if p == nil || p.State != "open" || p.HeadOID == "" {
 		return false
-	}
-	if g.Report == prEventKindComment {
-		ev := prRoutedEvent{PRURL: g.PRURL, Kind: prEventKindComment, EventID: g.PREventID}
-		return g.PREventID != "" && g.Key == ev.supervisorKey() && taskOpen(t) &&
-			t.PRURL == g.PRURL && s.stagePR(t.ID) == g.PRURL && !needsUserWakeEligible(t)
 	}
 	if !strings.HasPrefix(g.Key, p.URL+"@"+p.HeadOID+":") {
 		return false
@@ -636,7 +657,7 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 			return "", errors.New("task closed before delivery")
 		}
 		if ev.isFeedback() {
-			if _, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA, ev.CheckedAt); !ok {
+			if latest, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA, ev.CheckedAt); !ok || needsUserWakeEligible(latest) {
 				return "", errors.New("PR feedback no longer matches the task")
 			}
 		}
