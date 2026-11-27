@@ -300,9 +300,6 @@ func (n *Node) resolveStopRuntime(ctx context.Context, id string) error {
 	if r := n.starts.get(id); r != nil && r.ended.IsZero() {
 		return nil
 	}
-	if _, pending := n.pendingRuntimeForStop(id); pending {
-		return nil
-	}
 	if _, _, held := n.agyOpenIn(id); held || n.agyHasRawPaneAttribution(conversation) {
 		return nil
 	}
