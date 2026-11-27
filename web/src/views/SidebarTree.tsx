@@ -4,6 +4,7 @@ import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef } from "reac
 import { t } from "../i18n";
 import { isSpaceMuted } from "../lib/agent-filter";
 import { isQuiet, sessionHost, type AgentMutes, type Space } from "../lib/agent-groups";
+import { useActiveAgentsView } from "../lib/looks";
 import { useHeldSeenOrder, useSeenRowsMode } from "../lib/seen-rows";
 import { showsWorktreeLevel, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos-core";
 import { paneRoute, tabRowKeys, type ChildStates, type HerdrMachine, type HerdrSpace, type HerdrTab } from "../lib/herdr-tree";
@@ -775,6 +776,9 @@ function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the tab is read from `latest`; its key names the tab
     [onNodeMenu, tab.key],
   );
+  // Running now (#16898): the herdr tab name and the Agent session name each get their own line instead of competing
+  // for one line; the default list keeps its inline tab prefix
+  const stacked = useActiveAgentsView();
   const row = (
     <SessionRow
       s={tab.lead}
@@ -787,7 +791,8 @@ function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
       // a long tab name gives way: it would run under the "N agents" button (endRoom) and hide the agent's title;
       // squeezed, it shrinks (truncated) before the title goes under its minimum (SessionRow)
       prefix={tab.label}
-      prefixClass="min-w-0 max-w-[50%] shrink truncate text-[11.5px] text-ink-3 tabular-nums"
+      prefixClass={stacked ? "block line-clamp-2 whitespace-normal break-words text-submeta leading-4 text-ink-3 tabular-nums" : "min-w-0 max-w-[50%] shrink truncate text-[11.5px] text-ink-3 tabular-nums"}
+      stackPrefix={stacked}
       showTodoTag={single}
       onMenu={single ? onRowMenu : onTabMenu}
       menuLabel={single ? undefined : t("sidebar.tab_actions")}

@@ -2400,7 +2400,8 @@ nothing and draws the page as it always was, and Default puts it back.
   (`runningNow` in `lib/agent-groups.ts`): those herdr or another terminal engine still has a pane for, on an online
   computer, not stopped by a restart. A session with no pane (a desktop app's chat, a Feishu topic, a runtime's history,
   even with cards still waiting) is left out, and so are terminals with no Agent in them (plain shell panes). Grouped
-  by computer, without the grouping bar and without Recent; the quick filters stay.
+  by computer, without the grouping bar and without Recent; the quick filters stay. A herdr tab's name and its Agent
+  session's name each get their own line, rather than truncating one another as an inline prefix and title.
 - `settings_view: "short"`: Settings lists Models, Persona, Integrations or Channels and Extensions, Agents, General and
   Hub, and a **More settings** row lists the rest again. Search still finds every category, and an open category stays
   listed.
