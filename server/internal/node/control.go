@@ -333,6 +333,16 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if id == "" {
 		id = newUUID()
 	}
+	// A resume can arrive without a launcher in its RPC params. Resolve the provider before writing settings, which
+	// override parts of the environment personad launch will supply.
+	managed, err := n.readyManagedLauncher(ctx, launcher)
+	if err != nil {
+		return nil, err
+	}
+	managedRestart, _ := ctx.Value(managedRestartKey{}).(bool)
+	if managedRestart && (managed.Name == "" || managed.AgentType() != "claude") {
+		return nil, refusal(notDelivered, "The managed Claude provider is no longer available to resume this conversation.", nil)
+	}
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
 	if execution.Source.Role == "" {
@@ -361,7 +371,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		}
 	}
 	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.
-	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: modelArg, Effort: effort,
+	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: modelArg, Effort: effort, managed: managedRestart,
 		Plugins: n.claudeLoadsPlugins(ctx), TaskInstructionFile: instructionFile}
 	if backend := backendLaunchFrom(ctx); backend != nil && mode != "plan" {
 		for _, repo := range backend.executor.journal.Repositories {

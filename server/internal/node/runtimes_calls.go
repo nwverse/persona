@@ -387,6 +387,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				if !syntheticSegment {
 					input["client_msg_id"] = opts.ClientMsgID
 				}
+				if h.agent() == agyAgent && caps.Model && p.Model != "" {
+					input["model"] = p.Model
+				}
 				if p.PermissionMode != "" {
 					input["mode"] = p.PermissionMode
 				} else if h.agent() == agyAgent && !n.runtimeAssistant(p.SessionID) {
