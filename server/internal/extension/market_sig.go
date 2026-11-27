@@ -227,7 +227,7 @@ func ParseCatalog(raw []byte, trusted string) (*Fetched, error) {
 	if trusted != "" {
 		keys = []string{trusted}
 	}
-	f, err := parseCatalog(raw, keys, "extension-market_security.signature")
+	f, err := parseCatalog(raw, keys, "extension-market_security.signature", 0)
 	if err != nil {
 		return nil, catalogFailure(ErrCatalogUnverified, err)
 	}
@@ -238,11 +238,16 @@ func ParseCatalog(raw []byte, trusted string) (*Fetched, error) {
 // several during a rotation). No keys: the catalog is parsed but not verified, as for an unsigned market. With keys,
 // one valid signature by any of them verifies it, and Fetched.SignedBy is the first key (in keys' order) that signed.
 func ParseCatalogKeys(raw []byte, keys []string) (*Fetched, error) {
+	return ParseCatalogKeysForBuild(raw, keys, 0)
+}
+
+// ParseCatalogKeysForBuild verifies the same raw payload and resolves entries against the given hub build.
+func ParseCatalogKeysForBuild(raw []byte, keys []string, build int64) (*Fetched, error) {
 	refused := "extension-market_security.private_signature"
 	if len(keys) == 1 && keys[0] == Official.SigningKey {
 		refused = "extension-market_security.signature"
 	}
-	f, err := parseCatalog(raw, keys, refused)
+	f, err := parseCatalog(raw, keys, refused, build)
 	if err != nil {
 		return nil, catalogFailure(ErrCatalogUnverified, err)
 	}
@@ -251,7 +256,7 @@ func ParseCatalogKeys(raw []byte, keys []string) (*Fetched, error) {
 
 // parseCatalog verifies with any one of keys (none: not verified); refused is the message key of a signature no key
 // verifies.
-func parseCatalog(raw []byte, keys []string, refused string) (*Fetched, error) {
+func parseCatalog(raw []byte, keys []string, refused string, build int64) (*Fetched, error) {
 	if len(raw) > IndexMost {
 		return nil, i18n.Err("extension-market_security.catalog")
 	}
@@ -315,10 +320,7 @@ func parseCatalog(raw []byte, keys []string, refused string) (*Fetched, error) {
 	if len(keys) > 0 && trusted == "" {
 		return nil, i18n.Err(refused)
 	}
-	if err := catalogFields(payload, reflect.TypeFor[MarketIndex]()); err != nil {
-		return nil, err
-	}
-	ix, warnings, err := ParseIndex(payload)
+	ix, warnings, err := parseIndex(payload, build)
 	if err != nil {
 		return nil, err
 	}
