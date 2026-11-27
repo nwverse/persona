@@ -392,8 +392,9 @@ func TestInvestigationFindingsStaleLiveWorkerReview(t *testing.T) {
 	}
 	const evidence = "Verified the log source."
 	completeTestFinding(t, s, todo.ID, report.Version, investigateLogs, evidence)
-	if _, err := confirmTestFindings(s, todo.ID, report.Version, findingDisposition{ID: investigateLogs.ID, Done: "No matching check"}); err == nil ||
-		!strings.Contains(err.Error(), "exact scoped next-action check") {
+	conflicting := findingDisposition{ID: investigateLogs.ID, Done: evidence, WaitTarget: "another team"}
+	if _, err := confirmTestFindings(s, todo.ID, report.Version, conflicting); err == nil ||
+		!strings.Contains(err.Error(), "only one disposition") {
 		t.Fatalf("review with an invalid disposition: %v", err)
 	}
 	got := todoNow(s, todo.ID).Supervision.Investigation
