@@ -447,16 +447,18 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   return (
     <aside data-sidebar-root className="flex h-full w-full flex-col bg-canvas">
       <div className="px-2.5 pt-2.5">
-        <div className="mb-2 flex items-center gap-1">
+        <div className={cx("flex items-center gap-1", hideCollapse ? "mb-1" : "mb-2")}>
           <div className="min-w-0 flex-1"><AssistantSwitcher phase={phase} online={online} total={total} route={route} /></div>
           {/* folds the column to the rail of icons (a wide screen; macOS desktop hosts it in MacBayTools; the drawer closes by its scrim) */}
           {!narrow && !hideCollapse && <CollapseButton collapsed={false} chord={bindings["left-sidebar"]} />}
         </div>
-        <button type="button" onClick={onSearch} className="touch-hit mb-1 flex h-8 w-full items-center gap-2 rounded-control bg-inset px-2.5 text-left shadow-hairline transition-colors hover:bg-hover">
-          <Icon name="search" size={12} stroke={2} className="text-ink-3" />
-          <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3">{t("sidebar.search_sessions")}</span>
-          <span className="hidden sm:inline-flex [@media(hover:none)]:hidden"><Kbd>{searchHint}</Kbd></span>
-        </button>
+        {!hideCollapse && (
+          <button type="button" onClick={onSearch} className="touch-hit mb-1 flex h-8 w-full items-center gap-2 rounded-control bg-inset px-2.5 text-left shadow-hairline transition-colors hover:bg-hover">
+            <Icon name="search" size={12} stroke={2} className="text-ink-3" />
+            <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3">{t("sidebar.search_sessions")}</span>
+            <span className="hidden sm:inline-flex [@media(hover:none)]:hidden"><Kbd>{searchHint}</Kbd></span>
+          </button>
+        )}
       </div>
 
       {/* scroll-pt: a row reached by Tab doesn't stop under the pinned Persona row — about 62px with its 主对话 line

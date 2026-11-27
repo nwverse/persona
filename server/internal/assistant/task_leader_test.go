@@ -164,10 +164,29 @@ func TestTaskLeaderGetsRestrictedTaskPlanAndWorkersDoNot(t *testing.T) {
 			restricted = append(restricted, tl)
 		}
 	}
-	if len(restricted) != 1 || !strings.Contains(restricted[0].Description, "Hand part of your own task to workers") ||
-		strings.Contains(string(restricted[0].InputSchema), "todo_id") || !strings.Contains(string(restricted[0].InputSchema), `"role"`) ||
-		!strings.Contains(string(restricted[0].InputSchema), `"worker"`) {
+	if len(restricted) != 1 || !strings.Contains(restricted[0].Description, "Hand part of your own task to workers") {
 		t.Fatalf("the leader's tools: %+v", restricted)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(restricted[0].InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	taskSchema := schema["properties"].(map[string]any)["tasks"].(map[string]any)
+	item := taskSchema["items"].(map[string]any)
+	fields := item["properties"].(map[string]any)
+	// A nested distinct_from.todo_id explains separation; it cannot select a worker's to-do.
+	if fields["todo_id"] != nil || item["additionalProperties"] != false {
+		t.Fatalf("the leader must not be able to select an existing worker to-do: %+v", item)
+	}
+	role, ok := fields["role"].(map[string]any)
+	if !ok || !reflect.DeepEqual(role["enum"], []any{"worker"}) ||
+		!slices.Contains(item["required"].([]any), any("role")) {
+		t.Fatalf("the leader's task must require role=worker: %+v", item)
+	}
+	override, _ := fields["distinct_from"].(map[string]any)
+	distinct, _ := override["items"].(map[string]any)
+	if !reflect.DeepEqual(distinct["required"], []any{"todo_id", "reason"}) {
+		t.Fatalf("the duplicate override needs a to-do ID and reason: %+v", distinct)
 	}
 	if got := leaderToolNames(s.sessionMCPTools(ctx, "box", "someone-else", false, false)); slices.Contains(got, "task_plan") {
 		t.Fatalf("an agent of no task got task_plan: %v", got)

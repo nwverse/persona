@@ -710,6 +710,11 @@ Recent reads use durable seen timestamps; input and view-exit activity use a sep
 durable record, so they neither mark a future answer read nor suppress its notification. A manager restart forgets neither.
 The owner may still explicitly complete a task in the UI; that does not stop its Agent.
 
+An explicit supervisor cancellation can close a newly planned dispatch while its only Agent is passively viewed.
+It requires a recent first dispatch and a readable transcript with no owner input, possible writes or delivered result.
+A published review or file, an incomplete transcript, or owner input keeps the activity guard.
+The retirement sweep continues to protect the open view and the normal inactivity window.
+
 **Closure and Agent retirement are separate**: completed and cancelled tasks both keep their Agent conversations usable.
 The web chat shows a persistent completed/cancelled ownership line, separate from active task ownership, with a link to
 the task and a continuation hint only while sending remains available. Cancellation no longer interrupts the Agent or
@@ -1617,24 +1622,54 @@ Existing `pr_url` / `prs` references are imported once before the first interact
 association read or edit. During a meeting turn, `todo_get` and
 `todo_repositories_get` read only saved associations: they never import links or
 write association data, revisions or receipts. An ordinary user turn retains the
-historical import behavior. New Agent reports append every supported PR URL to this same store,
-including self-hosted instances; old stage and delivery fields retain their existing
+historical import behavior. PR URLs in progress reports, closeouts and structured
+work artifacts are candidates, not ownership evidence. Automatic imports require
+a successful native PR-create tool outcome after the Agent's task link, or a node
+read of its actual checkout: the published PR head branch and commit must match,
+and its author must be the node's signed-in account (or a successful native push
+must name that branch). A deployment or review report mentioning another task's
+PRs does not claim them, even when every Agent uses the same account.
+Missing node identity, an older node or an unpublished head leaves the link unclaimed.
+An automatic import also skips any PR already associated with another open to-do;
+that exclusion is transactional across concurrent reports. Explicit user/Agent
+association tools remain the deliberate way to share a reference. Rejected PRs
+cannot enter legacy `pr_url` / PR history through stage updates.
+If a conflicting link is already saved on both open to-dos, the automatic claim
+fails without deleting either association or treating the old duplicate as accepted.
+Persisted work artifacts retry the same ownership check without requiring a live
+transcript subscription. Turns predating that Agent's task link, retired turns and
+released or dismissed Agents contribute nothing.
+An association-store failure leaves the saved artifacts retryable on the next Inbox
+linking pass, including after a manager restart. The deterministic Inbox linker
+reads these saved links as well as legacy task references, so a comment or review
+on any linked PR can return to the existing task Agent even when `pr_url` names
+another PR. Ambiguous or closed tasks are not selected.
+Old stage and delivery fields retain their existing
 judgment semantics. A stored receipt prevents historical imports and repeated reports
 from restoring links removed by the user. An explicit additive call can restore them.
 Imports and interactive edits lock the same Todo and commit atomically; changes
 broadcast the existing `todos` event even when stage and legacy PR stay unchanged.
-Metadata import errors are logged without blocking the legacy progress path; explicit
-tool and HTTP failures remain errors. Link-derived repositories absent from the
-catalog have `catalog_state: "unlisted"`; recording a GitHub or GitLab URL performs
-no repository verification, remote lookup or catalog mutation. In a report, a
+Metadata import errors are logged and leave non-PR progress intact, but cannot
+admit an unverified PR into legacy progress. Explicit tool and HTTP failures remain
+errors. Link-derived repositories absent from the catalog have
+`catalog_state: "unlisted"`; the association-store write itself performs no remote
+lookup or catalog mutation. Recording a GitHub or GitLab association makes no
+provider call; automatic imports still require the ownership proof above. In a report, a
 provider extension's URL that is new is read by that extension in the background,
 and not again on that to-do for 5 minutes once it has answered (an attempt that
-failed or found it unavailable is tried on the next reply). That covers every address on its hosts in
-an Agent's reply, even one that is then not kept (a file page, an issue, another repository),
-so the extension learns the addresses you and your Agents mention in a to-do's work,
-as its install permission says. Reports skip such addresses while the extension is
+failed or found it unavailable is tried on the next reply). Automatic PR imports
+establish ownership before making that query; merely mentioning another PR, or
+marking a reference as a PR artifact, does not send its address to the provider.
+The provider may still reject a proven address as the wrong kind.
+Reports skip such addresses while the extension is
 unavailable, and the one-time import of older `pr_url` / `prs` references never
-asks an extension.
+asks an extension. A provider's resolved URL, kind and title are not ownership
+evidence: its background result passes the same requested-kind, report-turn and active Agent
+checks before the transaction can record it. A successful resolution may be reused
+during the cooldown, but each new report checks ownership again; an earlier report
+without proof cannot suppress a later report's valid creation evidence.
+A newer report arriving during a provider call is checked when that same
+resolution completes, without making a second provider call.
 
 Task repository storage uses manager migration `0516_todo_repositories.sql`.
 Earlier branch builds recorded it as `0513` or `0514`; the existing migration
