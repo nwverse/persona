@@ -128,5 +128,6 @@
   "placement_hit_launcher_unhealthy": "launcher {launcher} unhealthy ({kind})",
   "placement_hit_no_resources": "resource metrics unavailable",
   "inbox_link_removed": "The Inbox topic changed. Its automatic link was removed; the task can still start.",
-  "inbox_candidates": "Possible Inbox items: {items}. No automatic link was made; confirm the source before linking."
+  "inbox_candidates": "Possible Inbox items: {items}. No automatic link was made; confirm the source before linking.",
+  "placement_hit_scratch_unsupported": "managed scratch workspace not supported (upgrade Persona Node)"
 }
