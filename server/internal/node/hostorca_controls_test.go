@@ -217,12 +217,7 @@ func TestOrcaDialogOnARestingClaudeNeedsYou(t *testing.T) {
 	waitRow := func(status string) proto.Session {
 		t.Helper()
 		var s proto.Session
-		for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
-			if s = paneRow(t, n, sidA); s.Status == status {
-				return s
-			}
-		}
-		t.Fatalf("never %s: %+v", status, s)
+		waitFor(t, "the row "+status, func() bool { s = paneRow(t, n, sidA); return s.Status == status })
 		return s
 	}
 	s := waitRow(proto.StatusBlocked)
