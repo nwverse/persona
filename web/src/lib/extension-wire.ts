@@ -371,6 +371,7 @@ export interface Contributes {
   repository_providers?: RepositoryProviderItem[];
   memory_sources?: MemorySourceItem[];
   disk_offload?: DiskOffloadItem[];
+  web_shells?: WebShellItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -389,6 +390,21 @@ export interface SkillItem {
   /** The directory, relative to the package (or to the data directory with source data). */
   dir: string;
   source?: ContentSource;
+}
+
+/**
+ * A static Web/Desktop frontend bundle (docs "Web shells", #15396): a package directory containing index.html and
+ * static assets, served on the hub origin only when the user explicitly selects it, with a guaranteed ?shell=builtin
+ * fallback.
+ */
+export interface WebShellItem {
+  id: string;
+  /** Display name shown in Settings › Advanced › Appearance. */
+  name: string;
+  /** Short summary of the layout or workflow this shell provides. */
+  description?: string;
+  /** Directory inside the package containing index.html and static assets. */
+  dir: string;
 }
 
 /**

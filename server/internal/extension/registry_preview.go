@@ -203,6 +203,7 @@ func MorePermissions(cur *Extension, m *Manifest) bool {
 		slices.ContainsFunc(m.Topics(), func(t string) bool { return !slices.Contains(was.Topics(), t) }) ||
 		slices.ContainsFunc(m.Surfaces(), func(t string) bool { return !slices.Contains(was.Surfaces(), t) }) ||
 		len(newChannels(was, m)) > 0 || len(newSendsAsUser(was, m)) > 0 || len(newRepositoryHosts(was, m)) > 0 ||
+		len(newWebShells(was, m)) > 0 ||
 		slices.ContainsFunc(m.ContributesTo(), func(t string) bool { return !slices.Contains(was.ContributesTo(), t) })
 }
 
@@ -432,6 +433,11 @@ func (r *Registry) checkPackageFiles(ctx context.Context, m *Manifest, root stri
 	}
 	for _, l := range m.Looks() {
 		if err := CheckLookFiles(l, root); err != nil {
+			return err
+		}
+	}
+	for _, ws := range m.WebShells() {
+		if err := CheckWebShellFiles(ws, root); err != nil {
 			return err
 		}
 	}

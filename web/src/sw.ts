@@ -90,12 +90,22 @@ worker.addEventListener("fetch", (e) => {
   }
 });
 
+// Drops the built-in shell and asset caches and unregisters this worker when the hub starts serving a custom web_shell,
+// so built-in cached /assets/ never bleed across shells or interfere with custom shell recovery (#15396).
+async function dropBuiltInCaches() {
+  await Promise.allSettled([caches.delete(SHELL_CACHE), caches.delete(ASSET_CACHE), worker.registration.unregister()]);
+}
+
 // The hub's shell when it answers within SHELL_TIMEOUT_MS (and it's kept for next time); the cached one when it's slow,
 // unreachable or fails; a redirect or 401/403 (an expired sign-in) goes to the browser so it follows it
 // (lib/sw-shell.ts). Without a cached shell, whatever the hub does.
 function shell(e: FetchEvent): Promise<Response> {
   return shellResponse({
-    fetch: () => fetch(e.request),
+    fetch: async () => {
+      const r = await fetch(e.request);
+      if (r.headers.has("X-Persona-Web-Shell")) await dropBuiltInCaches();
+      return r;
+    },
     cached: () => caches.match("/", { cacheName: SHELL_CACHE }),
     keep: keepShell,
     waitUntil: (p) => e.waitUntil(p),
@@ -103,15 +113,16 @@ function shell(e: FetchEvent): Promise<Response> {
   });
 }
 
-// A file worth keeping: a real, unredirected answer that is not a page (a sign-in page answering for a script or icon).
+// A file worth keeping: a real, unredirected answer that is not a page or a custom web_shell asset.
 function cacheable(r: Response): boolean {
-  return r.ok && !r.redirected && !(r.headers.get("Content-Type") ?? "").startsWith("text/html");
+  return r.ok && !r.redirected && !r.headers.has("X-Persona-Web-Shell") && !(r.headers.get("Content-Type") ?? "").startsWith("text/html");
 }
 
 async function asset(req: Request): Promise<Response> {
   const cache = await caches.open(ASSET_CACHE);
   // A hashed file is the same whoever asks: keepShell kept it with a plain fetch, the page asks for its module script
   // with an Origin, and a server answering `Vary: Origin` (vite preview, a CORS proxy) would make that a miss.
+  // Never serve cached /assets/ when a custom web_shell response arrives.
   const hit = await cache.match(req, { ignoreVary: true });
   if (hit) return hit;
   const r = await fetch(req);

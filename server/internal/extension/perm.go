@@ -164,8 +164,11 @@ func Digest(m *Manifest) string {
 		// RepositoryHosts: being asked about the repositories and links on these hosts is agreed to like a permission
 		// (empty for any other extension, so their digests are what they were).
 		RepositoryHosts []string `json:"repository_hosts,omitempty"`
+		// WebShells: rendering a custom Web/Desktop UI on the Hub origin is agreed to like a permission
+		// (empty for any other extension, so their digests are what they were).
+		WebShells []string `json:"web_shells,omitempty"`
 	}{m.Runtime != nil, m.Permissions.normalized(), m.Topics(), m.Surfaces(), m.NodeProgram().consent(), m.ToolsConsent(), sendsAsUserIDs(m),
-		hostIntegrationConsent(m), sortedSchemes(m), sortedRepositoryHosts(m)})
+		hostIntegrationConsent(m), sortedSchemes(m), sortedRepositoryHosts(m), sortedWebShellIDs(m)})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -193,6 +196,42 @@ func sortedRepositoryHosts(m *Manifest) []string {
 	out := slices.Clone(m.RepositoryHosts())
 	slices.Sort(out)
 	return slices.Compact(out)
+}
+
+// sortedWebShellIDs are the ids of m's web_shells contributions, sorted: what the digest holds of them.
+func sortedWebShellIDs(m *Manifest) []string {
+	var out []string
+	for _, ws := range m.WebShells() {
+		if !slices.Contains(out, ws.ID) {
+			out = append(out, ws.ID)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// newWebShells are m's web_shells whose ids old did not declare (old nil: all of them).
+func newWebShells(old, m *Manifest) []WebShellItem {
+	var had []string
+	if old != nil {
+		had = sortedWebShellIDs(old)
+	}
+	var out []WebShellItem
+	for _, ws := range m.WebShells() {
+		if !slices.Contains(had, ws.ID) {
+			out = append(out, ws)
+		}
+	}
+	return out
+}
+
+func webShellsLine(l i18n.Lang, title string, list []WebShellItem) PermissionLine {
+	names := make([]string, 0, len(list))
+	for _, ws := range list {
+		names = append(names, ws.Name)
+	}
+	return PermissionLine{Key: "web_shells", Title: title,
+		Detail: permissionText(l, "web_shells_detail", i18n.Args{"names": strings.Join(names, permissionText(l, "list_separator"))})}
 }
 
 // newRepositoryHosts are the hosts m's repository_providers claim that old's did not (old nil: all of them).
@@ -478,6 +517,9 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 		}
 		out = append(out, PermissionLine{Key: "ui_surfaces", Title: title, Detail: surfacesDetail(l, m, surfaces)})
 	}
+	if shells := m.WebShells(); len(shells) > 0 {
+		out = append(out, webShellsLine(l, permissionText(l, "web_shells_title"), shells))
+	}
 	if len(m.Secrets) > 0 {
 		names := make([]string, 0, len(m.Secrets))
 		for _, s := range m.Secrets {
@@ -632,6 +674,9 @@ func AddedWith(l i18n.Lang, old, m *Manifest, config json.RawMessage) []Permissi
 	}
 	if len(surfaces) > 0 {
 		out = append(out, PermissionLine{Key: "ui_surfaces", Title: permissionText(l, "surfaces_more_title"), Detail: surfacesDetail(l, m, surfaces)})
+	}
+	if shells := newWebShells(old, m); len(shells) > 0 {
+		out = append(out, webShellsLine(l, permissionText(l, "web_shells_more_title"), shells))
 	}
 	var names []string
 	for _, s := range newSecrets(old, m) {

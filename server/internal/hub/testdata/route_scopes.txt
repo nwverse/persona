@@ -19,6 +19,7 @@
 -                    /api/v1/error-reports
 -                    /api/v1/extensions
 -                    /api/v1/extensions/
+-                    /api/v1/extensions/-/web-shells
 extensions.call:{id} /api/v1/extensions/{id}/
 -                    /api/v1/extensions/{id}/-/machines/{mid}/
 -                    /api/v1/imessage
@@ -247,6 +248,7 @@ decisions.raise      GET /api/v1/decisions/{id}
 -                    GET /api/v1/extensions/-/triage-templates
 -                    GET /api/v1/extensions/-/ui
 -                    GET /api/v1/extensions/-/upgrades
+-                    GET /api/v1/extensions/-/web-shells
 -                    GET /api/v1/extensions/-/widgets
 -                    GET /api/v1/extensions/{id}/-/assistant-data
 -                    GET /api/v1/extensions/{id}/-/auth

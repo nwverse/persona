@@ -139,5 +139,8 @@
   "disk_offload_title": "把电脑上的东西移到别处存放",
   "disk_offload_detail": "它可以列出它已经替每台电脑存放的东西。只有你在电脑的磁盘地图上选中文件和文件夹并确认后，Persona 才会交给它；它要在那台电脑上安装任何东西前，还会再问你一次",
   "assistant_data_title": "往助手读的内容里加它写的东西",
-  "assistant_data_detail": "它的程序写的文字可以进助手的说明和技能、Agent 的项目背景，或收件箱的分拣和起草，各有大小上限。每一项都能在它的详情里单独关掉"
+  "assistant_data_detail": "它的程序写的文字可以进助手的说明和技能、Agent 的项目背景，或收件箱的分拣和起草，各有大小上限。每一项都能在它的详情里单独关掉",
+  "web_shells_title": "提供自定义 Web 与桌面端界面",
+  "web_shells_more_title": "提供新增的自定义 Web 与桌面端界面",
+  "web_shells_detail": "提供 {names} 作为可选的 Web / 桌面端界面外壳。安装后不会自动切换；手动启用后其前端脚本会在你的 hub 同源下运行，随时可通过 ?shell=builtin 切回内置界面"
 }

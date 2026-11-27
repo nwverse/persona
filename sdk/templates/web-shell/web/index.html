@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <base href="/" />
+  <title>Persona · Focus 4-Layer</title>
+  <style>
+    :root {
+      --bg: #f5f4f0;
+      --surface: #faf9f6;
+      --card: #ffffff;
+      --border: rgba(24, 24, 22, 0.1);
+      --border-strong: rgba(24, 24, 22, 0.18);
+      --ink: #1a1a18;
+      --ink-2: #5b5a55;
+      --ink-3: #8c8a83;
+      --accent: #2f5cf6;
+      --accent-soft: rgba(47, 92, 246, 0.1);
+      --warn: #b86e00;
+      --warn-soft: rgba(184, 110, 0, 0.12);
+      --ok: #1b8249;
+      --ok-soft: rgba(27, 130, 73, 0.12);
+      --danger: #cf362b;
+      --danger-soft: rgba(207, 54, 43, 0.12);
+      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+      --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #141517;
+        --surface: #1b1c1f;
+        --card: #222428;
+        --border: rgba(255, 255, 255, 0.09);
+        --border-strong: rgba(255, 255, 255, 0.18);
+        --ink: #f1f0ec;
+        --ink-2: #b4b2aa;
+        --ink-3: #807e77;
+        --accent: #6c90ff;
+        --accent-soft: rgba(108, 144, 255, 0.16);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 13px; line-height: 1.45; }
+    :lang(zh) { text-autospace: normal; }
+    .num, .time { font-variant-numeric: tabular-nums; }
+    .ellipsis { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    button, select, input { font-family: inherit; color: inherit; }
+    button { border: none; background: transparent; cursor: pointer; padding: 0; white-space: nowrap; transition: transform 140ms var(--ease-out), background-color 140ms ease-out; }
+    button:active { transform: scale(0.985); }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    .app { display: flex; height: 100vh; overflow: hidden; }
+    .sidebar { width: 280px; flex-shrink: 0; background: var(--bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+    .sb-head { padding: 12px 10px 8px; display: flex; flex-direction: column; gap: 8px; }
+    .sb-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13.5px; min-width: 0; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot-ok { background: var(--ok); }
+    .dot-warn { background: var(--warn); }
+    .dot-danger { background: var(--danger); }
+    .dot-muted { background: var(--ink-3); }
+
+    .btn-pill { padding: 4px 9px; border-radius: 7px; font-size: 11.5px; font-weight: 550; border: 1px solid var(--border-strong); background: var(--card); color: var(--ink-2); }
+    .btn-pill:hover { color: var(--ink); border-color: var(--ink-3); }
+    .btn-primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+
+    .search-box { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); }
+    .search-box input { border: none; outline: none; background: transparent; width: 100%; font-size: 12px; }
+
+    .sb-scroll { flex: 1; overflow-y: auto; padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 10px; }
+    .layer { display: flex; flex-direction: column; gap: 2px; }
+    .layer-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 6px 3px; font-size: 10.5px; font-weight: 650; color: var(--ink-3); letter-spacing: 0.02em; }
+
+    .nav-row { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 8px; font-size: 12.5px; color: var(--ink-2); text-align: left; }
+    .nav-row:hover { background: rgba(128, 128, 120, 0.08); color: var(--ink); }
+    .nav-row.active { background: var(--card); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); }
+    .badge { font-size: 10.5px; font-weight: 650; padding: 1px 6px; border-radius: 999px; background: rgba(128, 128, 120, 0.14); color: var(--ink-2); }
+    .badge-warn { background: var(--warn-soft); color: var(--warn); }
+    .badge-ok { background: var(--ok-soft); color: var(--ok); }
+    .badge-danger { background: var(--danger-soft); color: var(--danger); }
+
+    .tabs { display: flex; padding: 2px; border-radius: 7px; background: rgba(128, 128, 120, 0.12); gap: 2px; margin: 2px 2px 4px; }
+    .tab { flex: 1; padding: 3px 6px; border-radius: 5px; font-size: 11px; font-weight: 550; color: var(--ink-2); text-align: center; }
+    .tab.active { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
+
+    .bucket-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 2px; font-size: 10.5px; font-weight: 600; color: var(--ink-3); }
+    .sess-row { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 5px 7px; border-radius: 7px; font-size: 12px; color: var(--ink); text-align: left; }
+    .sess-row:hover { background: rgba(128, 128, 120, 0.08); }
+    .sess-row.active { background: var(--card); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); }
+    .sess-left { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+    .sess-time { font-size: 10.5px; color: var(--ink-3); flex-shrink: 0; }
+
+    .sb-footer { border-top: 1px solid var(--border); padding: 7px 8px; display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+    .shell-select { max-width: 128px; height: 26px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--card); font-size: 11px; padding: 0 6px; }
+
+    .main { flex: 1; min-width: 0; overflow-y: auto; background: var(--surface); padding: 20px 24px 32px; display: flex; flex-direction: column; gap: 16px; }
+    .head-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .h1 { font-size: 20px; font-weight: 700; margin: 0; letter-spacing: -0.02em; }
+    .sub { font-size: 12px; color: var(--ink-2); margin: 3px 0 0; }
+
+    .kpi-strip { display: flex; align-items: center; gap: 10px; padding: 9px 14px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; flex-wrap: wrap; }
+    .kpi { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+    .kpi strong { color: var(--ink); }
+    .sep { width: 1px; height: 14px; background: var(--border); }
+
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 11px; padding: 11px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .card-col { flex-direction: column; align-items: stretch; }
+    .card-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+    .card-title { font-size: 13px; font-weight: 600; }
+    .card-meta { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--ink-3); }
+    .chip { padding: 1px 6px; border-radius: 5px; background: rgba(128, 128, 120, 0.11); color: var(--ink-2); }
+    .sec-title { font-size: 12.5px; font-weight: 650; display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+
+    .composer { display: flex; gap: 8px; margin-top: 8px; }
+    .composer input { flex: 1; height: 34px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); padding: 0 10px; font-size: 12.5px; outline: none; }
+    .empty { padding: 24px; text-align: center; color: var(--ink-3); border: 1px dashed var(--border-strong); border-radius: 12px; }
+    .banner { padding: 10px 14px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .err-line { margin-top: 6px; padding: 7px 10px; border-radius: 8px; background: var(--danger-soft); color: var(--danger); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sb-head">
+        <div class="sb-top">
+          <div class="brand">
+            <span class="dot dot-ok" id="connDot"></span>
+            <span class="ellipsis">Persona · Focus</span>
+          </div>
+          <a class="btn-pill" href="?shell=builtin" style="text-decoration:none" title="Return to built-in Persona Web UI">内置界面</a>
+        </div>
+        <div class="search-box">
+          <input id="q" type="search" placeholder="过滤会话、机器、项目…" />
+        </div>
+      </div>
+
+      <div class="sb-scroll">
+        <!-- L1: Action -->
+        <div class="layer">
+          <div class="layer-head"><span>行动中心</span></div>
+          <button class="nav-row active" data-view="focus"><span>今日焦点</span><span class="badge badge-warn num" id="bFocus">0</span></button>
+          <button class="nav-row" data-view="inbox"><span>收件箱 · 待介入</span><span class="badge badge-danger num" id="bInbox">0</span></button>
+          <a class="nav-row" href="?shell=builtin" style="text-decoration:none"><span>主对话（切内置打开）</span><span style="font-size:10.5px;color:var(--ink-3)">↗</span></a>
+        </div>
+
+        <!-- L2: Work & Sessions -->
+        <div class="layer">
+          <div class="layer-head">
+            <span>会话与编排</span>
+            <button id="btnNoise" style="font-size:10.5px;color:var(--ink-3)">后台: 隐藏</button>
+          </div>
+          <div class="tabs">
+            <button class="tab active" data-group="status">按状态</button>
+            <button class="tab" data-group="project">按项目</button>
+            <button class="tab" data-group="machine">按机器</button>
+          </div>
+          <div id="sessionList"></div>
+        </div>
+
+        <!-- L3: Context, Enabled Modules & Extensions -->
+        <div class="layer" id="modLayer" style="display:none">
+          <div class="layer-head">
+            <span>已启模块</span>
+            <span id="modMode" style="font-size:10px;color:var(--ink-3)"></span>
+          </div>
+          <div id="modList"></div>
+        </div>
+
+        <div class="layer" id="extLayer">
+          <div class="layer-head">
+            <span>扩展应用</span>
+            <button id="btnExt" style="font-size:10.5px;color:var(--ink-3)">0 ▸</button>
+          </div>
+          <div id="extList" style="display:none"></div>
+        </div>
+      </div>
+
+      <!-- L4: Footer Infra -->
+      <div class="sb-footer">
+        <button class="btn-pill num" data-view="machines" id="bMachines">0/0 机器</button>
+        <select class="shell-select" id="shellSelect" aria-label="切换 Web 外壳">
+          <option value="builtin">内置官方界面</option>
+        </select>
+      </div>
+    </aside>
+
+    <main class="main" id="main"></main>
+  </div>
+
+  <script>
+  (function () {
+    const baseHref = document.querySelector("base")?.getAttribute("href") || "/";
+    const BASE = new URL(baseHref, location.origin).pathname.replace(/\/+$/, "");
+    const COOKIE_PATH = BASE ? `${BASE}/` : "/";
+    const token = () => localStorage.getItem("persona.token") || "";
+    const apiUrl = (p) => `${BASE}${p}`;
+
+    const OPTIONAL_MODULES = [
+      { id: "health", label: "健康", path: "/health" },
+      { id: "recording", label: "会议录音与纪要", path: "/recordings" },
+      { id: "lark", label: "飞书", path: "/settings/connectors" },
+      { id: "voice", label: "语音对话", path: "/voice" },
+      { id: "screen-share", label: "屏幕共享", path: "/machines" }
+    ];
+
+    const state = {
+      view: "focus",
+      group: "status",
+      showNoise: false,
+      extOpen: false,
+      q: "",
+      selected: null,
+      authMissing: false,
+      features: null,
+      machines: [],
+      sessions: [],
+      interactions: [],
+      inbox: [],
+      extPages: [],
+      shells: [],
+      items: [],
+      drafts: {},
+      pendingMsgIds: {},
+      sendingBy: {},
+      sendErrorBy: {},
+      error: ""
+    };
+
+    const $ = (s) => document.querySelector(s);
+    const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    function newClientMsgId() {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+      return "ws-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+    }
+
+    function hasFeature(name) {
+      return Array.isArray(state.features) && state.features.includes(name);
+    }
+
+    // Fail closed: only surface optional modules or extensions when Hub capabilities explicitly advertise them.
+    function moduleEnabled(id) {
+      return hasFeature(`module.${id}`);
+    }
+
+    function isCoreOnlyHub() {
+      return hasFeature("modules") && !state.features.some((f) => f.startsWith("module."));
+    }
+
+    function extensionsEnabled() {
+      return hasFeature("extensions") || hasFeature("plugins");
+    }
+
+    function writeShellCookie(choice) {
+      const sec = location.protocol === "https:" ? "; Secure" : "";
+      if (!choice || choice === "builtin") {
+        document.cookie = `persona_web_shell=; Path=${COOKIE_PATH}; Max-Age=0; SameSite=Lax${sec}`;
+      } else {
+        document.cookie = `persona_web_shell=${choice}; Path=${COOKIE_PATH}; Max-Age=31536000; SameSite=Lax${sec}`;
+      }
+    }
+
+    async function apiGet(path) {
+      const headers = {};
+      if (token()) headers["Authorization"] = "Bearer " + token();
+      const res = await fetch(apiUrl(path), { headers });
+      if (res.status === 401) { state.authMissing = true; throw new Error("unauthorized"); }
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json();
+    }
+
+    async function apiPost(path, body) {
+      const headers = { "Content-Type": "application/json" };
+      if (token()) headers["Authorization"] = "Bearer " + token();
+      const res = await fetch(apiUrl(path), { method: "POST", headers, body: JSON.stringify(body) });
+      if (!res.ok) {
+        let detail = "";
+        try {
+          const j = await res.json();
+          detail = j.error || j.message || "";
+        } catch (_) {}
+        throw new Error(detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`);
+      }
+      return res.json().catch(() => ({}));
+    }
+
+    // Read capabilities from /api/v1/health first, and fall back to authenticated WebSocket hello (needed on public hubs where /health omits features).
+    function fetchHelloFeatures() {
+      return new Promise((resolve) => {
+        if (!token() || typeof WebSocket === "undefined") { resolve(null); return; }
+        let settled = false;
+        const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        const url = `${proto}//${location.host}${BASE}/api/v1/ws?token=${encodeURIComponent(token())}`;
+        let ws;
+        const timer = setTimeout(() => { try { ws && ws.close(); } catch (_) {} done(null); }, 2500);
+        try {
+          ws = new WebSocket(url);
+          ws.onmessage = (ev) => {
+            try {
+              const msg = JSON.parse(ev.data);
+              if (msg && msg.type === "hello" && Array.isArray(msg.features)) {
+                clearTimeout(timer);
+                ws.close();
+                done(msg.features);
+              }
+            } catch (_) {}
+          };
+          ws.onerror = () => { clearTimeout(timer); done(null); };
+          ws.onclose = () => { clearTimeout(timer); done(null); };
+        } catch (_) {
+          clearTimeout(timer);
+          done(null);
+        }
+      });
+    }
+
+    function isBackgroundNoise(s) {
+      const text = `${s.title || ""} ${s.cwd || ""} ${s.space || ""}`.toLowerCase();
+      return text.includes("/memories") || text.includes("memory provenance") || text.includes("memory extension") || s.origin === "routine";
+    }
+
+    function bucketOf(s) {
+      const st = String(s.state || s.status || "").toLowerCase();
+      if (st === "needs_you" || st === "waiting" || st === "asking" || s.needs_you) return "needs_you";
+      if (st === "working" || st === "running" || st === "busy" || st === "active") return "working";
+      if (st === "unread" || s.unread || s.unseen) return "unread";
+      return "done";
+    }
+
+    function machineName(mid) {
+      const m = state.machines.find((x) => x.id === mid);
+      return (m && m.name) || mid || "未知机器";
+    }
+
+    function projectName(s) {
+      if (s.space) return s.space;
+      const root = s.repo_root || s.workspace_cwd || s.cwd || "";
+      return root.split("/").filter(Boolean).pop() || "未分组";
+    }
+
+    function relTime(ts) {
+      if (!ts) return "";
+      const ms = typeof ts === "number" ? (ts < 1e12 ? ts * 1000 : ts) : Date.parse(ts);
+      if (!ms || Number.isNaN(ms)) return "";
+      const min = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+      if (min < 1) return "刚刚";
+      if (min < 60) return `${min}m`;
+      const hr = Math.floor(min / 60);
+      if (hr < 24) return `${hr}h`;
+      return `${Math.floor(hr / 24)}d`;
+    }
+
+    // Never hide sessions that need user attention, even if their path or origin looks like background noise.
+    function isHiddenNoise(s) {
+      return isBackgroundNoise(s) && bucketOf(s) !== "needs_you";
+    }
+
+    function filteredSessions() {
+      const q = state.q.trim().toLowerCase();
+      return state.sessions.filter((s) => {
+        if (!state.showNoise && isHiddenNoise(s)) return false;
+        if (!q) return true;
+        const hay = `${s.title || ""} ${s.id || ""} ${s.machine_name || s.machine_id || ""} ${s.cwd || ""} ${s.space || ""}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    function renderSidebar() {
+      const online = state.machines.filter((m) => m.online).length;
+      $("#bMachines").textContent = `${online}/${state.machines.length} 机器`;
+      $("#connDot").className = "dot " + (state.authMissing || state.error ? "dot-warn" : "dot-ok");
+
+      const visible = filteredSessions();
+      const hiddenCount = state.sessions.filter(isHiddenNoise).length;
+      const working = visible.filter((s) => bucketOf(s) === "working");
+      const needs = visible.filter((s) => bucketOf(s) === "needs_you");
+      const unread = visible.filter((s) => bucketOf(s) === "unread");
+      $("#bFocus").textContent = String(needs.length + working.length);
+      $("#bInbox").textContent = String(state.inbox.length + state.interactions.length);
+      $("#btnNoise").textContent = state.showNoise
+        ? `后台: 显示`
+        : (hiddenCount ? `后台: 隐藏 (${hiddenCount})` : "后台: 隐藏");
+
+      const listEl = $("#sessionList");
+      const groups = [];
+      if (state.group === "status") {
+        const done = visible.filter((s) => bucketOf(s) === "done");
+        if (needs.length) groups.push(["待我介入", "dot-danger", needs]);
+        groups.push(["工作中", "dot-warn", working]);
+        groups.push(["完成待看", "dot-ok", unread]);
+        if (done.length) groups.push(["最近历史", "dot-muted", done.slice(0, 3)]);
+      } else if (state.group === "project") {
+        const by = new Map();
+        for (const s of visible) {
+          const p = projectName(s);
+          if (!by.has(p)) by.set(p, []);
+          by.get(p).push(s);
+        }
+        for (const [k, arr] of by) groups.push([k, "dot-muted", arr]);
+      } else {
+        const by = new Map();
+        for (const s of visible) {
+          const m = s.machine_name || machineName(s.machine_id);
+          if (!by.has(m)) by.set(m, []);
+          by.get(m).push(s);
+        }
+        for (const [k, arr] of by) groups.push([k, "dot-muted", arr]);
+      }
+
+      listEl.innerHTML = groups.map(([label, dot, arr]) => `
+        <div class="bucket-head">
+          <span style="display:flex;align-items:center;gap:5px"><span class="dot ${dot}"></span>${esc(label)}</span>
+          <span class="num">${arr.length}</span>
+        </div>
+        ${arr.map((s) => {
+          const sid = `${s.machine_id || ""}::${s.session_id || s.id || ""}`;
+          const active = state.view === "session" && state.selected === sid;
+          const title = s.title || s.session_id || s.id || "(untitled)";
+          return `<button class="sess-row ${active ? "active" : ""}" data-sid="${esc(sid)}" title="${esc(title)}">
+            <span class="sess-left"><span class="ellipsis">${esc(title)}</span></span>
+            <span class="sess-time time">${esc(relTime(s.state_since || s.updated_at || s.last_active_at))}</span>
+          </button>`;
+        }).join("")}
+      `).join("") || `<div style="padding:10px 6px;color:var(--ink-3);font-size:11.5px">暂无会话</div>`;
+
+      listEl.querySelectorAll("[data-sid]").forEach((btn) => {
+        btn.addEventListener("click", () => openSession(btn.dataset.sid));
+      });
+
+      // Module-aware L3 section: only renders optional modules announced by Hub features ("modules" + "module.<id>").
+      const modLayer = $("#modLayer");
+      const enabledMods = OPTIONAL_MODULES.filter((m) => moduleEnabled(m.id));
+      if (Array.isArray(state.features) && (enabledMods.length > 0 || isCoreOnlyHub())) {
+        modLayer.style.display = "flex";
+        $("#modMode").textContent = isCoreOnlyHub() ? "Core-only" : `${enabledMods.length} 模块`;
+        $("#modList").innerHTML = enabledMods.length
+          ? enabledMods.map((m) =>
+              `<a class="nav-row" style="text-decoration:none" href="${esc(BASE)}${esc(m.path)}?shell=builtin">
+                <span class="ellipsis">${esc(m.label)}</span>
+                <span style="font-size:10px;color:var(--ink-3)">↗</span>
+              </a>`
+            ).join("")
+          : `<div style="padding:4px 8px;color:var(--ink-3);font-size:11px">核心模式（未启用可选模块）</div>`;
+      } else {
+        modLayer.style.display = "none";
+      }
+
+      const extLayer = $("#extLayer");
+      if (!extensionsEnabled()) {
+        extLayer.style.display = "none";
+      } else {
+        extLayer.style.display = "flex";
+        $("#btnExt").textContent = `${state.extPages.length} ${state.extOpen ? "▾" : "▸"}`;
+        const extEl = $("#extList");
+        extEl.style.display = state.extOpen ? "block" : "none";
+        extEl.innerHTML = state.extPages.map((p) =>
+          `<a class="nav-row" style="text-decoration:none" href="${esc(BASE)}/extension/${esc(p.extension)}/${esc(p.id)}?shell=builtin">
+            <span class="ellipsis">${esc(p.title || p.id)}</span>
+            <span style="font-size:10px;color:var(--ink-3)">${esc(p.extension_name || p.extension)}</span>
+          </a>`
+        ).join("") || `<div style="padding:4px 8px;color:var(--ink-3);font-size:11px">无扩展页面</div>`;
+      }
+
+      const sel = $("#shellSelect");
+      const currentCookie = (document.cookie.match(/(?:^|;\s*)persona_web_shell=([^;]+)/) || [])[1] || "";
+      const decoded = currentCookie ? decodeURIComponent(currentCookie) : "builtin";
+      sel.innerHTML = `<option value="builtin">内置官方界面</option>` + state.shells.map((sh) =>
+        `<option value="${esc(sh.key)}" ${sh.key === decoded ? "selected" : ""}>${esc(sh.name)}</option>`
+      ).join("");
+
+      $$("[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === state.view));
+      $$("[data-group]").forEach((b) => b.classList.toggle("active", b.dataset.group === state.group));
+    }
+
+    function renderMain() {
+      const main = $("#main");
+      if (state.authMissing) {
+        main.innerHTML = `
+          <div class="banner">
+            <span>当前浏览器尚未登录此 Hub。请先切回内置界面完成 OPAQUE / 配对登录，再在「设置 › 高级 › 外观」切回 Focus 4-Layer。</span>
+            <a class="btn-pill btn-primary" href="?shell=builtin" style="text-decoration:none">切回内置界面登录</a>
+          </div>`;
+        return;
+      }
+
+      const visible = filteredSessions();
+      const needs = visible.filter((s) => bucketOf(s) === "needs_you");
+      const working = visible.filter((s) => bucketOf(s) === "working");
+      const unread = visible.filter((s) => bucketOf(s) === "unread");
+
+      if (state.view === "focus") {
+        main.innerHTML = `
+          <div class="head-row">
+            <div>
+              <h1 class="h1">今日焦点 · Focus 4-Layer</h1>
+              <p class="sub">按人类注意力紧迫度排序：待介入 → 完成待看 → 工作中；后台任务默认隔离（待介入会话永不隐藏）。</p>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              ${isCoreOnlyHub() ? `<span class="chip">Core-only Hub</span>` : ""}
+              <button class="btn-pill" id="btnRefresh">刷新数据</button>
+            </div>
+          </div>
+          <div class="kpi-strip">
+            <button class="kpi" data-view-jump="inbox"><span class="dot dot-danger"></span>待介入 <strong class="num">${needs.length + state.interactions.length}</strong></button>
+            <span class="sep"></span>
+            <span class="kpi"><span class="dot dot-warn"></span>工作中 <strong class="num">${working.length}</strong></span>
+            <span class="sep"></span>
+            <span class="kpi"><span class="dot dot-ok"></span>待验收 <strong class="num">${unread.length}</strong></span>
+            <span class="sep"></span>
+            <button class="kpi" data-view-jump="machines">在线机器 <strong class="num">${state.machines.filter((m) => m.online).length}/${state.machines.length}</strong></button>
+          </div>
+          ${needs.length ? `<div>
+            <div class="sec-title"><span class="dot dot-danger"></span>待我介入 (${needs.length})</div>
+            ${needs.map(renderCard).join("")}
+          </div>` : ""}
+          <div>
+            <div class="sec-title"><span class="dot dot-ok"></span>刚完成 · 待验收 (${unread.length})</div>
+            ${unread.slice(0, 8).map(renderCard).join("") || `<div class="empty">当前没有未验收的完成会话</div>`}
+          </div>
+          <div>
+            <div class="sec-title"><span class="dot dot-warn"></span>工作中 (${working.length})</div>
+            ${working.map(renderCard).join("") || `<div class="empty">当前没有运行中的 Agent</div>`}
+          </div>`;
+      } else if (state.view === "inbox") {
+        main.innerHTML = `
+          <div class="head-row"><div><h1 class="h1">收件箱与待审批</h1><p class="sub">集中处理待确认审批卡片与收件箱条目。</p></div></div>
+          ${state.interactions.map((it) => `
+            <div class="card"><div class="card-body">
+              <div class="card-title">${esc(it.title || it.kind || "待确认请求")}</div>
+              <div class="card-meta"><span class="chip">${esc(it.machine_id || "")}</span><span>${esc(it.body || it.summary || "")}</span></div>
+            </div><a class="btn-pill" href="?shell=builtin" style="text-decoration:none">去内置处理</a></div>
+          `).join("")}
+          ${state.inbox.map((item) => `
+            <div class="card"><div class="card-body">
+              <div class="card-title">${esc(item.title || item.subject || item.id)}</div>
+              <div class="card-meta"><span class="chip">${esc(item.source || "inbox")}</span><span>${esc(item.summary || "")}</span></div>
+            </div></div>
+          `).join("")}
+          ${(!state.interactions.length && !state.inbox.length) ? `<div class="empty">收件箱已清零 ✓</div>` : ""}`;
+      } else if (state.view === "machines") {
+        main.innerHTML = `
+          <div class="head-row"><div><h1 class="h1">在线机器 (${state.machines.length})</h1><p class="sub">物理设备收敛在底栏设施，不抢占日常任务主视野。</p></div></div>
+          ${state.machines.map((m) => `
+            <div class="card"><div class="card-body">
+              <div class="card-title" style="display:flex;align-items:center;gap:8px"><span class="dot ${m.online ? "dot-ok" : "dot-muted"}"></span>${esc(m.name || m.id)}</div>
+              <div class="card-meta"><span class="chip">${esc(m.os || "node")}</span><span>${esc(m.id)}</span></div>
+            </div><span class="badge ${m.online ? "badge-ok" : ""}">${m.online ? "在线" : "离线"}</span></div>
+          `).join("") || `<div class="empty">暂无已连接机器</div>`}`;
+      } else if (state.view === "session") {
+        const currentSid = state.selected || "";
+        const [mid, sid] = currentSid.split("::");
+        const s = state.sessions.find((x) => (x.machine_id || "") === mid && (x.id || x.session_id || "") === sid);
+        const draft = state.drafts[currentSid] || "";
+        const isSending = Boolean(state.sendingBy[currentSid]);
+        const sendError = state.sendErrorBy[currentSid] || "";
+        main.innerHTML = `
+          <div class="head-row">
+            <div>
+              <h1 class="h1">${esc(s ? (s.title || sid) : sid)}</h1>
+              <p class="sub">${esc(s?.machine_name || mid)} · ${esc(s?.cwd || s?.space || "")}</p>
+            </div>
+            <div style="display:flex;gap:8px">
+              <a class="btn-pill" href="${esc(BASE)}/s/${encodeURIComponent(mid)}/${encodeURIComponent(sid)}?shell=builtin" style="text-decoration:none">用内置完整页打开</a>
+              <button class="btn-pill" id="btnBackFocus">返回焦点</button>
+            </div>
+          </div>
+          <div class="card card-col">
+            <div class="sec-title">最近对话记录 (${state.items.length})</div>
+            <div style="display:flex;flex-direction:column;gap:8px;max-height:55vh;overflow-y:auto">
+              ${state.items.slice(-20).map((it) => `
+                <div style="padding:8px 10px;border-radius:8px;background:var(--bg);font-size:12.5px">
+                  <div style="font-size:10.5px;color:var(--ink-3);margin-bottom:2px">${esc(it.role || it.kind || "event")}</div>
+                  <div style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(it.text || it.content || it.summary || JSON.stringify(it).slice(0, 240))}</div>
+                </div>
+              `).join("") || `<div class="empty">暂无消息记录</div>`}
+            </div>
+            <form class="composer" id="sendForm">
+              <input id="msgInput" value="${esc(draft)}" placeholder="直接给该 Agent 发消息…" ${isSending ? "disabled" : ""} />
+              <button class="btn-pill btn-primary" type="submit" ${isSending ? "disabled" : ""}>${isSending ? "发送中…" : "发送"}</button>
+            </form>
+            ${sendError ? `<div class="err-line" role="alert">${esc(sendError)}</div>` : ""}
+          </div>`;
+        $("#btnBackFocus")?.addEventListener("click", () => { state.view = "focus"; render(); });
+        $("#msgInput")?.addEventListener("input", (e) => {
+          state.drafts[currentSid] = e.target.value;
+          delete state.pendingMsgIds[currentSid];
+          if (state.sendErrorBy[currentSid]) delete state.sendErrorBy[currentSid];
+        });
+        $("#sendForm")?.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const targetSid = currentSid;
+          const input = $("#msgInput");
+          const rawDraft = input?.value || "";
+          const text = rawDraft.trim();
+          if (!text || state.sendingBy[targetSid]) return;
+          const clientMsgId = state.pendingMsgIds[targetSid] || (state.pendingMsgIds[targetSid] = newClientMsgId());
+          state.sendingBy[targetSid] = true;
+          delete state.sendErrorBy[targetSid];
+          state.drafts[targetSid] = rawDraft;
+          renderMain();
+          try {
+            await apiPost(`/api/v1/sessions/${encodeURIComponent(mid)}/${encodeURIComponent(sid)}/messages`, { text, client_msg_id: clientMsgId });
+            delete state.drafts[targetSid];
+            delete state.pendingMsgIds[targetSid];
+            delete state.sendingBy[targetSid];
+            if (state.view === "session" && state.selected === targetSid) {
+              await openSession(targetSid);
+            }
+          } catch (err) {
+            delete state.sendingBy[targetSid];
+            state.sendErrorBy[targetSid] = `发送失败（${err instanceof Error ? err.message : String(err)}），草稿已保留，可安全重试。`;
+            if (state.view === "session" && state.selected === targetSid) {
+              renderMain();
+            }
+          }
+        });
+      }
+
+      $("#btnRefresh")?.addEventListener("click", loadAll);
+      main.querySelectorAll("[data-view-jump]").forEach((el) => {
+        el.addEventListener("click", () => { state.view = el.dataset.viewJump; render(); });
+      });
+      main.querySelectorAll("[data-open-sid]").forEach((el) => {
+        el.addEventListener("click", () => openSession(el.dataset.openSid));
+      });
+    }
+
+    function renderCard(s) {
+      const sid = `${s.machine_id || ""}::${s.session_id || s.id || ""}`;
+      return `<div class="card">
+        <div class="card-body">
+          <div class="card-title ellipsis">${esc(s.title || s.session_id || s.id)}</div>
+          <div class="card-meta">
+            <span class="chip">${esc(projectName(s))}</span>
+            ${s.agent_name || s.agent ? `<span class="chip">${esc(s.agent_name || s.agent)}</span>` : ""}
+            <span>${esc(s.machine_name || machineName(s.machine_id))}</span>
+            ${s.branch ? `<span>${esc(s.branch)}</span>` : ""}
+            <span class="time">${esc(relTime(s.state_since || s.updated_at || s.last_active_at))}</span>
+          </div>
+        </div>
+        <button class="btn-pill" data-open-sid="${esc(sid)}">查看</button>
+      </div>`;
+    }
+
+    async function openSession(composite) {
+      state.selected = composite;
+      state.view = "session";
+      state.items = [];
+      render();
+      const [mid, sid] = composite.split("::");
+      try {
+        const res = await apiGet(`/api/v1/sessions/${encodeURIComponent(mid)}/${encodeURIComponent(sid)}/items`);
+        if (state.selected === composite) {
+          state.items = Array.isArray(res.items) ? res.items : [];
+        }
+      } catch (_) {}
+      if (state.view === "session" && state.selected === composite) renderMain();
+    }
+
+    function render() {
+      renderSidebar();
+      renderMain();
+    }
+
+    async function loadAll() {
+      state.authMissing = false;
+      state.error = "";
+      // 1. Read hub capabilities (/api/v1/health, falling back to WS hello when /health omits features on public hubs).
+      let features = null;
+      try {
+        const health = await apiGet("/api/v1/health");
+        if (Array.isArray(health.features)) features = health.features;
+      } catch (_) {}
+      if (!features) {
+        features = await fetchHelloFeatures();
+      }
+      if (Array.isArray(features)) state.features = features;
+
+      // 2. Fetch core endpoints + capability-gated extension endpoints.
+      const extOn = extensionsEnabled();
+      const [machines, sessions, interactions, inbox, ui, shells] = await Promise.allSettled([
+        apiGet("/api/v1/machines"),
+        apiGet("/api/v1/sessions"),
+        apiGet("/api/v1/interactions"),
+        apiGet("/api/v1/inbox"),
+        extOn ? apiGet("/api/v1/extensions/-/ui") : Promise.resolve({ ui: [] }),
+        extOn ? apiGet("/api/v1/extensions/-/web-shells") : Promise.resolve({ web_shells: [] })
+      ]);
+      if (machines.status === "fulfilled") state.machines = machines.value.machines || [];
+      if (sessions.status === "fulfilled") state.sessions = sessions.value.sessions || [];
+      if (interactions.status === "fulfilled") state.interactions = interactions.value.interactions || [];
+      if (inbox.status === "fulfilled") state.inbox = inbox.value.items || [];
+      if (ui.status === "fulfilled") state.extPages = (ui.value.ui || []).filter((u) => u.placement === "nav_page");
+      if (shells.status === "fulfilled") state.shells = shells.value.web_shells || [];
+      render();
+    }
+
+    $$("[data-view]").forEach((b) => b.addEventListener("click", () => { state.view = b.dataset.view; render(); }));
+    $$("[data-group]").forEach((b) => b.addEventListener("click", () => { state.group = b.dataset.group; renderSidebar(); }));
+    $("#btnNoise").addEventListener("click", () => { state.showNoise = !state.showNoise; render(); });
+    $("#btnExt").addEventListener("click", () => { state.extOpen = !state.extOpen; renderSidebar(); });
+    $("#q").addEventListener("input", (e) => { state.q = e.target.value; renderSidebar(); });
+    $("#shellSelect").addEventListener("change", (e) => {
+      const choice = e.target.value || "builtin";
+      if (choice === "builtin") {
+        writeShellCookie("");
+        location.assign(`${BASE || ""}/?shell=builtin`);
+        return;
+      }
+      writeShellCookie(choice);
+      location.assign(`${BASE || ""}/`);
+    });
+
+    loadAll();
+  })();
+  </script>
+</body>
+</html>

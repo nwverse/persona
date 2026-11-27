@@ -18,6 +18,7 @@ import { NoticeDot } from "../ui/NoticeDot";
 import { useHasUnseenLabs } from "../lib/labs-seen";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
+import { useWebShells, WebShellPicker } from "./settings/WebShellPicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
@@ -330,7 +331,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // Settings search: filters the sidebar categories, and jumps to a group or a setting's row inside a page (scroll +
   // brief highlight).
   const [query, setQuery] = useState("");
-  const search = searchSettings(query, integrationsV2);
+  const hasWebShells = useWebShells().length > 0;
+  const search = searchSettings(query, integrationsV2, hasWebShells);
   // Inbox Sources' relationship view (#5741) takes the wide page while it is shown; the list keeps its width.
   const [sourcesGraph, setSourcesGraph] = useState(false);
   // Wide extension plugin_page views (code/diff/split/columns/graph/scene/map) expand to the full extension page width.
@@ -853,6 +855,7 @@ function Advanced() {
       <SurfaceStyleRow />
       <ThemeColorPicker />
       <ExtensionThemePicker />
+      <WebShellPicker />
       <FontRows />
       <SidebarIconsRow />
       <PhoneNavRow />

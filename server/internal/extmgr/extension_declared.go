@@ -39,6 +39,17 @@ type TriageTemplateView struct {
 	Text          string `json:"text"`
 }
 
+// WebShellView is an installed Web/Desktop shell contribution as Web Settings lists it.
+type WebShellView struct {
+	Extension     string `json:"extension"`
+	ExtensionName string `json:"extension_name"`
+	Version       string `json:"version"`
+	ID            string `json:"id"`
+	Key           string `json:"key"`
+	Name          string `json:"name"`
+	Description   string `json:"description,omitempty"`
+}
+
 // declared calls f with each extension that is on and runs here (its contributions as they take effect).
 func (ps *extensions) declared(f func(p *extension.Extension)) {
 	if ps == nil {
@@ -81,5 +92,28 @@ func (h *Manager) declaredRoutes(api *http.ServeMux) {
 			}
 		})
 		writeJSON(w, map[string]any{"templates": out})
+	})
+	api.HandleFunc("GET /api/v1/extensions/-/web-shells", func(w http.ResponseWriter, r *http.Request) {
+		out := []WebShellView{}
+		h.extensions.declared(func(p *extension.Extension) {
+			if p.Dir == "" {
+				return
+			}
+			for _, it := range p.Manifest.WebShells() {
+				if err := extension.CheckWebShellFiles(it, p.Dir); err != nil {
+					continue
+				}
+				out = append(out, WebShellView{
+					Extension:     p.Record.ID,
+					ExtensionName: p.Full.Name,
+					Version:       p.Record.Version,
+					ID:            it.ID,
+					Key:           extension.WebShellKey(p.Record.ID, it.ID),
+					Name:          it.Name,
+					Description:   it.Description,
+				})
+			}
+		})
+		writeJSON(w, map[string]any{"web_shells": out})
 	})
 }

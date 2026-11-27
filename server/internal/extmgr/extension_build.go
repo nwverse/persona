@@ -584,6 +584,31 @@ func (p *devProject) tarball(platforms []string) ([]byte, error) {
 			return nil
 		})
 	}
+	for _, ws := range p.manifest.WebShells() {
+		if ws.Dir == "" {
+			continue
+		}
+		_ = filepath.WalkDir(filepath.Join(p.dir, filepath.FromSlash(ws.Dir)), func(path string, e fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if e.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+			if e.IsDir() {
+				if e.Name() != "." && strings.HasPrefix(e.Name(), ".") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasPrefix(e.Name(), ".") || !e.Type().IsRegular() {
+				return nil
+			}
+			rel, _ := filepath.Rel(p.dir, path)
+			paths = append(paths, rel)
+			return nil
+		})
+	}
 	slices.Sort(paths)
 	paths = slices.Compact(paths)
 	var buf bytes.Buffer

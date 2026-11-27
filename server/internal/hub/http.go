@@ -138,7 +138,7 @@ func (h *Hub) routes() http.Handler {
 	h.managerJoinRoutes(mux)
 	h.managerInstallRoutes(mux) // GET /i/<code>: the install script (managers_install.go)
 	mux.Handle("/api/", appAPI)
-	mux.Handle("/", h.adminRoutes(mux, appAPI, webApp(filepath.Join(h.cfg.dir, "web"))))
+	mux.Handle("/", h.adminRoutes(mux, appAPI, h.webHandler(filepath.Join(h.cfg.dir, "web"))))
 	return h.outerLayers(h.privateNetworkOnly(h.sharingDispatcher(h.plaintextLoopbackOnly(jsonRouteErrors(mux)))))
 }
 

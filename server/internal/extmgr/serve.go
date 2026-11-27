@@ -558,6 +558,8 @@ func (h *Manager) hubCall(ctx context.Context, method string, params json.RawMes
 		TZ        string          `json:"tz"`
 		Sender    string          `json:"sender"`
 		Proof     string          `json:"proof"`
+		Extension string          `json:"extension"`
+		ID        string          `json:"id"`
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &a); err != nil {
@@ -596,6 +598,12 @@ func (h *Manager) hubCall(ctx context.Context, method string, params json.RawMes
 		}
 		h.audit(ctx, au.Extension, au.Action, actor, au.Detail)
 		return map[string]any{}, nil
+	case extwire.HubWebShellBundle:
+		bundle, ok := h.extensionWebShellBundle(a.Extension, a.ID)
+		if !ok {
+			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions: web shell not found"}
+		}
+		return bundle, nil
 	}
 	return nil, fmt.Errorf("extensions: no hub call %q", method)
 }
@@ -674,6 +682,7 @@ func (h *Manager) report() extwire.Report {
 	if h.extensions != nil {
 		r.ScreenKeepAwake = h.cua().awake()
 		r.Looks = h.extensionLooks()
+		r.WebShells = h.extensionWebShells()
 	}
 	if ps := h.extensions; ps != nil {
 		r.PushGradingDeclared = true
@@ -899,6 +908,65 @@ func (h *Manager) extensionLooks() []extwire.LookPackage {
 		}
 	})
 	return out
+}
+
+// extensionWebShells are lightweight validated Web/Desktop shell descriptors of enabled extensions, for the hub.
+func (h *Manager) extensionWebShells() []extwire.WebShellRef {
+	var out []extwire.WebShellRef
+	h.extensions.declared(func(p *extension.Extension) {
+		if p.Dir == "" {
+			return
+		}
+		for _, ws := range p.Manifest.WebShells() {
+			files, err := extension.ReadWebShellFiles(ws, p.Dir)
+			if err != nil {
+				h.logf("web_shell %s of %s left out: %v", ws.ID, p.Record.ID, err)
+				continue
+			}
+			item, _ := json.Marshal(ws)
+			out = append(out, extwire.WebShellRef{
+				Extension:     p.Record.ID,
+				ExtensionName: p.Full.Name,
+				Version:       p.Record.Version,
+				Item:          item,
+				Digest:        extension.WebShellDigest(files),
+			})
+		}
+	})
+	return out
+}
+
+// extensionWebShellBundle reads one enabled extension's validated static Web Shell bundle on demand for the hub.
+func (h *Manager) extensionWebShellBundle(extID, shellID string) (extwire.WebShellBundle, bool) {
+	var found extwire.WebShellBundle
+	var ok bool
+	h.extensions.declared(func(p *extension.Extension) {
+		if ok || p.Dir == "" || p.Record.ID != extID {
+			return
+		}
+		for _, ws := range p.Manifest.WebShells() {
+			if ws.ID != shellID {
+				continue
+			}
+			files, err := extension.ReadWebShellFiles(ws, p.Dir)
+			if err != nil {
+				h.logf("web_shell %s of %s left out: %v", ws.ID, p.Record.ID, err)
+				return
+			}
+			item, _ := json.Marshal(ws)
+			found = extwire.WebShellBundle{
+				Extension:     p.Record.ID,
+				ExtensionName: p.Full.Name,
+				Version:       p.Record.Version,
+				Item:          item,
+				Digest:        extension.WebShellDigest(files),
+				Files:         files,
+			}
+			ok = true
+			return
+		}
+	})
+	return found, ok
 }
 
 // secretProviderID is the current id of installed extension id (an old alias's too) when it contributes a secret

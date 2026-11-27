@@ -225,6 +225,13 @@ describe("the settings search's index", () => {
     }));
   });
 
+  it("hides the Web Shell search entry until at least one web_shells extension is installed", () => {
+    const { t, searchSettings } = english;
+    const label = t("settings-webshell.label");
+    expect(searchSettings(label, false, false).groups.some((g) => g.anchor === "web-shell")).toBe(false);
+    expect(searchSettings(label, false, true).groups).toContainEqual(expect.objectContaining({ tab: "advanced", anchor: "web-shell" }));
+  });
+
   it("lands every entry on something a page draws, and lists each once", () => {
     const { SEARCH_INDEX } = english;
     // anchors a page writes from a value: each one's source, and the values it takes

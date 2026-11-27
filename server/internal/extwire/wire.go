@@ -19,6 +19,7 @@ import (
 var Routes = []string{
 	"/api/v1/extensions",
 	"/api/v1/extensions/",
+	"/api/v1/extensions/-/web-shells",
 	"/api/v1/admin/extensions",
 	"/api/v1/admin/extensions/",
 	"/api/v1/plugins",
@@ -67,6 +68,7 @@ var KeptRoutes = []string{
 	"/api/v1/extensions/-/widgets",
 	"/api/v1/extensions/-/shortcuts",
 	"/api/v1/extensions/-/triage-templates",
+	"/api/v1/extensions/-/web-shells",
 }
 
 // Headers the hub sets on a relayed request: who asked, as its auth found it. Any the client sent are dropped.
@@ -190,6 +192,9 @@ type Report struct {
 	// Looks are the looks of the extensions that are on (docs/extensions/extensions.md "Avatars"), with their files: the hub serves
 	// them as persona packages beside its own.
 	Looks []LookPackage `json:"looks,omitempty"`
+	// WebShells are lightweight descriptors of enabled extensions' static Web/Desktop shells (docs/extensions/extensions.md "Web shells", #15396).
+	// File bytes stay out of Report to remain well below bus.MaxMessage; the hub fetches a bundle on demand via HubWebShellBundle.
+	WebShells []WebShellRef `json:"web_shells,omitempty"`
 	// BotIdentities identify enabled bots for cross-manager conflict warnings. Never include credentials.
 	BotIdentities []BotIdentity `json:"bot_identities,omitempty"`
 	// EventsDeclared: APIs carry the types each extension declares for api.broadcast (APIPrefix.Events), and the hub
@@ -216,6 +221,25 @@ type LookPackage struct {
 	ExtensionName string            `json:"extension_name"`
 	Version       string            `json:"version"`
 	Item          json.RawMessage   `json:"item"`
+	Files         map[string][]byte `json:"files"`
+}
+
+// WebShellRef is one extension's validated static Web/Desktop shell descriptor (metadata + content digest only).
+type WebShellRef struct {
+	Extension     string          `json:"extension"`
+	ExtensionName string          `json:"extension_name"`
+	Version       string          `json:"version"`
+	Item          json.RawMessage `json:"item"`
+	Digest        string          `json:"digest"`
+}
+
+// WebShellBundle is HubWebShellBundle's answer: the validated static files of one web shell.
+type WebShellBundle struct {
+	Extension     string            `json:"extension"`
+	ExtensionName string            `json:"extension_name"`
+	Version       string            `json:"version"`
+	Item          json.RawMessage   `json:"item"`
+	Digest        string            `json:"digest"`
 	Files         map[string][]byte `json:"files"`
 }
 
@@ -261,6 +285,8 @@ const (
 	// HubAudit: Audit → {}: a request of an extension's token the hub refused, for that extension's audit in its manager
 	// (plugin_audit). The manager takes the actions below only.
 	HubAudit = "audit"
+	// HubWebShellBundle: {extension, id} → WebShellBundle: read one validated web shell's static bundle on demand.
+	HubWebShellBundle = "web_shell.bundle"
 )
 
 // What the hub records with HubAudit (Audit.Action).

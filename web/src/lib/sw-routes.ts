@@ -23,6 +23,7 @@ export function strategy(url: URL, origin: string, method: string, mode: string)
   if (p === "/v1/projects" || p.startsWith("/v1/projects/")) return "pass";
   if (p === "/api" || p.startsWith("/api/") || p === "/admin" || p.startsWith("/admin/")) return "pass";
   if (p === "/sw.js" || p === "/share" || p.startsWith("/share/") || p === "/share-assets" || p.startsWith("/share-assets/") || p === "/public-share" || p.startsWith("/public-share/")) return "pass";
+  if (url.searchParams.has("shell")) return "pass";
   if (mode === "navigate") return "shell";
   if (p.startsWith("/assets/")) return "asset";
   if (/^\/[^/]+\.(png|webmanifest)$/.test(p)) return "static";

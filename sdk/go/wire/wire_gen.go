@@ -316,6 +316,7 @@ type Contributes struct {
 	RepositoryProviders []RepositoryProviderItem `json:"repository_providers,omitempty"`
 	MemorySources       []MemorySourceItem       `json:"memory_sources,omitempty"`
 	DiskOffload         []DiskOffloadItem        `json:"disk_offload,omitempty"`
+	WebShells           []WebShellItem           `json:"web_shells,omitempty"`
 	Messaging           []MessagingItem          `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
@@ -327,7 +328,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "web_shells", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -359,7 +360,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "web_shells", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -378,6 +379,19 @@ type SkillItem struct {
 	// The directory, relative to the package (or to the data directory with source data).
 	Dir    string `json:"dir"`
 	Source string `json:"source,omitempty"`
+}
+
+// WebShellItem: A static Web/Desktop frontend bundle (docs "Web shells", #15396): a package directory containing
+// index.html and static assets, served on the hub origin only when the user explicitly selects it, with a guaranteed
+// ?shell=builtin fallback.
+type WebShellItem struct {
+	ID string `json:"id"`
+	// Display name shown in Settings › Advanced › Appearance.
+	Name string `json:"name"`
+	// Short summary of the layout or workflow this shell provides.
+	Description string `json:"description,omitempty"`
+	// Directory inside the package containing index.html and static assets.
+	Dir string `json:"dir"`
 }
 
 // ContentSource: where a skill's or a prompt's files are: package (the default) or data, the extension's data
@@ -8208,6 +8222,7 @@ var newDef = map[string]func() any{
 	"StoragePermission":             func() any { return new(StoragePermission) },
 	"Contributes":                   func() any { return new(Contributes) },
 	"SkillItem":                     func() any { return new(SkillItem) },
+	"WebShellItem":                  func() any { return new(WebShellItem) },
 	"PromptItem":                    func() any { return new(PromptItem) },
 	"ThemeColors":                   func() any { return new(ThemeColors) },
 	"ThemeItem":                     func() any { return new(ThemeItem) },

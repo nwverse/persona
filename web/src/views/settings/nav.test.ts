@@ -122,6 +122,9 @@ describe("settings sidebar groups", () => {
       expect(groups).toContainEqual(expect.objectContaining({ tab: "advanced", group: query, anchor }));
       expect(groups.some((g) => g.tab === "general" && g.anchor === anchor)).toBe(false);
     }
+    const wsLabel = t("settings-webshell.label");
+    expect(searchSettings(wsLabel, false, false).groups.some((g) => g.anchor === "web-shell")).toBe(false);
+    expect(searchSettings(wsLabel, false, true).groups).toContainEqual(expect.objectContaining({ tab: "advanced", group: wsLabel, anchor: "web-shell" }));
   });
 
   it("redirects legacy connectors/channels/extensions/sources routes into integrations when integrations_v2 is on", () => {

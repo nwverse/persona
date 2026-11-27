@@ -449,6 +449,7 @@ data class ExtensionContributes(
     @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
     @SerialName("memory_sources") val memorySources: List<ExtensionMemorySourceItem>? = null,
     @SerialName("disk_offload") val diskOffload: List<ExtensionDiskOffloadItem>? = null,
+    @SerialName("web_shells") val webShells: List<ExtensionWebShellItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
     /** Extra keys stay at this object's level on the wire; declared fields always win. */
     val additionalProperties: Map<String, JsonElement> = emptyMap(),
@@ -489,12 +490,13 @@ private data class ExtensionContributesKnown(
     @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
     @SerialName("memory_sources") val memorySources: List<ExtensionMemorySourceItem>? = null,
     @SerialName("disk_offload") val diskOffload: List<ExtensionDiskOffloadItem>? = null,
+    @SerialName("web_shells") val webShells: List<ExtensionWebShellItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
 )
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "web_shells", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -536,6 +538,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             repositoryProviders = fields.repositoryProviders,
             memorySources = fields.memorySources,
             diskOffload = fields.diskOffload,
+            webShells = fields.webShells,
             messaging = fields.messaging,
             additionalProperties = obj.filterKeys { it !in keys },
         )
@@ -577,6 +580,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             repositoryProviders = value.repositoryProviders,
             memorySources = value.memorySources,
             diskOffload = value.diskOffload,
+            webShells = value.webShells,
             messaging = value.messaging,
         )
         val obj = output.json.encodeToJsonElement(known, fields) as JsonObject
@@ -602,6 +606,28 @@ data class ExtensionSkillItem(
      */
     val dir: String = "",
     val source: String? = null,
+)
+
+/**
+ * A static Web/Desktop frontend bundle (docs "Web shells", #15396): a package directory containing index.html and
+ * static assets, served on the hub origin only when the user explicitly selects it, with a guaranteed ?shell=builtin
+ * fallback.
+ */
+@Serializable
+data class ExtensionWebShellItem(
+    val id: String = "",
+    /**
+     * Display name shown in Settings › Advanced › Appearance.
+     */
+    val name: String = "",
+    /**
+     * Short summary of the layout or workflow this shell provides.
+     */
+    val description: String? = null,
+    /**
+     * Directory inside the package containing index.html and static assets.
+     */
+    val dir: String = "",
 )
 
 /**

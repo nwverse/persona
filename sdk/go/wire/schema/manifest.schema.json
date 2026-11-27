@@ -380,6 +380,7 @@
         "repository_providers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/RepositoryProviderItem"}},
         "memory_sources": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/MemorySourceItem"}},
         "disk_offload": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/DiskOffloadItem"}},
+        "web_shells": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/WebShellItem"}},
         "messaging": {"type": "array", "minItems": 1, "items": {"$ref": "messaging.schema.json#/$defs/MessagingItem"}}
       }
     },
@@ -394,6 +395,18 @@
         "source": {"$ref": "#/$defs/ContentSource"}
       },
       "required": ["id", "dir"]
+    },
+    "WebShellItem": {
+      "description": "A static Web/Desktop frontend bundle (docs \"Web shells\", #15396): a package directory containing index.html and static assets, served on the hub origin only when the user explicitly selects it, with a guaranteed ?shell=builtin fallback.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/ID"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 40, "description": "Display name shown in Settings › Advanced › Appearance."},
+        "description": {"type": "string", "maxLength": 200, "description": "Short summary of the layout or workflow this shell provides."},
+        "dir": {"type": "string", "description": "Directory inside the package containing index.html and static assets."}
+      },
+      "required": ["id", "name", "dir"]
     },
     "ContentSource": {
       "description": "Where a skill's or a prompt's files are: package (the default) or data, the extension's data directory, which its program writes and upgrades keep.",

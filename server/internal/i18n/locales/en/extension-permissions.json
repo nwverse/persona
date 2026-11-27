@@ -139,5 +139,8 @@
   "disk_offload_title": "Offload items from your computers",
   "disk_offload_detail": "It can list what it already holds of each computer. Persona hands it files and folders only after you pick them on a computer's disk map and confirm, and it asks you again before installing anything on that computer",
   "assistant_data_title": "Add what it writes to what your assistant reads",
-  "assistant_data_detail": "Text its program writes can go into the assistant's instructions and skills, an Agent's project background or Inbox triage and drafts, within size limits. You can switch each part off in its details"
+  "assistant_data_detail": "Text its program writes can go into the assistant's instructions and skills, an Agent's project background or Inbox triage and drafts, within size limits. You can switch each part off in its details",
+  "web_shells_title": "Provide a custom Web and Desktop interface",
+  "web_shells_more_title": "Provide additional custom Web and Desktop interfaces",
+  "web_shells_detail": "Offers {names} as optional Web/Desktop UI shells on the hub origin. Nothing switches automatically on install; when selected, its scripts run on your hub origin and you can always return to the built-in interface via ?shell=builtin"
 }

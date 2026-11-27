@@ -12,9 +12,9 @@ export function mustFollow(r: Response): boolean {
   return r.type === "opaqueredirect" || r.redirected || r.status === 0 || (r.status >= 300 && r.status < 400) || [401, 403, 407, 511].includes(r.status);
 }
 
-/** Only a fresh, successful, unredirected index.html becomes the cached shell (never a login page reached by a redirect). */
+/** Only a fresh, successful, unredirected built-in index.html becomes the cached shell (never a login page or a custom web_shell). */
 export function isShell(r: Response): boolean {
-  return r.ok && !r.redirected && (r.headers.get("Content-Type") ?? "").startsWith("text/html");
+  return r.ok && !r.redirected && !r.headers.has("X-Persona-Web-Shell") && (r.headers.get("Content-Type") ?? "").startsWith("text/html");
 }
 
 /** What to hand the browser for a response mustFollow accepted. A followed redirect can't answer a navigation (its

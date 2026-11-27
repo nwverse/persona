@@ -246,6 +246,12 @@ func (h *Hub) extReport() extwire.Report {
 				out.Looks = append(out.Looks, l)
 			}
 		}
+		beforeShells := slices.Clone(out.WebShells)
+		for _, ws := range r.WebShells {
+			if !slices.ContainsFunc(beforeShells, func(o extwire.WebShellRef) bool { return o.Extension == ws.Extension }) {
+				out.WebShells = append(out.WebShells, ws)
+			}
+		}
 	}
 	return out
 }
