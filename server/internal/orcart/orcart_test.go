@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -226,6 +227,53 @@ func TestRead(t *testing.T) {
 	}
 }
 
+// The output tail is the read without screen or cursor; the log pages by cursor, from the oldest line Orca keeps when
+// the cursor is older. An Orca that answers without cursors reads no log.
+func TestReadTailAndLog(t *testing.T) {
+	f := orcarttest.New(t)
+	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "", "x", "claude"))
+	log := make([]string, 0, 2000)
+	for i := 501; i <= 2500; i++ {
+		log = append(log, fmt.Sprintf("line-%d", i))
+	}
+	f.SetOutput("term_1", append(slices.Clone(log), "$ "), true, log, 2500)
+	c := client(f, nil)
+	ctx := context.Background()
+	tg := orcart.Target{Handle: "term_1", Incarnation: "inc-term_1"}
+	tail, truncated, limited, source, err := c.ReadTail(ctx, tg, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"line-2497", "line-2498", "line-2499", "line-2500", "$ "}; !slices.Equal(tail, want) ||
+		!truncated || !limited || source != "stream" {
+		t.Errorf("tail = %q truncated %v limited %v source %q", tail, truncated, limited, source)
+	}
+	lines, oldest, err := c.ReadLog(ctx, tg, 0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"line-501", "line-502", "line-503"}; !slices.Equal(lines, want) || oldest != 500 {
+		t.Errorf("log = %q from %d", lines, oldest)
+	}
+	if lines, _, err := c.ReadLog(ctx, tg, 1<<53, 10); err != nil || len(lines) != 0 {
+		t.Errorf("past the newest: %q, %v", lines, err)
+	}
+	if got := f.Trace("terminal.read"); !slices.Equal(got, []string{
+		`terminal.read {"limit":5,"terminal":"term_1"}`,
+		`terminal.read {"cursor":0,"limit":3,"terminal":"term_1"}`,
+		`terminal.read {"cursor":9007199254740992,"limit":10,"terminal":"term_1"}`,
+	}) {
+		t.Errorf("reads: %q", got)
+	}
+	if inv := f.Invalid(); len(inv) != 0 {
+		t.Errorf("invalid requests: %v", inv)
+	}
+	f.SetOldOutput("term_1", []string{"$ "})
+	if _, _, err := c.ReadLog(ctx, tg, 0, 10); !errors.Is(err, orcart.ErrNoCursor) {
+		t.Errorf("no cursors: %v", err)
+	}
+}
+
 // Orca 1.4.277 lifts the text of an agent's input box out of the screen rows into draft, leaving the prompt row as
 // its bare glyph (seen live with Claude Code 2.1.331, for a typed draft and for Claude's grey suggestion alike). Text
 // puts it back where it is on screen, so the node reads the box as drawn; without a draft the rows stay as sent.
@@ -358,6 +406,39 @@ func TestWorktreeSnapshots(t *testing.T) {
 	}
 	if tr := f.Trace("worktree.ps"); len(tr) != 3 || tr[0] != `worktree.ps {"afterSnapshotId":null}` {
 		t.Errorf("calls %v", tr)
+	}
+}
+
+// A list Orca cut short at its limit says so: terminal.list's Truncated, AllWorktrees' ErrPartial (whole answers only,
+// outside a snapshot series).
+func TestListsCutShortSaySo(t *testing.T) {
+	f := orcarttest.New(t)
+	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "refs/heads/main", "x", ""))
+	f.SetWorktrees(orcarttest.Worktree("wt1", "/tmp/p", "main"))
+	c := client(f, nil)
+	ctx := context.Background()
+	l, err := c.Terminals(ctx, true)
+	if err != nil || l.Truncated || len(l.Terminals) != 1 {
+		t.Fatalf("whole terminal list: %+v %v", l, err)
+	}
+	trees, err := c.AllWorktrees(ctx)
+	if err != nil || len(trees) != 1 {
+		t.Fatalf("whole worktree list: %v %v", trees, err)
+	}
+	if tr := f.Trace("worktree.ps"); len(tr) != 1 || tr[0] != `worktree.ps {"afterSnapshotId":null}` {
+		t.Errorf("calls %v", tr)
+	}
+	f.Handle("terminal.list", func(map[string]any) any {
+		return map[string]any{"terminals": []any{}, "totalCount": 201, "truncated": true}
+	})
+	f.Handle("worktree.ps", func(map[string]any) any {
+		return map[string]any{"worktrees": []any{}, "totalCount": 201, "truncated": true}
+	})
+	if l, err := c.Terminals(ctx, false); err != nil || !l.Truncated {
+		t.Fatalf("cut terminal list: %+v %v", l, err)
+	}
+	if _, err := c.AllWorktrees(ctx); !errors.Is(err, orcart.ErrPartial) {
+		t.Fatalf("cut worktree list: %v", err)
 	}
 }
 

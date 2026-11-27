@@ -2219,6 +2219,10 @@ rail's other metrics (`web/src/ui/nav-rail-metrics.ts`); details in `docs/web/we
 
 The web Changes panel's secondary file tree (#10477) reuses the existing `ResizeHandle` separator from the sidebar and side panel: pointer drag, arrow keys, Home/End, and double-click/Enter to reset. Column dimensions live in `web/src/lib/layout.ts` (`CHANGES_TREE_DEFAULT`, `CHANGES_TREE_MIN`, `CHANGES_TREE_MAX`, `CHANGES_DIFF_MIN`). Its default remains 192 px; the browser remembers a user resize and temporarily fits it to the panel while keeping space for the diff. At narrow widths the tree stays above the diff. File names and indentation may truncate, while each row's unchanged addition/deletion counts remain whole and the full path remains on hover.
 
+### 4.2.1 Click a word to look it up (web, #10977)
+
+A plain click on an English word in any text the page shows opens a small card on that word: the word, its pronunciation, its meanings, Save or Saved, and the dictionary's name. It is for everyday reading (Assistant first), so it stays off until the hub says a dictionary is available, and off adds nothing to the page. The card uses the existing surface (`bg-surface`, `border-line`, `shadow-overlay`), the text tokens (`text-card-title`, `text-meta`, `text-label`), `Button` / `IconButton` and the pop-in motion; it is a labelled non-modal dialog that takes focus and gives it back when it closes. Escape, a press outside it or scrolling closes it. Save / Saved is one toggle button (`aria-pressed`) that changes at once; a refused change puts it back and says so in a line under it. The same click does nothing on a link, a button, a row that opens something, a field, code, a terminal, a drag, or a double-click that selects the word; `data-no-lookup` opts a region out. Saved words are underlined only when the dictionary's own underline switch is on; the underline (`--accent`) is painted over the words and does not change them.
+
 ### 4.3 Feedback and haptics
 
 Settings › Hub shows a stage strip and an inset step list during updates (#15240). The
@@ -3297,6 +3301,32 @@ line. A stopped Agent instead gives its explicit stop reason beside the existing
 promise that another message can be sent. There is no new setting, style, notification, count or automatic confirmation.
 The ownership notice and stopped/archived-session recovery controls load only when needed, keeping them out of the
 first-screen startup budget without changing their layout, text or actions. Session-detail load errors stay eager.
+
+## Word lookup
+
+The `text_lookup` extension point on Apple (#10977; behavior per surface in `docs/apple/ios.md` "Word lookup (text_lookup)").
+Who it serves: everyday readers of English text; nothing changes for anyone without an enabled lookup extension
+(principle 1, defaults first; principle 3, turning the extension off removes the behavior at once).
+
+- **Gesture**: a quick tap on a word of reading text (`TextLookupViews.swift`, `LookupTap`) opens the card; it never takes a
+  touch from a link, a long press (lift, selection), a button or a scroll, and never fires in inputs, code blocks, tool
+  output or terminals. Rows and buttons are never lookup surfaces. The plain alternative (VoiceOver selects rather than
+  taps) is **Look Up in <provider>** in a selection's edit menu (`Theme.Icon.lookUpWord`, an alias of `glossary`).
+- **The card** (`TextLookupCard`): a popover on the iPhone too (as `InfoTip`; a UIKit popover hosting the card, which
+  grows with it as the lookup loads), `Theme.Size.box300` wide in all (scaled) with `Theme.Space.m` padding: one width,
+  so its height is measured at the width it is drawn. The word in `Theme.Font.title` on one line (shrinking to
+  `Theme.TextLookup.minimumScale`), the pronunciation in `Theme.Font.secondary` secondary ink, senses as a part-of-speech
+  label in `Theme.Font.captionStrong` secondary and the sense in `Theme.Font.secondary` (at most
+  `Theme.TextLookup.senseLimit`), then a footer: the extension's name in `Theme.Font.caption` secondary and **Save** /
+  **Saved** (`themedButton`, prominent while unsaved; `Theme.Icon.saveWord` / `Theme.Icon.savedWord`, one line). Loading
+  shows the word at once with a small spinner and "Looking up…"; a failure says why in secondary ink with **Retry**
+  (section 3.10); a failed save says why in `Theme.danger` caption and goes back. No entry: "No entry for this word.",
+  no Save.
+- **Underline of saved words** (only with the extension's `underline_saved`, off by default): a `Theme.TextLookup.underline`
+  hairline `Theme.TextLookup.underlineInset` above the line's bottom in `Theme.TextLookup.underlineInk` (the accent at
+  55%, quieter than a link), drawn by one Canvas per block, hidden from VoiceOver.
+- **Tokens** (`apple/Shared/Design/TextLookupTokens.swift`): `Theme.TextLookup.tapLimit`, `senseLimit`, `minimumScale`,
+  `underline`, `underlineInset`, `underlineInk`.
 
 ## UI change self-check
 

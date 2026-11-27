@@ -171,8 +171,32 @@ func (b *runtimeRegistry) beginCompaction(ctx context.Context, host *runtimeConn
 	return compaction, nil
 }
 
+func (c *runtimeCompaction) settle(failure string) {
+	if c.state == nil || c.state.State != proto.CompactionRunning {
+		return
+	}
+	select {
+	case c.settled <- failure:
+	default:
+	}
+}
+
+func (b *runtimeRegistry) settleCompaction(h *runtimeConn, id, failure string) bool {
+	if b == nil || h == nil || id == "" {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	compact := b.compactions[id]
+	if compact == nil || compact.runtime != h || compact.state == nil || compact.state.State != proto.CompactionRunning {
+		return false
+	}
+	compact.settle(failure)
+	return true
+}
+
 func (c *runtimeCompaction) observe(row proto.Session) {
-	if c.state.State != proto.CompactionRunning {
+	if c.state == nil || c.state.State != proto.CompactionRunning {
 		return
 	}
 	switch row.Status {
@@ -180,10 +204,7 @@ func (c *runtimeCompaction) observe(row proto.Session) {
 		c.sawWork = true
 	case proto.StatusIdle, proto.StatusDone:
 		if c.sawWork || row.Rev != c.revision || row.TurnError != c.turnError {
-			select {
-			case c.settled <- row.TurnError:
-			default:
-			}
+			c.settle(row.TurnError)
 		}
 	}
 }

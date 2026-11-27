@@ -196,6 +196,8 @@ type Head struct {
 	// Working: a turn is running; Prompts are the ids of the approvals and questions waiting for an answer.
 	Working bool
 	Prompts []string
+	// Epoch is the journal's incarnation (a rewind starts a new one); history cursors name it.
+	Epoch string
 }
 
 // Head reads the newest page of a session's history (the smallest one Orca gives).
@@ -203,6 +205,7 @@ func (c *Client) Head(ctx context.Context, sessionID string) (*Head, error) {
 	var res struct {
 		OK   bool `json:"ok"`
 		Page struct {
+			Epoch               string   `json:"epoch"`
 			Fence               int64    `json:"fence"`
 			Working             bool     `json:"working"`
 			ActionablePromptIDs []string `json:"actionablePromptIds"`
@@ -216,7 +219,7 @@ func (c *Client) Head(ctx context.Context, sessionID string) (*Head, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Head{Fence: res.Page.Fence, Working: res.Page.Working, Prompts: res.Page.ActionablePromptIDs}
+	h := &Head{Fence: res.Page.Fence, Working: res.Page.Working, Prompts: res.Page.ActionablePromptIDs, Epoch: res.Page.Epoch}
 	if res.ProviderSession != nil {
 		h.Provider = res.ProviderSession.ID
 	}

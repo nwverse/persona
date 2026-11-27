@@ -1541,7 +1541,12 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusNotFound, errors.New("agent link not found"))
 			return
 		}
+		if !s.loadWork(r.Context()) {
+			apierr.Write(w, http.StatusServiceUnavailable, errors.New("the agents' work could not be read yet"))
+			return
+		}
 
+		key := [2]string{mid, sid}
 		s.todos.writing.Lock()
 		if st := s.todoDB(); st != nil {
 			if err := st.UnlinkTodoAgent(r.Context(), todoID, mid, sid); err != nil {
@@ -1553,10 +1558,12 @@ func (s *Service) todoRoutes() {
 
 		now := time.Now().UTC()
 		var unlinkedCwd string
+		var detached bool
 		s.todos.mu.Lock()
 		if target, ok := s.todos.todos[todoID]; ok {
 			for i := range target.Agents {
 				if target.Agents[i].MachineID == mid && target.Agents[i].SessionID == sid {
+					detached = target.Agents[i].DismissedAt == nil
 					unlinkedCwd = target.Agents[i].Cwd
 					target.Agents[i].ReleasedAt = &now
 					target.Agents[i].DismissedAt = &now
@@ -1565,12 +1572,25 @@ func (s *Service) todoRoutes() {
 			}
 			target.UpdatedAt = now
 		}
-		if curTid, ok := s.todos.activeBySession[[2]string{mid, sid}]; ok && curTid == todoID {
-			delete(s.todos.activeBySession, [2]string{mid, sid})
+		if s.todos.activeBySession[key] == todoID {
+			delete(s.todos.activeBySession, key)
 		}
+		_, stillAttached := s.todos.activeBySession[key]
 		s.todos.mu.Unlock()
+		var retired *db.SessionWork
+		var hiddenCard string
+		if detached && !stillAttached {
+			retired, hiddenCard = s.retireDetachedRetry(key, now)
+		}
 		s.todos.writing.Unlock()
 
+		if retired != nil {
+			s.saveWork(*retired)
+			if hiddenCard != "" {
+				s.recordEnd(hiddenCard, "cancelled", nil)
+			}
+			s.bindRetiredTurn(key, now)
+		}
 		s.linksChanged(r.Context())
 		s.todosChanged(r.Context())
 		if unlinkedCwd != "" {

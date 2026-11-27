@@ -429,3 +429,103 @@ test('assistant sessions discovered from disk advertise capabilities.rewind = fa
   assert.equal(rowOf(asstId).capabilities?.rewind, false)
   assert.notEqual(rowOf(agentId).capabilities?.rewind, false)
 })
+
+test('idle reaping and companion restart restore the session model after session/resume resets it', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'agy-model-reload-'))
+  const binary = join(home, 'agy')
+  const record = join(home, 'requests.jsonl')
+  const assistantDir = join(home, '.persona', 'assistant')
+  mkdirSync(assistantDir, { recursive: true })
+  writeFileSync(record, '')
+  const writeFakeBin = (extraFlags) => writeFileSync(
+    binary,
+    `#!/bin/sh\nexec '${process.execPath}' '${fake}' --record '${record}' ${extraFlags} "$@"\n`,
+    { mode: 0o700 },
+  )
+  writeFakeBin('--resume-default-model gemini-4-neon-high')
+  const node = await startFakeNode(t, { features: ['assistant_pids'] })
+  let runtime = createAgyRuntime({
+    home,
+    agyBin: binary,
+    personadBin: binary,
+    socketPath: node.path,
+    log: () => {},
+    assistantAcpIdleMs: 300,
+    promptInactivityMs: 0,
+  })
+  t.after(async () => { await runtime.stop(); rmSync(home, { recursive: true, force: true }) })
+  await runtime.start()
+  await node.ready
+  const calls = () => readFileSync(record, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
+  const pids = () => node.last('runtime.assistant_pids')?.pids ?? {}
+  const start = async (params) => (await node.peer.call('session.start', { cwd: assistantDir, ...params })).session.session_id
+  const call = (method, session_id, params = {}) => node.peer.call(`session.${method}`, { session_id, ...params })
+
+  const session = await start({ assistant: true, model: 'gemini-4-neon-xhigh' })
+  const rawId = toAgyId(session)
+  mkdirSync(join(home, '.gemini', 'antigravity-cli', 'brain', rawId), { recursive: true })
+  const firstPID = await until('initial worker reported', () => pids()[session])
+  await until('idle worker reaped', () => !pids()[session])
+
+  // Send without an explicit model: session/resume resets native model to gemini-4-neon-high,
+  // and the runtime must re-apply the persisted gemini-4-neon-xhigh before prompting.
+  const beforeReload = calls().length
+  await call('send', session, { assistant: true, text: 'after idle reap' })
+  await until('reloaded prompt completed', () => calls().slice(beforeReload).some((entry) => entry.ended === rawId))
+  const reloadedPID = await until('reloaded worker reported', () => pids()[session])
+  assert.notEqual(reloadedPID, firstPID)
+  const reloadCalls = calls().slice(beforeReload).filter((entry) => entry.params?.sessionId === rawId)
+  const setModelIdx = reloadCalls.findIndex((entry) => entry.method === 'session/set_model' && entry.params?.modelId === 'gemini-4-neon-xhigh')
+  const promptIdx = reloadCalls.findIndex((entry) => entry.method === 'session/prompt')
+  assert.ok(setModelIdx >= 0 && promptIdx > setModelIdx, `expected model restore before prompt: ${JSON.stringify(reloadCalls)}`)
+
+  // Simulate a full companion restart (fresh in-memory sessionModels) with a persisted .persona-model.
+  await runtime.stop()
+  const restartedNode = await startFakeNode(t, { features: ['assistant_pids'] })
+  runtime = createAgyRuntime({
+    home,
+    agyBin: binary,
+    personadBin: binary,
+    socketPath: restartedNode.path,
+    log: () => {},
+    assistantAcpIdleMs: 300,
+    promptInactivityMs: 0,
+  })
+  await runtime.start()
+  await restartedNode.ready
+  const restartedPids = () => restartedNode.last('runtime.assistant_pids')?.pids ?? {}
+  const callRestarted = (method, session_id, params = {}) => restartedNode.peer.call(`session.${method}`, { session_id, ...params })
+
+  const beforeRestart = calls().length
+  await callRestarted('send', session, { assistant: true, text: 'after companion restart' })
+  await until('post-restart prompt completed', () => calls().slice(beforeRestart).some((entry) => entry.ended === rawId))
+  const restartCalls = calls().slice(beforeRestart).filter((entry) => entry.params?.sessionId === rawId)
+  assert.ok(
+    restartCalls.some((entry) => entry.method === 'session/set_model' && entry.params?.modelId === 'gemini-4-neon-xhigh'),
+    `expected persisted model restore across companion restart: ${JSON.stringify(restartCalls)}`,
+  )
+
+  // An explicit caller model overrides the persisted model and becomes the new restored model.
+  const beforeExplicit = calls().length
+  await callRestarted('send', session, { assistant: true, text: 'switch model', model: 'gemini-4-neon-custom' })
+  await until('explicit-model prompt completed', () => calls().slice(beforeExplicit).some((entry) => entry.ended === rawId))
+  await until('worker reaped after explicit switch', () => !restartedPids()[session])
+
+  const beforeCustomReload = calls().length
+  await callRestarted('send', session, { assistant: true, text: 'after custom switch reap' })
+  await until('custom-reload prompt completed', () => calls().slice(beforeCustomReload).some((entry) => entry.ended === rawId))
+  const customReloadCalls = calls().slice(beforeCustomReload).filter((entry) => entry.params?.sessionId === rawId)
+  assert.ok(
+    customReloadCalls.some((entry) => entry.method === 'session/set_model' && entry.params?.modelId === 'gemini-4-neon-custom'),
+    `expected updated persisted model restore: ${JSON.stringify(customReloadCalls)}`,
+  )
+
+  // If the persisted model is later rejected as retired, automatic restore degrades gracefully instead of failing the send.
+  await until('worker reaped before retired-model check', () => !restartedPids()[session])
+  writeFakeBin('--resume-default-model gemini-4-neon-high --reject-model gemini-4-neon-custom')
+  const beforeRetired = calls().length
+  await callRestarted('send', session, { assistant: true, text: 'retired model fallback' })
+  await until('retired-model prompt still completes', () => calls().slice(beforeRetired).some((entry) => entry.ended === rawId))
+  const retiredCalls = calls().slice(beforeRetired).filter((entry) => entry.params?.sessionId === rawId)
+  assert.ok(retiredCalls.some((entry) => entry.method === 'session/prompt'))
+})

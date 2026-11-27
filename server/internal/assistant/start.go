@@ -1672,7 +1672,8 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		c, known := s.session(ctx, machine, sid)
 		if known && c.SourceKind == proto.SourceRuntime {
 			// Preserve existing runtime inheritance unless the main chat has its
-			// own binding. That binding still passes the execution identity check.
+			// own binding, or its inherited binding already targets this runtime
+			// launcher with a configured model or effort.
 			if p["is_main"] != true {
 				return nil
 			}
@@ -1681,7 +1682,13 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 				return err
 			}
 			if record.Binding == (ModelBinding{}) {
-				return nil
+				resolved, err := s.resolveModel(ctx, purposeMain)
+				if err != nil {
+					return err
+				}
+				if c.Launcher == "" || resolved.Provider != launcherProvider(c.Launcher) || (resolved.Model == "" && resolved.Effort == "") {
+					return nil
+				}
 			}
 		}
 		if known && !followsSetting {
@@ -1728,12 +1735,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	pickedLauncher := l != ""
 	// The background supervisor runs under its own purpose (which follows Main chat until it is set apart), whoever
 	// writes to it: the hub's relays already do (backgroundModel), so a message typed to it must too.
-	purpose := "assistant"
-	if p["is_main"] == true {
-		purpose = purposeMain
-	} else if s.isBackground(ctx, sid) {
-		purpose = purposeSupervise
-	}
+	purpose := s.conversationModelPurpose(ctx, machine, sid)
 	if pickedLauncher {
 		if err := s.applyPickedModel(ctx, p); err != nil {
 			return err
@@ -1783,7 +1785,18 @@ func (s *Service) sendOnPick(ctx context.Context, machine, sid string, p map[str
 	if err := s.otherKindPick(ctx, machine, sid, pick.Launcher); err != nil {
 		return err
 	}
-	return preservePermissionMode(p, func() error { return s.applyPick(ctx, p, pick) })
+	return preservePermissionMode(p, func() error { return s.applyPickFor(ctx, s.conversationModelPurpose(ctx, machine, sid), p, pick) })
+}
+
+func (s *Service) conversationModelPurpose(ctx context.Context, machine, sid string) string {
+	cfg := s.settings(ctx)
+	if cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine {
+		return purposeMain
+	}
+	if s.isBackground(ctx, sid) {
+		return purposeSupervise
+	}
+	return "assistant"
 }
 
 // startedByTask: sid is a conversation a scheduled task started (origin task), also once it is no task's current

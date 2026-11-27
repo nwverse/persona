@@ -376,8 +376,8 @@ func (p *Proc) Hold() (release func()) {
 	}
 }
 
-// Wait waits until it is ready or stops trying: nil once ready; ctx's error, or the run's error after it failed and
-// nothing will start it again before a backoff.
+// Wait waits until it is ready or stops trying: nil once ready; ctx's error, ErrNotRunning once the Proc has stopped,
+// or the run's error after it failed and nothing will start it again before a backoff.
 func (p *Proc) Wait(ctx context.Context) error {
 	for {
 		p.mu.Lock()
@@ -390,10 +390,24 @@ func (p *Proc) Wait(ctx context.Context) error {
 			return i18n.ErrEnglish("extension-status.host_failure", i18n.Args{"name": p.spec.Name, "err": why})
 		}
 		select {
+		case <-p.done:
+			return p.notRunningErr()
+		default:
+		}
+		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-p.done:
+			return p.notRunningErr()
 		case <-ch:
 		}
+	}
+}
+
+func (p *Proc) notRunningErr() error {
+	return &callFailure{
+		message: i18n.ErrEnglish("extension-status.host_failure", i18n.Args{"name": p.spec.Name, "err": ErrNotRunning}),
+		cause:   ErrNotRunning,
 	}
 }
 
@@ -459,7 +473,7 @@ func (p *Proc) call(ctx context.Context, method string, params, out any) error {
 	}
 	if s == nil {
 		if !lazy && !starting {
-			return &callFailure{message: i18n.ErrEnglish("extension-status.host_failure", i18n.Args{"name": p.spec.Name, "err": ErrNotRunning}), cause: ErrNotRunning}
+			return p.notRunningErr()
 		}
 		wctx, cancel := context.WithTimeout(ctx, ReadyWithin)
 		err := p.Wait(wctx)
@@ -471,7 +485,7 @@ func (p *Proc) call(ctx context.Context, method string, params, out any) error {
 		s = p.sess
 		p.mu.Unlock()
 		if s == nil {
-			return &callFailure{message: i18n.ErrEnglish("extension-status.host_failure", i18n.Args{"name": p.spec.Name, "err": ErrNotRunning}), cause: ErrNotRunning}
+			return p.notRunningErr()
 		}
 	}
 	cctx, cancel := context.WithTimeout(ctx, p.spec.callTimeout())

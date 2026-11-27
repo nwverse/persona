@@ -251,6 +251,12 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.EngineFooterNoneOffline -> R.string.designsystem_core_engine_footer_none_offline
     CoreText.Key.EngineSwitched -> R.string.designsystem_core_engine_switched
     CoreText.Key.EngineSavedOffline -> R.string.designsystem_core_engine_saved_offline
+    CoreText.Key.EngineSetNotice -> R.string.designsystem_core_engine_set_notice
+    CoreText.Key.EngineFooterSet -> R.string.designsystem_core_engine_footer_set
+    CoreText.Key.EngineFooterSetOffline -> R.string.designsystem_core_engine_footer_set_offline
+    CoreText.Key.EngineFooterSetOne -> R.string.designsystem_core_engine_footer_set_one
+    CoreText.Key.EngineFooterSetOneOffline -> R.string.designsystem_core_engine_footer_set_one_offline
+    CoreText.Key.EngineDefaultChanged -> R.string.designsystem_core_engine_default_changed
     CoreText.Key.ToolRun -> R.string.designsystem_core_tool_run
     CoreText.Key.ToolRead -> R.string.designsystem_core_tool_read
     CoreText.Key.ToolEdit -> R.string.designsystem_core_tool_edit

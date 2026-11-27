@@ -699,6 +699,16 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		}
 		return
 	}
+	if event == "session.compaction.settled" {
+		var p struct {
+			SessionID string `json:"session_id"`
+			Error     string `json:"error"`
+		}
+		if json.Unmarshal(params, &p) == nil && p.SessionID != "" {
+			rh.reg.settleCompaction(h, p.SessionID, p.Error)
+		}
+		return
+	}
 	if event == "runtime.workspaces" { // its own workspaces (runtimeworkspaces.go): only from one that keeps them
 		var p struct {
 			Workspaces []runtimeWorkspace `json:"workspaces"`

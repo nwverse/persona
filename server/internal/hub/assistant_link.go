@@ -485,20 +485,16 @@ func init() {
 		out, err := assistantLink{h}.appCallFrom(ctx, c.managerID(), p)
 		return out, busCodedError(err)
 	})
-	handleBus(assistantwire.MethodNotify, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p assistantwire.NotifyRequest
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodNotify + ": " + err.Error()}
-		}
+	handleTypedBus(assistantwire.NotifyMethod, assistantwire.MethodNotify+": ", func(h *Hub, ctx context.Context, c *busConn, p assistantwire.NotifyRequest) (assistantwire.NotifyResult, error) {
 		from, id := c.managerID(), p.Notification.ID
 		var release func()
 		if id != "" {
 			first, rel, paused := h.beginHandOver(ctx, from, id)
 			if paused {
-				return nil, &rpc.Error{Code: bus.CodeStoreUnavailable, Message: "hub writes are paused"}
+				return assistantwire.NotifyResult{}, &rpc.Error{Code: bus.CodeStoreUnavailable, Message: "hub writes are paused"}
 			}
 			if !first {
-				return map[string]any{"ok": true}, nil // delivered already: it came again (outbox_relay.go)
+				return assistantwire.NotifyResult{OK: true}, nil // delivered already: it came again (outbox_relay.go)
 			}
 			release = rel
 		}
@@ -511,7 +507,7 @@ func init() {
 			if id != "" {
 				h.forgetHandOver(from, id, release != nil)
 			}
-			return nil, busCodedError(err)
+			return assistantwire.NotifyResult{}, busCodedError(err)
 		}
 		return notifyAnswer(out), nil
 	})
@@ -530,21 +526,22 @@ func init() {
 // the assistant's notify_user tell the model the notice went to the briefing, not the phone; devices (always there when
 // out is) the devices it was handed to, and with none, reason "no_device" or "filtered" as POST /api/v1/notify; kept the
 // offline devices that get it when they connect again. A hub before devices answered only ok and held.
-func notifyAnswer(out *pushOutcome) map[string]any {
-	res := map[string]any{"ok": true}
+func notifyAnswer(out *pushOutcome) assistantwire.NotifyResult {
+	res := assistantwire.NotifyResult{OK: true}
 	if out == nil {
 		return res
 	}
-	res["devices"] = out.devices
+	devices := out.devices
+	res.Devices = &devices
 	if out.kept > 0 {
-		res["kept"] = out.kept
+		res.Kept = out.kept
 	}
 	switch {
 	case out.held != "":
-		res["held"] = true
-		res["reason"] = out.held
+		res.Held = true
+		res.Reason = out.held
 	case out.devices == 0:
-		res["reason"] = out.reason()
+		res.Reason = out.reason()
 	}
 	return res
 }

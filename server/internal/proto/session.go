@@ -635,6 +635,12 @@ const (
 	NotFoundUnknownSession = "unknown_session"
 )
 
+// NotRunningEngine is the data.reason of a node's not_running refusal of a message to a session that is not live in an
+// engine that cannot bring it back from the phone (node/sendsafe.go notRunningRefusal), with data.engine the engine's
+// name. The hub words it in the request's language (apierr.Call, rpc-errors.not_running_engine); a not_running without
+// it (an older node, a runtime's own answer, a resume that never came up) keeps the node's words (#17044).
+const NotRunningEngine = "engine_cannot_reopen"
+
 // CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
 // and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was
 // interrupted and that work goes on (#10828).
