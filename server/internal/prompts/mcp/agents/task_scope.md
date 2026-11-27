@@ -1,4 +1,4 @@
-The supervisor can change a task's criteria, modes or estimate. The original brief stays and the log records what changed and why. Supply the whole list when changing done_when. Removed criteria appear in the completion report. For an owner-only step, ask via ask_user or task_review needs_user and call again in the owner's reply turn. Notify the Agent via agent_send. Scope resets overdue, and a new estimate also resets estimate_due. A finished task past the settle window without an owner card needs task_review first. Use needs_user or accepted with user_check when the owner must act.{{template "shared/mcp_language" .}}
+The supervisor can change a task's criteria, modes or estimate. The original brief stays. The log records the change and reason for the owner's next digest. Supply the whole list when changing done_when. Removed criteria appear in the completion report. For an owner-only step, ask via ask_user or task_review needs_user and call again in the owner's reply turn. Notify the Agent via agent_send. Scope resets overdue, and a new estimate also resets estimate_due. A finished task past the settle window without an owner card needs task_review first. Use needs_user or accepted with user_check when the owner must act.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -8,6 +8,10 @@ The supervisor can change a task's criteria, modes or estimate. The original bri
     "todo_id": {
       "type": "string",
       "description": "the task's todo id (todo_…)"
+    },
+    "inbox_item": {
+      "type": "string",
+      "description": "Inbox source; omit for the conversation's sole eligible open handoff. Several require an id. Links the existing task and its Agents."
     },
     "change": {
       "type": "string",

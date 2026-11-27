@@ -103,13 +103,16 @@ const switchSendWait = 8 * time.Minute
 // seconds; 5 minutes for one that is starting or not running (a resume, node's claudeStartWait, #1396); switchSendWait
 // for the user's message that carries out a switch to another launcher (apply_switch): it quits the agent and starts
 // it again, and brings it back on its own launcher when that fails. Decided by the request, not the cached row, which
-// may not show a switch picked a moment ago.
+// may not show a switch picked a moment ago. A live terminal Claude send may resume on an updated provider too.
 func sendWait(p map[string]any, s proto.Session) time.Duration {
 	if apply, _ := p["apply_switch"].(bool); apply {
 		return switchSendWait
 	}
 	if s.Starting || s.Status == proto.StatusOffline {
 		return 5 * time.Minute
+	}
+	if s.CanRefreshTerminalLauncher() {
+		return proto.LauncherRefreshSendWait
 	}
 	return 90 * time.Second
 }

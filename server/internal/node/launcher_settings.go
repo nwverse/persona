@@ -219,6 +219,9 @@ func (n *Node) mergeManagedSettings(launcher string, l proto.ManagedLauncher, ou
 		env[k] = ""
 		n.logf("launcher %s: the proxy in Claude's settings.json (%s) does not answer; it runs without it", launcher, k)
 	}
+	if l.AgentType() == "claude" && !l.Withheld {
+		env[managedSettingsConfigEnv] = managedClaudeFingerprint(l)
+	}
 	mine["env"] = env
 	mine["enableArtifact"] = false // artifactsOff: a gateway cannot carry them
 	// A managed launcher brings its own gateway key, so the computer's user-global apiKeyHelper (~/.claude/settings.json)

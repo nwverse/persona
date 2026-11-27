@@ -239,6 +239,7 @@ func TestSendMessageDeliveryRefusalReturns409AndFailedClientOp(t *testing.T) {
 					return map[string]any{}, nil
 				}
 			})
+			h.machineByID("box").setSessions([]proto.Session{{SessionID: "s1", Agent: "claude", PaneID: "w1:p1", Status: proto.StatusIdle}})
 			req := httptest.NewRequest(http.MethodPost, sendPath, strings.NewReader(`{"text":"hello"}`))
 			req.RemoteAddr = "127.0.0.1:12345"
 			req.Header.Set("Authorization", "Bearer "+h.cfg.Token)

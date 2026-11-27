@@ -366,17 +366,20 @@ func (s *Service) gateDeployStage(ctx context.Context, t Todo, stage, pr, machin
 	return deliveryStage(d.State), false
 }
 
-// gateDelivery checks a judged delivery that says live (deliveryLive) against the running hub: held, it is merged
-// (or pr) with why. replies name the PR (else the todo's).
-func (s *Service) gateDelivery(ctx context.Context, t Todo, d TodoDelivery, pr string) TodoDelivery {
-	if d.State != deliveryLive {
-		return d
-	}
+// gateDelivery checks a judged delivery against the running hub using an owned or saved PR.
+// A reply naming another PR needs independent confirmation before it can count as merged or deployed.
+func (s *Service) gateDelivery(ctx context.Context, t Todo, d TodoDelivery, pr string, otherPR bool) TodoDelivery {
 	if pr == "" {
 		pr = t.PRURL
 	}
+	if otherPR && pr == "" && d.State != deliveryNone {
+		return TodoDelivery{} // no delivery status to save and no progress to apply
+	}
+	if d.State != deliveryLive && !(otherPR && (d.State == deliveryMerged || d.State == deliveryOff)) {
+		return d
+	}
 	r := s.checkDeployed(ctx, pr)
-	if !r.held() {
+	if !r.held() && (!otherPR || r.State == deployIn && (d.State != deliveryMerged || r.Merge != "")) {
 		return d
 	}
 	h := s.heldDelivery(ctx, r, s.knownDeployMerge(ctx, t, pr))

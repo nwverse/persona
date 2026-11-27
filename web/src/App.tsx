@@ -38,7 +38,7 @@ import { watchRoster } from "./lib/managers";
 import { t } from "./i18n";
 import { Button, Collapse, cx, EASE, IconButton, Loading, Spinner, Toasts } from "./ui/atoms";
 import { focusables, trapTabIn } from "./ui/overlay";
-import { Empty } from "./views/session/files/parts";
+import { Empty } from "./views/session/files/empty";
 import { AgentsPage } from "./views/AgentsPage";
 import { ChatView } from "./views/chat/ChatView";
 import { preloadCloseout } from "./views/chat/closeout-chunks";

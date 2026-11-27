@@ -559,7 +559,7 @@
   },
   {
     "name": "agent_send",
-    "description": "Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Any stop but the user's allows resume, an unknown one too. User or exit stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nGive task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.\n\nUse `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result. A stopped Agent resumes onto its own open to-do with `todo_id` (never with `task`).\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Send the user's request. Busy Agents may queue it. To keep context after a stop, use resume and resume_why, including for unknown stops. User or exit stops need the owner's Resume. Give task unless the Agent has your open task. Nearly full Agents compact first. Use agent_start for unrelated work, ask_user if unsure. An unused branch starts on first send. Only /exit or /quit stops an Agent and keeps its tab. The owner closes other chats' Agents.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nGive task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task or use null for a reply, nudge or decision. Blank fields count as omitted.\n\nUse `handoff` for your stopped to-do. A node ack starts its result wait. Resume a stopped Agent onto its own open to-do with `todo_id` (never `task`).\n\n`wait_seconds` observes up to 50s after dispatch. `Inline observation` JSON: `completed` (this input's `reply`), `question` (pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids. It never answers questions, accepts tasks, resends or cancels work. Normal supervision via `task_review` applies. Older nodes may time out rather than return an unrelated reply.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -581,6 +581,10 @@
         },
         "text": {
           "type": "string"
+        },
+        "inbox_item": {
+          "type": "string",
+          "description": "Inbox ID; for this conversation's eligible handoffs, omit for one, specify for several."
         },
         "resume": {
           "type": "boolean",
@@ -2605,7 +2609,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Use for code changes, repo research and multi-step work. Use machines_list, KB, agents_list and preferences to explain choices. Main/lead, read-only, user_requested and preapproved plans start now. Others and owner_step need 开始. Check queued starts in the to-do. Reuse an Agent via agent_send when context and permissions fit, even after closure.\n\nAn explicit machine is fixed by default. Flexible lets portable work move when health checks fail. Omit machine for automatic placement. Planning leads own their tasks and escalate needs_user to main. Main may select a lead. Incompatible leads need supervision_policy first. Check the supervisor and similar work. Reuse an active same-directory Agent when it fits. Pass todo_id for an unassigned to-do (Lark topic, split, failed start).\n\nStarted tasks keep a hub brief (owner request or started_why). Writable tasks need done_when and read-only tasks need goal. Give out_of_bounds as needed. Set completion_mode for draft or review-ready delivery. Omit expect_minutes for an automatic estimate. Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.\n\nEdits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.\n\nUse repositories_list or repository_get when needed. An explicit URL or path wins. Set machine and cwd separately from bindings. Only the owner can close terminals on acceptance.\n\nPass todo_id with a saved backend or container operation_id. For a new container, selected_repo_ids must be ready. Host picks an enabled engine.\n\nWorkspace new isolates and can name a branch (default task/\u003ctodo id\u003e). Existing selects a clean checkout without switching. Queue waits FIFO if requested or the owner waits. None creates nothing. Omission uses none for readonly and the writable default or new if busy. Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Plan multi-step work. Check machines_list, KB, agents_list and preferences. Main/lead, readonly, user_requested and preapproved tasks start now. Others and owner_step need 开始. Queued means dispatched. Reuse suitable Agents via agent_send. Keep reminders and events separate.\n\nAn explicit machine is fixed by default. Use flexible for portable work or omit machine for automatic placement. Leads own their tasks and escalate needs_user to main. Main can select a lead. Use supervision_policy for incompatible leads. Match open issue or PR work with continues, todo_id or distinct_from. Other duplicate hints are advisory.\n\nWritable tasks need done_when and read-only tasks need goal. Set completion_mode for draft or review-ready delivery. Use continues and continues_why to carry work on, task_retry for failed starts and task_scope with scope_revision for scope changes.\n\nEdits need readonly=false and write permission. With readonly, Claude/agy uses bypassPermissions, Codex uses plan unless assistant.readonly_mode=prompt, and pi/cursor refuse. A leader can plan and review direct workers.\n\nUse repositories_list or repository_get when needed. An explicit URL or path wins. Set machine and cwd separately from bindings. Only the owner can close terminals on acceptance.\n\nPass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.\n\nWorkspace new isolates and can name a branch (default task/\u003ctodo id\u003e). Existing needs a clean, unused checkout. Queue waits FIFO if requested or the owner waits. None creates nothing. Omit for none on readonly or the writable default (new if busy). Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch. Inline observation includes `completed` with this input's `reply`, `question` with a pending `interaction_id`, or `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`. Observation records known input and session ids. Observation never answers questions, accepts tasks, resends or cancels work. Normal supervision and `task_review` apply. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single task waits.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2959,7 +2963,7 @@
               },
               "continues": {
                 "type": "string",
-                "description": "Original todo id; reuses todo/brief, stops prior Agents, reopens if closed."
+                "description": "Original todo id (needs continues_why); reuses todo/brief, stops prior Agents, reopens if closed."
               },
               "scope_revision": {
                 "type": "string",
@@ -2968,6 +2972,27 @@
               "continues_why": {
                 "type": "string",
                 "description": "With continues: one-line replacement reason."
+              },
+              "distinct_from": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "todo_id",
+                    "reason"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "todo_id": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "description": "new tasks only: explain each conflicting open todo. Reasons stay in the brief"
               },
               "started_why": {
                 "type": "string",
@@ -2996,7 +3021,7 @@
                   "human",
                   "autonomous"
                 ],
-                "description": "Optional: human or autonomous."
+                "description": "Optional to-do audience."
               },
               "direction_id": {
                 "type": "string",
@@ -3019,7 +3044,7 @@
               },
               "inbox_item": {
                 "type": "string",
-                "description": "Handed-off Inbox ID or 'none'; links without filing/replying."
+                "description": "Inbox ID or 'none' to skip; omit to link sole eligible handoff (multiple need ID; none stays unlinked). Never files/replies."
               },
               "tier": {
                 "type": "string",
@@ -3445,7 +3470,7 @@
   },
   {
     "name": "task_scope",
-    "description": "The supervisor can change a task's criteria, modes or estimate. The original brief stays and the log records what changed and why. Supply the whole list when changing done_when. Removed criteria appear in the completion report. For an owner-only step, ask via ask_user or task_review needs_user and call again in the owner's reply turn. Notify the Agent via agent_send. Scope resets overdue, and a new estimate also resets estimate_due. A finished task past the settle window without an owner card needs task_review first. Use needs_user or accepted with user_check when the owner must act.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "The supervisor can change a task's criteria, modes or estimate. The original brief stays. The log records the change and reason for the owner's next digest. Supply the whole list when changing done_when. Removed criteria appear in the completion report. For an owner-only step, ask via ask_user or task_review needs_user and call again in the owner's reply turn. Notify the Agent via agent_send. Scope resets overdue, and a new estimate also resets estimate_due. A finished task past the settle window without an owner card needs task_review first. Use needs_user or accepted with user_check when the owner must act.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3457,6 +3482,10 @@
         "todo_id": {
           "type": "string",
           "description": "the task's todo id (todo_…)"
+        },
+        "inbox_item": {
+          "type": "string",
+          "description": "Inbox source; omit for the conversation's sole eligible open handoff. Several require an id. Links the existing task and its Agents."
         },
         "change": {
           "type": "string",
