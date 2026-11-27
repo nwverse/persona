@@ -24,9 +24,9 @@ import (
 
 // The type-aware domain rules (docs/server/architecture.md "Domain model", "The rules and their checks"): what the
 // syntax-only rules of domainrules cannot see, because it takes a value's type to see it. TestDomainTyped runs them
-// over the cores that predate no rule (every core but the legacy ones the baseline holds) and every package that
-// reaches one through its production imports, directly or through others (an adapter hands a core's value to code
-// that never imports the core), type-checked from source against the gc export data of what they import
+// over the cores that predate no rule (every core but the legacy ones the baseline holds), every application seam, and
+// every package that reaches one through its production imports, directly or through others (an adapter hands a core's
+// value to code that never imports the core), type-checked from source against the gc export data of what they import
 // (go list -export -deps; go/types and go/importer, the standard library only).
 
 // typedRule is what a typed finding says besides what was found, as domainrules' rules do.
@@ -58,6 +58,11 @@ var typedRules = map[string]typedRule{
 		"visit the failure (fail.FailVisitor), or compare it with nil only",
 		"server/internal/domainkit/domaintest/domaintest.go (Describe)",
 	},
+	"typed-seam-contract": {
+		"a generic seam lets any type cross the boundary that seam-any keeps typed, and bus methods encode and decode their type arguments on the wire",
+		"declare the request and reply as exported named types in a contract package listed in contracts.txt",
+		"server/internal/assistant/inbox_module.go (Register)",
+	},
 }
 
 func typedMessage(id, what string) string {
@@ -81,16 +86,39 @@ type typedFinding struct {
 	msg  string
 }
 
+func contractSet(module string, entries []string) map[string]bool {
+	out := make(map[string]bool, len(entries))
+	for _, c := range entries {
+		if strings.Contains(strings.Split(c, "/")[0], ".") {
+			out[c] = true
+		} else {
+			out[module+"/"+c] = true
+		}
+	}
+	return out
+}
+
 func TestDomainTyped(t *testing.T) {
 	start := time.Now()
+	lists, err := domainrules.ReadLists("testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracts := contractSet(serverModule, lists.Contracts)
 	pkgs, err := domainrules.Load(serverDir, serverModule)
 	if err != nil {
 		t.Fatal(err)
 	}
 	strict := map[string]bool{} // import paths of the cores the rules hold in full
+	seams := map[string]bool{}  // import paths of the application seams
 	for _, p := range pkgs {
-		if (p.Layer == "core" || p.Layer == "core shared") && !domainrules.LegacyCore(p.Rel) {
-			strict[p.Path] = true
+		switch p.Layer {
+		case "core", "core shared":
+			if !domainrules.LegacyCore(p.Rel) {
+				strict[p.Path] = true
+			}
+		case "application seam":
+			seams[p.Path] = true
 		}
 	}
 	layers := map[string]string{}
@@ -99,10 +127,10 @@ func TestDomainTyped(t *testing.T) {
 		layers[p.Path] = p.Layer
 		byPath[p.Path] = p
 	}
-	reach := reachesStrict(byPath, strict)
+	reach := reachesRoots(byPath, strict, seams)
 	var targets []string
 	for _, p := range pkgs {
-		if (strict[p.Path] || reach(p.Path)) && p.Name != "" {
+		if (strict[p.Path] || seams[p.Path] || reach(p.Path)) && p.Name != "" {
 			targets = append(targets, p.Path)
 		}
 	}
@@ -119,11 +147,11 @@ func TestDomainTyped(t *testing.T) {
 		}
 		units = append(units, typedUnit{path: path, layer: layers[path], files: files})
 	}
-	findings, checked, err := typedCheck(units, strict, layers, listed)
+	findings, checked, err := typedCheck(units, strict, layers, contracts, listed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("domain typed: %d packages (%d strict cores), %d files type-checked in %s", len(units), len(strict), checked,
+	t.Logf("domain typed: %d packages (%d strict cores, %d seams), %d files type-checked in %s", len(units), len(strict), len(seams), checked,
 		time.Since(start).Round(time.Millisecond))
 	if len(units) == 0 || checked == 0 {
 		t.Fatalf("the typed domain rules inspected nothing: %d cores, %d packages", len(strict), len(units))
@@ -134,12 +162,18 @@ func TestDomainTyped(t *testing.T) {
 }
 
 // Every typed rule fails on its planted case and passes its compliant twin (testdata/domaintyped: an application
-// package and a core, one that reaches a core only through its adapter and a helper that reaches none; each case is
-// marked with a "planted: <rule>" comment on its line, and a twin names none).
+// package, a core, an application seam, one that reaches a core only through its adapter and a helper that reaches
+// none; each case is marked with a "planted: <rule>" comment on its line, and a twin names none).
 func TestDomainTypedPlanted(t *testing.T) {
+	lists, err := domainrules.ReadLists("testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracts := contractSet(serverModule, lists.Contracts)
 	planted := filepath.Join("testdata", "domaintyped")
 	units := []typedUnit{ // the ones another imports first
 		{path: "planted/helper", layer: "library"},
+		{path: "planted/seam", layer: "application seam"},
 		{path: "planted/app", layer: "application"},
 		{path: "planted/core", layer: "core"},
 		{path: "planted/viaadapt", layer: "application"},
@@ -166,17 +200,26 @@ func TestDomainTypedPlanted(t *testing.T) {
 	}
 	strict := map[string]bool{serverModule + "/internal/assistant/fleetcount": true, serverModule + "/internal/agentref": true,
 		"planted/core": true}
-	layers := map[string]string{serverModule + "/internal/assistant/fleetcount/fleetcountadapt": "adapter",
-		serverModule + "/internal/agentref/agentrefadapt": "adapter"}
+	layers := map[string]string{
+		serverModule + "/internal/assistant/fleetcount/fleetcountadapt": "adapter",
+		serverModule + "/internal/agentref/agentrefadapt":               "adapter",
+		serverModule + "/internal/assistant/kernel/seam":                "application seam",
+	}
 	for _, u := range units {
 		layers[u.path] = u.layer
 	}
-	listed, err := goListExport(serverDir, []string{serverModule + "/internal/assistant/fleetcount/fleetcountadapt",
-		serverModule + "/internal/agentref/agentrefadapt", "fmt", "maps", "slices", "encoding/json", "log/slog"})
+	listed, err := goListExport(serverDir, []string{
+		serverModule + "/internal/assistant/fleetcount/fleetcountadapt",
+		serverModule + "/internal/agentref/agentrefadapt",
+		serverModule + "/internal/assistant/kernel/seam",
+		serverModule + "/internal/assistantwire",
+		serverModule + "/internal/buswire",
+		"context", "fmt", "maps", "slices", "encoding/json", "log/slog",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings, _, err := typedCheck(units, strict, layers, listed)
+	findings, _, err := typedCheck(units, strict, layers, contracts, listed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,9 +254,17 @@ func TestDomainTypedPlanted(t *testing.T) {
 	}
 }
 
-// reachesStrict says of a package of the tree whether its production imports reach a strict core, directly or through
-// other packages of the tree.
-func reachesStrict(byPath map[string]*domainrules.Pkg, strict map[string]bool) func(path string) bool {
+// reachesRoots says of a package of the tree whether its production imports reach any package in roots, directly or
+// through other packages of the tree.
+func reachesRoots(byPath map[string]*domainrules.Pkg, roots ...map[string]bool) func(path string) bool {
+	isRoot := func(path string) bool {
+		for _, r := range roots {
+			if r[path] {
+				return true
+			}
+		}
+		return false
+	}
 	memo := map[string]bool{}
 	var reach func(path string) bool
 	reach = func(path string) bool {
@@ -225,7 +276,7 @@ func reachesStrict(byPath map[string]*domainrules.Pkg, strict map[string]bool) f
 		if p := byPath[path]; p != nil {
 			for _, f := range p.Files {
 				for _, imp := range f.Imports {
-					r = r || !f.Test && (strict[imp.Path] || reach(imp.Path))
+					r = r || !f.Test && (isRoot(imp.Path) || reach(imp.Path))
 				}
 			}
 		}
@@ -235,17 +286,21 @@ func reachesStrict(byPath map[string]*domainrules.Pkg, strict map[string]bool) f
 	return reach
 }
 
-// The typed rules check a package that reaches a strict core only through another package's production code, and
-// leave out one that reaches it only from its tests.
+// The typed rules check a package that reaches a strict core or an application seam through production code, and leave
+// out one that reaches them only from its tests.
 func TestDomainTypedReach(t *testing.T) {
 	const module = "planted"
 	pkgs, err := domainrules.LoadFiles(module, map[string]string{
-		"core/core.go":          "// Package core.\n//\n//persona:layer core\npackage core\n",
-		"coreadapt/adapt.go":    "// Package coreadapt.\n//\n//persona:layer adapter\npackage coreadapt\n\nimport _ \"planted/core\"\n",
-		"app/app.go":            "// Package app.\npackage app\n\nimport _ \"planted/coreadapt\"\n",
-		"tested/tested.go":      "// Package tested.\npackage tested\n",
-		"tested/tested_test.go": "package tested\n\nimport _ \"planted/core\"\n",
-		"alone/alone.go":        "// Package alone.\npackage alone\n\nimport _ \"strings\"\n",
+		"core/core.go":              "// Package core.\n//\n//persona:layer core\npackage core\n",
+		"coreadapt/adapt.go":        "// Package coreadapt.\n//\n//persona:layer adapter\npackage coreadapt\n\nimport _ \"planted/core\"\n",
+		"app/app.go":                "// Package app.\npackage app\n\nimport _ \"planted/coreadapt\"\n",
+		"seam/seam.go":              "// Package seam.\n//\n//persona:layer application seam\npackage seam\n",
+		"seamapp/app.go":            "// Package seamapp.\npackage seamapp\n\nimport _ \"planted/seam\"\n",
+		"seamtested/tested.go":      "// Package seamtested.\npackage seamtested\n",
+		"seamtested/tested_test.go": "package seamtested\n\nimport _ \"planted/seam\"\n",
+		"tested/tested.go":          "// Package tested.\npackage tested\n",
+		"tested/tested_test.go":     "package tested\n\nimport _ \"planted/core\"\n",
+		"alone/alone.go":            "// Package alone.\npackage alone\n\nimport _ \"strings\"\n",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -254,13 +309,20 @@ func TestDomainTypedReach(t *testing.T) {
 	for _, p := range pkgs {
 		byPath[p.Path] = p
 	}
-	reach := reachesStrict(byPath, map[string]bool{module + "/core": true})
-	for path, want := range map[string]bool{"coreadapt": true, "app": true, "tested": false, "alone": false} {
+	reach := reachesRoots(byPath, map[string]bool{module + "/core": true}, map[string]bool{module + "/seam": true})
+	for path, want := range map[string]bool{
+		"coreadapt":  true,
+		"app":        true,
+		"seamapp":    true,
+		"seamtested": false,
+		"tested":     false,
+		"alone":      false,
+	} {
 		if byPath[module+"/"+path] == nil {
 			t.Fatalf("%s was not loaded", path)
 		}
 		if got := reach(module + "/" + path); got != want {
-			t.Errorf("%s reaches the core: %v, want %v", path, got, want)
+			t.Errorf("%s reaches a root: %v, want %v", path, got, want)
 		}
 	}
 }
@@ -296,9 +358,9 @@ func goListExport(dir string, pkgs []string) (map[string]listedPkg, error) {
 }
 
 // typedCheck type-checks each unit from source, against the export data listed of what it imports, and runs the
-// rules over it; layers is the layer each package of the tree declares. It returns the findings and the number of
-// files checked.
-func typedCheck(units []typedUnit, strict map[string]bool, layers map[string]string,
+// rules over it; layers is the layer each package of the tree declares, and contracts is the set of contract package
+// import paths from contracts.txt. It returns the findings and the number of files checked.
+func typedCheck(units []typedUnit, strict map[string]bool, layers map[string]string, contracts map[string]bool,
 	listed map[string]listedPkg) ([]typedFinding, int, error) {
 	fset := token.NewFileSet()
 	imp := unitImporter{listed: listed, checked: map[string]*types.Package{},
@@ -324,8 +386,12 @@ func typedCheck(units []typedUnit, strict map[string]bool, layers map[string]str
 			}
 			parsed = append(parsed, f)
 		}
-		info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{},
-			Uses: map[*ast.Ident]types.Object{}}
+		info := &types.Info{
+			Types:     map[ast.Expr]types.TypeAndValue{},
+			Defs:      map[*ast.Ident]types.Object{},
+			Uses:      map[*ast.Ident]types.Object{},
+			Instances: map[*ast.Ident]types.Instance{},
+		}
 		conf := types.Config{Importer: imp}
 		pkg, err := conf.Check(u.path, fset, parsed, info)
 		if err != nil {
@@ -333,7 +399,7 @@ func typedCheck(units []typedUnit, strict map[string]bool, layers map[string]str
 		}
 		files += len(parsed)
 		imp.checked[u.path] = pkg
-		c := typedChecks{fset: fset, unit: u, pkg: pkg, info: info, strict: strict, layers: layers}
+		c := typedChecks{fset: fset, unit: u, pkg: pkg, info: info, strict: strict, layers: layers, contracts: contracts}
 		c.fail = c.failInterface()
 		if c.cores, err = reachedCores(pkg, strict, listed, imp); err != nil {
 			return nil, 0, fmt.Errorf("type-checking %s: %v", u.path, err)
@@ -342,10 +408,11 @@ func typedCheck(units []typedUnit, strict map[string]bool, layers map[string]str
 			c.file(f)
 		}
 		c.visitors(parsed)
+		c.seamContracts()
 		findings = append(findings, c.findings...)
 	}
 	slices.SortFunc(findings, func(a, b typedFinding) int {
-		return strings.Compare(a.pos.String()+a.rule, b.pos.String()+b.rule)
+		return strings.Compare(a.pos.String()+a.rule+a.msg, b.pos.String()+b.rule+b.msg)
 	})
 	return findings, files, nil
 }
@@ -367,15 +434,16 @@ func (u unitImporter) Import(path string) (*types.Package, error) {
 
 // typedChecks is the rules over one type-checked unit.
 type typedChecks struct {
-	fset     *token.FileSet
-	unit     typedUnit
-	pkg      *types.Package
-	info     *types.Info
-	strict   map[string]bool
-	layers   map[string]string
-	fail     *types.Interface // the kit's fail.Fail, nil when the unit reaches none
-	cores    []*types.Package // the strict cores the unit reaches, directly or through what it imports
-	findings []typedFinding
+	fset      *token.FileSet
+	unit      typedUnit
+	pkg       *types.Package
+	info      *types.Info
+	strict    map[string]bool
+	layers    map[string]string
+	contracts map[string]bool
+	fail      *types.Interface // the kit's fail.Fail, nil when the unit reaches none
+	cores     []*types.Package // the strict cores the unit reaches, directly or through what it imports
+	findings  []typedFinding
 }
 
 func (c *typedChecks) add(pos token.Pos, rule, what string) {
@@ -655,4 +723,92 @@ func (c *typedChecks) visitors(files []*ast.File) {
 			return true
 		})
 	}
+}
+
+// seamContracts is typed-seam-contract over the unit: every instantiation of an exported generic function or type
+// declared in an application seam package (explicit, inferred, method-value, or instantiated function value) must
+// pass exported named types declared in a package listed in contracts.txt. Inside the same seam package, forwarding
+// a type parameter of an exported generic declaration to another exported generic declaration is allowed because
+// callers are checked at their own instantiation; forwarding from an unexported helper or from outside the seam is
+// rejected so a generic wrapper cannot smuggle untyped values across the seam.
+func (c *typedChecks) seamContracts() {
+	var exportedTP map[*types.TypeParam]bool
+	if c.unit.layer == "application seam" {
+		exportedTP = map[*types.TypeParam]bool{}
+		for _, obj := range c.info.Defs {
+			if obj == nil || !obj.Exported() {
+				continue
+			}
+			if params := typeParamList(obj); params != nil {
+				for i := range params.Len() {
+					exportedTP[params.At(i)] = true
+				}
+			}
+		}
+	}
+	for id, inst := range c.info.Instances {
+		obj := c.info.Uses[id]
+		if obj == nil || obj.Pkg() == nil || !obj.Exported() || c.layers[obj.Pkg().Path()] != "application seam" {
+			continue
+		}
+		sameSeam := c.unit.layer == "application seam" && obj.Pkg() == c.pkg
+		for i := range inst.TypeArgs.Len() {
+			arg := inst.TypeArgs.At(i)
+			if sameSeam {
+				if tp, isTP := types.Unalias(arg).(*types.TypeParam); isTP && exportedTP[tp] {
+					continue
+				}
+			}
+			if !c.isContractType(arg) {
+				label := c.typeName(arg)
+				if tp := typeParamName(obj, i); tp != "" {
+					label = tp + " (" + label + ")"
+				}
+				c.add(id.Pos(), "typed-seam-contract", obj.Pkg().Name()+"."+obj.Name()+" type argument "+label+" is not a contract type")
+			}
+		}
+	}
+}
+
+// isContractType says whether t is an exported named type declared in a contract package listed in contracts.txt;
+// for a generic contract type, every type argument must also be a contract type.
+func (c *typedChecks) isContractType(t types.Type) bool {
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil || !obj.Exported() || !c.contracts[obj.Pkg().Path()] {
+		return false
+	}
+	for i := range named.TypeArgs().Len() {
+		if !c.isContractType(named.TypeArgs().At(i)) {
+			return false
+		}
+	}
+	return true
+}
+
+func typeParamList(obj types.Object) *types.TypeParamList {
+	switch x := obj.(type) {
+	case *types.Func:
+		if sig, ok := x.Type().(*types.Signature); ok {
+			return sig.TypeParams()
+		}
+	case *types.TypeName:
+		switch t := x.Type().(type) {
+		case *types.Named:
+			return t.TypeParams()
+		case *types.Alias:
+			return t.TypeParams()
+		}
+	}
+	return nil
+}
+
+func typeParamName(obj types.Object, idx int) string {
+	if params := typeParamList(obj); params != nil && idx < params.Len() {
+		return params.At(idx).Obj().Name()
+	}
+	return ""
 }

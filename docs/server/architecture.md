@@ -779,6 +779,7 @@ stated above; #15088 lists the ones known.
 | `typed-codec` | no core value, nor a value that holds one, passed to `fmt`, `log`, `slog`, `json.Marshal`, `MarshalIndent` or `Encode`, or a template's `Execute` | fails at once |
 | `typed-map-range` | no range over a value whose type is a map in a core, a field or a named map type included | fails at once |
 | `typed-fail-compare` | no `==` or `!=` between two failures (a failure's code cannot be compared, so it panics); comparing with `nil` is fine | fails at once |
+| `typed-seam-contract` | every type argument of an exported generic function or type declared in an `application seam` package (such as `seam.NewBusMethod` and `seam.NewTypedBusMethod`, explicit or inferred) is an exported named type declared in a package listed in `contracts.txt` (recursively for generic contract types); forwarding a type parameter is allowed only from an exported generic declaration in the same seam package | fails at once |
 | `adapter-name` | an adapter exports no type named like one of its core's | the adapter |
 | `adapter-exported-result` | an adapter hands out only what the section above lists, in results (a map's keys included, and what a contract's, `db`'s or `prompts`' type can be called with), through parameters (none of type `any`, `interface{}`, a type parameter or another package's type but `io.Writer` and `http.ResponseWriter`; a contract's, `db`'s or `prompts`' type only where what it can be called with takes what an adapter may hand out, what is called on what its methods and funcs return included) and in exported fields; it has no exported variable or constant, and no exported alias or named slice, map, array, func or chan type. What it does not read is listed above | the adapter |
 | `app-exported-record` | exported structs with an exported field, in undeclared, application and library packages (contracts, `db` and `prompts` aside) | the package |
@@ -1166,7 +1167,8 @@ func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
   `BusHub.request` asks `Registry.Answer` after its own cases, where the Inbox's switch was, and before the extension
   manager and the devices: the params are decoded into `P` once (a field `P` lacks is ignored), a body that does not
   decode is answered `invalid_params` as the switch answered it, and the reply is encoded as the bus encodes answers.
-  `P` and `R` are contract types. archguard's `TestModuleBusMethodsAreNoCentralCase` keeps the list off the central
+  `P` and `R` are contract types (`typed-seam-contract` in `TestDomainTyped` checks every instantiation, inferred type
+  arguments included). archguard's `TestModuleBusMethodsAreNoCentralCase` keeps the list off the central
   dispatch: it reads the cases of `BusHub.request`, of each function in package assistant it hands the method name
   to, and of the extension manager's and the devices' `Request`, and fails on a listed name among them or on a case
   whose name is not a string literal or constant. `TestTheCentralSwitchLeavesTheKernelsBusMethods`
