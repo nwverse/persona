@@ -73,6 +73,8 @@ type TerminalList struct {
 	// HasTabs: the layouts were asked for (Tabs is complete, possibly empty).
 	HasTabs           bool
 	TopologyRevisions map[string]int64
+	// Truncated: Orca left terminals out (more than its list limit).
+	Truncated bool
 }
 
 // Terminals is terminal.list, with the layouts (costly for Orca to build) only when layouts is true.
@@ -80,6 +82,7 @@ func (c *Client) Terminals(ctx context.Context, layouts bool) (*TerminalList, er
 	var res struct {
 		Terminals         []Terminal       `json:"terminals"`
 		TopologyRevisions map[string]int64 `json:"topologyRevisions"`
+		Truncated         bool             `json:"truncated"`
 		VisualLayouts     []struct {
 			WorktreeID string     `json:"worktreeId"`
 			Root       layoutNode `json:"root"`
@@ -89,7 +92,7 @@ func (c *Client) Terminals(ctx context.Context, layouts bool) (*TerminalList, er
 	if err := c.Call(ctx, ListTimeout, "terminal.list", params, &res); err != nil {
 		return nil, err
 	}
-	out := &TerminalList{Terminals: res.Terminals, HasTabs: layouts, TopologyRevisions: res.TopologyRevisions}
+	out := &TerminalList{Terminals: res.Terminals, HasTabs: layouts, TopologyRevisions: res.TopologyRevisions, Truncated: res.Truncated}
 	for _, l := range res.VisualLayouts {
 		l.Root.tabs(l.WorktreeID, &out.Tabs)
 	}
@@ -224,6 +227,25 @@ func (c *Client) Worktrees(ctx context.Context, after string) (trees []Worktree,
 	}
 	err = c.Call(ctx, ListTimeout, "worktree.ps", map[string]any{"afterSnapshotId": a}, &res)
 	return res.Worktrees, res.SnapshotID, res.Unchanged && after != "", err
+}
+
+// ErrPartial: Orca answered a list with only part of it (more than its limit).
+var ErrPartial = errors.New("orca answered with part of the list")
+
+// AllWorktrees is worktree.ps answered whole, outside a snapshot series (Worktrees); ErrPartial when Orca left
+// worktrees out.
+func (c *Client) AllWorktrees(ctx context.Context) ([]Worktree, error) {
+	var res struct {
+		Worktrees []Worktree `json:"worktrees"`
+		Truncated bool       `json:"truncated"`
+	}
+	if err := c.Call(ctx, ListTimeout, "worktree.ps", map[string]any{"afterSnapshotId": nil}, &res); err != nil {
+		return nil, err
+	}
+	if res.Truncated {
+		return nil, ErrPartial
+	}
+	return res.Worktrees, nil
 }
 
 // Screen is terminal.read with screen: the visible screen as plain text.

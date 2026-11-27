@@ -322,6 +322,39 @@ func TestWorktreeSnapshots(t *testing.T) {
 	}
 }
 
+// A list Orca cut short at its limit says so: terminal.list's Truncated, AllWorktrees' ErrPartial (whole answers only,
+// outside a snapshot series).
+func TestListsCutShortSaySo(t *testing.T) {
+	f := orcarttest.New(t)
+	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "refs/heads/main", "x", ""))
+	f.SetWorktrees(orcarttest.Worktree("wt1", "/tmp/p", "main"))
+	c := client(f, nil)
+	ctx := context.Background()
+	l, err := c.Terminals(ctx, true)
+	if err != nil || l.Truncated || len(l.Terminals) != 1 {
+		t.Fatalf("whole terminal list: %+v %v", l, err)
+	}
+	trees, err := c.AllWorktrees(ctx)
+	if err != nil || len(trees) != 1 {
+		t.Fatalf("whole worktree list: %v %v", trees, err)
+	}
+	if tr := f.Trace("worktree.ps"); len(tr) != 1 || tr[0] != `worktree.ps {"afterSnapshotId":null}` {
+		t.Errorf("calls %v", tr)
+	}
+	f.Handle("terminal.list", func(map[string]any) any {
+		return map[string]any{"terminals": []any{}, "totalCount": 201, "truncated": true}
+	})
+	f.Handle("worktree.ps", func(map[string]any) any {
+		return map[string]any{"worktrees": []any{}, "totalCount": 201, "truncated": true}
+	})
+	if l, err := c.Terminals(ctx, false); err != nil || !l.Truncated {
+		t.Fatalf("cut terminal list: %+v %v", l, err)
+	}
+	if _, err := c.AllWorktrees(ctx); !errors.Is(err, orcart.ErrPartial) {
+		t.Fatalf("cut worktree list: %v", err)
+	}
+}
+
 // Tabs come in the layout's reading order: a split's first side, then its second — the same every time.
 func TestTabsInLayoutOrder(t *testing.T) {
 	f := orcarttest.New(t)
