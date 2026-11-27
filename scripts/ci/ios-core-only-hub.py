@@ -398,9 +398,9 @@ def settings(ctl, key):
                  lambda: (ctl.call("state").get("settingsDepth") or 0) > 0 or None)
 
 
-def exercise_app(ctl, base, code, edition, shots, container, master, start_node):
+def exercise_app(ctl, base, code, edition, shots, master):
     full = edition == "full"
-    proof = {"schema": 1, "run_id": ctl.run_id, "edition": edition, "core_reads": core_reads(base, code)}
+    proof = {"schema": 1, "run_id": ctl.run_id, "edition": edition, "base_url": base, "core_reads": core_reads(base, code)}
     ctl.hub = base
     pair = "persona://pair?url=" + urllib.parse.quote(base, safe="") + "&token=" + urllib.parse.quote(code, safe="")
     # No -pairURL: its presence deliberately suppresses the device-credential exchange.
@@ -523,24 +523,6 @@ def exercise_app(ctl, base, code, edition, shots, container, master, start_node)
     no_errors(ctl, "Devices")
     capture_both(ctl, shots, edition, "devices", proof)
 
-    # Fresh-hub evidence above intentionally has no session. Seed only a synthetic idle main record now, then open it
-    # through the real assistant route; no model or Agent execution is claimed.
-    main_session = seed_main(container)
-    start_node()
-    proof["main_fixture"] = "synthetic-idle-record-in-real-postgres"
-    proof["fixture_node"] = "real sandbox Link/node online; no model execution"
-    launch(ctl, ["-tab", "assistant", "-openAssistant", main_session,
-                 "-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
-    ctl.online(timeout=30)
-    require(ctl, element_id="shell-composer-add")
-    ctl.longpress(id="shell-composer-add", duration=1.0)
-    require(ctl, element_id="composer-menu-mention")
-    meeting = find_on_page(ctl, element_id="composer-menu-meeting")
-    proof["entries"]["composer-menu-meeting"] = meeting
-    check(meeting == full, f"{edition}: wrong recording composer visibility")
-    no_errors(ctl, "composer")
-    capture_both(ctl, shots, edition, "composer", proof)
-
     ctl.call("ping", _timeout=5)
     status, devices = request(base, "/api/v1/devices", master)
     check(status == 200 and isinstance(devices.get("devices"), list) and devices["devices"],
@@ -552,6 +534,35 @@ def exercise_app(ctl, base, code, edition, shots, container, master, start_node)
     proof["device_credential_issued"] = True
     proof["app_alive_at_end"] = True
     return proof
+
+
+def run_composer_ui_test(parent, work, client_env, simulator, shots, proof, main_session, readings):
+    """Run XCTest's real press-and-hold against the already-paired app and merge its run-bound proof."""
+    fixture = work / "composer-fixture.json"
+    fixture.write_text(json.dumps({"schema": 1, "run_id": proof["run_id"], "edition": proof["edition"],
+                                  "base_url": proof["base_url"], "main_session": main_session, "confirmed_loopback": True}))
+    fixture.chmod(0o600)
+    source = parent / "source"
+    command = ["python3", "scripts/heavy_slot.py", "run", "--kind", "xcode", "--", "xcodebuild", "test",
+               "-project", "apple/Persona.xcodeproj", "-scheme", "Persona", "-configuration", "Debug",
+               "-destination", f"platform=iOS Simulator,id={simulator}", "-derivedDataPath", parent / "DerivedData",
+               "-parallel-testing-enabled", "NO", "-only-testing:PersonaUITests/CoreOnlyHubLiveUITests",
+               "-resultBundlePath", work / "composer.xcresult"]
+    env = dict(client_env, TEST_RUNNER_PERSONA_IOS_CORE_HUB_FIXTURE=str(fixture), TEST_RUNNER_PERSONA_SHOTS=str(shots))
+    readings.append({"build": f"composer-ui-{proof['edition']}", **idle_reading()})
+    run_log(command, work / "composer-test.log", 1800, source, env)
+    result = work / "composer-proof.json"
+    check(result.is_file(), f"{proof['edition']}: XCTest wrote no composer proof")
+    composer = json.loads(result.read_text())
+    check(composer.get("schema") == 1 and composer.get("run_id") == proof["run_id"] and
+          composer.get("edition") == proof["edition"], "composer proof does not belong to this run")
+    expected = proof["edition"] == "full"
+    check(composer.get("meeting_visible") is expected, f"{proof['edition']}: XCTest has the wrong meeting visibility")
+    captures = composer.get("captures") or []
+    check(len(captures) == 2 and all((shots / name).is_file() for name in captures), "XCTest did not save both appearances")
+    proof["entries"]["composer-menu-meeting"] = composer["meeting_visible"]
+    proof["pages"]["composer"] = "loaded through XCTest press-for-duration"
+    proof.setdefault("screenshots", []).extend(captures)
 
 
 def validate_proof(proof, edition, run_id, shots):
@@ -633,13 +644,15 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
         ctl = Ctl(udid=simulator, bundle="org.example.persona.ci", port=smoke.free_port())
         ctl.run_id = run_id
 
-        def start_node():
-            nonlocal nodes, node_home
-            nodes, node_home = start_fixture_node(base, bindir, work, master)
-
-        proof = exercise_app(ctl, base, pair_code(base, master), edition, shots, container, master, start_node)
+        proof = exercise_app(ctl, base, pair_code(base, master), edition, shots, master)
         proof["hub_id"] = health["hub_id"]
         proof["module_flags"] = sorted(f for f in features if f == "modules" or f.startswith("module."))
+        main_session = seed_main(container)
+        nodes, node_home = start_fixture_node(base, bindir, work, master)
+        proof["main_session"] = main_session
+        proof["main_fixture"] = "synthetic-idle-record-in-real-postgres"
+        proof["fixture_node"] = "real sandbox Link/node online; no model execution"
+        run_composer_ui_test(parent, work, client_env, simulator, shots, proof, main_session, readings)
         validate_proof(proof, edition, run_id, shots)
         (shots / f"{edition}-proof.json").write_text(json.dumps(proof, indent=2, sort_keys=True) + "\n")
         smoke.stop_hub(hub, bindir)

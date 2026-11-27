@@ -76,6 +76,12 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         with self.assertRaises(DRIVER.Failed):
             DRIVER.validate_proof(proof, "full", "run", self.shots)
 
+    def test_composer_ui_test_is_opt_in_and_uses_the_real_xctest_gesture(self):
+        source = (ROOT / "apple/PersonaUITests/CoreOnlyHubLiveUITests.swift").read_text()
+        self.assertIn("throw XCTSkip", source)
+        self.assertIn("app.launchPinned()", source)
+        self.assertIn("add.press(forDuration:", source)
+
     def test_machine_fixture_never_starts_a_local_node(self):
         source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()
         self.assertIn('"kind": "link"', source)
