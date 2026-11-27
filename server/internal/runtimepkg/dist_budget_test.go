@@ -102,9 +102,10 @@ import (
 // Targeted Antigravity stepsToItems lookup (targetItemId), per-session sentMsgVersions, and lazy transcriptOf projection (#16152) add 567 B (305,425 B -> 305,992 B).
 // Antigravity unavailable-Auto permission-mode fallback, restricted permission_modes advertisement, and runtime-sdk session.modes permission_mode forwarding (#17239) add 703 B (305,992 B -> 306,695 B).
 // Hardening dsh assistant memoryWrite against relative-path, clipInput truncation, and symlink escapes (#17339) adds 739 B (306,695 B -> 307,434 B).
+// Isolating managed Antigravity channel model catalogs, stripping ambient/extension provider env across channels, preserving Assistant channel and extension env snapshots across respawns, and rotating warm idle Assistant channels add 181 B (307,434 B -> 307,615 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 307_434
+	const budget = 307_615
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
