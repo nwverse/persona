@@ -664,6 +664,8 @@ Measured with `claude plugin … --json` in throwaway `CLAUDE_CONFIG_DIR`s while
 - Active plugin input is independent of peer inbox availability: advertise it and attempt owner delivery before the
   inbox fallback. While plugin permission bridging is active, reserve questions for native `ix_` cards; restore
   transcript-based `clq_` cards only when that capability is unavailable (#17407).
+- Count consecutive completed turns with hook-eligible tools before suspending classic bridging. Poll again as soon
+  as `classic.PreToolUse` arrives, and let a brief poll outage preserve recent authorization for new requests (#17407).
 - Run `claude plugin validate` and `claude plugin test` on the exact conflict-resolved head, not only the pre-merge
   branch: one lost `}` kept every hook from loading. A timer that releases a busy poll is only a scheduling boundary,
   never `submitted: true`; let the real submission continuation ack and cover delayed rejection and `drop`, idle and

@@ -326,16 +326,18 @@ describe('persona plugin', () => {
     expect(w.requests.filter(r => r.url.endsWith('/permission'))).toEqual([])
   })
 
-  test('reports classic hooks passed over after a main-loop turn uses tools without classic.PreToolUse', async ($, on) => {
+  test('suspends bridging after two missed turns and restores it on the next classic.PreToolUse', async ($, on) => {
     const w = world(
       on,
       [
         { status: 200, body: { messages: [], permissions: true, retry_ms: 60_000 } },
         { status: 200, body: { messages: [], permissions: false, retry_ms: 60_000 } },
+        { status: 200, body: { messages: [], permissions: true, retry_ms: 60_000 } },
       ],
       { HOME: '/home/me' },
       {
         stepToolUses: [{ tool_use_id: 'toolu_skipped', tool: 'Bash', input: { command: 'echo skipped' } }],
+        onPermission: () => ({ status: 200, body: { action: 'decide', decision: { behavior: 'allow' } } }),
       },
     )
     await $.session.start(start)
@@ -350,6 +352,13 @@ describe('persona plugin', () => {
       // drain the step
     }
     await w.clock.advance(2_000)
+    await $.turn.complete({ turnId: 'turn-passed-over', answer: 'done' } as never)
+    await w.clock.settle()
+    expect(w.requests.length).toBe(1)
+
+    await $.turn.start({ text: 'run another tool', turnId: 'second' } as never)
+    await $.turn.step({ turnId: 'second', index: 0, model: 'claude-sonnet-5-5', messageCount: 1 }).next()
+    await $.turn.complete({ turnId: 'second', answer: 'done' } as never)
     await w.clock.settle()
 
     expect(await $.classic.PermissionRequest(permEvent({ tool_use_id: 'toolu_skipped' }) as never)).toEqual({})
@@ -358,7 +367,11 @@ describe('persona plugin', () => {
     const polls = w.requests.filter(r => r.url.endsWith('/poll'))
     expect(polls.length).toBe(2)
     expect(polls[1]?.body).toMatchObject({ classic_passed_over: true })
-    await $.turn.complete({ turnId: 'turn-passed-over', answer: 'done' } as never)
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_restored', agent_id: 'sub-1' } as never)
+    expect(w.requests[2]?.body.classic_passed_over).toBeUndefined()
+    expect(await $.classic.PermissionRequest(permEvent({ tool_use_id: 'toolu_restored' }) as never)).toEqual({
+      decision: { behavior: 'allow' },
+    })
   })
 
   test('keeps classic permission bridging when classic.PreToolUse reaches the plugin', async ($, on) => {
@@ -516,7 +529,9 @@ describe('persona plugin', () => {
     await w.clock.settle()
     expect(w.requests.filter(r => r.url.endsWith('/permission')).length).toBe(0)
 
-    await w.clock.advance(500)
+    await w.clock.advance(999)
+    expect(w.requests.filter(r => r.url.endsWith('/permission')).length).toBe(0)
+    await w.clock.advance(1)
     await w.clock.settle()
     expect(w.requests.filter(r => r.url.endsWith('/permission')).length).toBe(1)
 
@@ -644,7 +659,6 @@ describe('persona plugin', () => {
       on,
       [
         { status: 200, body: { messages: [], permissions: true, retry_ms: 1_000 } },
-        // Second /poll fails -> clears permissionAuth while the card is active.
         { fail: true },
       ],
       { HOME: '/home/me' },
@@ -673,13 +687,13 @@ describe('persona plugin', () => {
     expect(calls).toBe(13)
   })
 
-  test('still delivers /permission-done using the request socket even after /poll fails and clears permissionAuth', async ($, on) => {
+  test('still delivers /permission-done using the request socket after /poll revokes authorization', async ($, on) => {
     let releasePerm!: (ans: Answer) => void
     const w = world(
       on,
       [
         { status: 200, body: { messages: [], permissions: true, retry_ms: 100 } },
-        { fail: true }, // clears permissionAuth after 100 ms
+        { status: 200, body: { permissions: false, retry_ms: 60_000 } },
       ],
       { HOME: '/home/me' },
       {
@@ -696,7 +710,6 @@ describe('persona plugin', () => {
     const permP = $.classic.PermissionRequest(permEvent({ tool_input: { command: 'echo hi' } }) as never)
     await w.clock.settle()
 
-    // Let the second /poll fail and clear permissionAuth.
     await w.clock.advance(100)
     await w.clock.settle()
 
@@ -862,17 +875,20 @@ describe('persona plugin', () => {
     expect(dones[0]?.body.reason).toBe('permission_denied')
   })
 
-  test('falls back to passthrough after repeated transient fetch failures on /permission', async ($, on) => {
+  test('retries a new permission request during a poll outage and expires the cached authorization after two minutes', async ($, on) => {
     const w = world(
       on,
-      [{ status: 200, body: { messages: [], permissions: true, retry_ms: 60_000 } }],
+      [{ status: 200, body: { permissions: true, retry_ms: 1 } }, { fail: true }],
       { HOME: '/home/me' },
       {
-        onPermission: () => ({ fail: true }),
+        onPermission: (_body, call) => call <= 3
+          ? { fail: true }
+          : { status: 200, body: { action: 'decide', decision: { behavior: 'allow' } } },
       },
     )
     await $.session.start(start)
     await w.clock.settle()
+    await w.clock.advance(1)
 
     const permP = $.classic.PermissionRequest(permEvent() as never)
     await w.clock.settle()
@@ -880,9 +896,15 @@ describe('persona plugin', () => {
     await w.clock.settle()
     await w.clock.advance(1_000)
     await w.clock.settle()
+    await w.clock.advance(1_000)
 
-    expect(await permP).toEqual({})
-    expect(w.requests.filter(r => r.url.endsWith('/permission')).length).toBe(3)
+    expect(await permP).toEqual({ decision: { behavior: 'allow' } })
+    const calls = () => w.requests.filter(r => r.url.endsWith('/permission'))
+    expect(calls().length).toBe(4)
+    expect(new Set(calls().map(r => r.body.req_id)).size).toBe(1)
+    await w.clock.advance(116_999)
+    expect(await $.classic.PermissionRequest(permEvent() as never)).toEqual({})
+    expect(calls().length).toBe(4)
   })
 })
 
@@ -971,16 +993,24 @@ describe('protocol helpers', () => {
   })
 
   test('classic hook observation', () => {
+    const hookless = { toolUses: ['View', 'GlobTool', 'GrepTool', 'ToolSearch'].map(tool => ({ tool })) }
     let observed = createClassicHookObservation()
     observed = noteTurnStepToolUses(observed, undefined, { toolUses: [1, 2] })
     expect(observed.toolUses).toBe(2)
     observed = finishClassicTurn(observed)
+    expect(observed.passedOver).toBe(false)
+    observed = finishClassicTurn(noteTurnStepToolUses(observed, undefined, hookless))
+    expect(observed.consecutivePassedOver).toBe(0)
+    observed = finishClassicTurn(noteTurnStepToolUses(observed, undefined, { toolUses: [1] }))
+    expect(observed.passedOver).toBe(false)
+    observed = finishClassicTurn(noteTurnStepToolUses(observed, undefined, { toolUses: [1] }))
     expect(observed.passedOver).toBe(true)
     expect(observed.toolUses).toBe(0)
 
-    let present = createClassicHookObservation()
+    let present = observed
     present = noteTurnStepToolUses(present, undefined, { toolUses: [1] })
     present = noteClassicPreToolUse(present, { tool_use_id: 't1' })
+    expect(present).toMatchObject({ passedOver: false, consecutivePassedOver: 0 })
     present = finishClassicTurn(present)
     expect(present.passedOver).toBe(false)
 
