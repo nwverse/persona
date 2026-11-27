@@ -128,7 +128,8 @@ func (s *Service) nameTodoLater(ctx context.Context, id, from, prompt string) {
 		defer s.todos.titling.Done()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
-		to := s.todoTitleWithin(ctx, prompt, s.laterTodoTitleTimeout(ctx))
+		model, timeout := s.laterTodoTitleModel(ctx)
+		to := s.todoTitleWithin(ctx, prompt, model, timeout)
 		if to == "" || to == from {
 			return
 		}
@@ -149,24 +150,34 @@ const (
 	todoTitleLauncherTimeout = 50 * time.Second
 )
 
-// laterTodoTitleTimeout is the to-do title's budget in the background: longer when todo.title runs on a launcher.
-func (s *Service) laterTodoTitleTimeout(ctx context.Context) time.Duration {
-	if b, err := s.resolveModel(ctx, "todo.title"); err == nil {
-		if c, err := s.apiConfig(ctx, b); err == nil && c.RunLauncher != "" {
-			return todoTitleLauncherTimeout
-		}
+// laterTodoTitleModel is the to-do title's model and budget in the background, from one resolution of todo.title: the
+// budget is chosen by the configuration the call then runs on (longer on a launcher), so a settings change in between
+// cannot give a launcher the API budget. A binding that does not resolve falls back to purposeModel, whose call then
+// fails the way it always has.
+func (s *Service) laterTodoTitleModel(ctx context.Context) (*ai.Client, time.Duration) {
+	b, err := s.resolveModel(ctx, "todo.title")
+	if err != nil {
+		return s.purposeModel("todo.title"), todoTitleTimeout
 	}
-	return todoTitleTimeout
+	c, err := s.apiConfig(ctx, b)
+	if err != nil {
+		return s.purposeModel("todo.title"), todoTitleTimeout
+	}
+	timeout := todoTitleTimeout
+	if c.RunLauncher != "" {
+		timeout = todoTitleLauncherTimeout
+	}
+	return s.countedClient("todo.title", "", b.Provider, c), timeout
 }
 
 // todoTitleFromModel is todoTitleWithin with the budget of a caller that waits.
 func (s *Service) todoTitleFromModel(ctx context.Context, prompt string) string {
-	return s.todoTitleWithin(ctx, prompt, todoTitleTimeout)
+	return s.todoTitleWithin(ctx, prompt, s.purposeModel("todo.title"), todoTitleTimeout)
 }
 
-// todoTitleWithin is the small-task model's title for a task with this prompt, asked for within timeout; "" when
+// todoTitleWithin is the small-task model's title for a task with this prompt, asked of model within timeout; "" when
 // there is no model, it fails or says nothing usable (the todo keeps the title it has).
-func (s *Service) todoTitleWithin(ctx context.Context, prompt string, timeout time.Duration) string {
+func (s *Service) todoTitleWithin(ctx context.Context, prompt string, model *ai.Client, timeout time.Duration) string {
 	prompt = strings.TrimSpace(contextBlock.ReplaceAllString(prompt, ""))
 	if prompt == "" {
 		return ""
@@ -179,7 +190,7 @@ func (s *Service) todoTitleWithin(ctx context.Context, prompt string, timeout ti
 	// Reasoning models think first: a small max_tokens comes back empty (agents_start.go's tab names). Thinking is
 	// switched off for this short naming call, and a cut-off chain-of-thought line is dropped before it can replace
 	// the title (title_guard.go).
-	r, err := s.purposeModel("todo.title").Chat(cctx, ai.Request{
+	r, err := model.Chat(cctx, ai.Request{
 		System:          prompts.RenderTodoTitle(prompts.TodoTitle{Language: language, Max: max}),
 		Messages:        []ai.Message{{Role: ai.RoleUser, Content: prompts.RenderTodoTitleInput(cutRunes(prompt, 1500), language)}},
 		MaxTokens:       200,
