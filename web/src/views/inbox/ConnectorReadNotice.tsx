@@ -1,4 +1,5 @@
 import { ApiError, errorText } from "../../lib/api";
+import { safeWebURL } from "../../lib/format";
 import { larkMessagePreview } from "../../lib/lark-inbox-card";
 import type { ThreadPage } from "../../lib/connectors";
 import type { InboxItem } from "../../lib/inbox";
@@ -27,23 +28,6 @@ export function ConnectorReadNotice({ failure, onRetry }: { failure: Conversatio
     </details>
     {failure.kind === "failed" && <Button tone="quiet" className="mt-1" onClick={onRetry}>{t("inbox-connectorthread.retry_conversation")}</Button>}
   </div>;
-}
-
-function safeWebURL(url?: string): string | undefined {
-  const trimmed = url?.trim();
-  if (!trimmed || /\s/.test(trimmed) || !/^https?:\/\//i.test(trimmed)) return undefined;
-  for (let i = 0; i < trimmed.length; i++) {
-    const c = trimmed.charCodeAt(i);
-    if (c <= 0x1f || c === 0x7f) return undefined;
-  }
-  const auth = trimmed.replace(/^https?:\/\//i, "").split(/[/?#]/, 1)[0];
-  if (!auth || auth.includes("@") || auth.includes("\\")) return undefined;
-  try {
-    const u = new URL(trimmed);
-    return (u.protocol === "https:" || u.protocol === "http:") && u.hostname && !u.username && !u.password ? u.href : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export function ConnectorReplyTarget({ item, page }: { item: InboxItem; page?: ThreadPage | null }) {
