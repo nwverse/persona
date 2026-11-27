@@ -435,11 +435,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			kept[i].OriginOnly = true // persist the route's lack of acceptance authority with the signal itself
 		}
 	}
-	willInterject := slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply })
-	c, listed := s.session(ctx, here.MachineID, to)
-	directBlocked := !listed || c.Starting || s.relayReplacing(to) || s.relayHasUnresolvedSupervision(to) ||
-		!willInterject && (c.Status == proto.StatusWorking || s.relayWaits(to, relayMsg{Tool: superviseTool, Urgent: anyDecision(kept)}))
-	if directBlocked && slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) {
+	if slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) && s.digestDirectBlocked(ctx, here.MachineID, to, kept) {
 		var queueableEntries []prompts.SuperviseEntry
 		var queueable, reval []superviseSignal
 		for i, g := range kept {
@@ -652,6 +648,16 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 		b.queued = map[string][]superviseSignal{}
 	}
 	b.queued[to] = list
+}
+
+// digestDirectBlocked: a digest of kept for conversation to could not go in directly now (the checks tryDirectRelay
+// makes), so the signals that need revalidation stay pending while the rest queue. It asks the node for the session,
+// so deliverDigest calls it only when such a signal rides along; otherwise the direct send looks the session up itself.
+func (s *Service) digestDirectBlocked(ctx context.Context, machine, to string, kept []superviseSignal) bool {
+	willInterject := slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply })
+	c, listed := s.session(ctx, machine, to)
+	return !listed || c.Starting || s.relayReplacing(to) || s.relayHasUnresolvedSupervision(to) ||
+		!willInterject && (c.Status == proto.StatusWorking || s.relayWaits(to, relayMsg{Tool: superviseTool, Urgent: anyDecision(kept)}))
 }
 
 // supervisionSignalNeedsRevalidation reports whether an untried signal must stay in pending for delivery-time
