@@ -84,7 +84,7 @@ private fun GroupMode(model: FeishuGroupAccessModel, access: FeishuGroupAccess, 
                 }
             })
         }
-        JGroupItem(GroupPosition(first = false, last = policy.mode != FeishuGroupAccessMode.OwnerOnly)) {
+        JGroupItem(GroupPosition(first = false, last = false)) {
             Text(stringResource(feishuGroupModeDetail(policy.mode)), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s),
                 style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         }
@@ -148,7 +148,7 @@ private fun MemberList(
                 }
             }
         }
-        JGroupItem(GroupPosition(first = count == 0, last = true)) {
+        JGroupItem(GroupPosition(first = false, last = true)) {
             JRow(stringResource(if (chats) R.string.settings_feishu_group_add_group else R.string.settings_feishu_group_add_person),
                 leadingIcon = PersonaIcons.add, enabled = !off && !full, onClick = { adding = true })
         }
