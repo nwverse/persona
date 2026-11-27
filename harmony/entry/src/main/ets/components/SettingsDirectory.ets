@@ -91,6 +91,7 @@ function settingTint(id:string):ResourceColor {
     case 'models':
     case 'assistant':
     case 'privacy':
+    case 'phone_xiaoyi':
       return Colors.ai;
     case 'machines':
     case 'phone_live_screen':

@@ -5,6 +5,8 @@ import { defaultStateRoot, legacyEnvName } from '../../runtime-sdk/lib/compat.js
 import { stateDir } from '../../runtime-sdk/lib/identity.js'
 import { selfPackage } from '../../runtime-sdk/lib/package.js'
 
+// On Windows the daemon is personad.exe: without the suffix it was never found, so the assistant got no Persona tools.
+const exe = (options) => ((options.platform || process.platform) === 'win32' ? '.exe' : '')
 // The previous context tag still begins a cached preview; its literal stays in this adapter.
 export function contextOpening(text) {
   return /^(?:<persona-context\b|<jarvis-context\b)/.test(text)
@@ -13,10 +15,12 @@ export function contextOpening(text) {
 export function daemonCandidates(home, options) {
   // An explicit runtime home owns discovery too; an ambient PERSONA_HOME must not replace it.
   const roots = options.stateHome ? [options.stateHome] : [home ? stateDir(home, {}) : stateDir(), join(home, '.persona'), join(home, '.jarvis')]
-  return [options.personadBin, options.jarvisdBin, ...roots.flatMap((root) => [join(root, 'bin', 'personad'), join(root, 'bin', 'jarvisd')])]
+  const x = exe(options)
+  return [options.personadBin, options.jarvisdBin, ...roots.flatMap((root) => [join(root, 'bin', 'personad' + x), join(root, 'bin', 'jarvisd' + x)])]
 }
 export function daemonBinary(home, options) {
-  return daemonCandidates(home, options).find((p) => p && existsSync(p)) || (options.stateHome ? join(options.stateHome, 'bin', 'personad') : join(defaultStateRoot(home), 'bin', 'personad'))
+  const name = 'personad' + exe(options)
+  return daemonCandidates(home, options).find((p) => p && existsSync(p)) || join(options.stateHome || defaultStateRoot(home), 'bin', name)
 }
 const SOURCE_MCP_PROXY = fileURLToPath(new URL('../mcp-proxy.mjs', import.meta.url))
 const SOURCE_MEDIA_GUARD = fileURLToPath(new URL('../media-guard.mjs', import.meta.url))
