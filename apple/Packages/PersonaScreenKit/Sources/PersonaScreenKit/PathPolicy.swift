@@ -64,25 +64,26 @@ public struct PathPolicy: Sendable {
         }
         for (id, s) in routes where !lost.contains(id) {
             if s.healthy { healthySince[id] = healthySince[id] ?? now } else { healthySince[id] = nil }
-            if let ms = s.minRttMs {
+            if let ms = s.minRttMs, ms.isFinite, ms >= 0 {
                 floors[id, default: []].append((now, ms))
                 floors[id]?.removeAll { now - $0.at > config.floorWindow }
             }
         }
+        let live = routes.filter { !lost.contains($0.key) }
 
         // Lost: at once to the best route that qualifies.
-        if lost.contains(current) || routes[current] == nil {
+        if lost.contains(current) || live[current] == nil {
             degradedSince = nil
-            guard let to = best(routes, excluding: current, now: now, stable: false) else { return .stay }
+            guard let to = best(live, excluding: current, now: now, stable: false) else { return .stay }
             return move(to, networkChanged ? .networkChanged : .lost, now: now, leaving: true)
         }
-        let here = routes[current]!
+        let here = live[current]!
 
         // Degraded: losing packets or slower than its own floor, with a healthy alternative.
         if degraded(current, here) {
             degradedSince = degradedSince ?? now
             if now - degradedSince! >= config.degradedFor, lastMove.map({ now - $0 >= config.degradedDwell }) ?? true,
-               let to = best(routes, excluding: current, now: now, stable: false), routes[to]?.healthy == true {
+               let to = best(live, excluding: current, now: now, stable: false), live[to]?.healthy == true {
                 return move(to, .degraded, now: now, leaving: true)
             }
         } else {
@@ -92,7 +93,7 @@ public struct PathPolicy: Sendable {
         // Faster: right away near the stream's start; later only after the stable window and the dwell.
         let first = lastMove == nil && now - startedAt! <= config.startWindow
         if !first, let last = lastMove, now - last < config.dwell { return .stay }
-        guard let to = best(routes, excluding: nil, now: now, stable: !first), to != current, let there = routes[to],
+        guard let to = best(live, excluding: nil, now: now, stable: !first), to != current, let there = live[to],
               better(there, than: here) else { return .stay }
         return move(to, .faster, now: now, leaving: false)
     }
@@ -113,8 +114,8 @@ public struct PathPolicy: Sendable {
     }
 
     private func degraded(_ id: String, _ s: LinkStats) -> Bool {
-        if let loss = s.packetLoss, loss >= config.degradedLoss { return true }
-        if let ms = s.minRttMs, let floor = floors[id]?.map(\.ms).min(), ms >= floor + config.degradedRiseMs { return true }
+        if let loss = s.packetLoss, loss.isFinite, loss >= config.degradedLoss { return true }
+        if let ms = s.minRttMs, ms.isFinite, ms >= 0, let floor = floors[id]?.map(\.ms).min(), ms >= floor + config.degradedRiseMs { return true }
         return false
     }
 
@@ -127,11 +128,29 @@ public struct PathPolicy: Sendable {
         return true
     }
 
-    /// The best qualifying route by rank.
+    /// The best qualifying route: within `tieMs` of the fastest measured route, the preferred kind wins (then lower
+    /// minimum round trip, then route id). Unmeasured routes rank after measured ones, by kind order then route id.
     private func best(_ routes: [String: LinkStats], excluding: String?, now: Double, stable: Bool) -> String? {
-        routes.filter { $0.key != excluding && qualifies($0.key, $0.value, now: now, stable: stable) }
-            .sorted { a, b in ranks(a.value, before: b.value) || (!ranks(b.value, before: a.value) && a.key < b.key) }
-            .first?.key
+        let candidates = routes.filter { $0.key != excluding && qualifies($0.key, $0.value, now: now, stable: stable) }
+        guard !candidates.isEmpty else { return nil }
+        let measured = candidates.compactMap { id, stats -> (id: String, stats: LinkStats, ms: Double)? in
+            guard let ms = stats.minRttMs, ms.isFinite, ms >= 0 else { return nil }
+            return (id, stats, ms)
+        }
+        if let fastestMs = measured.map(\.ms).min() {
+            let cutoff = fastestMs + max(0, config.tieMs)
+            return measured.filter { $0.ms <= cutoff }.min { a, b in
+                let oa = order(a.stats.kind), ob = order(b.stats.kind)
+                if oa != ob { return oa < ob }
+                if a.ms != b.ms { return a.ms < b.ms }
+                return a.id < b.id
+            }?.id
+        }
+        return candidates.min { a, b in
+            let oa = order(a.value.kind), ob = order(b.value.kind)
+            if oa != ob { return oa < ob }
+            return a.key < b.key
+        }?.key
     }
 
     private func order(_ k: LinkStats.Kind) -> Int {
@@ -143,23 +162,15 @@ public struct PathPolicy: Sendable {
         }
     }
 
-    /// a ranks before b: clearly lower minimum round trip, or within the tie the preferred kind. A route not measured
-    /// yet ranks after measured ones of the same kind order.
-    private func ranks(_ a: LinkStats, before b: LinkStats) -> Bool {
-        switch (a.minRttMs, b.minRttMs) {
-        case let (x?, y?) where abs(x - y) > config.tieMs: return x < y
-        case (nil, _?) where a.kind == .relay: return false
-        case (_?, nil) where b.kind == .relay: return true
-        default: return order(a.kind) < order(b.kind)
-        }
-    }
-
     /// Whether moving from a (in use) to b is worth it.
     private func better(_ b: LinkStats, than a: LinkStats) -> Bool {
-        guard let y = b.minRttMs else { return false }
-        guard let x = a.minRttMs else { return b.kind != .relay } // the relay not measured yet: a direct route wins
-        if a.kind == .relay, b.kind != .relay { return y <= x + config.tieMs }
-        if y <= x - max(config.betterMs, config.betterShare * x) { return true }
-        return abs(x - y) <= config.tieMs && order(b.kind) < order(a.kind) && b.kind != .relay
+        guard let y = b.minRttMs, y.isFinite, y >= 0 else { return false }
+        guard let x = a.minRttMs, x.isFinite, x >= 0 else { return b.kind != .relay } // the relay not measured yet: a direct route wins
+        let tie = max(0, config.tieMs)
+        let betterMs = max(0, config.betterMs)
+        let betterShare = max(0, config.betterShare)
+        if a.kind == .relay, b.kind != .relay { return y <= x + tie }
+        if y <= x - max(betterMs, betterShare * x) { return true }
+        return abs(x - y) <= tie && order(b.kind) < order(a.kind) && b.kind != .relay
     }
 }
