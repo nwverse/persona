@@ -104,6 +104,15 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
         update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } },
       },
     })
+    const brain = join(home, '.gemini', 'antigravity', 'brain', sid)
+    mkdirSync(brain, { recursive: true })
+    const transcriptFile = join(brain, 'transcript.json')
+    writeFileSync(transcriptFile, JSON.stringify({
+      steps: [
+        { step_index: 0, type: 'USER_INPUT', user_input: { items: [{ text: promptText }] } },
+        { step_index: 1, type: 'PLANNER_RESPONSE', planner_response: { response: reply } },
+      ],
+    }))
     record({ kind: 'prompt_done', sessionId: sid, reply, authed, key: process.env.GEMINI_API_KEY || '' })
     send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } })
     return
