@@ -311,3 +311,18 @@ func TestInternalQuestionRetainsCredentialConstraintWithoutRequestingIt(t *testi
 	}
 	waitFor(t, "internal constraint reached terminal state", func() bool { return len(e.s.pendingQuestions()) == 0 })
 }
+
+func TestMainInternalReviewerIsIndependentOfItsSourceTask(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor = "bg1" })
+	ctx := context.Background()
+	if err := e.s.linkTodoAgent(ctx, e.todo.ID, "server", "conv1", "Source conversation", assistantHome, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	ix := askPermission("ix_main_on_task", "conv1")
+	ix.MachineID = "server"
+	to, home := e.s.internalReviewer(ctx, ix)
+	if to != "bg1" || home != "server" {
+		t.Fatalf("main approval followed a lower task supervisor: %q on %q", to, home)
+	}
+}

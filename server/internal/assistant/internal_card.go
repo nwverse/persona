@@ -80,22 +80,27 @@ func (s *Service) activeInternalCard(ix proto.Interaction) bool {
 // to create it is closed unanswered, never interpreted as approval or owner work.
 func (s *Service) internalReviewer(ctx context.Context, ix proto.Interaction) (string, string) {
 	cfg := s.settings(ctx)
-	to, _ := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
-	if to != "" && to != ix.SessionID {
-		return to, s.canonical(cfg.MachineID)
+	home := s.canonical(cfg.MachineID)
+	if cfg.supervisorConversation(ix.SessionID) && ix.SessionID != cfg.Main {
+		return cfg.Main, home // a source task cannot send a supervisor's own approval downwards
 	}
 	if ix.SessionID == cfg.Main && cfg.Main != "" {
 		s.background.mu.Lock()
 		defer s.background.mu.Unlock()
 		cfg = s.settings(ctx)
 		if cfg.BackgroundSupervisor != "" && cfg.BackgroundSupervisor != ix.SessionID {
-			return cfg.BackgroundSupervisor, s.canonical(cfg.MachineID)
+			return cfg.BackgroundSupervisor, home
 		}
 		if id, err := s.startBackground(ctx); err == nil && id != ix.SessionID {
-			return id, s.canonical(cfg.MachineID)
+			return id, home
 		}
+		return "", home
 	}
-	return "", s.canonical(cfg.MachineID)
+	to, _ := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
+	if to != "" && to != ix.SessionID {
+		return to, home
+	}
+	return "", home
 }
 
 func validInternalAnswer(ix proto.Interaction, r proto.Resolution) bool {
