@@ -246,7 +246,7 @@ func (n *Node) pushLive(id string, l *proto.SessionLive) {
 // liveHosts are the hosts whose screens readLive reads: each reads a pane's text (herdr-core and Orca as plain text,
 // which parseClaudeStatus takes as it is), so a Claude in the Herdr app or Orca shows its line too (#3904). botmux has
 // no screen of its own.
-var liveHosts = map[string]bool{host.Herdr: true, host.HerdrCore: true, host.Orca: true}
+var liveHosts = map[string]bool{host.Herdr: true, host.HerdrCore: true, host.Orca: true, host.Tmux: true}
 
 // livePane is the pane whose status line is read for session id: "" when it is not a working Claude on a screen
 // readLive can read (then the line is null).

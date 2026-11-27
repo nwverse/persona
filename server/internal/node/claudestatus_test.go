@@ -10,8 +10,141 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestRestingClaudeHosts(t *testing.T) {
+	for _, kind := range []string{host.Herdr, host.HerdrCore, host.Tern, host.Rex, host.Orca, host.Tmux, host.Botmux} {
+		for _, status := range []string{proto.StatusDone, proto.StatusIdle, proto.StatusUnknown, proto.StatusWorking, proto.StatusBlocked} {
+			a := host.Agent{Agent: "claude", PaneID: kind + ":pane"}
+			want := kind != host.Tmux && kind != host.Botmux && status != proto.StatusWorking && status != proto.StatusBlocked
+			if got := restingClaude(a, status); got != want {
+				t.Errorf("%s/%s: got %v, want %v", kind, status, got, want)
+			}
+		}
+	}
+	for _, a := range []host.Agent{{Agent: "codex", PaneID: "herdr-core:pane"}, {Agent: "claude"}} {
+		if restingClaude(a, proto.StatusDone) {
+			t.Errorf("unexpected resting Claude: %+v", a)
+		}
+	}
+}
+
+func TestClaudeStatusLiveHosts(t *testing.T) {
+	n := &Node{hosts: host.NewRegistry(), agents: map[string]host.Agent{}}
+	for _, kind := range []string{host.Herdr, host.HerdrCore, host.Orca, host.Tmux, host.Botmux} {
+		pane, want := kind+":pane", kind+":pane"
+		if kind == host.Botmux {
+			want = ""
+		}
+		n.agents[sidA] = host.Agent{Agent: "claude", AgentStatus: proto.StatusWorking, PaneID: pane}
+		if got := n.livePane(sidA); got != want {
+			t.Errorf("%s live pane: got %q, want %q", kind, got, want)
+		}
+	}
+}
+
+func TestClaudeStatusTranscriptWorkingOverBlocked(t *testing.T) {
+	now := time.Now()
+	fresh, since := now.Add(-time.Second), now.Add(-30*time.Second)
+	for _, tc := range []struct {
+		name           string
+		activity, text time.Time
+		open, closed   bool
+		since          time.Time
+		want           bool
+	}{
+		{"fresh activity", fresh, time.Time{}, true, false, since, true},
+		{"text fallback", time.Time{}, fresh, true, false, since, true},
+		{"no blocked entry", fresh, fresh, true, false, time.Time{}, false},
+		{"no open turn", fresh, fresh, false, false, since, false},
+		{"closed turn", fresh, fresh, true, true, since, false},
+		{"no activity", time.Time{}, time.Time{}, true, false, since, false},
+		{"before blocked", since.Add(-time.Second), fresh, true, false, since, false},
+		{"grace boundary", since.Add(10 * time.Second), fresh, true, false, since, false},
+		{"past grace", since.Add(10*time.Second + time.Nanosecond), time.Time{}, true, false, since, true},
+		{"freshness boundary", now.Add(-45 * time.Second), fresh, true, false, now.Add(-time.Minute), false},
+		{"stale text", time.Time{}, now.Add(-time.Minute), true, false, now.Add(-2 * time.Minute), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := quickMeta{turnOpen: tc.open, turnClosed: tc.closed, turnActivityAt: tc.activity, lastTextAt: tc.text}
+			if got := new(Node).claudeTranscriptWorkingOverBlocked(context.Background(), sidA, "", "", m, tc.since, now); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaudeStatusBlockedRequestsPreventRecovery(t *testing.T) {
+	now := time.Now()
+	m := quickMeta{turnOpen: true, lastTextAt: now.Add(-time.Second)}
+	for name, setup := range map[string]func(*Node){
+		"active question": func(n *Node) {
+			_, leave := n.activeAsks.enter(proto.Interaction{SessionID: sidA, Kind: proto.IxQuestion})
+			t.Cleanup(func() { leave() })
+		},
+		"plugin permission": func(n *Node) {
+			n.ccPlugins.perms = map[ccPluginPermID]*ccPluginPerm{{sessionID: sidA}: {sessionID: sidA}}
+		},
+		"allow dialog":  func(n *Node) { n.allowed.m = map[string]*allowWatch{sidA: {head: "Permission required"}} },
+		"cached dialog": func(n *Node) { n.dialogs.m = map[string]*paneDialog{"w1:p1": {at: now, head: "Choose an option"}} },
+		"visible dialog": func(n *Node) {
+			n.hosts = host.NewRegistry(&screenHost{bareHost: bareHost{kind: host.Herdr}, screen: screenFixture(t, "claude-2.1.309-auto-mode-notice-120.txt")})
+		},
+		"picker": func(n *Node) {
+			n.hosts = host.NewRegistry(&screenHost{bareHost: bareHost{kind: host.Herdr}, screen: screenFixture(t, "claude-2.1.318-help-wrapped-prompt-120.txt")})
+		},
+		"screen read failure": func(n *Node) { n.hosts = host.NewRegistry() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			n := &Node{hosts: host.NewRegistry(&screenHost{bareHost: bareHost{kind: host.Herdr}, screen: boxed("Working")})}
+			if !n.claudeTranscriptWorkingOverBlocked(context.Background(), sidA, "w1:p1", "", m, now.Add(-30*time.Second), now) {
+				t.Fatal("clear screen must allow recovery")
+			}
+			setup(n)
+			if n.claudeTranscriptWorkingOverBlocked(context.Background(), sidA, "w1:p1", "", m, now.Add(-30*time.Second), now) {
+				t.Fatal("unanswered request or unreadable screen must keep blocked")
+			}
+		})
+	}
+}
+
+func TestClaudeStatusSessionListHealsStaleBlocked(t *testing.T) {
+	n, f, home := herdrNode(t)
+	now := time.Now()
+	p := filepath.Join(home, "claude.jsonl")
+	ts := now.Add(-time.Second).UTC().Format(time.RFC3339Nano)
+	body := `{"type":"user","uuid":"u1","message":{"role":"user","content":"Find the bug"},"timestamp":"` + ts + `"}` + "\n" +
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"text","text":"Looking for the bug"}]},"timestamp":"` + ts + `"}` + "\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seedAgents(t, n, f, claudeAgent(sidA, proto.StatusBlocked, "w1:p1", "w1:t1", "w1", home, ""))
+	n.paths = map[string]string{sidA: p}
+	n.pathsAt = map[string]time.Time{sidA: now}
+	f.setScreen("w1:p1", boxed("Working"))
+	if row := paneRow(t, n, sidA); row.Status != proto.StatusBlocked {
+		t.Fatalf("initial blocked must remain during grace: %+v", row)
+	}
+	n.blockedAt[sidA] = now.Add(-30 * time.Second)
+	if row := paneRow(t, n, sidA); row.Status != proto.StatusWorking || row.AttentionReason != "" {
+		t.Fatalf("fresh Claude transcript must heal stale blocked: %+v", row)
+	}
+	for _, kind := range []string{host.HerdrCore, host.Tmux, host.Botmux} {
+		a := n.agents[sidA]
+		a.PaneID = kind + ":pane"
+		n.agents[sidA] = a
+		n.hosts = host.NewRegistry(&screenHost{bareHost: bareHost{kind: kind}, screen: boxed("Working")})
+		want := proto.StatusWorking
+		if kind == host.Botmux {
+			want = proto.StatusBlocked
+		}
+		if row := paneRow(t, n, sidA); row.Status != want {
+			t.Fatalf("%s stale blocked: got %s, want %s", kind, row.Status, want)
+		}
+	}
+}
 
 // boxed puts rows above a Claude Code input box and its footer, as a screen shows them.
 func boxed(rows ...string) string {

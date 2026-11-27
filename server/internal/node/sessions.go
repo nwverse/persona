@@ -256,6 +256,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				rolloutPath = p
 				textAt = m.lastTextAt
 				rollout = m
+				if a.Agent == "claude" {
+					rollout.turnOpen = m.claudeTurn // Claude stores its open turn separately from Codex.
+				}
 				if m.title != "" && a.Agent != "codex" && a.Agent != traexAgent {
 					s.Title = m.title
 				}
@@ -313,6 +316,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		blockedSince := n.noteBlockedAt(id, s.Status == proto.StatusBlocked, now)
 		if a.Agent == "codex" && host.ParsePane(a.PaneID).Kind != host.Botmux && s.Status == proto.StatusBlocked &&
 			n.codexRolloutWorkingOverBlocked(ctx, id, a.PaneID, rolloutPath, rollout, blockedSince, now) {
+			s.Status = proto.StatusWorking
+			s.AttentionReason = ""
+		}
+		if a.Agent == "claude" && host.ParsePane(a.PaneID).Kind != host.Botmux && s.Status == proto.StatusBlocked &&
+			n.claudeTranscriptWorkingOverBlocked(ctx, id, a.PaneID, rolloutPath, rollout, blockedSince, now) {
 			s.Status = proto.StatusWorking
 			s.AttentionReason = ""
 		}
