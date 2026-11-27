@@ -2396,8 +2396,10 @@ nothing and draws the page as it always was, and Default puts it back.
   composer, pending cards, plans, live cards, urgent calls, and a background round while it runs. Other conversations
   are unchanged.
 - `agents_view: "active"`: the Agents list (the page and the sidebar's block) shows only the Agents running now
-  (`runningNow` in `lib/agent-groups.ts`: live on an online computer, not stopped by a restart), grouped by computer,
-  without the grouping bar and without Recent. The quick filters stay.
+  (`runningNow` in `lib/agent-groups.ts`): those herdr or another terminal engine still has a pane for, on an online
+  computer, not stopped by a restart. A session with no pane (a desktop app's chat, a Feishu topic, a runtime's history,
+  even with cards still waiting) is left out. Grouped by computer, without the grouping bar and without Recent; the
+  quick filters stay.
 - `settings_view: "short"`: Settings lists Models, Persona, Integrations or Channels and Extensions, Agents, General and
   Hub, and a **More settings** row lists the rest again. Search still finds every category, and an open category stays
   listed.

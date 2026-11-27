@@ -69,10 +69,12 @@ describe("所有分组共用 live 与最近的边界", () => {
 });
 
 describe("runningNow", () => {
-  it("keeps the live Agents on an online computer, not one a restart stopped", () => {
-    const all = [session("working", "working"), session("idle", "idle"), session("waits", "needs_you"),
-      session("restarted", "unknown", { status: "interrupted" }), session("offline", "offline"),
-      session("machine-offline", "working", { machine_id: "machine-off" })];
+  it("keeps the Agents a terminal still has a pane for, on an online computer, not one a restart stopped", () => {
+    const pane = (n: number) => ({ pane_id: `w1:p${n}` });
+    const all = [session("working", "working", pane(1)), session("idle", "idle", pane(2)), session("waits", "needs_you", pane(3)),
+      session("restarted", "unknown", { status: "interrupted", ...pane(4) }), session("offline", "offline", pane(5)),
+      session("machine-offline", "working", { machine_id: "machine-off", ...pane(6) }),
+      session("no-pane", "idle"), session("cards-left", "needs_you"), session("feishu", "idle", { pane_id: "botmux:t1" })];
     const { live } = splitAgentSessions(all, machines);
     expect(ids(runningNow(live, machines))).toEqual(["working", "idle", "waits"]);
   });
