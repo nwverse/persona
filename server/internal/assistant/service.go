@@ -537,6 +537,7 @@ func New(o Options) *Service {
 	s.sessionReviewRoutes()
 	s.workspaceBoardRoutes()
 	s.navigationRoutes() // navigation.go: the page the apps open on
+	s.templateRoutes()   // templates.go: a template's settings part, applied in one step
 	s.webFontRoutes()
 	s.channelRoutes()
 	s.kbInit(o.KB)

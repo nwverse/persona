@@ -45,6 +45,7 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.appearance"), anchor: "appearance" },
   { tab: "general", group: words(t("settings.theme_light"), t("settings.theme_dark")), hint: t("language.system"), anchor: "theme" },
   { tab: "general", group: t("ui-look.text_size"), anchor: "text-size" },
+  { tab: "general", group: t("settings-templates.title"), hint: words(t("settings-templates.default_name"), t("settings-templates.console_name"), t("settings-templates.import")), anchor: "templates" },
   { tab: "general", group: t("language.label"), anchor: "language" },
   { tab: "general", group: t("settings.reply_motion"), anchor: "reply-motion" },
   { tab: "general", group: t("settings.starred_messages"), anchor: "starred-messages" },
@@ -78,7 +79,6 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "advanced", group: t("ui-extensionthemepicker.label"), anchor: "extension-theme" },
   { tab: "advanced", group: t("ui-look.font"), hint: words(t("ui-look.font_sans"), t("ui-look.font_mono"), t("ui-look.font_browser")), anchor: "font" },
   { tab: "advanced", group: t("ui-look.sidebar_icons"), hint: words(t("ui-look.sidebar_icons_monochrome"), t("ui-look.sidebar_icons_colored")), anchor: "sidebar-icons" },
-  { tab: "advanced", group: t("ui-look.phone_nav"), hint: words(t("ui-look.phone_nav_switch"), t("ui-look.phone_nav_tabs")), anchor: "phone-nav" },
   // the assistant's profile
   { tab: "persona", group: t("settings-assistantsettings.routines"), hint: t("settings-assistantsettings.proactive_title"), anchor: "routines" },
   { tab: "persona", group: t("settings-assistantsettings.quiet_tasks"), anchor: "quiet-tasks" },

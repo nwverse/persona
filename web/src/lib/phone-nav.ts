@@ -1,4 +1,4 @@
-// Settings › Advanced › Appearance › "Phone navigation" (#16761): how a narrow screen moves between its main places. Top switch,
+// Phone navigation (#16761): how a narrow screen moves between its main places, set by a template (#16772, lib/templates.ts: the Agent console template turns the tab bar on, Default turns it off). Top switch,
 // the default, is the "Assistant | Agents" switch in the middle of the top bar (views/ShellSwitch.tsx, #1996), as it
 // always was. Tab bar puts four places along the bottom instead (views/PhoneTabBar.tsx): the main chat, Agents, the
 // chats external sources opened (Lark /agent and other extensions, `/history/external`) and Settings, for people who

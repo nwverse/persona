@@ -2097,6 +2097,7 @@ clients' fallbacks are in [counts.md](counts.md); the hub's part is its "The hub
 | PUT | `/api/v1/workspace-board/settings` | `{enabled}` → `{enabled,can_write}`; `full` only, missing `enabled` returns 400 |
 | GET | `/api/v1/navigation` | `{"start"?, "pages"?, "overview"?}`: the page the apps open on, the sidebar's arrangement (#9071) and Overview's extension cards (#9745) with its own sections (#10905), one per hub, so the owner's for all their devices; each is left out until something is stored, see "Navigation" |
 | PUT | `/api/v1/navigation` | `{start?, pages?, overview?}` → the record; `full` only; none of them, or one of another shape, returns 400 |
+| POST | `/api/v1/templates/settings` | `{settings: [{key, action?, value}], dry_run?}` → `{results: [{key, action, title?, status, text?, error?}], dry_run}`: a template's settings part (#16772), each persona_settings key through its own setter; full access only, see "Templates" |
 | GET | `/api/v1/settings/web-fonts` | The default manager's shared web font choices `{sans, mono}`. Each choice is `{preset, family?}` and starts at `{"preset":"default"}` |
 | PUT | `/api/v1/settings/web-fonts` | Full access only. Send one of `{sans: {preset, family?}}` or `{mono: {preset, family?}}` and receive both choices. Only `custom` accepts a family name |
 | GET | `/api/v1/workspaces` | `{workspaces:[Workspace],errors?:[{machine_id,error}]}`; workspace discovery independent of Agents, keeps the last known info on failure, readable by `answer` |
@@ -6594,6 +6595,28 @@ The web shows a prefs change at once and then PUTs it. When the PUT fails (other
 - Pinned sessions always appear in "Pinned" at the top, followed by custom sections, then groups from `view.group`.
 - After a successful PUT, broadcasts `{"type":"agents.prefs"}`, and other clients GET again. When an old hub lacks this endpoint (404), clients store preferences only locally.
 
+## Templates
+
+A template (#16772, `schema/template.schema.json`, `docs/web/web.md` "Templates") is a named set of configuration the
+owner applies in one step. The apps apply its browser, navigation and extension parts through those parts' own routes;
+its `settings` part goes to `POST /api/v1/templates/settings`, answered by the default manager
+(`server/internal/assistant/templates.go`, relayed by the hub like the other `assistantwire.Routes`).
+
+- Body: `{"settings": [{"key", "action"?, "value"}], "dry_run"?: bool}`, at most 64 items (more, no `settings`, or a body
+  that is not JSON: 400). `action` is `set` (the default), `add` or `remove`, as the setting takes it (persona_settings'
+  `list` names each key's actions and value).
+- Each item, in order, goes through the setter persona_settings uses for that key (its validation, its before → after
+  words and its write); items are independent, so one that fails does not stop the rest. The answer is one result per
+  item: `status` `change` (a dry run: it would change; `text` is the change in the owner's words) or `unchanged` (already
+  so), `applied` (written; `text` is what the setter said) or `failed` (`error`), `unsupported` (not one of the manager's
+  own settings: the hub's settings app and extensions have their own routes), `not_allowed` (a setting that grants
+  permissions or speaks for the owner: `assistant.standing_authorizations`, the outward-message identity, direction
+  prompts) or `invalid` (the setter refused the value or the action; `error` says why). `title` is the setting's name in
+  the owner's language.
+- It is the owner's own action from the settings page, so it takes no card, as every other settings write there; it
+  requires `full` (an `answer` credential gets 403) and extension tokens never reach it (`extwire.RouteScopes` does not
+  list it). A hub from before answers 404: the apps then skip the settings part and say so.
+
 ## Navigation
 
 The page the apps open on (#9071), the sidebar's arrangement and Overview's (its extension cards, #9745, and its own sections, #10905): `GET /api/v1/navigation` / `PUT /api/v1/navigation`, answered by the default manager
@@ -7157,7 +7180,7 @@ per-turn fallback** — while `text` always keeps the transcript's words so clie
 
 ```json
 {"role":"user","kind":"text","text":"<botmux_reminder>…</botmux_reminder>\n\n<user_message>\nship it\n</user_message>\n\n<sender … />",
- "botmux":{"kind":"message","text":"ship it","sender":"Alex Chen","sender_type":"user","thread":true}}
+ "botmux":{"kind":"message","text":"ship it","sender":"Alex Kim","sender_type":"user","thread":true}}
 ```
 
 | Field | Meaning |

@@ -21,7 +21,8 @@ import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
-import { FontRows, PhoneNavRow, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, SurfaceStyleRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { FontRows, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, SurfaceStyleRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { TemplatesGroup } from "./settings/Templates";
 import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
@@ -816,6 +817,7 @@ function General({ onModel }: { onModel: () => void }) {
       </Group>
 
       <DesktopSettings />
+      <TemplatesGroup />
       <StartPageGroup />
       <SidebarPagesGroup />
       {features && (
@@ -855,7 +857,6 @@ function Advanced() {
       <ExtensionThemePicker />
       <FontRows />
       <SidebarIconsRow />
-      <PhoneNavRow />
     </Group>
   );
 }
