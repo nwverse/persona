@@ -269,13 +269,7 @@ func TestOrcaResumeInTheKeptShell(t *testing.T) {
 			starts := orcaTypedStarts(o)
 			o.Reset()
 			_, _ = request(t, n, "session.start", map[string]any{"session_id": id, "resume_session_id": id, "cwd": sub})
-			deadline := time.Now().Add(5 * time.Second)
-			for !strings.Contains(strings.Join(starts(), "\n"), "--resume "+id) {
-				if time.Now().After(deadline) {
-					t.Fatalf("no resume typed; calls: %v", o.Trace())
-				}
-				time.Sleep(20 * time.Millisecond)
-			}
+			waitFor(t, "the resume typed", func() bool { return strings.Contains(strings.Join(starts(), "\n"), "--resume "+id) })
 			sends := o.Params("terminal.send")
 			if busy {
 				if c := o.Trace("terminal.create"); len(c) != 1 {

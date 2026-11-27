@@ -501,24 +501,37 @@ func TestInspectProcess(t *testing.T) {
 	if _, err := c.InspectProcess(ctx, tg); !orcart.IsCode(err, "method_not_found") {
 		t.Fatalf("an Orca without the call: %v", err)
 	}
+	type process struct {
+		foreground     string
+		children, idle bool
+		shellPID       int
+		known          bool
+		unverified     string
+	}
 	for _, tc := range []struct {
-		name  string
-		in    map[string]any
-		want  orcart.Process
-		known bool
+		name string
+		in   map[string]any
+		want process
 	}{
-		{"shell at rest", orcarttest.ShellAtRest(41), orcart.Process{Verdict: "live", IdleShell: true, ShellPID: 41}, true},
-		{"shell with jobs", orcarttest.ShellWithJobs(41), orcart.Process{Verdict: "live", ShellPID: 41}, true},
-		{"program", orcarttest.Running("sleep", 41), orcart.Process{Foreground: "sleep", HasChildren: true, Verdict: "live", ShellPID: 41}, true},
+		{"shell at rest", orcarttest.ShellAtRest(41), process{idle: true, shellPID: 41, known: true}},
+		{"shell with jobs", orcarttest.ShellWithJobs(41), process{shellPID: 41, known: true}},
+		{"program", orcarttest.Running("sleep", 41), process{foreground: "sleep", children: true, shellPID: 41, known: true}},
 		{"unverifiable", orcarttest.Unverifiable("incarnation_mismatch"),
-			orcart.Process{Foreground: "bash", Verdict: "unverifiable", Reason: "incarnation_mismatch"}, false},
+			process{foreground: "bash", unverified: "incarnation_mismatch"}},
 		{"no evidence", map[string]any{"foregroundProcess": nil, "hasChildProcesses": true, "childProcessEvidence": "unverifiable"},
-			orcart.Process{HasChildren: true, ChildEvidence: "unverifiable"}, false},
+			process{children: true, unverified: "unverifiable"}},
+		{"evidence without a verdict", map[string]any{"foregroundProcess": nil, "hasChildProcesses": false,
+			"foregroundProcessEvidence": map[string]any{}}, process{unverified: "unverifiable"}},
 	} {
 		f.SetProcess("term_1", tc.in)
 		p, err := c.InspectProcess(ctx, tg)
-		if err != nil || *p != tc.want || p.Known() != tc.known {
-			t.Errorf("%s: %+v, %v; want %+v (known %v)", tc.name, p, err, tc.want, tc.known)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		got := process{p.Foreground(), p.HasChildren(), p.IdleShell(), p.ShellPID(), p.Known(), p.Unverified()}
+		if got != tc.want {
+			t.Errorf("%s: %+v; want %+v", tc.name, got, tc.want)
 		}
 	}
 	for _, p := range f.Params("terminal.inspectProcess") {

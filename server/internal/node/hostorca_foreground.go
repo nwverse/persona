@@ -62,13 +62,13 @@ func (h *orcaHost) PaneForeground(ctx context.Context, pane host.PaneRef) ([]str
 	}
 	switch {
 	case !p.Known():
-		return nil, fmt.Errorf("%w in %s (%s)", errOrcaCannotTell, pane.ID, orcaUnverified(p))
-	case p.Foreground != "":
-		return []string{p.Foreground}, nil
-	case p.HasChildren:
+		return nil, fmt.Errorf("%w in %s (%s)", errOrcaCannotTell, pane.ID, p.Unverified())
+	case p.Foreground() != "":
+		return []string{p.Foreground()}, nil
+	case p.HasChildren():
 		return nil, fmt.Errorf("%w in %s: something other than the shell is in front", errOrcaCannotTell, pane.ID)
 	}
-	shell := orcaShellName(p.ShellPID)
+	shell := orcaShellName(p.ShellPID())
 	if shell == "" {
 		return nil, fmt.Errorf("%w in %s: the shell in front has no name", errOrcaCannotTell, pane.ID)
 	}
@@ -87,9 +87,9 @@ func (h *orcaHost) PaneShellAtRest(ctx context.Context, pane host.PaneRef) (bool
 		return false, fmt.Errorf("%w: this Orca cannot say whether %s is at rest (no terminal.inspectProcess)", host.ErrUnsupported, pane.ID)
 	}
 	if !p.Known() {
-		return false, fmt.Errorf("%w in %s (%s)", errOrcaCannotTell, pane.ID, orcaUnverified(p))
+		return false, fmt.Errorf("%w in %s (%s)", errOrcaCannotTell, pane.ID, p.Unverified())
 	}
-	return p.IdleShell && p.Foreground == "" && !p.HasChildren, nil
+	return p.IdleShell() && p.Foreground() == "" && !p.HasChildren(), nil
 }
 
 // shellInFront: Orca reads t (the exact terminal and incarnation, no stale-handle retry) with only its shell in front;
@@ -103,23 +103,15 @@ func (h *orcaHost) shellInFront(ctx context.Context, t orcart.Terminal) error {
 	case err != nil:
 		return orcaInputErr(err)
 	case !p.Known():
-		return host.Mark(fmt.Errorf("%w in %s (%s)", errOrcaCannotTell, t.PaneKey(), orcaUnverified(p)), host.ErrNotDelivered)
-	case p.HasChildren || p.Foreground != "" && !shellProgram(p.Foreground):
-		what := p.Foreground
+		return host.Mark(fmt.Errorf("%w in %s (%s)", errOrcaCannotTell, t.PaneKey(), p.Unverified()), host.ErrNotDelivered)
+	case p.HasChildren() || p.Foreground() != "" && !shellProgram(p.Foreground()):
+		what := p.Foreground()
 		if what == "" {
 			what = "a program"
 		}
 		return host.Mark(fmt.Errorf("orca: %s runs in %s, not its shell at rest: nothing typed", what, t.PaneKey()), host.ErrNotDelivered)
 	}
 	return nil
-}
-
-// orcaUnverified says why an answer is unverifiable, for logs and errors.
-func orcaUnverified(p *orcart.Process) string {
-	if p.Reason != "" {
-		return p.Reason
-	}
-	return "unverifiable"
 }
 
 // orcaShellName names a terminal's shell from its process (Orca's evidence fence): its argv[0], "-zsh" for a login
