@@ -90,6 +90,23 @@ describe("macOS unified titlebar bridge & Apple G2 contour", () => {
     expect(host.querySelector("[data-mac-contour]")).not.toBeNull();
   });
 
+  it("places collapse button inside MacBayTools in expanded mode without duplicate search button and collapses to rail (#17136)", () => {
+    const onSearch = vi.fn();
+    setSidebarCollapsed(false);
+    act(() => root.render(<MacBayTools bay="expanded" onSearch={onSearch} />));
+    const expandedButtons = host.querySelectorAll("button");
+    expect(expandedButtons).toHaveLength(1);
+    expect(expandedButtons[0]!.getAttribute("aria-label")).toBe("收起侧边栏");
+    expect(expandedButtons[0]!.getAttribute("aria-expanded")).toBe("true");
+    const tools = host.querySelector<HTMLElement>("[data-mac-bay-tools]")!;
+    expect(tools.style.left).toBe("80px");
+    expect(tools.style.top).toBe("11px");
+
+    act(() => expandedButtons[0]!.click());
+    expect(getLayout().sidebarCollapsed).toBe(true);
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
   it("expands from rail and exits maximized hidden state when MacBayTools expand button is clicked", () => {
     const onSearch = vi.fn();
     setSidebarCollapsed(true);

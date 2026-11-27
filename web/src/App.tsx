@@ -478,7 +478,7 @@ function Shell() {
   const rail = !narrow && sidebarRail(layout);
   const macChrome = useMacChrome();
   const macWindowed = macChrome.unifiedTitlebar && !macChrome.fullScreen && !narrow;
-  const macBay: "rail" | "hidden" | null = macWindowed ? (rail ? "rail" : !sidebarShown(layout) ? "hidden" : null) : null;
+  const macBay = macWindowed ? (rail ? "rail" : sidebarShown(layout) ? "expanded" : "hidden") : undefined;
   useEffect(() => {
     if (!narrow) setDrawer(false);
   }, [narrow]);
@@ -679,7 +679,7 @@ function Shell() {
       data-app-shell
       data-sidebar-hidden={!sidebarShown(layout) || undefined}
       data-mac-chrome={macChromeMode(macChrome)}
-      data-mac-bay={macBay ?? (macWindowed ? "expanded" : undefined)}
+      data-mac-bay={macBay}
       className="flex h-full overflow-hidden bg-page"
     >
       {/* wide: a fixed column; narrow: a drawer over the page, clear of a landscape notch and the home indicator */}
@@ -700,7 +700,7 @@ function Shell() {
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar active={narrow ? drawer : sidebarShown(layout)} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
+        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} hideCollapse={macWindowed} /> : <Sidebar active={narrow ? drawer : sidebarShown(layout)} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} hideCollapse={macWindowed} />}
         {!narrow && !rail && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}
