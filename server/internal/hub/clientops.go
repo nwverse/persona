@@ -156,7 +156,8 @@ type clientOpForgetter interface {
 
 // clientOpRetry: an operation of kind answered body keeps no receipt (ForgetClientOp), so the same request asked
 // again runs again instead of the stored refusal coming back for good. Each kind below lets go an answer the manager
-// never got (assistant_offline). A conversation's start, an approval question and an inbox hand-off also let go the
+// never got (assistant_offline) — including "message", which fails in assistantSend / todoHandoff or when the devices
+// manager is offline before anything reaches a node. A conversation's start, an approval question and an inbox hand-off also let go the
 // manager's answer that their node got nothing (#13360: delivered "none" and retryable, apierr.Body's for ErrOffline,
 // a start's 503 node_unreachable): nothing was started or sent, and what the manager did before the node's call makes
 // nothing twice. An inbox reply or hand-off and an approval question cut off on the way to the manager
@@ -175,7 +176,7 @@ func clientOpRetry(kind string, body []byte) bool {
 	offline, inDoubt := res.Code == assistantwire.CodeAssistantOffline, res.Code == assistantwire.CodeAssistantInDoubt
 	gotNothing := res.Delivered == "none" && res.Retryable
 	switch kind {
-	case "choose", meetingJustMeOp, meetingFollowupOp, todoAnswerOp, todoRouteOp, todoCreateOp:
+	case "choose", "message", meetingJustMeOp, meetingFollowupOp, todoAnswerOp, todoRouteOp, todoCreateOp:
 		return offline
 	case "assistant_start":
 		return offline || gotNothing
