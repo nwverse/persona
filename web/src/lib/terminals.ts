@@ -225,6 +225,19 @@ export function paneTrail(spaces: readonly TermSpace[], id: string): string {
   return "";
 }
 
+/** The pane's title and owning workspace label for a compact terminal header breadcrumb. */
+export function paneHeaderInfo(spaces: readonly TermSpace[], id: string): { title: string; workspace: string } {
+  for (const sp of spaces)
+    for (const t of sp.tabs) {
+      const p = t.panes.find((x) => x.id === id);
+      if (p) {
+        const title = t.panes.length > 1 && t.label && t.label !== p.title && t.label !== sp.label ? `${t.label} · ${p.title}` : p.title || t.label;
+        return { title, workspace: sp.label };
+      }
+    }
+  return { title: "", workspace: "" };
+}
+
 /** The pane's working directory, "" when unknown. */
 export function paneCwd(spaces: readonly TermSpace[], id: string): string {
   for (const sp of spaces)

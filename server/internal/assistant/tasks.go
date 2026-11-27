@@ -52,6 +52,12 @@ type PlanTask struct {
 	InboxItem string `json:"inbox_item,omitempty"`
 	// InboxHandoff is the hub-owned operation validated when the plan was made.
 	InboxHandoff string `json:"inbox_handoff,omitempty"`
+	InboxOptOut  bool   `json:"inbox_opt_out,omitempty"`
+	// Soft-match provenance is set by the manager, never imported from a tool call.
+	InboxMatch      string   `json:"inbox_match,omitempty"`
+	InboxMatchText  string   `json:"inbox_match_text,omitempty"`
+	InboxCandidates []string `json:"inbox_candidates,omitempty"`
+	InboxNotice     string   `json:"inbox_notice,omitempty"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
 	MachinePolicy string `json:"machine_policy,omitempty"`
 	// PlacementConstraints restricts automatic machine selection when Machine is omitted.
@@ -98,8 +104,9 @@ type PlanTask struct {
 	RetryFromAllowAll bool   `json:"retry_from_allow_all,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
-	Ultracode *bool `json:"ultracode,omitempty"`
-	Readonly  bool  `json:"readonly,omitempty"`
+	Ultracode        *bool `json:"ultracode,omitempty"`
+	Readonly         bool  `json:"readonly,omitempty"`
+	MultiIssueReport bool  `json:"multi_issue_report,omitempty"`
 	// UserRequested: the user asked for this very task in the turn that planned it (#2559); with
 	// assistant.start_requested_tasks on it starts without the card's "Start".
 	UserRequested bool `json:"user_requested,omitempty"`
@@ -174,7 +181,11 @@ type PlanTask struct {
 	PartOf      string   `json:"part_of,omitempty"`
 	After       []string `json:"after,omitempty"`
 	BlockedByPR []string `json:"blocked_by_pr,omitempty"`
-	RequestGate string   `json:"request_gate,omitempty"`
+	// UnlockStage and UnlockContracts are the validated stage gate for After, kept with the plan so a saved plan
+	// retains it across a manager restart. Empty means the dependency is mirrored as todo_done.
+	UnlockStage     string   `json:"unlock_stage,omitempty"`
+	UnlockContracts []string `json:"unlock_contracts,omitempty"`
+	RequestGate     string   `json:"request_gate,omitempty"`
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
 	Project string `json:"project,omitempty"`
@@ -236,6 +247,9 @@ type PlanTask struct {
 	rememberKind bool
 	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
 	preservePermission bool
+	// handoffLauncherSwitch marks a continuation whose launcher or agent kind changed (not only machine);
+	// cross-launcher / cross-provider switches always require explicit owner confirmation on the plan card.
+	handoffLauncherSwitch bool
 	// LauncherDefaultModel selects the launcher's own model instead of a matching Agents binding. It is hub-owned:
 	// task_spawn sets it for an explicitly empty parent model, and a launcher-only retry override sets it too. Its
 	// absence on a legacy plan keeps that row's opaque launch unchanged.
@@ -647,6 +661,9 @@ func (s *Service) feedItems(ctx context.Context, conversation string, since time
 	if err != nil {
 		return nil, err
 	}
+	for i, item := range items {
+		items[i] = readTaskNotice(item)
+	}
 	s.settleCards(ctx, items)
 	s.fileCards(ctx, items)
 	return s.resolveInterruptions(ctx, conversation, items), nil
@@ -908,11 +925,56 @@ func (s *Service) trustKinds(ctx context.Context, tasks []PlanTask) {
 
 // ---- HTTP ----
 
+func (s *Service) listTaskPlans(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	query := r.URL.Query()
+	conv, scoped := query.Get("conversation"), query.Has("conversation")
+	ext := r.Header.Get(RoleHeader) == roleExtension
+	plans := []*TaskPlan{}
+	if ext && !scoped {
+		// Extensions can read individual conversation feeds. The main pending view spans conversations.
+		apierr.WriteJSON(w, map[string]any{"plans": plans})
+		return
+	}
+	if ext && s.feedHiddenFromExtension(ctx, conv) {
+		apierr.Write(w, http.StatusNotFound, errNoSuchConversation)
+		return
+	}
+	var pending []*TaskPlan
+	var err error
+	if scoped {
+		pending, err = s.openTaskPlans(ctx)
+		pending = slices.DeleteFunc(pending, func(p *TaskPlan) bool { return p.Conversation != conv })
+	} else {
+		pending, err = s.mainPendingPlans(ctx)
+	}
+	if err != nil {
+		apierr.Write(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	var visible map[string]*TaskPlan
+	if ext {
+		byID := make(map[string]*TaskPlan, len(pending))
+		for _, p := range pending {
+			byID[p.ID] = p
+		}
+		_, visible, _ = s.extensionFeed(ctx, nil, byID)
+	}
+	lang := s.requestLang(r)
+	for _, p := range pending {
+		if !ext || visible[p.ID] != nil {
+			plans = append(plans, s.planWithSpace(ctx, s.planWithSuggestion(ctx, p, lang)))
+		}
+	}
+	apierr.WriteJSON(w, map[string]any{"plans": plans})
+}
+
 func (s *Service) taskRoutes() {
 	s.draftDecisionRoutes()
 	s.doneCheckRoute()
 	s.taskTerminalRoute()
 	s.handle("POST /api/v1/task-plans/{id}/workspace-preview", s.previewPlanWorkspaces)
+	s.handle("GET /api/v1/task-plans", s.listTaskPlans)
 	s.handle("GET /api/v1/task-plans/{id}", func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.loadPlan(r.Context(), r.PathValue("id"))
 		if err != nil {

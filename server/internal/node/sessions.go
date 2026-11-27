@@ -92,7 +92,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if agent.Agent == agyAgent {
 			if conversation := n.agyConversation(id, agent.PaneID); conversation != "" {
 				agyConversations[id] = conversation
-				if agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+				if !agyStopped(agent.AgentStatus) {
 					agyRuntimeIDs[id] = agyAgent + "-" + conversation
 				}
 			}
@@ -161,7 +161,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			seen[id] = true
 			continue
 		}
-		viaBotmux := host.ParsePane(a.PaneID).Kind == host.Botmux
+		pane := host.ParsePane(a.PaneID)
+		viaBotmux := pane.Kind == host.Botmux
+		if viaBotmux {
+			if h, ok := n.hosts.Get(host.Botmux).(*botmuxHost); ok {
+				s.SetBotmuxExternalTrigger(h.externalTriggerNotice())
+				h.refreshCapsAsync(pane.ID)
+			}
+		}
 		switch {
 		case viaBotmux && (a.Agent == "codex" || a.Agent == traexAgent):
 			// The thread's name, else botmux's title of the topic; messages go through botmux, neither route.
@@ -325,6 +332,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		}
 		if a.Agent == "codex" {
 			n.codexPaneControls(&s, rollout)
+		} else if a.Agent == "claude" {
+			n.claudeTerminalSpeedRow(&s, rollout)
 		}
 		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
@@ -348,7 +357,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			hasRuntimeRow := false
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
-				if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+				if runtimeRow, ok := n.runtimes.agyPaneRuntimeRow(runtimeID); ok {
 					hasRuntimeRow = true
 					if s.Model == "" {
 						s.Model = runtimeRow.Model
@@ -368,6 +377,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.LastText == "" && runtimeRow.LastText != "" {
 						s.LastText = runtimeRow.LastText
 					}
+					// The companion has already applied the native rewind cut.
+					agyBackgroundTasks{running: runtimeRow.Background, ended: runtimeRow.BackgroundEnded()}.apply(&s)
+					n.agyRuntimeTaskLogs(&s, agyConversations[id])
 					if bd := runtimeRow.ContextBreakdown(); bd != nil {
 						if existing := s.ContextBreakdown(); existing == nil || existing.Source != proto.ContextBreakdownExact {
 							s.SetContextBreakdown(bd)
@@ -376,11 +388,17 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 			}
 			if a.Agent == agyAgent {
+				conversation := agyConversations[id]
+				u, readable := n.agyTranscriptMeta(conversation)
+				if readable {
+					n.applyAgyTurnEvidence(&s, conversation, u.turn)
+				}
 				if hasRuntimeRow {
 					n.resolveAgyContext(&s, agyConversations[id])
 				} else {
-					n.mergeAgyTranscript(&s, agyConversations[id])
+					n.mergeAgyTranscript(&s, u)
 				}
+				n.agyPaneControls(&s, id)
 				n.agyPaneTitle(&s, agyConversations[id]) // its conversation's title, not the terminal's (agytitle.go)
 				if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked {
 					liveBusyAgy[a.PaneID] = true
@@ -439,6 +457,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if m := n.assistantModeOf(s.SessionID); m != "" {
 				s.PermissionMode = m
 			}
+		} else if s.Agent == agyAgent {
+			s.PermissionMode = agyShownMode(s.PermissionMode, n.agyRuntimeMode(s.SessionID))
 		}
 		// A conversation in a Claude transcript here (runtimetranscript.go): what it says, and its own row goes. Under
 		// an id of its own, the ids it went by go too, named on the row for the manager's archive (runtimealiases.go).
@@ -459,6 +479,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			}
 		} else if s.Agent == agyAgent {
 			n.resolveAgyContextWindow(s)
+			if s.SourceInstanceID == agyRuntimeID {
+				agyBackgroundTasks{running: s.Background, ended: s.BackgroundEnded()}.apply(s)
+				if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); ok {
+					n.agyRuntimeTaskLogs(s, conversation)
+				}
+			}
 		}
 		seen[s.SessionID] = true
 		if j != i {
@@ -535,6 +561,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if s.Status == proto.StatusWorking && (s.Agent == "" || s.Agent == "claude" || s.Agent == "codex") {
 			s.ToolLoop = n.toolLoopOf(s.SessionID)
 		}
+		// The row leaves with a title it can show (#16343): whatever source named it (a Codex thread name, a runtime's
+		// own title, a terminal's) may hold a whole opening prompt, which the list would otherwise carry everywhere.
+		// Every lookup by title above has read the whole one already.
+		s.Title = transcript.ListTitle(s.Title)
 		if pass == nil || !pass.unavailable[s.SessionID] {
 			s.WorkspaceCwd = n.sessionWorkspaceCwd(s.Cwd)
 			fillGitPlace(s)            // project, worktree and branch for the apps' tree (gitplace.go)
@@ -554,10 +584,19 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	out = out[:j]
 	n.nameAgyAliases(out, agyConversations) // the ids an agy conversation went by, on the row listing it (agyaliases.go)
 	n.markAgyStopped(out, agyRuntimeIDs)    // and one the user closed, stopped by them (agystopped.go)
+	// The desktop app's sessions once each: a transcript one went on from folds into its current row (#14394).
+	if folds := n.offlineFolds(); len(folds.earlier) > 0 {
+		if out = foldDesktopEarlier(out, folds, n.alwaysListed()); len(out) == 0 {
+			return nil // as above
+		}
+	}
 	parents, origins := n.offlineDesktop()
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
 	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them
 	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
+	if n.peer != nil {
+		n.noteCheckpointEnds(out)
+	}
 	sortNewestFirst(out)
 	return out
 }

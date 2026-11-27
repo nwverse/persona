@@ -177,8 +177,11 @@ describe("New agent's model panel (#5104)", () => {
     await open();
     await openPanel();
     if (wide) act(() => q<HTMLButtonElement>('[data-panel-side="agy"]')!.click());
-    const group = q('[data-panel-section][aria-label="agy"]')!;
-    const refresh = () => group.querySelector<HTMLButtonElement>(`[aria-label="${t("ui-modelpanel.refresh_provider_models", { provider: "agy" })}"]`)!;
+    const providerName = "Antigravity CLI";
+    const group = q(`[data-panel-section="provider"][aria-label="${providerName}"]`)!;
+    expect(group).not.toBeNull();
+    const refreshLabel = t("ui-modelpanel.refresh_provider_models", { provider: providerName });
+    const refresh = () => group.querySelector<HTMLButtonElement>(`button[aria-label="${refreshLabel}"]`)!;
     const fetchBefore = vi.mocked(fetch).getMockImplementation()!;
     let answer!: (response: Response) => void;
     const reply = new Promise<Response>((resolve) => { answer = resolve; });
@@ -205,7 +208,7 @@ describe("New agent's model panel (#5104)", () => {
 
   it("left alone, follows Model settings: nothing of the model is sent, the pill names what they run with the engine's mark", async () => {
     await open();
-    expect(pill().title).toBe("Claude Code · Opus 5.5 · Claude Code · High");
+    expect(pill().title).toBe("Claude Code · Opus 5.5 · High");
     expect(pill().querySelector("[data-pill-engine]")!.getAttribute("data-pill-engine")).toBe("claude");
     await openPanel();
     expect(follow().getAttribute("aria-pressed")).toBe("true");
@@ -231,7 +234,7 @@ describe("New agent's model panel (#5104)", () => {
     await flush();
     expect(panel()).toBeNull();
     // nothing sent for the effort: the pill says the one Model settings starts it with
-    expect(pill().title).toBe("Claude Code · Sonnet 5 · Claude Code · High");
+    expect(pill().title).toBe("Claude Code · Sonnet 5 · High");
     await openPanel();
     expect(follow().getAttribute("aria-pressed")).toBe("false");
     expect(row("model:claude\nsonnet").getAttribute("aria-pressed")).toBe("true");
@@ -250,7 +253,7 @@ describe("New agent's model panel (#5104)", () => {
     act(() => follow().click());
     await flush();
     expect(panel()).toBeNull();
-    expect(pill().title).toBe("Claude Code · Opus 5.5 · Claude Code · High");
+    expect(pill().title).toBe("Claude Code · Opus 5.5 · High");
     start();
     expect(launched[0]?.launcher).toBe("");
     expect(launched[0]?.model).toBeUndefined();
@@ -390,7 +393,7 @@ describe("New agent's model panel (#5104)", () => {
     act(() => engines[1].click());
     await flush();
     expect(panel()).toBeNull();
-    expect(pill().title).toBe("Codex · GPT 5.5 · Codex");
+    expect(pill().title).toBe("Codex · GPT 5.5");
     expect(pill().querySelector("[data-pill-engine]")!.getAttribute("data-pill-engine")).toBe("codex");
     start();
     expect(launched[0]).toMatchObject({ launcher: "codex", model: "gpt-5.5" });
@@ -416,7 +419,7 @@ describe("New agent's model panel (#5104)", () => {
     act(() => machineChip("Studio").click());
     await flush();
     expect(q("[data-testid=new-agent-dropped]")!.textContent).toBe("Studio 上用不了 only-mac，已换回这台电脑的默认设置。");
-    expect(pill().title).toBe("Claude Code · Opus 5.5 · Claude Code · High");
+    expect(pill().title).toBe("Claude Code · Opus 5.5 · High");
     // a pick on this computer takes the note away
     await pick("model:claude\nsonnet");
     expect(q("[data-testid=new-agent-dropped]")).toBeNull();
@@ -518,7 +521,7 @@ describe("Codex reasoning effort in New Agent (#13764)", () => {
     localStorage.setItem("new.mode.mac", "plan");
     await open();
     await pick("model:codex\ngpt-5.5");
-    expect(pill().title).toBe("Codex · GPT-5.5 · Codex");
+    expect(pill().title).toBe("Codex · GPT-5.5");
     expect(radio("计划模式")).toBeUndefined();
     await openPanel();
     await customize("model:codex\ngpt-5.5");
@@ -544,11 +547,11 @@ describe("Codex reasoning effort in New Agent (#13764)", () => {
     expect(slider.getAttribute("aria-valuetext")).toBe("模型默认");
     // End lands on the highest reported level ("high"), never an unreported level like "max".
     await slide("End");
-    expect(pill().title).toBe("Codex · GPT-5.5 Mini · Codex · High");
+    expect(pill().title).toBe("Codex · GPT-5.5 Mini · High");
     if (reset) {
       act(() => button("恢复推荐").click());
       await flush();
-      expect(pill().title).toBe("Codex · GPT-5.5 Mini · Codex");
+      expect(pill().title).toBe("Codex · GPT-5.5 Mini");
       expect(flyout()!.querySelector('[role="slider"]')!.getAttribute("aria-valuetext")).toBe("模型默认");
     }
     act(() => pill().click());
@@ -595,7 +598,7 @@ describe("Codex reasoning effort in New Agent (#13764)", () => {
     // Explicitly selecting "medium" sends effort: "medium" to override Codex's config.toml.
     act(() => levelButtons.find((b) => b.dataset.panelLevel === "medium")!.click());
     await flush();
-    expect(pill().title).toBe("Codex · GPT-5.5 · Codex · Medium");
+    expect(pill().title).toBe("Codex · GPT-5.5 · Medium");
     act(() => pill().click());
     start();
     expect(launched[0]).toMatchObject({ launcher: "codex", agentType: "codex", inlinePrompt: true, effort: "medium" });
@@ -606,7 +609,7 @@ describe("Codex reasoning effort in New Agent (#13764)", () => {
     tiers = [{ name: "codex-deep", launcher: "codex", model: "gpt-5.5-mini", effort: "high" }];
     await open();
     await pick("preset:codex-deep");
-    expect(pill().title).toBe("Codex · GPT-5.5 Mini · Codex · High");
+    expect(pill().title).toBe("Codex · GPT-5.5 Mini · High");
     start();
     expect(launched[0]).toMatchObject({ launcher: "codex", agentType: "codex", inlinePrompt: true, model: "gpt-5.5-mini", effort: "high" });
   });

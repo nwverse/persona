@@ -47,6 +47,8 @@ import persona.android.MainActivity
 import persona.android.data.Hub
 import persona.android.navigation.*
 import persona.core.contracts.*
+import persona.core.contracts.api.AssistantConversations
+import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.MainConversationSender
 import persona.core.contracts.api.MessageSender
@@ -238,7 +240,7 @@ private fun PersonaRootContent(
                     }
                     active.phone?.let { PhoneConfirmationHost(it.confirmations) }
                 }
-                persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = Tokens.Space.m))
+                persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = persona.core.designsystem.ToastTopBarClearance))
             }
         }
     }
@@ -336,6 +338,13 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         // The Inbox list this closed, if any, never takes its landing; the next entry opens on Needs you.
         inboxLandings.getValue(AppTab.Persona).clear()
         selected = AppTab.Persona
+    }
+    /** Opens the new-chat page of [manager], keeping that manager's starter draft. */
+    fun showAssistantComposer(manager: String) {
+        val choice = AssistantManagerChoice.current.value
+        if (choice.shown != manager) AssistantManagerChoice.choose(choice.hubId, manager, choice.defaultId)
+        showAssistantHome()
+        persona.feature.assistant.AssistantComposerFocus.request()
     }
     /** Point Persona's navigator at the host now in front. */
     fun showHost(root: NavKey, next: List<NavKey>) {
@@ -1189,6 +1198,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         // A chat's terminal cover reads its machine's own hub group, as the terminal page does (`routed`).
         fun chatTerminal(route: ChatRoute) = session.terminal?.let { shell.groupTerminal(SessionKey(route.machineId, route.sessionId)) ?: it }
         val askSubscriptions = rememberSubscriptionAsk(session.sender, shell.feedback)
+        val composeExtensions = rememberExtensionCompose(session.assistant, shell.feedback, ::showAssistantComposer)
         val provider = entryProvider<NavKey>(fallback = { key -> shellFallbackEntry(key, navigator) }) {
             assistantEntries(navigator) {
                 // Persona's conversation offers the next card an Agent waits on you with, as an Agent's chat does (#4339 C18).
@@ -1268,7 +1278,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 entry<persona.core.navigation.AddComputerRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
                 entry<MachineDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
             }
-            settingsDetailEntries(navigator, services, askSubscriptions)
+            settingsDetailEntries(navigator, services, askSubscriptions, composeExtensions)
             // Each module's pages (Modules.kt); in demo mode a module has no services and says why its pages cannot work.
             // What a module's pages use of the core (the knowledge base, the assistant, sending, sessions); none in demo mode.
             val moduleShell = session.knowledge?.let { knowledge ->
@@ -1555,7 +1565,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                       entry<PhoneToolsRoute> { session.phone?.let { PhoneToolsScreen(it, settingsNavigator) }
                           ?: UnavailablePage(stringResource(R.string.app_unavailable_phone_tools), settingsNavigator) }
                       assistantEntries(settingsNavigator)
-                      settingsDetailEntries(settingsNavigator, services, askSubscriptions)
+                      settingsDetailEntries(settingsNavigator, services, askSubscriptions, composeExtensions)
                   }
                   // In a regular window the list of settings stays beside the page it opens, as on an open iPhone Duo
                   // (its divider is not kept: the sheet starts from the usual split each time). Elsewhere one page.
@@ -1760,6 +1770,43 @@ private fun rememberSubscriptionAsk(sender: MessageSender, feedback: AppFeedback
                     throw e
                 } catch (e: Exception) {
                     if (feedback.failure(e) != true) feedback.notice(failed)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * An extension page's compose link: its quick prompt goes to its owner's main conversation draft, or to that owner's
+ * new-chat draft when it has no main conversation. Never creates a conversation and never sends.
+ */
+@Composable
+private fun rememberExtensionCompose(
+    conversations: AssistantConversations,
+    feedback: AppFeedback,
+    showNewConversation: (String) -> Unit,
+): (Navigator, String, String?) -> Unit {
+    val scope = rememberCoroutineScope()
+    val failed = stringResource(persona.feature.chat.R.string.chat_handoff_failed)
+    return remember(conversations, scope, feedback, failed, showNewConversation) {
+        { nav, text, manager ->
+            scope.launch {
+                try {
+                    val handoff = prepareExtensionCompose(conversations, text, manager,
+                        AssistantManagerChoice.current.value.defaultId.ifBlank {
+                            persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER
+                        })
+                    val main = handoff.main
+                    if (main == null) {
+                        nav.selectTab(AppTab.Persona)
+                        showNewConversation(handoff.manager)
+                    } else {
+                        nav.navigate(ChatRoute(main.machineId, main.sessionId, ConversationKind.Assistant))
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    if (feedback.failure(error) != true) feedback.notice(failed)
                 }
             }
         }

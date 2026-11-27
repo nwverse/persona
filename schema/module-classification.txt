@@ -88,6 +88,7 @@ go server/internal/assistant/fleetcount core
 go server/internal/assistant/fleetcount/fleetcountadapt core
 go server/internal/assistant/fleetcount/fleetcounttest core
 go server/internal/assistant/fleetview core
+go server/internal/assistant/kblark core
 go server/internal/assistant/kernel core
 go server/internal/assistant/kernel/seam core
 go server/internal/assistant/repository core
@@ -208,6 +209,7 @@ go server/internal/node/clipshare core
 go server/internal/node/diskmap core
 go server/internal/node/imessageport core
 go server/internal/node/iphoneport core
+go server/internal/node/larkgateport core
 go server/internal/node/machdiag core
 go server/internal/node/nodekit core
 go server/internal/node/screenport core
