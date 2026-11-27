@@ -395,10 +395,12 @@ describe("TodosView goal folding and blocker surfacing under todos_v2 (#14661)",
     expect(visibleTodoIds()).toEqual(["child_blocker", "goal_ship", "solo_todo"]);
 
     // Under Tasks filter, personal parent goal_ship is excluded -> its task children stay visible as top-level rows (child_done is inside folded Done)
+    // and retain their parent goal hint (#16939) so parent context is never lost when filtered.
     await clickKind(t("todos.kind_filter_tasks"));
     expect(visibleTodoIds()).toEqual(["child_blocker", "child_work"]);
     expect(host.querySelector('[data-testid="todo-section"][data-section="done"]')?.getAttribute("data-todos")).toBe("1");
-    expect(host.querySelector('[data-testid="todo-parent-goal"]')).toBeNull();
+    expect(host.querySelector('[data-todo="child_blocker"] [data-testid="todo-parent-goal"]')?.textContent).toContain("Launch Q4 release");
+    expect(host.querySelector('[data-todo="child_work"] [data-testid="todo-parent-goal"]')?.textContent).toContain("Launch Q4 release");
     expect(host.querySelector('[data-testid="todo-goal-toggle"]')).toBeNull();
 
     // Under To-dos filter, task children are excluded -> personal parent renders without a fold toggle
@@ -841,7 +843,11 @@ describe("TodoDetail dual template, default-expanded sections & status summary u
 
   it("keeps personal to-dos on the lightweight template under todos_v2=true", async () => {
     await render({ todos: dualTodos, todosV2: true, selectedId: "personal_note" });
-    expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
+    // Personal template keeps no work_goal badge, status summary, subtasks, or agent CTAs;
+    // when eligible parent targets exist, the single unified ownership strip houses the Parent goal button without duplicating it on the title row (#16939).
+    expect(host.querySelector("[data-testid=todo-detail-template-badge]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeTruthy();
+    expect(host.querySelectorAll("[data-testid=todo-detail-change-parent]")).toHaveLength(1);
     expect(host.querySelector("[data-testid=todo-detail-status-summary]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-detail-subtasks]")).toBeNull();
@@ -849,6 +855,12 @@ describe("TodoDetail dual template, default-expanded sections & status summary u
     expect(host.querySelector("[data-testid=todo-plan-priority]")?.className).toContain("text-ink-3");
     expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();
+
+    // A lone personal to-do with no direction, parent, children, or eligible reorganization targets omits the ownership strip completely
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: [dualTodos[0]], todosV2: true, selectedId: "personal_note" });
+    expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
   });
 
   it("keeps all sections expanded by default, renders subtle priority & status summary strip, and dynamic CTA for work goals under todos_v2=true", async () => {
@@ -1422,8 +1434,16 @@ describe("TodosView server-owned board projection consumption (#15800)", () => {
       "direction:secretary",
     ]);
     expect(groups[0]!.textContent).toContain("Platform Server Label");
+    // Under #16939, same-direction children nest under their parent goal (expanded by default),
+    // preserving the children's relative server order.
     const platformIds = [...groups[0]!.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
-    expect(platformIds).toEqual(["goal_child_surfaced", "goal_parent", "goal_child_folded"]);
+    expect(platformIds).toEqual(["goal_parent", "goal_child_surfaced", "goal_child_folded"]);
+    const nestedChildren = groups[0]!.querySelector('[data-testid="todo-goal-children"][data-parent="goal_parent"]')!;
+    expect(nestedChildren).toBeTruthy();
+    expect([...nestedChildren.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"))).toEqual([
+      "goal_child_surfaced",
+      "goal_child_folded",
+    ]);
   });
 
   it("ignores server board completely when todos_v2 is false (100% legacy behavior)", async () => {

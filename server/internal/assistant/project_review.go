@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -35,7 +35,7 @@ type projectReviewBinding struct {
 	LinkedAt time.Time `json:"linked_at,omitzero"`
 }
 
-var projectReviewRef = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,255}$`)
+var projectReviewRef = lazyre.New(`^[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,255}$`)
 
 // projectReviewOwnerRef names an App message in the review event. The send API takes any non-empty client_msg_id;
 // one that is not a plain reference is named by its hash, so it is still reviewed once and its text never reaches
