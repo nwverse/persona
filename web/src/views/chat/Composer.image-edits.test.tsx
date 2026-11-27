@@ -81,6 +81,31 @@ const turned = (turns: number, before: EditState = { edits: noEdits(), history: 
 const result = (data: string): DraftImage => ({ name: "image.png", mime: "image/png", data: btoa(data) });
 
 describe("an edited picture in the composer", () => {
+  it("restores the same preview and edit history on the first render after navigation", async () => {
+    const mount = (key: string) => act(() => root.render(<Composer draftKey={key} placeholder="" />));
+    mount("hub/first");
+    act(() => void sendDraft("hub/first", { type: "image", image: result("original") }));
+    const edit = await open("image.png");
+    const state = turned(1);
+    act(() => edit.onDone(result("edited"), state));
+    const preview = tile("image.png").querySelector("img")!.src;
+
+    act(() => root.render(null));
+    mount("hub/second");
+    expect(tile("image.png")).toBeNull();
+    act(() => void sendDraft("hub/second", { type: "image", image: { ...result("other"), name: "other.png" } }));
+    mount("hub/first");
+
+    expect(tile("image.png")?.querySelector("img")?.src).toBe(preview);
+    expect(tile("other.png")).toBeNull();
+    expect(revoke).not.toHaveBeenCalled();
+    const reopened = await open("image.png");
+    expect(reopened.src).toBe(edit.src);
+    expect(reopened.start).toMatchObject(state);
+    mount("hub/second");
+    expect(tile("other.png")).not.toBeNull();
+  });
+
   it("opens again where the editor stopped, updates the expanded preview, and frees URLs on remove", async () => {
     act(() => root.render(<Composer draftKey="k" placeholder="" onSend={async () => true} />));
     act(() => void sendDraft("k", { type: "image", image: { name: "a.png", mime: "image/png", data: btoa("source") } }));

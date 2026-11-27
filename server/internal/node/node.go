@@ -305,6 +305,7 @@ type Node struct {
 	agyIdleClock      func() time.Time // nil uses time.Now (tests override per-node)
 	agyIdlePolicy     *assistantwire.AgyIdleCompaction
 	agyIdleSessions   map[string]*agyIdleState
+	agyAttemptSeq     uint64
 	pendingIxSessions map[string]bool
 	// recoveries: a conversation's bounded model-failure recovery, surviving the process replaced by a model switch.
 	// recoveryClosed stops the ended connection's Node from starting another attempt while its processes hand over.
