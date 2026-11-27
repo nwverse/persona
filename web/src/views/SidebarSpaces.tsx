@@ -144,7 +144,7 @@ function SidebarSpaceItem({ space, route, reg, hover, go, defaultFolded, onEditM
               href={href(newChatRoute)}
               onClick={go(newChatRoute)}
               aria-label={t("sidebar.space_new_chat", { name: title })}
-              title={t("spaces.new_chat")}
+              title={t("sidebar.space_new_chat", { name: title })}
               aria-current={activeNew ? "page" : undefined}
               className={cx(ACTION_BUTTON, activeNew && "bg-hover-2 text-ink")}
             >
@@ -154,7 +154,7 @@ function SidebarSpaceItem({ space, route, reg, hover, go, defaultFolded, onEditM
               type="button"
               onClick={onEditMd}
               aria-label={t("sidebar.space_edit_md", { name: title })}
-              title={t("spaces.md_section")}
+              title={t("sidebar.space_edit_md", { name: title })}
               className={ACTION_BUTTON}
             >
               <Icon name="file" size={12} stroke={1.9} />
@@ -192,7 +192,7 @@ function SidebarSpaceItem({ space, route, reg, hover, go, defaultFolded, onEditM
               to={newChatRoute}
               go={go}
               icon="compose"
-              label={t("spaces.new_chat")}
+              label={t("sidebar.new_chat")}
             />
           )}
           {(remaining > 0 || canCollapse) && (
