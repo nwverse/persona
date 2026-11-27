@@ -172,9 +172,13 @@ func extractAgyUsage(steps []agyStep) agyTranscriptUsage {
 		switch step.Type {
 		case "USER_INPUT":
 			if step.Source == "" || step.Source == "USER_EXPLICIT" {
+				text := agyUserText(step.Content)
+				if isAgyCompactCommand(text) {
+					break
+				}
 				u.turns++
 				if u.first == "" {
-					u.first = agyUserText(step.Content)
+					u.first = text
 				}
 			}
 		case "CHECKPOINT":

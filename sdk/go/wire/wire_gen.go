@@ -1580,10 +1580,12 @@ type SecretsResolveResult struct {
 	Value string `json:"value"`
 }
 
-// SecretStoreField: A public field name/type; never a value or source path.
+// SecretStoreField: A public field name/type or edit action (delete, keep_value); never a value or source path.
 type SecretStoreField struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
+	Name      string `json:"name"`
+	Type      string `json:"type,omitempty"`
+	Delete    bool   `json:"delete,omitempty"`
+	KeepValue bool   `json:"keep_value,omitempty"`
 }
 
 // SecretStoreTarget: the canonical public target approved on the secret storage card.

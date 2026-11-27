@@ -913,26 +913,96 @@ export struct SessionTools {
         .bindContextMenu(this.pathMenu,ResponseType.LongPress).id('session.files.path')
     },(owner:string) => owner)
   }
+  @Builder compactFolderBreadcrumbBar() {
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: 6 }) {
+        SymbolGlyph((this.pathCrumbs[this.pathCrumbs.length - 1]?.home) ? $r('sys.symbol.house') : Symbols.folder)
+          .fontSize(Tokens.interfaceFontVp(13, nativeEnvironment.fontScale))
+          .fontColor([Colors.link])
+          .flexShrink(0)
+        Text(
+          (this.pathCrumbs[this.pathCrumbs.length - 1]?.home)
+            ? tr('file_crumb_home')
+            : (this.pathCrumbs[this.pathCrumbs.length - 1]?.title || this.workspace.currentPath)
+        )
+          .fontSize(Tokens.interfaceFontVp(13, nativeEnvironment.fontScale))
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Colors.ink)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .textAlign(TextAlign.Start)
+          .layoutWeight(1)
+        if (this.pathCrumbs[this.pathCrumbs.length - 1]?.session) {
+          Text(tr('file_crumb_session'))
+            .fontSize(Tokens.interfaceFontVp(11, nativeEnvironment.fontScale))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.link)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            .backgroundColor(Colors.accentWell)
+            .borderRadius(Tokens.capsule)
+            .maxLines(1)
+            .flexShrink(0)
+        }
+        SymbolGlyph(Symbols.down)
+          .fontSize('10vp')
+          .fontColor([Colors.tertiary])
+          .flexShrink(0)
+      }
+      .width('100%')
+      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .constraintSize({ minHeight: 34 })
+    .padding(0)
+    .backgroundColor(Colors.control)
+    .borderRadius(Tokens.capsule)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.capsule })
+    .accessibilityText(
+      ((this.pathCrumbs[this.pathCrumbs.length - 1]?.home)
+        ? tr('file_crumb_home')
+        : (this.pathCrumbs[this.pathCrumbs.length - 1]?.title || this.workspace.currentPath)) +
+      (this.pathCrumbs[this.pathCrumbs.length - 1]?.session ? ', ' + tr('file_crumb_session') : '')
+    )
+    .bindMenu(this.pathMenu)
+    .id('session.files.path')
+  }
+  @Builder folderNavButtons(buttonWidth: number, buttonHeight: number, glyphSize: string) {
+    Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.collapse).fontSize(glyphSize).fontColor([Colors.ink]) }
+      .width(buttonWidth).height(buttonHeight).padding(0).backgroundColor(Colors.control)
+      .border({ width: 0.5, color: this.cardRim(), radius: buttonHeight / 2 })
+      .enabled(this.workspace.folderBack.length > 0)
+      .accessibilityText(tr('session_folder_back')).onClick(() => { Haptics.tap(); this.folderHistory(false); }).id('session.files.back')
+    Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.expand).fontSize(glyphSize).fontColor([Colors.ink]) }
+      .width(buttonWidth).height(buttonHeight).padding(0).backgroundColor(Colors.control)
+      .border({ width: 0.5, color: this.cardRim(), radius: buttonHeight / 2 })
+      .enabled(this.workspace.folderForward.length > 0)
+      .accessibilityText(tr('session_folder_forward')).onClick(() => { Haptics.tap(); this.folderHistory(true); }).id('session.files.forward')
+    Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(glyphSize).fontColor([Colors.link]).id('session.files.parent') }
+      .width(buttonWidth).height(buttonHeight).padding(0).backgroundColor(Colors.control)
+      .border({ width: 0.5, color: this.cardRim(), radius: buttonHeight / 2 })
+      .enabled(parentFolder(this.workspace.currentPath) !== this.workspace.currentPath && !!parentFolder(this.workspace.currentPath))
+      .accessibilityText(parentFolder(this.workspace.currentPath)).onClick(() => { Haptics.tap(); this.goFolder(parentFolder(this.workspace.currentPath)); }).id('session.files.up')
+  }
   @Builder folderBar() {
     Column({space:5}) {
-      Row({space:Tokens.gap}) {
-        Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.collapse).fontSize('16vp').fontColor([Colors.ink]) }
-          .width(this.fileNavigationHeight+10).height(this.fileNavigationHeight).padding(0).backgroundColor(Colors.control)
-          .border({width:0.5,color:this.cardRim(),radius:this.fileNavigationHeight/2})
-          .enabled(this.workspace.folderBack.length>0)
-          .accessibilityText(tr('session_folder_back')).onClick(() => { Haptics.tap(); this.folderHistory(false); }).id('session.files.back')
-        Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.expand).fontSize('16vp').fontColor([Colors.ink]) }
-          .width(this.fileNavigationHeight+10).height(this.fileNavigationHeight).padding(0).backgroundColor(Colors.control)
-          .border({width:0.5,color:this.cardRim(),radius:this.fileNavigationHeight/2})
-          .enabled(this.workspace.folderForward.length>0)
-          .accessibilityText(tr('session_folder_forward')).onClick(() => { Haptics.tap(); this.folderHistory(true); }).id('session.files.forward')
-        Button({type:ButtonType.Circle}) { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize('16vp').fontColor([Colors.link]).id('session.files.parent') }
-          .width(this.fileNavigationHeight+10).height(this.fileNavigationHeight).padding(0).backgroundColor(Colors.control)
-          .border({width:0.5,color:this.cardRim(),radius:this.fileNavigationHeight/2})
-          .enabled(parentFolder(this.workspace.currentPath) !== this.workspace.currentPath && !!parentFolder(this.workspace.currentPath))
-          .accessibilityText(parentFolder(this.workspace.currentPath)).onClick(() => { Haptics.tap(); this.goFolder(parentFolder(this.workspace.currentPath)); }).id('session.files.up')
-        this.folderBreadcrumbs()
-      }.width('100%')
+      if (this.isCompactPane) {
+        Row({space:6}) {
+          this.folderNavButtons(36, 36, '14vp')
+          Blank().layoutWeight(1)
+          Button({type:ButtonType.Circle}) { this.horizontalMenuGlyph() }
+            .width(36).height(36).padding(0).backgroundColor(Colors.control)
+            .border({width:0.5,color:this.cardRim(),radius:18})
+            .bindMenu(this.fileMenu).accessibilityText(tr('more')).id('session.files.more')
+            .bindSheet($$this.transferOpen,this.fileTransferForm(),{title:{title:tr('file_transfer_title')},height:SheetSize.LARGE,showClose:true})
+        }.width('100%').alignItems(VerticalAlign.Center)
+        this.compactFolderBreadcrumbBar()
+      } else {
+        Row({space:Tokens.gap}) {
+          this.folderNavButtons(this.fileNavigationHeight + 10, this.fileNavigationHeight, '16vp')
+          this.folderBreadcrumbs()
+        }.width('100%')
+      }
       if (this.editingPath) Row({space:5}) {
         TextInput({text:this.pathDraft,placeholder:tr('path')}).layoutWeight(1).height(Math.max(44,20*nativeEnvironment.fontScale+12)).fontSize(15)
           .onChange((v:string) => this.pathDraft=v).onSubmit(() => this.openPath()).id('session.files.path_input')
@@ -956,9 +1026,11 @@ export struct SessionTools {
         }.height(Math.max(34,20*Math.min(nativeEnvironment.fontScale,Tokens.interfaceScaleFor(15))+9))
           .layoutWeight(1).backgroundColor(Colors.tertiaryFill).borderRadius(22)
         else Blank().layoutWeight(1)
-        Button({type:ButtonType.Circle}) { this.horizontalMenuGlyph() }
-          .width(44).height(44).padding(0).backgroundColor(Colors.control).bindMenu(this.fileMenu).accessibilityText(tr('more')).id('session.files.more')
-          .bindSheet($$this.transferOpen,this.fileTransferForm(),{title:{title:tr('file_transfer_title')},height:SheetSize.LARGE,showClose:true})
+        if (!this.isCompactPane) {
+          Button({type:ButtonType.Circle}) { this.horizontalMenuGlyph() }
+            .width(44).height(44).padding(0).backgroundColor(Colors.control).bindMenu(this.fileMenu).accessibilityText(tr('more')).id('session.files.more')
+            .bindSheet($$this.transferOpen,this.fileTransferForm(),{title:{title:tr('file_transfer_title')},height:SheetSize.LARGE,showClose:true})
+        }
       }.width('100%').id('session.files.find')
     }.padding({left:this.paneHorizontalPadding(),right:this.paneHorizontalPadding(),top:this.paneTopPadding(5),bottom:this.isCompactPane ? 6 : 8}).width('100%')
   }

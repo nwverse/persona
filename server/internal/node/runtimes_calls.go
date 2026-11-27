@@ -378,6 +378,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				if err := n.a2aSendReady(ctx, p.SessionID); err != nil {
 					return err
 				}
+				if h.agent() == agyAgent {
+					if err := n.agyIdleCompactBeforeInput(ctx, h, p.SessionID, p.Text, p.Images, false, false); err != nil {
+						return err
+					}
+				}
 				input := map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images}
 				if !syntheticSegment {
 					input["client_msg_id"] = opts.ClientMsgID
