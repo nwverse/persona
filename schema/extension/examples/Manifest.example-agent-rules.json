@@ -1,0 +1,10 @@
+{
+  "manifest_version": 1,
+  "id": "rules-lab",
+  "name": "Rules Lab",
+  "version": "1.0.0",
+  "description": "Rules validated for one model in one repository, added to new task Agents that run that model there.",
+  "engines": {"persona": ">=202611270000", "extension_protocol": 1},
+  "runtime": {"command": "bin/rules-lab"},
+  "contributes": {"agent_rules": [{"id": "rules", "name": "Validated rules"}]}
+}

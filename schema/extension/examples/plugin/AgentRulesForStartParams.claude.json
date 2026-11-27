@@ -1,0 +1,1 @@
+{"contribution": "rules", "agent": "claude", "launcher": "claude", "model": "example-model[1m]", "cwd": "/home/me/src/app", "machine": "my-laptop"}

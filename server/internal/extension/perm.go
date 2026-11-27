@@ -164,8 +164,11 @@ func Digest(m *Manifest) string {
 		// RepositoryHosts: being asked about the repositories and links on these hosts is agreed to like a permission
 		// (empty for any other extension, so their digests are what they were).
 		RepositoryHosts []string `json:"repository_hosts,omitempty"`
+		// AgentRules: being asked about every new task Agent and adding to its instructions is agreed to like a
+		// permission (false, so left out, for any other extension: their digests are what they were).
+		AgentRules bool `json:"agent_rules,omitempty"`
 	}{m.Runtime != nil, m.Permissions.normalized(), m.Topics(), m.Surfaces(), m.NodeProgram().consent(), m.ToolsConsent(), sendsAsUserIDs(m),
-		hostIntegrationConsent(m), sortedSchemes(m), sortedRepositoryHosts(m)})
+		hostIntegrationConsent(m), sortedSchemes(m), sortedRepositoryHosts(m), asksAgentRules(m)})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -424,6 +427,9 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if hosts := newRepositoryHosts(nil, m); len(hosts) > 0 {
 		out = append(out, repositoryProviderLine(l, "repository_provider_title", hosts))
 	}
+	if asksAgentRules(m) {
+		out = append(out, permissionLine(l, "agent_rules"))
+	}
 	if to := m.ContributesTo(); len(to) > 0 {
 		out = append(out, PermissionLine{Key: "contributes_to", Title: permissionText(l, "contributes_title"),
 			Detail: permissionText(l, "contributes_detail", i18n.Args{"names": strings.Join(to, permissionText(l, "list_separator"))})})
@@ -593,6 +599,9 @@ func AddedWith(l i18n.Lang, old, m *Manifest, config json.RawMessage) []Permissi
 	}
 	if hosts := newRepositoryHosts(old, m); len(hosts) > 0 {
 		out = append(out, repositoryProviderLine(l, "repository_provider_more_title", hosts))
+	}
+	if addsAgentRules(old, m) {
+		out = append(out, permissionLine(l, "agent_rules"))
 	}
 	var to []string
 	for _, owner := range m.ContributesTo() {

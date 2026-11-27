@@ -316,6 +316,7 @@ type Contributes struct {
 	RepositoryProviders []RepositoryProviderItem `json:"repository_providers,omitempty"`
 	MemorySources       []MemorySourceItem       `json:"memory_sources,omitempty"`
 	DiskOffload         []DiskOffloadItem        `json:"disk_offload,omitempty"`
+	AgentRules          []AgentRulesItem         `json:"agent_rules,omitempty"`
 	Messaging           []MessagingItem          `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
@@ -327,7 +328,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "agent_rules", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -359,7 +360,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "agent_rules", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -643,6 +644,17 @@ const (
 
 // DiskOffloadKinds are the values of DiskOffloadKind, in order.
 var DiskOffloadKinds = []string{"file", "dir", "app"}
+
+// AgentRulesItem: rules for a new task Agent, asked by the manager when it starts one (agent_rules.for_start;
+// agent_rules.schema.json) with the Agent's agent type, launcher, model, directory and computer; a non-empty answer
+// goes in with the task's other framework rules. Needs the program to speak the protocol. Being asked about every new
+// Agent and adding to its instructions is agreed to like a permission (in the permission digest).
+type AgentRulesItem struct {
+	ID string `json:"id"`
+	// What the install page and the extension's contributions call the rules (Validated rules). Not only spaces, no
+	// control characters.
+	Name string `json:"name"`
+}
 
 // MemorySourceItem: the extension's memory, read by the manager one entry at a time (memory.entries;
 // memory.schema.json) so the hub decides which entries reach which scene (a conversation's standing context, a
@@ -7603,6 +7615,33 @@ type RoutineFactsResult struct {
 	Sections []RoutineReportSection `json:"sections,omitempty"`
 }
 
+// AgentRulesForStartParams: agent_rules.for_start: the rules for one new task Agent. Read-only: answering changes
+// nothing the manager can see; the program may record that it was asked.
+type AgentRulesForStartParams struct {
+	// The agent_rules item's id.
+	Contribution string `json:"contribution"`
+	// The agent type the resolved launcher starts (claude, codex, agy, pi, opencode, or a runtime's own type).
+	Agent string `json:"agent"`
+	// The launcher's name on that computer.
+	Launcher string `json:"launcher"`
+	// The model id the Agent starts on, as the start names it (it may carry a context-window suffix such as [1m]); empty
+	// when the start uses the launcher's own default and the manager cannot tell which model that is.
+	Model string `json:"model"`
+	// The Agent's directory on its computer, as the task names it (before any worktree the Agent makes itself).
+	Cwd string `json:"cwd"`
+	// The id of the computer the Agent starts on.
+	Machine string `json:"machine"`
+}
+
+// AgentRulesForStartResult: the rules for that Agent. An empty text adds nothing.
+type AgentRulesForStartResult struct {
+	// The rules, as the Agent should read them. At most 4096 bytes of UTF-8: the manager drops a longer answer whole.
+	Text string `json:"text"`
+	// The program's own version of the text (a hash, say), logged with the start so a later look can tell which rules an
+	// Agent had.
+	Rev string `json:"rev,omitempty"`
+}
+
 // requiredJSONComponent preserves required fields only inside stream payloads.
 type requiredJSONComponent Component
 
@@ -8225,6 +8264,7 @@ var newDef = map[string]func() any{
 	"SecretProviderItem":            func() any { return new(SecretProviderItem) },
 	"RepositoryProviderItem":        func() any { return new(RepositoryProviderItem) },
 	"DiskOffloadItem":               func() any { return new(DiskOffloadItem) },
+	"AgentRulesItem":                func() any { return new(AgentRulesItem) },
 	"MemorySourceItem":              func() any { return new(MemorySourceItem) },
 	"RepositoryLinkLabel":           func() any { return new(RepositoryLinkLabel) },
 	"RoutineFactsItem":              func() any { return new(RoutineFactsItem) },
@@ -8730,6 +8770,8 @@ var newDef = map[string]func() any{
 	"RoutineFactsParams":            func() any { return new(RoutineFactsParams) },
 	"RoutineReportSection":          func() any { return new(RoutineReportSection) },
 	"RoutineFactsResult":            func() any { return new(RoutineFactsResult) },
+	"AgentRulesForStartParams":      func() any { return new(AgentRulesForStartParams) },
+	"AgentRulesForStartResult":      func() any { return new(AgentRulesForStartResult) },
 }
 
 // Call is one call or event of an extension point's protocol (the schemas' x-methods and x-events): who
@@ -8851,4 +8893,5 @@ var Calls = map[string]Call{
 	"offload.job":                     {Name: "offload.job", From: "hub", Params: "OffloadJobParams", Result: "OffloadJob"},
 	"offload.cancel":                  {Name: "offload.cancel", From: "hub", Params: "OffloadJobParams", Result: "Empty"},
 	"routine_facts.collect":           {Name: "routine_facts.collect", From: "hub", Params: "RoutineFactsParams", Result: "RoutineFactsResult"},
+	"agent_rules.for_start":           {Name: "agent_rules.for_start", From: "hub", Params: "AgentRulesForStartParams", Result: "AgentRulesForStartResult"},
 }

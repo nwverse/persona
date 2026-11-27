@@ -184,6 +184,8 @@ type Service struct {
 	// memoryExtension hands the assembler the memory extension's entries, its second source; nil hands none
 	// (memory_assemble_entry.go).
 	memoryExtension memoryExtensionSource
+	// agentRules is the extensions' manager as a new task Agent's start asks it for rules (agent_rules.go); nil asks none.
+	agentRules agentRuleSources
 	// trustSrc is Options.Trust.
 	trustSrc MachineTrust
 	logf     func(format string, args ...any)

@@ -108,6 +108,10 @@ func TestMain(m *testing.M) {
 		serveMemorySourceExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "agent-rules" { // agent_rules_test.go
+		serveAgentRulesExtensionForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "offload" { // extension_offload_test.go
 		serveOffloadExtensionForTest()
 		return

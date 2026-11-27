@@ -371,6 +371,7 @@ export interface Contributes {
   repository_providers?: RepositoryProviderItem[];
   memory_sources?: MemorySourceItem[];
   disk_offload?: DiskOffloadItem[];
+  agent_rules?: AgentRulesItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -636,6 +637,21 @@ export interface DiskOffloadItem {
  */
 export type DiskOffloadKind = "file" | "dir" | "app" | (string & {});
 export const DISK_OFFLOAD_KINDS = ["file", "dir", "app"] as const;
+
+/**
+ * Rules for a new task Agent, asked by the manager when it starts one (agent_rules.for_start;
+ * agent_rules.schema.json) with the Agent's agent type, launcher, model, directory and computer; a non-empty answer
+ * goes in with the task's other framework rules. Needs the program to speak the protocol. Being asked about every new
+ * Agent and adding to its instructions is agreed to like a permission (in the permission digest).
+ */
+export interface AgentRulesItem {
+  id: string;
+  /**
+   * What the install page and the extension's contributions call the rules (Validated rules). Not only spaces, no
+   * control characters.
+   */
+  name: string;
+}
 
 /**
  * The extension's memory, read by the manager one entry at a time (memory.entries; memory.schema.json) so the hub
