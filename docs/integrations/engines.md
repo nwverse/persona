@@ -124,7 +124,12 @@ node also reads it from the `presence/<conversation>.lock` the pane's foreground
 Orca panes (#16531), so a pane is known before its first hook fires and after a node restart; a pane whose agy processes
 hold two conversations' locks stays unknown. Persona reads
 that conversation's local `transcript.jsonl` from the node's Antigravity data directory, or `transcript_full.jsonl` when
-the compact export is absent. Switching export sources resets the history cursor. The node uses the conversation ID to
+the compact export is absent. Switching export sources resets the history cursor. A launcher that gives each agy account
+its own `HOME` or `ANTIGRAVITY_CLI_CONFIG_DIR` keeps the conversation outside the default data directory (#17097): the
+node checks the default first and, when the conversation is not there, reads the agy data directories named by the
+processes under its agy panes (their environment, at most once every 30 seconds and only for a pane whose conversation
+no known directory holds). The conversation is then read from the directory that actually holds it, with the same
+per-directory safety checks as the default. The runtime companion keeps the directory Persona itself started it with. The node uses the conversation ID to
 restore Persona-started panes with `agy --conversation`. The pane's row is then titled after that conversation, as the Antigravity
 companion titles it: the companion's title, else agy's own (its `cache/conversation_metadata.json`), else the first
 message typed into it (#13639). agy sets no terminal title, so until one of these is known the row has the shell's title
