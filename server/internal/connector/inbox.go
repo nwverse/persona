@@ -13,6 +13,7 @@ type (
 	GroupFallbackResult = connectorwire.GroupFallbackResult
 	GroupNew            = connectorwire.GroupNew
 	GroupToolCall       = connectorwire.GroupToolCall
+	InboxMention        = connectorwire.InboxMention
 	InboxReply          = connectorwire.InboxReply
 	InboxThing          = connectorwire.InboxThing
 	StatusChange        = connectorwire.StatusChange

@@ -30,10 +30,21 @@ export interface InboxHandling {
 
 export type SuggestionKind = "reply" | "agent" | "conclusion" | "todo";
 
+export interface InboxMention {
+  id: string;
+  name: string;
+}
+
+export function activeMentions(text: string, mentions?: InboxMention[]): InboxMention[] {
+  if (!text || !mentions?.length) return [];
+  return mentions.filter((m) => m.id && m.name && text.includes(`@${m.name}`));
+}
+
 export interface InboxSuggestion {
   version: number;
   kind: SuggestionKind | string;
   text: string;
+  mentions?: InboxMention[];
   note?: string;
   /** A to-do suggestion's due: a day (2006-01-02, all day) or a moment (RFC 3339); absent: no due date. */
   due?: string;
@@ -54,6 +65,7 @@ export interface InboxSuggestionAttempt {
   code?: string;
   retry_after?: number;
   text: string;
+  mentions?: InboxMention[];
   at: string;
   conversation?: { machine_id: string; session_id: string };
 }
