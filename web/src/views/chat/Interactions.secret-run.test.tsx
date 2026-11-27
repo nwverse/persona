@@ -19,10 +19,11 @@ vi.mock("../../lib/ops", () => ({
   }),
 }));
 import { InteractionCard } from "./Interactions";
+import { setToken } from "../../lib/api";
 import { answerCard } from "../../lib/card-answer";
 import { NOTE_MESSAGE, planClick } from "../../lib/notification-answer";
 import { quickAnswers } from "../../lib/quick-answers";
-import { getState } from "../../lib/store";
+import { applyCompleteSessions, getState } from "../../lib/store";
 import { secretRunInput } from "../../lib/tool-detail";
 import { initI18n } from "../../i18n";
 import type { Interaction, Session } from "../../lib/types";
@@ -393,5 +394,63 @@ describe("密码卡片（secret_run）", () => {
       body: { allow: true, values: { password: PW } },
       headers: { "X-Persona-Features": "secret_run_env" },
     }]);
+  });
+
+  it("reports owner card seen through authenticated api() and retries after non-2xx failure on reconnect", async () => {
+    setToken("synthetic-owner-tok");
+    const seenReqs: { url: string; method?: string; auth: string | null }[] = [];
+    let failNext = true;
+    const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      seenReqs.push({ url: String(input), method: init?.method, auth: headers.get("Authorization") });
+      if (failNext) {
+        failNext = false;
+        return new Response(JSON.stringify({ error: "temporary failure" }), { status: 503, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    try {
+      // Unseen timed secret_run card: initial POST fails with 503 -> must carry Bearer auth and clear sent cache so reconnect retries.
+      Object.assign(getState(), { conn: "connecting" });
+      render(card({}, { id: "ix_secret_seen_1", seen_ttl_seconds: 600 }));
+      await flush();
+      expect(seenReqs).toEqual([
+        { url: "/api/v1/interactions/ix_secret_seen_1/seen", method: "POST", auth: "Bearer synthetic-owner-tok" },
+      ]);
+
+      // Hub reconnects (conn -> online via store subscription): retries automatically without remounting and succeeds.
+      act(() => { applyCompleteSessions([getState().sessions.m[0]], [], { conn: "online" }); });
+      await flush();
+      expect(seenReqs).toHaveLength(2);
+      expect(seenReqs[1]).toEqual({
+        url: "/api/v1/interactions/ix_secret_seen_1/seen", method: "POST", auth: "Bearer synthetic-owner-tok",
+      });
+
+      // Re-rendering after success does NOT send a duplicate /seen.
+      render(card({}, { id: "ix_secret_seen_1", seen_ttl_seconds: 600 }));
+      await flush();
+      expect(seenReqs).toHaveLength(2);
+
+      // Already-seen card (seen_at set) does NOT send /seen.
+      render(card({}, { id: "ix_secret_seen_already", seen_ttl_seconds: 600, seen_at: "2026-11-27T00:00:00Z" }));
+      await flush();
+      expect(seenReqs).toHaveLength(2);
+
+      // Generic secret-field permission card with seen_ttl_seconds also reports /seen via api().
+      render({
+        id: "ix_generic_secret_field", machine_id: "m", session_id: "s", kind: "permission",
+        tool_name: "custom_secret_tool", summary: "Provide token",
+        fields: [{ key: "token", label: "Token", secret: true }], seen_ttl_seconds: 600,
+      });
+      await flush();
+      expect(seenReqs).toHaveLength(3);
+      expect(seenReqs[2]).toEqual({
+        url: "/api/v1/interactions/ix_generic_secret_field/seen", method: "POST", auth: "Bearer synthetic-owner-tok",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      setToken("");
+    }
   });
 });
