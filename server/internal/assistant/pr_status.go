@@ -648,17 +648,20 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	externalSource := externalParkPRURL(held)
 	isExternalParkPR := externalSource != "" && externalSource == triageNormalizePRURL(status.URL)
 	terminalState := strings.EqualFold(status.State, "merged") || strings.EqualFold(status.State, "closed")
-	reconcileBlockers := func() {
+	reconcileTerminalBlockers := func() {
+		if _, err := s.reconcileTodoBlockersForPR(ctx, status); err != nil {
+			s.logf("task %s: reconcile blockers for PR %s: %v", t.ID, status.URL, err)
+		}
+	}
+	reconcileEarlyTerminal := func() {
 		if terminalState && s.settings(ctx).todosV2On() {
-			if _, err := s.reconcileTodoBlockersForPR(ctx, status); err != nil {
-				s.logf("task %s: reconcile blockers for PR %s: %v", t.ID, status.URL, err)
-			}
+			reconcileTerminalBlockers()
 			s.onPRStatusMergeTrain(ctx, t, status)
 		}
 	}
 	current, ok := s.todoNow(t.ID)
 	if !ok || current.DoneAt != nil {
-		reconcileBlockers()
+		reconcileEarlyTerminal()
 		return nil
 	}
 	if current.PRURL != status.URL && !slices.Contains(current.PRs, status.URL) {
@@ -667,7 +670,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 				return err
 			}
 		}
-		reconcileBlockers()
+		reconcileEarlyTerminal()
 		return nil
 	}
 	t = current
@@ -724,7 +727,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 				return err
 			}
 		}
-		reconcileBlockers()
+		reconcileEarlyTerminal()
 		return nil // a new Agent reply replaced the PR while the request was in flight
 	}
 	store := s.store()
@@ -856,7 +859,9 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			s.maybeEmitUnparkedPRMerged(ctx, t.ID, u, held, parkWoke, newlyClosed, preStage)
 		}
 	}
-	reconcileBlockers()
+	if terminalState && s.settings(ctx).todosV2On() {
+		reconcileTerminalBlockers()
+	}
 	s.onPRStatusMergeTrain(ctx, t, status)
 	return nil
 }
