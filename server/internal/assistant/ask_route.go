@@ -313,7 +313,7 @@ func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder [
 
 // routeAsk sends new card ix to its supervisor instead of the user (announce); false when it is not one to route.
 func (s *Service) routeAsk(ix proto.Interaction) bool {
-	if s.internalCard(ix) && (ix.ToolName == "ask_user" || s.settings(context.Background()).supervisorConversation(ix.SessionID) || s.inputCardSource(ix, false) == cardConfirmOutbound || s.inputCardSource(ix, false) == cardExtensionApproval) {
+	if s.activeInternalCard(ix) {
 		return s.handNonOwnerCard(ix)
 	}
 	if !routable(ix) {

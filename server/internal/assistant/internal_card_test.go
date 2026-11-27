@@ -22,9 +22,11 @@ func TestInternalAskUserSourceMatrix(t *testing.T) {
 				e.f.mu.Lock()
 				e.f.known["bg1"] = true
 				e.f.mu.Unlock()
-				e.sessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
-					proto.Session{SessionID: "lead1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
-					proto.Session{SessionID: "bg1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle})
+				convs := []proto.Session{{SessionID: "conv1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+					{SessionID: "lead1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+					{SessionID: "bg1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle}}
+				e.sessions("server", convs...)
+				e.f.setSessions("server", convs...)
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				done := make(chan error, 1)

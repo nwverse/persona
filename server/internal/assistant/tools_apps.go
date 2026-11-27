@@ -324,7 +324,7 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		Reason        string          `json:"reason"`
 	}
 	_ = json.Unmarshal(args, &a)
-	if ix, ok := s.pendingIx(strings.TrimSpace(a.InteractionID)); ok && s.internalCard(ix) {
+	if ix, ok := s.pendingIx(strings.TrimSpace(a.InteractionID)); ok && s.activeInternalCard(ix) {
 		todo, routed := s.routedTo(ix.ID, self, s.isMain(ctx, self))
 		if !routed || self == ix.SessionID {
 			return "", errors.New("this internal interaction was not handed to you")

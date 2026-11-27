@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"bytes"
 	"encoding/json"
 	"time"
 )
@@ -15,7 +16,7 @@ func InternalMaintenanceApproval(ix Interaction) bool {
 	var input struct {
 		Force bool `json:"force"`
 	}
-	return len(ix.ToolInput) > 0 && string(ix.ToolInput) != "null" && json.Unmarshal(ix.ToolInput, &input) == nil
+	return bytes.HasPrefix(bytes.TrimSpace(ix.ToolInput), []byte("{")) && json.Unmarshal(ix.ToolInput, &input) == nil
 }
 
 // MaintenanceAllowed accepts a fresh explicit supervisor answer only for the

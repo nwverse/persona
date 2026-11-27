@@ -1208,9 +1208,9 @@ permissions and questions go to its supervising conversation (the main conversat
   decision; the last rung needing the user does not hand it to them. No timeout hands a card to the user, with the
   hub's push tiering on or off: past its last rung a card goes back to the task's supervisor and stays there
   (parked), the entry saying it came back; the supervisor is reminded each `askHoldFor`, at most `askRemindMax` (3)
-  times, the card stays on the apps marked `delegating`, and only `ask_escalate` hands it to the user. With the push
-  grading switch on (`docs/server/server.md`) the first reminder also leaves the owner a held P1 notice for the Needs
-  you list and the briefing; with it off nothing goes to the owner (a P1 would push).
+  times, the card stays on the apps marked `delegating`, and only `ask_escalate` hands it to the user. A reminder
+  records its work event and wakes the supervisor only. It constructs no owner notice, regardless of push grading
+  or attention settings.
   `ask_escalate` takes `why_owner` and `p0`: with the switch on only `irreversible`, `visible_to_others`,
   `only_owner_knows` or `p0` push, the rest go to the Needs you list and the briefing without a push, bot card or
   channel message.

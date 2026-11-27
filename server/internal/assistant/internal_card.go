@@ -60,6 +60,17 @@ func (s *Service) internalCard(ix proto.Interaction) bool {
 		src == cardToolPermission && proto.InternalMaintenanceApproval(ix)
 }
 
+// activeInternalCard needs the manager-owned reviewer entry rather than the
+// existing task ladder or a node's ordinary answer lookup.
+func (s *Service) activeInternalCard(ix proto.Interaction) bool {
+	if !s.internalCard(ix) {
+		return false
+	}
+	src := s.inputCardSource(ix, false)
+	return ix.ToolName == "ask_user" || src == cardConfirmOutbound || src == cardExtensionApproval ||
+		s.settings(context.Background()).supervisorConversation(ix.SessionID)
+}
+
 // internalReviewer never sends an approval back to the conversation that raised
 // it. Main's own cards use a separate, auditable background conversation. Failure
 // to create it is closed unanswered, never interpreted as approval or owner work.

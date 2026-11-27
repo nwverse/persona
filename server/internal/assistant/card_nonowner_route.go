@@ -92,6 +92,14 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 		return true
 	}
 	_, standalone := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
+	todo := ""
+	if !cfg.supervisorConversation(ix.SessionID) {
+		if t, found := s.taskOf(ctx, s.canonical(ix.MachineID), ix.SessionID); found && t.Supervision != nil {
+			if state := t.Supervision.state(t); state != reviewAccepted && state != reviewCancelled {
+				todo = t.ID
+			}
+		}
+	}
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[ix.ID]
 	if p == nil || p.claimed || p.told || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
@@ -116,6 +124,7 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 		until = now.Add(min(askHoldFor, remaining/2))
 	}
 	p.route = &askRoute{
+		todo:            todo,
 		machine:         home,
 		ladder:          []string{to},
 		routedAt:        now,
