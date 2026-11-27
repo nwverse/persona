@@ -178,8 +178,9 @@ func (h *orcaHost) terminals(ctx context.Context) ([]orcart.Terminal, []orcart.T
 		h.mu.Unlock()
 		if stale {
 			if l, err = h.c.Terminals(ctx, true); err == nil {
+				tabs := h.namedTabs(ctx, l.Tabs) // the names renames gave them (hostorca_panes.go)
 				h.mu.Lock()
-				h.tabs, h.tabsAt, h.topology = l.Tabs, time.Now(), orcaTopology(l)
+				h.tabs, h.tabsAt, h.topology = tabs, time.Now(), orcaTopology(l)
 				h.mu.Unlock()
 			}
 		}

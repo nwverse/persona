@@ -143,6 +143,47 @@ func TestOrcaWithoutSplitOrCloseTab(t *testing.T) {
 	}
 }
 
+// A renamed Orca tab is listed under its new name, though Orca's layouts (on a runtime with no window) keep its first
+// title: the phone tab model's custom name wins, read when the layouts are. Persona's own rename has the next listing
+// read them; a rename made in Orca shows once they are read again. An Orca without the model lists the layouts' titles.
+func TestOrcaRenamedTabsKeepTheirNames(t *testing.T) {
+	n, o, _ := orcaSession(t)
+	slotName := func() string {
+		t.Helper()
+		return byID(listSessions(t, n))[sidA].SlotName
+	}
+	if got := slotName(); got != "tab tab1" {
+		t.Fatalf("first name %q", got)
+	}
+	if _, err := request(t, n, "tabs.rename", map[string]any{"kind": host.Orca, "tab_id": "tab1", "label": "fix login"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := slotName(); got != "fix login" {
+		t.Fatalf("after Persona's rename %q", got)
+	}
+	o.RenameTab("tab1", "owner name")
+	o.SetRevision("repo::"+orcaCwd, 2) // the layouts are read again
+	if got := slotName(); got != "owner name" {
+		t.Fatalf("after a rename in Orca %q", got)
+	}
+	if tr := o.Trace(); len(tr) != 1 || !strings.HasPrefix(tr[0], "terminal.rename ") {
+		t.Errorf("the listing's reads showed as actions: %v", tr)
+	}
+
+	n, o, _ = orcaSession(t)
+	o.Lack("session.tabs.list")
+	o.RenameTab("tab1", "owner name")
+	o.SetRevision("repo::"+orcaCwd, 2)
+	if got := slotName(); got != "tab tab1" {
+		t.Fatalf("an Orca without the tab model: %q", got)
+	}
+	o.SetRevision("repo::"+orcaCwd, 3)
+	listSessions(t, n)
+	if c := o.Count("session.tabs.list"); c != 1 {
+		t.Fatalf("asked an Orca without the tab model %d times", c)
+	}
+}
+
 // The assistant's tab name (#15674) lands on an Orca tab only while Orca, asked then, still shows the name the
 // assistant saw: a rename made meanwhile (the owner's in Orca's window, or Persona's own) wins, and nothing is renamed.
 // The name asked for is the phone tab model's (session.tabs.list): on an Orca with no window the layout keeps the tab's

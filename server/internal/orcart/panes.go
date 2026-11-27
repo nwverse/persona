@@ -59,11 +59,11 @@ func (c *Client) CloseTab(ctx context.Context, t Target) error {
 }
 
 // TabNames is session.tabs.list's view of a worktree's terminal tabs ("id:<worktreeId>"), the model Orca's phone app
-// reads: for each tab, the name each of its panes shows now, its custom name when it has one (set by
-// terminal.rename, or a rename in Orca's window) else its title. Unlike the tab titles of terminal.list's layouts, it
-// follows renames on a runtime with no window (Orca 1.4.277's headless server keeps the layout's tab title as created;
-// checked live).
-func (c *Client) TabNames(ctx context.Context, worktree string) (map[string][]string, error) {
+// reads. shown has, for each tab, the name each of its panes shows now: its custom name when it has one (given by
+// terminal.rename or a rename in Orca's window), else its title. custom has the tabs' custom names alone. Unlike the
+// tab titles of terminal.list's layouts, it follows renames on a runtime with no window (Orca 1.4.277's headless
+// server keeps a layout tab's title as created; checked live).
+func (c *Client) TabNames(ctx context.Context, worktree string) (shown map[string][]string, custom map[string]string, err error) {
 	var res struct {
 		Tabs []struct {
 			Type        string `json:"type"`
@@ -74,9 +74,9 @@ func (c *Client) TabNames(ctx context.Context, worktree string) (map[string][]st
 		} `json:"tabs"`
 	}
 	if err := c.Call(ctx, CallTimeout, "session.tabs.list", map[string]any{"worktree": worktree}, &res); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	out := map[string][]string{}
+	shown, custom = map[string][]string{}, map[string]string{}
 	for _, t := range res.Tabs {
 		if t.Type != "terminal" {
 			continue
@@ -86,12 +86,14 @@ func (c *Client) TabNames(ctx context.Context, worktree string) (map[string][]st
 			tab, _, _ = strings.Cut(t.ID, "::")
 		}
 		name := strings.TrimSpace(t.CustomTitle)
-		if name == "" {
+		if name != "" {
+			custom[tab] = name
+		} else {
 			name = strings.TrimSpace(t.Title)
 		}
-		out[tab] = append(out[tab], name)
+		shown[tab] = append(shown[tab], name)
 	}
-	return out, nil
+	return shown, custom, nil
 }
 
 // RuntimeID is the id of the runtime whose metadata the client read last ("" before any call). It changes when Orca

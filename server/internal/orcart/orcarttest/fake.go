@@ -944,14 +944,14 @@ func (f *Fake) Handle(method string, fn func(params map[string]any) any) {
 }
 
 // Trace is the calls so far ("method {params}"), only of the given methods when any are named, else all but the
-// listing ones every refresh makes (status.get, terminal.list, worktree.ps).
+// listing ones a refresh makes (status.get, terminal.list, worktree.ps, and session.tabs.list with the layouts).
 func (f *Fake) Trace(methods ...string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []string
 	for _, c := range f.log {
 		if len(methods) > 0 && !slices.Contains(methods, c.Method) ||
-			len(methods) == 0 && slices.Contains([]string{"status.get", "terminal.list", "worktree.ps"}, c.Method) {
+			len(methods) == 0 && slices.Contains([]string{"status.get", "terminal.list", "worktree.ps", "session.tabs.list"}, c.Method) {
 			continue
 		}
 		out = append(out, c.String())

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/host"
@@ -27,6 +28,7 @@ var (
 const (
 	orcaSplitMethod    = "terminal.split"
 	orcaCloseTabMethod = "terminal.closeTab"
+	orcaTabNamesMethod = "session.tabs.list"
 )
 
 // orcaSplitDirections are host.Splitter's directions in Orca's words.
@@ -158,22 +160,66 @@ func (h *orcaHost) RenameSlotIf(ctx context.Context, slot, expected, name string
 	if !ok {
 		return fmt.Errorf("orca: the selected tab is no longer available")
 	}
+	var names map[string][]string // nil: an Orca without the tab model
+	if h.offers(orcaTabNamesMethod) {
+		names, _, err = h.c.TabNames(ctx, "id:"+t.WorktreeID)
+		if orcart.IsCode(err, "method_not_found") {
+			_ = h.missingErr(orcaTabNamesMethod, err)
+			names, err = nil, nil
+		}
+		if err != nil {
+			return orcaErr(err)
+		}
+	}
 	var shown bool
-	names, err := h.c.TabNames(ctx, "id:"+t.WorktreeID)
-	switch {
-	case orcart.IsCode(err, "method_not_found"):
+	if names == nil {
 		if shown, err = h.layoutShows(ctx, slot, expected); err != nil {
 			return err
 		}
-	case err != nil:
-		return orcaErr(err)
-	default:
+	} else {
 		shown = len(names[slot]) > 0 && !slices.ContainsFunc(names[slot], func(n string) bool { return n != expected })
 	}
 	if !shown {
 		return errTabRenamed
 	}
 	return h.RenameSlot(ctx, slot, name)
+}
+
+// namedTabs are the layouts' tabs under the names renames gave them. On a runtime with no window the layouts keep a
+// tab's first title, while Orca's phone tab model has the custom name a rename gave it (orcart.TabNames): that name
+// wins, so Persona's lists show the tab as renamed and the bulk rename does not name it again. It is read once per
+// worktree with tabs, and only when the layouts are (terminals): a worktree whose model cannot be read keeps the
+// layouts' titles, and an Orca without the model is not asked again.
+func (h *orcaHost) namedTabs(ctx context.Context, tabs []orcart.Tab) []orcart.Tab {
+	if len(tabs) == 0 || !h.offers(orcaTabNamesMethod) {
+		return tabs
+	}
+	out := slices.Clone(tabs)
+	custom := map[string]map[string]string{}
+	for i, t := range out {
+		names, read := custom[t.WorktreeID]
+		if !read {
+			_, c, err := h.c.TabNames(ctx, "id:"+t.WorktreeID)
+			if orcart.IsCode(err, "method_not_found") {
+				_ = h.missingErr(orcaTabNamesMethod, err)
+				return tabs
+			}
+			names = c // nil after another error: the layouts' titles
+			custom[t.WorktreeID] = names
+		}
+		if name := names[t.ID]; name != "" {
+			out[i].Title = name
+		}
+	}
+	return out
+}
+
+// renamedTab makes the next listing read the layouts and the tabs' names again: a tab was renamed, which changes no
+// topology revision.
+func (h *orcaHost) renamedTab() {
+	h.mu.Lock()
+	h.tabsAt = time.Time{}
+	h.mu.Unlock()
 }
 
 // layoutShows: terminal.list's layouts, read now (the cached ones may be orcaLayoutMaxAge old), label the tab as
