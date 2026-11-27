@@ -329,8 +329,9 @@ func reviewAuthorHasWriteAssociation(assoc string) bool {
 }
 
 var (
-	prCheckStatusLine    = lazyre.New(`^(?:(?:all )?ci(?: checks?| status)?|all checks|checks|(?:all )?tests|test suite|build|lint)(?:: ?| (?:has |have |is |are )?)(?:[✅❌] ?)?(?:passed|passing|failed|failing|green|red|succeeded|successful|success|failure|pending|complete|completed)$`)
-	prCoverageStatusLine = lazyre.New(`^(?:code )?coverage(?: report)?(?:: ?| (?:is )?)(?:[0-9]+(?:\.[0-9]+)?%|updated|passed|failed|unchanged)$`)
+	prCheckStatusLine    = lazyre.New(`^(?:(?:all )?ci(?: checks?| status)?|all checks|checks|(?:all )?tests|test suite|build|lint)(?:: ?| (?:has |have |is |are )?)(?:✅ ?)?(?:passed|passing|green|succeeded|successful|success|pending|complete|completed)$`)
+	prCoverageStatusLine = lazyre.New(`^(?:code )?coverage(?: report)?(?:: ?| (?:is )?)(?:[0-9]+(?:\.[0-9]+)?%|updated|passed|unchanged)$`)
+	prFeedbackNoWake     = lazyre.New(`(?i)<!--[[:space:]]*persona[[:space:]]*:[[:space:]]*no-wake[[:space:]]*-->`)
 	prWatcherReviewLine  = lazyre.New("^automated independent semantic review(?: at `[0-9a-f]+`)? found no blocking defects$")
 	prWatcherCheckLine   = lazyre.New("^- `[^`]+`$")
 )

@@ -215,6 +215,9 @@ func (f *prFeedback) events(ctx context.Context, todoID string, status TodoPRSta
 			continue
 		}
 		body := strings.TrimSpace(item.Body)
+		if prFeedbackNoWake.MatchString(body) {
+			continue
+		}
 		kind, reviewState, anchor := prEventKindComment, "", "#issuecomment-"
 		if reviews {
 			inline, err := g.prReviewComments(ctx, f.pullPath, item.ID)
@@ -249,7 +252,7 @@ func combinedPRReview(body string, inline []githubPRInlineComment) (string, bool
 	seen := make(map[int64]bool)
 	for _, c := range inline {
 		body := strings.TrimSpace(c.Body)
-		if body == "" || c.ID > 0 && seen[c.ID] {
+		if body == "" || prFeedbackNoWake.MatchString(body) || c.ID > 0 && seen[c.ID] {
 			continue
 		}
 		seen[c.ID] = true
