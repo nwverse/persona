@@ -4,16 +4,17 @@
 // too, #9751);
 // a section reads its own sessions while it is open, a page at a time, and stops when it is folded, so the groups of a
 // long list cost nothing until someone looks into one. By space on several computers, each computer is a section of
-// its own around its spaces (#13522).
+// its own around its spaces (#13522); a space's heading starts a new Agent in its folder (#13523).
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { neverConnected } from "../../lib/add-computer";
 import { shortPath } from "../../lib/format";
 import { filterQuery, PAGE_SIZE, SessionList, type ListChangeHint, type ListFilters } from "../../lib/session-list";
+import { openNewAgent } from "../../lib/new-agent";
 import { onHubEvent, useStore } from "../../lib/store";
 import { SectionList } from "../../lib/section-list";
 import { selectSidebarMachines } from "../../lib/sidebar-machines";
-import { computerSections, holdsPlace, JUST_FINISHED_KEY, type ComputerSection, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
+import { computerSections, groupMachines, holdsPlace, JUST_FINISHED_KEY, type ComputerSection, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
 import { onShownHint } from "../../lib/shown-hints";
 import { useFolded } from "../../lib/use-folded";
 import { nestUnderParents, type StableRowOrder } from "../../lib/side-sessions";
@@ -22,6 +23,7 @@ import { Button, Collapse, cx, sidebarFoldMotion } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { STATE_LABEL, stateName } from "../../lib/state-labels";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
+import { SectionAdd } from "../SectionAdd";
 import { GroupCount, NeedsCount, Section, ShowMoreRow, SidebarGroup } from "../SidebarSection";
 import { ClearSeenButton } from "./SeenRowsNotice";
 
@@ -152,6 +154,7 @@ function scheduleSectionLoad(priority: number, run: () => Promise<void>, signal:
 }
 
 type SectionProps<T> = Pick<GroupedSessionsProps<T>, "dimension" | "kind" | "scope" | "source" | "renderRow" | "groupName" | "groupLead" | "groupTip" | "machineName" | "open" | "foldScope" | "heldSeen" | "placeOf" | "justFinished" | "chipless">;
+type SidebarMachine = ReturnType<typeof selectSidebarMachines>[number];
 
 export function GroupedSessions<T>({ groups, byComputer = false, machineOrder, ...p }: GroupedSessionsProps<T>) {
   return (
@@ -161,8 +164,19 @@ export function GroupedSessions<T>({ groups, byComputer = false, machineOrder, .
   );
 }
 
+/** A space's New agent (#13523): the one New agent sheet, on the space's computer and in its folder, with that
+ *  computer's usual launcher. A runtime space only (an account is no place to start one), on a computer that is online,
+ *  whose folder the hub says (the catalog's `path`); not No project, which has none. */
+function startIn(group: SessionGroup, kind: string, dimension: GroupDimension, machines: readonly SidebarMachine[]): (() => void) | undefined {
+  const place = group.places[0];
+  if (kind !== "runtime" || dimension !== "group" || group.rest || !place?.path) return undefined;
+  if (!machines.some((m) => m.id === place.machine && m.online)) return undefined;
+  return () => openNewAgent({ machineId: place.machine, cwd: place.path });
+}
+
 /** A run of sections, a bounded number of them at first (a computer's spaces, or the whole list). */
 function GroupList<T>({ groups, onExcluded, dimension, kind, scope, source, renderRow, groupName, groupLead, groupTip, machineName, open, foldScope, heldSeen, placeOf, justFinished = false, chipless = false, nested = false }: SectionProps<T> & { groups: readonly SessionGroup[]; onExcluded?: (key: string, n: number) => void; nested?: boolean }) {
+  const machines = useStore(selectSidebarMachines);
   const [all, setAll] = useState(false);
   const adjusted = useMemo(() => {
     if (dimension !== "state" || !heldSeen?.rows.length || (!chipless && scope.state !== "unread")) return groups;
@@ -201,7 +215,8 @@ function GroupList<T>({ groups, onExcluded, dimension, kind, scope, source, rend
       return <GroupSection key={group.key} group={group} first={i === 0} startsOpen={sectionHeld.length > 0 || opens(group, i)} dimension={dimension} kind={kind} scope={scope} source={source}
         renderRow={renderRow} name={groupName(group)} lead={groupLead?.(group)} tip={groupTip?.(group)} machineName={machineName} several={several}
         holds={Boolean((open && holdsPlace(group, dimension, open)) || (dimension === "todo" && !group.rest && group.needs > 0))} foldScope={foldScope} onExcluded={onExcluded}
-        heldRows={sectionHeld} hideIds={hideIds} stay={Boolean(heldSeen?.stay)} onClearSeen={heldSeen?.onClear} onRows={heldSeen?.onRows} />;
+        heldRows={sectionHeld} hideIds={hideIds} stay={Boolean(heldSeen?.stay)} onClearSeen={heldSeen?.onClear} onRows={heldSeen?.onRows}
+        start={startIn(group, kind, dimension, machines)} />;
     })}
     {adjusted.length > shown.length && (
       <ShowMoreRow label={t("paged-agents.more_groups", { count: adjusted.length - shown.length })} onClick={() => setAll(true)} />
@@ -218,8 +233,6 @@ function Computers<T>({ groups, machineOrder, ...p }: SectionProps<T> & { groups
     <ComputerGroup key={section.machine} section={section} first={i === 0} machine={machines.find((m) => m.id === section.machine)} {...p} />
   ))}</>;
 }
-
-type SidebarMachine = ReturnType<typeof selectSidebarMachines>[number];
 
 /** A computer's heading, as the complete list's By machine has it: its online state, its name, then how many of its
  *  sessions need the user and how many it holds (the sums of its spaces'). A computer that is away starts folded. Its
@@ -260,11 +273,18 @@ function ComputerGroup<T>({ section, first, machine, ...p }: SectionProps<T> & {
   );
 }
 
-function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, source, renderRow, name, lead, tip, machineName, several, holds, foldScope, onExcluded, heldRows, hideIds, stay, onClearSeen, onRows }: {
+/** A space heading's + (#13523), as the complete list's space ⋯ shows: on hover with a pointer and on keyboard focus,
+ *  always on a touch screen. The heading's numbers step aside for it then, rather than being covered. */
+const REVEALED = "opacity-0 transition-opacity duration-150 group-hover/sec:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100";
+const STEP_ASIDE = "transition-transform duration-150 group-hover/sec:-translate-x-6 group-has-[[data-space-add]_:focus-visible]/sec:-translate-x-6 [@media(hover:none)]:mr-6";
+
+function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, source, renderRow, name, lead, tip, machineName, several, holds, foldScope, onExcluded, start, heldRows, hideIds, stay, onClearSeen, onRows }: {
   group: SessionGroup; first: boolean; startsOpen: boolean; dimension: GroupDimension; kind: string; scope: ListFilters; source: GroupedSource<T>;
   renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode; name: string; lead?: ReactNode; tip?: string; machineName: (id: string) => string; several: boolean; holds: boolean; foldScope?: string;
   /** Hears how many of its rows it leaves out while open (a computer's heading counts without them too). */
   onExcluded?: (key: string, n: number) => void;
+  /** Its heading's + (#13523): a new Agent where its sessions are. */
+  start?: () => void;
   heldRows: readonly T[]; hideIds?: ReadonlySet<string>; stay: boolean; onClearSeen?: (rows: readonly T[]) => void; onRows?: (rows: readonly T[]) => void;
 }) {
   // The first few start open, the rest folded: an open section keeps a list of its own up to date. "Expand all"
@@ -289,11 +309,17 @@ function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, sou
       <Section first={first} folded={folded} onToggle={toggle}
         title={lead || tip ? <span className="flex min-w-0 items-center gap-1.5">{lead}<span className="min-w-0 truncate" title={tip}>{title}</span></span> : title}
         right={<>
-          {dimension === "state" && stay && onClearSeen && heldRows.length > 0 && (
-            <ClearSeenButton count={heldRows.length} onClear={() => onClearSeen(heldRows)} />
-          )}
-          <NeedsCount n={group.needs} />
-          <GroupCount n={shownCount} label={t("paged-agents.count", { count: shownCount })} />
+          {/* the numbers step aside for the + where it shows: under the pointer, on keyboard focus, always on a touch screen */}
+          <span className={cx("flex shrink-0 items-center gap-1", start && STEP_ASIDE)}>
+            {dimension === "state" && stay && onClearSeen && heldRows.length > 0 && (
+              <ClearSeenButton count={heldRows.length} onClear={() => onClearSeen(heldRows)} />
+            )}
+            <NeedsCount n={group.needs} />
+            <GroupCount n={shownCount} label={t("paged-agents.count", { count: shownCount })} />
+          </span>
+          {start && <span data-space-add className="absolute top-0 right-2 bottom-1 z-10 flex items-center">
+            <SectionAdd label={t("agents-groupedsessions.new_agent_in", { name: group.qualifier ? `${name} · ${group.qualifier}` : name })} onClick={start} className={REVEALED} />
+          </span>}
         </>}>
         {!folded && <>
           {dimension === "project" && <GroupPlaces group={group} machineName={machineName} />}

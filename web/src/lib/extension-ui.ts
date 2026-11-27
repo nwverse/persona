@@ -12,6 +12,7 @@ import { itemHeaders, stampedHeaders } from "./manager-choice";
 import { extRoot } from "./extension-api";
 import { areaBands, colorOf, hue, imageLoadable, readV6 } from "./extension-ui-v6";
 import { isHttps, isObject, readAction, readPush } from "./extension-ui-read";
+import { decodeSettingsPrefill } from "./settings-prefill";
 import { t } from "../i18n";
 import type { Comment, Hunk, Thread, TreeEntry } from "./code-view";
 import type { UIColor, UIImageSource, UIRowAction, UIRowControl, UISpark, UITile } from "./extension-ui-v6";
@@ -801,11 +802,12 @@ export function inboxSourceItem(url: string): string | undefined {
 
 /**
  * The in-app path of an extension's settings page that persona://settings/extensions/<id> names (the id escaped as one
- * path segment): /settings?tab=extensions&extension=<id>. undefined for any other link, and for an id the hub keeps for
- * itself (one starting with "-") or one with a "/".
+ * path segment): /settings?tab=extensions&extension=<id>. A bounded ?set=<url-encoded JSON object> proposes ordinary
+ * values for that same page and is preserved. undefined for any other link, and for an id the hub keeps for itself (one
+ * starting with "-") or one with a "/".
  */
 export function extensionSettingsHref(url: string): string | undefined {
-  const m = /^persona:\/\/settings\/extensions\/([^/?#]+)$/.exec(canonicalAppURL(url));
+  const m = /^persona:\/\/settings\/extensions\/([^/?#]+)(?:\?([^#]*))?$/.exec(canonicalAppURL(url));
   if (!m) return undefined;
   let id: string;
   try {
@@ -814,7 +816,11 @@ export function extensionSettingsHref(url: string): string | undefined {
     return undefined;
   }
   if (!id || id.startsWith("-") || id.includes("/")) return undefined;
-  return `/settings?tab=extensions&extension=${encodeURIComponent(id)}`;
+  const href = `/settings?tab=extensions&extension=${encodeURIComponent(id)}`;
+  if (m[2] === undefined || m[2] === "") return href;
+  if (!m[2].startsWith("set=") || /[&;#]/.test(m[2])) return undefined;
+  const set = new URLSearchParams(m[2]).get("set");
+  return decodeSettingsPrefill(set) ? `${href}&set=${encodeURIComponent(set!)}` : undefined;
 }
 
 // ── reading what the hub sent (UI version 2) ─────────────

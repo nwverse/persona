@@ -130,7 +130,7 @@ beforeEach(async () => {
       const catalog = launcherModels[launcher?.name ?? ""] ?? { models: [{ id: "synthetic-model", name: "Synthetic model", efforts: ["low", "high"] }] };
       const host = new URL(url, "http://localhost").searchParams.get("host");
       return json({ agent: launcher?.agent_type || launcher?.agent || "claude", ...catalog,
-        supports_start_model: host === "herdr" ? catalog.supports_start_model : undefined });
+        supports_start_model: host === "herdr" || host === "orca" ? catalog.supports_start_model : undefined });
     }
     if (url.endsWith("/launchers")) return json({ launchers: launcherRows, tiers: launcherTiers });
     if (url.includes("/dirs?")) return json({ path: "/projects", entries: [] });

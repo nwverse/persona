@@ -31,6 +31,10 @@ func (r *Registry) Attach(ctx context.Context, id, source, actor string) (*Exten
 	if err != nil {
 		return nil, err
 	}
+	if old.Record.BuiltinPredecessor || errors.Is(old.problemErr, ErrIdentity) {
+		// A matching remote manifest cannot establish that its program is the signed package.
+		return nil, ErrIdentity
+	}
 	id = old.Record.ID
 	if rt := old.Full.Runtime; rt == nil || rt.IsDeno() {
 		return nil, i18n.Err("extension-status.attach_no_program", i18n.Args{"id": id})
