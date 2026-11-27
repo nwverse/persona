@@ -77,9 +77,10 @@ import (
 // start, settled-turn recovery across transient empty/UNSPECIFIED summary_not_idle and tool-only turns with
 // autonomous-wake cleanup, cached GetCascadeTrajectory idle verification for summary_behind, last_modified_time
 // listed cache invalidation, and sanitized unrecognized-status logging) add 1,066 B (292,362 B).
+// Antigravity Run-prefixed Persona MCP permission normalization (with shell/file/a2a guards), fork mode/model/effort preservation with RPC-gated implicit-option recovery, and assistant capabilities.rewind=false advertisement add 1,976 B (294,338 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 292_362
+	const budget = 294_338
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
