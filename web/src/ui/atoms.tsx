@@ -253,6 +253,32 @@ export function Button({
   );
 }
 
+/** An empty page or section: an icon, a line, what to do. */
+export function Empty({ icon, title, children, action }: { icon: IconName; title: string; children?: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div className="flex flex-col items-center px-6 py-14 text-center">
+      <span className="mb-3 flex size-11 items-center justify-center rounded-full bg-field text-ink-3">
+        <Icon name={icon} size={19} />
+      </span>
+      <p className="text-[13.5px] font-medium text-ink">{title}</p>
+      {children && <p className="mt-1 max-w-sm text-[12.5px] leading-relaxed text-ink-3">{children}</p>}
+      {action && <div className="mt-4">{action}</div>}
+    </div>
+  );
+}
+
+/** A tag in one of the tones (a memory's kind). */
+export function Tag({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "accent" | "orange" | "green" | "red" | "neutral" }) {
+  const tones = {
+    accent: "bg-accent-tint text-accent-ink",
+    orange: "bg-orange-tint text-orange",
+    green: "bg-green-tint text-green",
+    red: "bg-red-tint text-red",
+    neutral: "bg-field text-ink-2",
+  };
+  return <span className={cx("inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full px-2 text-[11px] font-medium", tones[tone])}>{children}</span>;
+}
+
 export function Spinner({ size = 12 }: { size?: number }) {
   return (
     <span
