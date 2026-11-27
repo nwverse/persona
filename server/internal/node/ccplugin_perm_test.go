@@ -840,8 +840,7 @@ func TestCCPluginPermissionDedupWithHookDecidedAndOutsideAskAndDesktopPersonOnly
 		t.Fatalf("older plugin should still fall back to clq_ card, got %d", len(cards))
 	}
 
-	// If AskUserQuestion opened BEFORE the plugin's initial /poll authorization, authorizing permissions must NOT
-	// withdraw the existing clq_ fallback card until an active plugin request actually covers that question call.
+	// Permission authorization reserves AskUserQuestion for the native ix_ card even before its request arrives.
 	status, out := pluginPost(t, c, "poll", map[string]any{
 		"session_id":     sidA,
 		"plugin_version": "0.3.0",
@@ -851,8 +850,8 @@ func TestCCPluginPermissionDedupWithHookDecidedAndOutsideAskAndDesktopPersonOnly
 	if status != http.StatusOK || out["permissions"] != true {
 		t.Fatalf("poll: %d %v", status, out)
 	}
-	if cards := n.outsideAskCards(); len(cards) != 1 {
-		t.Fatalf("pre-poll AskUserQuestion must retain clq_ fallback while no plugin request covers it, got %+v", cards)
+	if cards := n.outsideAskCards(); len(cards) != 0 {
+		t.Fatalf("permission-capable plugin must suppress clq_ fallback before its request arrives, got %+v", cards)
 	}
 
 	// Once an active plugin request covers toolu_q_dedup, outsideAskCards suppresses clq_ to avoid double cards.

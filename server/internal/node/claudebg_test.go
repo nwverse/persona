@@ -36,6 +36,45 @@ func bgTranscript(t *testing.T, home, cwd, id, title string) string {
 		strings.Repeat(" ", 4096))
 }
 
+func TestClaudeBgPluginInputWithoutPeerInbox(t *testing.T) {
+	for _, tc := range []struct{ entrypoint, status, mode string }{
+		{"cli", "idle", "submit"},
+		{"claude-desktop-3p", "idle", "submit"},
+		{"cli", "busy", "queue"},
+	} {
+		t.Run(tc.entrypoint+"/"+tc.status, func(t *testing.T) {
+			n, f, home := herdrNode(t)
+			noPaneEnv(t)
+			shortPluginWaits(t)
+			p := bgTranscript(t, home, home, sidA, "plan")
+			writeOutsideClaude(t, home, sidA, tc.entrypoint, tc.status, nil, nil)
+			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+			if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || s.Capabilities.Send || s.ReadOnlyReason == "" {
+				t.Fatalf("before plugin poll: %+v", s)
+			}
+			plugin := startFakePluginAs(t, pluginSocket(t, n), sidA, p, tc.mode, "0.3.0", []string{"busy_input", "settings"})
+			waitPolling(t, n, sidA)
+			s := byID(listSessions(t, n))[sidA]
+			if caps := s.Capabilities; caps == nil || !caps.Read || !caps.Send || !caps.PluginInput ||
+				caps.Model == nil || !*caps.Model || len(s.Efforts) != len(proto.EffortLevels) || s.ReadOnlyReason != "" {
+				t.Fatalf("active plugin without inbox: %+v, caps %+v", s, caps)
+			}
+			params := map[string]any{"session_id": sidA, "text": "continue", "client_msg_id": "m-other"}
+			if _, err := request(t, n, "session.send", params); refusalCode(err) != "open_elsewhere" {
+				t.Fatalf("non-owner send without inbox: %v", err)
+			}
+			params["owner_input"], params["client_msg_id"] = true, "m-owner"
+			res, err := request(t, n, "session.send", params)
+			if err != nil || res["ok"] != true || res["delivered_as"] != "user_input" || res["relay_reason"] != nil {
+				t.Fatalf("owner send through plugin: %v, %v", res, err)
+			}
+			if got := plugin.messages(); len(got) != 1 || got[0]["text"] != "continue" {
+				t.Fatalf("plugin messages: %v", got)
+			}
+		})
+	}
+}
+
 // A /fork in Claude Code 2.1.30x: the fork runs in Claude's daemon (sessions/<pid>.json kind "bg"), no pane; the
 // interactive claude in the pane parked its own session and shows the agents view, while herdr still names the pane
 // after that session and calls it working off the fork's terminal title. The fork lists live, read-only, with its

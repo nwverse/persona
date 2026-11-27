@@ -38,6 +38,9 @@ func (n *Node) outsideAskCards() []proto.Interaction {
 		if c.Status != "waiting" || seen[c.SessionID] || n.outsideSource(c) == "" || outsidePane(c) != "" {
 			continue
 		}
+		if n.ccPluginPermissionsCapable(c.SessionID, c.pid) {
+			continue // the plugin's native ix_ card owns the question
+		}
 		if p, has := peerOf(c); !has || !peerReachable(p) {
 			continue // nothing could answer it from the phone: the row says to answer on the computer
 		}
@@ -175,9 +178,13 @@ func readPendingOutsideAskFile(f *transcript.File) (*proto.Item, error) {
 
 // outsideAskCard is the card of the question claude c waits on, ok false when its current turn's latest call is not an
 // AskUserQuestion still open (a permission prompt, a plan, a dialog of its own), when an active AskUserQuestion hook
-// or plugin permission request already covers the same tool call, or when the call cannot be one card.
+// or plugin permission request already covers the same tool call, when plugin permission bridging is active, or when
+// the call cannot be one card.
 func (n *Node) outsideAskCard(c claudeProc) (proto.Interaction, bool) {
 	id := c.SessionID
+	if n.ccPluginPermissionsCapable(id, c.pid) {
+		return proto.Interaction{}, false
+	}
 	call := n.pendingOutsideAsk(c)
 	if call == nil || n.activeAsks.coversAsk(id, call.ToolUseID) || n.ccPlugins.coversAsk(id, call.ToolUseID) {
 		return proto.Interaction{}, false
