@@ -1419,8 +1419,8 @@ struct AgentPermissionForm: View {
             Button {
                 Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
             } label: {
-                if let always = interaction.alwaysScopeDetail, !always.isEmpty {
-                    Text("Always Approve · \(always)").lineLimit(1).minimumScaleFactor(0.8)
+                if let always = interaction.alwaysLabel, !always.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Always Approve · \(always)").lineLimit(2).minimumScaleFactor(0.8)
                 } else {
                     Text("Always Approve").lineLimit(1).minimumScaleFactor(0.8)
                 }
@@ -1428,6 +1428,14 @@ struct AgentPermissionForm: View {
             .font(Theme.Font.caption)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("codex-always")
+            if (interaction.alwaysLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let scope = interaction.alwaysScopeDetail {
+                Text(scope)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         reasonRow
     }

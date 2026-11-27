@@ -460,3 +460,260 @@ func TestRuntimeNonAssistantAGYAlwaysKeysParity(t *testing.T) {
 		t.Fatalf("non-assistant truncated Bash AlwaysKeys = %q, want none", truncCard.AlwaysKeys)
 	}
 }
+
+func TestRuntimeFileRuleScopeHardening(t *testing.T) {
+	home := t.TempDir()
+	base := t.TempDir()
+	workDir := filepath.Join(base, "work")
+	outsideDir := filepath.Join(base, "outside")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsideFile := filepath.Join(outsideDir, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Direct live file symlink pointing outside workDir.
+	liveEscape := filepath.Join(workDir, "escape.txt")
+	if err := os.Symlink(outsideFile, liveEscape); err != nil {
+		t.Fatal(err)
+	}
+	// Direct dangling file symlink pointing outside workDir.
+	danglingEscape := filepath.Join(workDir, "dangling.txt")
+	if err := os.Symlink(filepath.Join(outsideDir, "new-secret.txt"), danglingEscape); err != nil {
+		t.Fatal(err)
+	}
+	// Legitimate symlinked workspace dir (file inside does not escape).
+	linkedWorkspace := filepath.Join(base, "linked-work")
+	if err := os.Symlink(workDir, linkedWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	// Symlink pointing into a Persona space directory.
+	healthDir := filepath.Join(home, ".persona", "health")
+	if err := os.MkdirAll(healthDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	healthLink := filepath.Join(workDir, "health-link")
+	if err := os.Symlink(healthDir, healthLink); err != nil {
+		t.Fatal(err)
+	}
+	// Symlink pointing directly to filesystem root.
+	rootLink := filepath.Join(workDir, "root-link")
+	if err := os.Symlink(string(os.PathSeparator), rootLink); err != nil {
+		t.Fatal(err)
+	}
+
+	raw := func(field, p string) json.RawMessage {
+		b, _ := json.Marshal(map[string]string{field: p})
+		return b
+	}
+
+	for _, tc := range []struct {
+		name  string
+		input json.RawMessage
+		want  string
+	}{
+		{"dotdot root escape", raw("file_path", "/tmp/.."), ""},
+		{"dotdot parent escape", raw("file_path", workDir+"/.."), ""},
+		{"existing directory path", raw("file_path", workDir), ""},
+		{"dotdot mid-segment", raw("file_path", workDir+"/../outside/secret.txt"), ""},
+		{"dotdot symlink parent escape", raw("file_path", linkedWorkspace+"/../outside/secret.txt"), ""},
+		{"dotdot windows backslash", raw("file_path", `C:\work\..\secret.txt`), ""},
+		{"trailing slash", raw("file_path", workDir+"/"), ""},
+		{"trailing dot segment", raw("file_path", workDir+"/sub/."), ""},
+		{"trailing backslash", raw("file_path", `C:\work\`), ""},
+		{"bare dot", raw("file_path", "."), ""},
+		{"bare tilde", raw("file_path", "~"), ""},
+		{"bare tilde slash", raw("file_path", "~/"), ""},
+		{"bare home dir", raw("file_path", home), ""},
+		{"file directly in home dir", raw("file_path", filepath.Join(home, "direct.txt")), ""},
+		{"posix root file", raw("file_path", "/foo.txt"), ""},
+		{"windows drive root file", raw("file_path", `C:\foo.txt`), ""},
+		{"windows drive root slash file", raw("file_path", "C:/foo.txt"), ""},
+		{"windows unc share root file", raw("file_path", `\\server\share\foo.txt`), ""},
+		{"direct live file symlink escape", raw("file_path", liveEscape), ""},
+		{"direct dangling file symlink escape", raw("file_path", danglingEscape), ""},
+		{"space target direct", raw("file_path", filepath.Join(healthDir, "labs.md")), ""},
+		{"space target via symlink dir", raw("file_path", filepath.Join(healthLink, "labs.md")), ""},
+		{"symlink dir pointing to filesystem root", raw("file_path", filepath.Join(rootLink, "foo.txt")), ""},
+		{
+			"legitimate symlinked workspace preserves lexical key",
+			raw("file_path", filepath.Join(linkedWorkspace, "note.md")),
+			"//" + strings.TrimPrefix(filepath.ToSlash(linkedWorkspace), "/") + "/**",
+		},
+		{
+			"windows non-root directory allowed",
+			raw("file_path", `C:\work\sub\note.md`),
+			"//C:/work/sub/**",
+		},
+		{
+			"notebook_path supported",
+			raw("notebook_path", filepath.Join(workDir, "analysis.ipynb")),
+			"//" + strings.TrimPrefix(filepath.ToSlash(workDir), "/") + "/**",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := runtimeFileRuleScope(tc.input, home); got != tc.want {
+				t.Fatalf("runtimeFileRuleScope(%s) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestScopedRuntimeAlwaysKeysToolAndInputHardening(t *testing.T) {
+	n, hub := runtimeNode(t)
+	t.Cleanup(func() { n.gates().close() })
+	assistantHub(hub)
+	_ = prepareRuntimeAssistantEnvironment(t, n, true)
+	host := dialRuntime(t, n, agyKeepAlwaysHello())
+	sid := startedAGYAssistant(t, n, host)
+	n.noteModes(sid, proto.ModeDefault, "")
+
+	allow := true
+	hub.mu.Lock()
+	hub.resolve = func(proto.Interaction) proto.Resolution { return proto.Resolution{Allow: &allow} }
+	hub.mu.Unlock()
+
+	ask := func(tool string, input any) proto.Interaction {
+		t.Helper()
+		hub.mu.Lock()
+		before := len(hub.asked)
+		hub.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var res proto.Resolution
+		if err := host.peer.Call(ctx, "interaction.create", map[string]any{"interaction": map[string]any{
+			"kind": "permission", "session_id": sid, "tool_name": tool, "tool_use_id": "u-" + tool,
+			"tool_input": input,
+		}}, &res); err != nil {
+			t.Fatal(err)
+		}
+		hub.mu.Lock()
+		defer hub.mu.Unlock()
+		if len(hub.asked) != before+1 {
+			t.Fatalf("expected 1 card for %s", tool)
+		}
+		return hub.asked[len(hub.asked)-1]
+	}
+
+	workFile := filepath.Join(t.TempDir(), "work", "app.go")
+	workScope := "//" + strings.TrimPrefix(filepath.ToSlash(filepath.Dir(workFile)), "/") + "/**"
+
+	for _, tc := range []struct {
+		name  string
+		tool  string
+		input any
+		want  []string
+	}{
+		{"MultiEdit directory scoped", "MultiEdit", map[string]any{"file_path": workFile}, []string{"tool:Edit(" + workScope + ")"}},
+		{"NotebookEdit directory scoped", "NotebookEdit", map[string]any{"notebook_path": workFile}, []string{"tool:Edit(" + workScope + ")"}},
+		{"uppercase WRITE directory scoped", "WRITE", map[string]any{"file_path": workFile}, []string{"tool:Edit(" + workScope + ")"}},
+		{"uppercase EDIT directory scoped", "EDIT", map[string]any{"file_path": workFile}, []string{"tool:Edit(" + workScope + ")"}},
+		{"uppercase READ directory scoped", "READ", map[string]any{"file_path": workFile}, []string{"tool:Read(" + workScope + ")"}},
+		{"raw unmapped multi_replace_file_content fails closed", "multi_replace_file_content", map[string]any{"TargetFile": workFile}, nil},
+		{"raw unmapped delete_file fails closed even empty", "delete_file", map[string]any{}, nil},
+		{"raw unmapped move_file fails closed", "move_file", map[string]any{"source": workFile, "destination": workFile + ".bak"}, nil},
+		{"unknown tool with file_path fails closed", "custom_writer", map[string]any{"file_path": workFile}, nil},
+		{"unknown tool with TargetFile fails closed", "custom_patch", map[string]any{"TargetFile": workFile}, nil},
+		{"unknown tool with nested CommandLine fails closed", "custom_exec", map[string]any{"opts": map[string]any{"CommandLine": "rm -rf /"}}, nil},
+		{"unknown tool with clean non-path input allowed", "custom_lookup", map[string]any{"query": "weather"}, []string{"tool:custom_lookup"}},
+		{"known Grep with path allowed", "Grep", map[string]any{"pattern": "foo", "path": filepath.Dir(workFile)}, []string{"tool:Grep"}},
+		{"known mcp tool with path allowed", "mcp__persona__file_transfer", map[string]any{"path": workFile}, []string{"tool:mcp__persona__file_transfer"}},
+		{"space-targeted file from non-space assistant fails closed", "Write", map[string]any{"file_path": filepath.Join(n.home, ".persona", "health", "record.md")}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ask(tc.tool, tc.input)
+			if !slices.Equal(got.AlwaysKeys, tc.want) {
+				t.Fatalf("%s: AlwaysKeys = %q, want %q", tc.tool, got.AlwaysKeys, tc.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeRemoteAgentNeverGetsAlwaysKeys(t *testing.T) {
+	t.Run("remote_agent runtime with keep_always and always_label gets no AlwaysKeys", func(t *testing.T) {
+		n, hub := runtimeNode(t)
+		t.Cleanup(func() { n.gates().close() })
+		assistantHub(hub)
+		remoteHello := map[string]any{
+			"runtime": "pac", "name": "PAC", "launcher": "pac",
+			"caps": map[string]any{
+				"start": true, "send": true, "interrupt": true,
+				"assistant": true, "remote_agent": true, "keep_always": true,
+			},
+		}
+		host := dialRuntime(t, n, remoteHello)
+		const sid = "pac-remote-1"
+		cwd := filepath.Join(n.home, ".persona", "assistant")
+		if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+			{SessionID: sid, Title: "Remote", Cwd: cwd, Status: proto.StatusIdle},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "remote session listed", func() bool { _, _, ok := n.runtimes.rowOf(sid); return ok })
+
+		allow := true
+		hub.mu.Lock()
+		hub.resolve = func(proto.Interaction) proto.Resolution { return proto.Resolution{Allow: &allow, Always: true} }
+		hub.mu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var res proto.Resolution
+		if err := host.peer.Call(ctx, "interaction.create", map[string]any{"interaction": map[string]any{
+			"kind": "permission", "session_id": sid, "tool_name": "WebSearch", "tool_use_id": "rem-1",
+			"always_label": "Always allow WebSearch", "tool_input": map[string]any{"query": "hi"},
+		}}, &res); err != nil {
+			t.Fatal(err)
+		}
+		hub.mu.Lock()
+		card := hub.asked[len(hub.asked)-1]
+		hub.mu.Unlock()
+		if len(card.AlwaysKeys) != 0 {
+			t.Fatalf("remote_agent runtime got AlwaysKeys=%q, want none", card.AlwaysKeys)
+		}
+	})
+
+	t.Run("latched RemoteAgent session on local keep_always runtime gets no AlwaysKeys", func(t *testing.T) {
+		n, hub := runtimeNode(t)
+		t.Cleanup(func() { n.gates().close() })
+		assistantHub(hub)
+		cwd := prepareRuntimeAssistantEnvironment(t, n, true)
+		host := dialRuntime(t, n, agyKeepAlwaysHello())
+		const sid = "antigravity-latched-remote"
+		n.state.put(sid, sessionState{Launcher: "antigravity", Cwd: cwd, RemoteAgent: true})
+		if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+			{SessionID: sid, Title: "Latched Remote", Cwd: cwd, Status: proto.StatusIdle},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "latched remote session listed", func() bool { _, _, ok := n.runtimes.rowOf(sid); return ok })
+
+		allow := true
+		hub.mu.Lock()
+		hub.resolve = func(proto.Interaction) proto.Resolution { return proto.Resolution{Allow: &allow, Always: true} }
+		hub.mu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var res proto.Resolution
+		if err := host.peer.Call(ctx, "interaction.create", map[string]any{"interaction": map[string]any{
+			"kind": "permission", "session_id": sid, "tool_name": "WebSearch", "tool_use_id": "rem-2",
+			"always_label": "Always allow WebSearch", "tool_input": map[string]any{"query": "hi"},
+		}}, &res); err != nil {
+			t.Fatal(err)
+		}
+		hub.mu.Lock()
+		card := hub.asked[len(hub.asked)-1]
+		hub.mu.Unlock()
+		if len(card.AlwaysKeys) != 0 {
+			t.Fatalf("latched RemoteAgent session got AlwaysKeys=%q, want none", card.AlwaysKeys)
+		}
+		if card.AlwaysLabel != "" {
+			t.Fatalf("latched RemoteAgent assistant card retained AlwaysLabel=%q, want empty", card.AlwaysLabel)
+		}
+	})
+}

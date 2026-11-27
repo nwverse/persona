@@ -444,9 +444,9 @@ func TestAGYRuntimeAlwaysAllowLifecycleAndRevocation(t *testing.T) {
 		r, _ := s.nodeInteraction(ctx, agyCard("ix_agy_w1", "Write", "tool:Edit(//tmp/work/**)"))
 		firstDone <- r
 	}()
-	pending := ft.waitPending(1)
-	if pending[0].AlwaysHonored == nil || !*pending[0].AlwaysHonored {
-		t.Fatalf("AGY Write card AlwaysHonored = %v, want true", pending[0].AlwaysHonored)
+	firstPending := ft.waitPending(1)
+	if firstPending[0].AlwaysHonored == nil || !*firstPending[0].AlwaysHonored {
+		t.Fatalf("AGY Write card AlwaysHonored = %v, want true", firstPending[0].AlwaysHonored)
 	}
 	if err := s.resolve("ix_agy_w1", proto.Resolution{Allow: &yes, Always: true}); err != nil {
 		t.Fatal(err)
@@ -554,6 +554,42 @@ func TestAGYRuntimeAlwaysAllowLifecycleAndRevocation(t *testing.T) {
 		t.Fatalf("health space AGY card kept always/remembered: %+v", r)
 	}
 	ft.waitPending(0)
+
+	// 7. keepAlways must re-check ConfirmOutbound on both the source card and any waiting sibling card
+	// (even legacy cards with AlwaysHonored == nil).
+	const siblingSid = "antigravity-sibling-confirm"
+	legacyWaiting := proto.Interaction{
+		ID: "ix_agy_wait_health", MachineID: "mac", SessionID: siblingSid, Kind: proto.IxPermission,
+		Agent: "antigravity", AgentLabel: "Antigravity", Cwd: "/home/me/.persona/health",
+		ToolName: "Write", ExpiresAt: time.Now().Add(time.Hour), Resumable: true,
+		AlwaysKeys: []string{"tool:Edit(//tmp/work/**)"},
+	}
+	nonSpaceSibling := proto.Interaction{
+		ID: "ix_agy_nonspace", MachineID: "mac", SessionID: siblingSid, Kind: proto.IxPermission,
+		Agent: "antigravity", AgentLabel: "Antigravity", Cwd: m.assistantCwd(),
+		ToolName: "Write", ExpiresAt: time.Now().Add(time.Hour), Resumable: true,
+		AlwaysKeys: []string{"tool:Edit(//tmp/work/**)"},
+	}
+	// Source card under ConfirmOutbound must not record any grant in the store.
+	s.keepAlways(legacyWaiting, proto.Resolution{Allow: &yes, Always: true})
+	if _, ok := s.alwaysAllowed(ctx, nonSpaceSibling); ok {
+		t.Fatal("keepAlways persisted a grant from a ConfirmOutbound source card")
+	}
+
+	s.fleet.mu.Lock()
+	mWait := s.ixMapLocked()
+	waitPending := &pending{ix: legacyWaiting, done: make(chan proto.Resolution, 1), resolved: make(chan struct{})}
+	mWait[legacyWaiting.ID] = waitPending
+	s.fleet.mu.Unlock()
+	t.Cleanup(func() { s.finishInteraction(legacyWaiting.ID) })
+
+	// Trigger keepAlways from a non-space sibling card with the same session & key.
+	s.keepAlways(nonSpaceSibling, proto.Resolution{Allow: &yes, Always: true})
+	select {
+	case <-waitPending.resolved:
+		t.Fatal("keepAlways woke a waiting ConfirmOutbound legacy card")
+	default:
+	}
 }
 
 // The same completion must not push twice: a Stop whose reply was already pushed for, with no prompt since, is the same

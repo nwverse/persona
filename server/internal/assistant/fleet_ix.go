@@ -1926,7 +1926,7 @@ func (s *Service) keepAlways(ix proto.Interaction, r proto.Resolution) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
-	if s.isInboxWholeBashAlways(ctx, ix) {
+	if s.isInboxWholeBashAlways(ctx, ix) || s.ixPolicy(ctx, ix).ConfirmOutbound {
 		cancel()
 		return
 	}
@@ -1947,6 +1947,10 @@ func (s *Service) keepAlways(ix proto.Interaction, r proto.Resolution) {
 	s.fleet.mu.Unlock()
 	for _, w := range waiting {
 		ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
+		if s.ixPolicy(ctx, w).ConfirmOutbound {
+			cancel()
+			continue
+		}
 		res, ok := s.alwaysAllowed(ctx, w)
 		cancel()
 		if ok {
