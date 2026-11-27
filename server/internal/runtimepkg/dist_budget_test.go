@@ -79,9 +79,10 @@ import (
 // listed cache invalidation, and sanitized unrecognized-status logging) add 1,066 B (292,362 B).
 // Antigravity Run-prefixed Persona MCP permission normalization (with shell/file/a2a guards), fork mode/model/effort preservation with RPC-gated implicit-option recovery, and assistant capabilities.rewind=false advertisement add 1,976 B (294,338 B).
 // Antigravity idle auto-compaction `/compact` divider mapping and empty-prompt exemption (#16604) add 174 B (294,512 B).
+// OpenCode unconditional interruptVersion queued-turn cancellation and status refresh add 71 B (294,583 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 294_512
+	const budget = 294_583
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
