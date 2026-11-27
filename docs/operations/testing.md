@@ -841,7 +841,8 @@ available in both editions.
 
 Light/dark PNGs, including Settings › Advanced at the largest accessibility text size, per-edition sanitized proofs and
 `evidence.json` (commit, Xcode and pre-build local-time / idle readings) are
-written below `--shots`; credentials are never included. Inspect every PNG. `--keep` retains the temporary source snapshot,
+written below `--shots`; credentials are never included. A failed app phase also leaves a screenshot and a credential-free
+state/accessibility diagnostic there. Inspect every PNG. `--keep` retains the temporary source snapshot,
 hub homes and logs for diagnosis; without it the driver removes them. Every run ends with one `PASS`, `FAIL` or `TIMEOUT` line.
 A failed build or assertion, a missing proof, or a missing capture is never a pass.
 

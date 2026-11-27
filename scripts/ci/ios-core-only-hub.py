@@ -382,7 +382,7 @@ def exercise_app(ctl, base, code, edition, shots):
     ctl.tap(id="assistant-sidebar-button")
     require(ctl, element_id="sidebar-inbox")
     for entry in ("sidebar-health", "sidebar-meeting-recording"):
-        proof["entries"][entry] = find_on_page(ctl, element_id=entry)
+        proof["entries"][entry] = bool(matches(elements(ctl), element_id=entry))
     check(proof["entries"]["sidebar-health"] == full, f"{edition}: wrong Health drawer visibility")
     check(proof["entries"]["sidebar-meeting-recording"], f"{edition}: the core recording archive entry is missing")
     no_errors(ctl, "drawer")
@@ -507,6 +507,7 @@ def run_phase(parent, source, app, client_env, simulator, shots, edition, run_id
     bindir, home, log = work / "bin", work / "home", work / "hub.log"
     container = f"persona-ios-{run_id}-{edition}"
     hub = None
+    ctl = None
     try:
         readings.append({"build": f"server-{edition}", **idle_reading()})
         smoke.build("persona_core_only" if edition == "core-only" else "", bindir)
@@ -543,7 +544,18 @@ def run_phase(parent, source, app, client_env, simulator, shots, edition, run_id
         hub = None
         print(f"PASS {edition}: paired with a redeemed device credential; core pages loaded; module surfaces compared", flush=True)
         return proof
-    except Exception:
+    except Exception as error:
+        if ctl is not None:
+            # Local diagnostics only: the synthetic app has no user content. Never include the runtime or hub credential.
+            try:
+                ctl.screenshot(str(shots / f"{edition}-failure.png"), settle=False)
+                rows = [{key: row.get(key) for key in ("id", "label", "visible", "onScreen", "frame")}
+                        for row in elements(ctl)]
+                (shots / f"{edition}-failure.json").write_text(json.dumps({
+                    "error": str(error), "state": ctl.call("state"), "elements": rows,
+                }, indent=2) + "\n")
+            except Exception as diagnostic:
+                print(f"failure diagnostics unavailable: {diagnostic}", flush=True)
         if log.exists():
             sys.stderr.write(log.read_text()[-4000:])
         raise
