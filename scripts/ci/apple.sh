@@ -1,13 +1,13 @@
 #!/bin/bash
 # Public, local-runnable Apple checks. Requires XcodeGen, Python 3 and rsync.
 # The default lane uses macOS 26 and Xcode 26.0.x; ios18 uses the 18.6 simulator.
-# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-model-picker|ios-ipad-diagnostic]
+# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build|ios-core-only|ios-focused|ios-regressions|ios-model-picker|ios-ipad-diagnostic]
 # Cache CI_SPM_CACHE (default ~/Library/Caches/persona-ci/spm); keep the printed
 # output directory's *.xcresult bundles when investigating failures.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 LANE="${1:-all}"
-case "$LANE" in all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-model-picker|ios-ipad-diagnostic) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-model-picker|ios-ipad-diagnostic]\n' "$0" >&2; exit 2 ;; esac
+case "$LANE" in all|ios|ios18|packages|ios-build|ios-core-only|ios-focused|ios-regressions|ios-model-picker|ios-ipad-diagnostic) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build|ios-core-only|ios-focused|ios-regressions|ios-model-picker|ios-ipad-diagnostic]\n' "$0" >&2; exit 2 ;; esac
 [ "$#" -le 1 ] || { printf 'apple-ci: too many arguments\n' >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { printf 'apple-ci: FAIL requires macOS with Xcode\n' >&2; exit 1; }
 for tool in python3 xcodebuild xcrun xcodegen rsync git; do
@@ -184,9 +184,22 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   # The module contract and registry (#13432, docs/apple/ios.md "Modules").
   ci_run 'PersonaModuleAPI unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaModuleAPI" --scratch-path "$SPM/PersonaModuleAPI" -Xswiftc -warnings-as-errors
   ci_run 'Persona Input build' 600 xcrun swift build -c release --package-path "$SOURCE/apple/PersonaLink/Input" --scratch-path "$SPM/PersonaInput" -Xswiftc -warnings-as-errors
-  # The independent Link package contains only Persona Screen, built as mac-link.sh builds it; PersonaScreenCore's tests
-  # cover its capture decisions. There is no menu-bar app or separate Link UI test target to build.
+  # The Persona Link menu bar App (apple/PersonaLink/App, docs/operations/link.md "Tray and menu bar App"): a package of
+  # its own, apart from Persona Screen's, outside apple/project.yml.
+  ci_run 'Persona Link menu bar unit tests' 600 xcrun swift test --package-path "$SOURCE/apple/PersonaLink/App" --scratch-path "$SPM/PersonaLink" -Xswiftc -warnings-as-errors
+  # Persona Screen's package contains only Persona Screen, built as mac-link.sh builds it; PersonaScreenCore's tests
+  # cover its capture decisions.
   ci_run 'Persona Screen build' 600 xcrun swift build -c release --package-path "$SOURCE/apple/PersonaLink" --scratch-path "$SPM/PersonaScreen" --product PersonaScreen -Xswiftc -warnings-as-errors
+  # Domain packages (docs/server/architecture.md "Domain model", 'Client modules'): every package with a *Domain or
+  # *Adapt target, found by its name, so a new one is tested the day it exists. The tests are black-box, and the build
+  # writes each module's public symbol graph, from which AppleDomain checks the public API.
+  DOMAIN_GRAPHS="$OUTPUT/domain-symbol-graphs"
+  mkdir -p "$DOMAIN_GRAPHS"
+  DOMAIN_PACKAGES=$(python3 -B "$CI_ROOT/scripts/test/test_client_domain_modules.py" --swift-packages)
+  for package in $DOMAIN_PACKAGES; do
+    ci_run "$(basename "$package") domain tests" 900 xcrun swift test --package-path "$SOURCE/$package" --scratch-path "$SPM/$(basename "$package")" --disable-testable-imports -Xswiftc -warnings-as-errors -Xswiftc -emit-symbol-graph -Xswiftc -emit-symbol-graph-dir -Xswiftc "$DOMAIN_GRAPHS" -Xswiftc -symbol-graph-minimum-access-level -Xswiftc public
+  done
+  ci_run 'Domain packages follow the domain rules (AppleDomain)' 300 env PERSONA_DOMAIN_SYMBOL_GRAPHS="$DOMAIN_GRAPHS" python3 -B "$CI_ROOT/scripts/test/test_client_domain_modules.py" AppleDomain
   # Blocking calls on the main actor (docs/apple/performance.md, "Automated checks"). The lint is built in a fixed
   # folder beside its build output: the snapshot above moves on every run, and a package whose folder moved is rebuilt
   # from scratch, swift-syntax included (seen with Xcode 27.2). Unchanged files keep their times (no -t), so an
@@ -196,7 +209,7 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'Isolation lint unit tests' 900 xcrun swift test -c release --disable-testable-imports --package-path "$SPM/IsolationLint/package" --scratch-path "$SPM/IsolationLint/build"
   ci_run 'Blocking calls on the main actor (isolation lint)' 300 "$SPM/IsolationLint/build/release/isolation-lint" --root "$SOURCE" --baseline "$SOURCE/scripts/test/apple_isolation_baseline.json"
 fi
-if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ] || [ "$LANE" = ios-model-picker ] || [ "$LANE" = ios-ipad-diagnostic ]; then
+if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-core-only ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ] || [ "$LANE" = ios-model-picker ] || [ "$LANE" = ios-ipad-diagnostic ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
@@ -215,7 +228,7 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE
     runtimes="$OUTPUT/runtimes-$platform-before.json"
     ci_run "List $platform simulator runtimes" 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$runtimes"
     if ! runtime=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$runtimes" --platform "$platform"); then
-      ci_run "Download matching $platform 26.0 simulator runtime" 1200 xcodebuild -downloadPlatform "$platform" -architectureVariant universal
+      ci_run "Download matching $platform 26.0 simulator runtime" 1200 python3 "$CI_ROOT/scripts/ci/apple_runtime.py" --platform "$platform" --download
       runtimes="$OUTPUT/runtimes-$platform-after.json"
       ci_run "List downloaded $platform simulator runtimes" 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$runtimes"
       runtime=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$runtimes" --platform "$platform")
@@ -224,12 +237,12 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE
     if [ "$platform" = iOS ]; then IOS_RUNTIME="$runtime"; fi
   done
   resolve Persona
-  if [ "$LANE" != ios-model-picker ]; then
+  if [ "$LANE" != ios-model-picker ] && [ "$LANE" != ios-core-only ]; then
   # Generic device builds compile the actual watch/widget/notification/share
   # dependency graph; do not delete the watch target to accommodate the runner.
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
     -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-device" \
-    -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+    -disableAutomaticPackageResolution "${UNSIGNED[@]}" build 2>&1 | tee "$OUTPUT/ios-device.log"
   # Every Mach-O in the device app (extensions, frameworks, the Watch app) and every architecture: none links CallKit,
   # weakly or through a package (#9290). Device-only linker flags exist, so the simulator build cannot stand in for it.
   ci_run 'No CallKit in the device build' 300 python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \
@@ -238,14 +251,22 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE
   # device build fail here (#6735; MainPagesStackTests measures the run-time part in the simulator).
   ci_run 'Debug view stack frames (device build)' 300 python3 "$CI_ROOT/scripts/ci/apple_stack_frames.py" \
     "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"
+  # A domain result the app drops is an unused-result warning in this build's log (AppleDomain, swift-app-discard).
+  ci_run 'The app keeps the domain results (AppleDomain)' 300 env PERSONA_APP_BUILD_LOGS="$OUTPUT/ios-device.log" python3 -B "$CI_ROOT/scripts/test/test_client_domain_modules.py" AppleDomain
+  fi
+  if [ "$LANE" = all ] || [ "$LANE" = ios-core-only ]; then
   # The app without its moved feature modules (apple/modules-core-only.yml, #14017; docs/apple/ios.md "Modules"): the
-  # core must build with every apple/Modules/<Name> left out. Generated into the same project, built, then the whole
-  # project generated again for the steps below. Only the app scheme: the watch and extensions compile no module.
+  # core must build with every apple/Modules/<Name> left out. In hosted CI this runs in its own parallel ios-core-only
+  # job so the full ios lane stays inside its 120-minute limit (#14496); the local all lane still runs it after the
+  # device build and regenerates the whole project for the tests below. Only the app scheme: the watch and extensions
+  # compile no module.
   ci_run 'Generate core-only Apple project' 120 env PERSONA_CORE_ONLY=YES xcodegen generate --spec "$SOURCE/apple/project.yml" --project "$SOURCE/apple"
   ci_run 'Core-only iOS build' 1800 "${XCODE[@]}" -scheme Persona \
     -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-core-only" \
     -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+  if [ "$LANE" = all ]; then
   ci_run 'Generate Apple project again (whole)' 120 xcodegen generate --spec "$SOURCE/apple/project.yml" --project "$SOURCE/apple"
+  fi
   fi
 fi
 if [ "$LANE" = ios18 ]; then
@@ -259,7 +280,7 @@ if [ "$LANE" = ios18 ]; then
   fi
   resolve Persona
 fi
-if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
+if [ "$LANE" != packages ] && [ "$LANE" != ios-build ] && [ "$LANE" != ios-core-only ]; then
   if [ "$LANE" = ios18 ]; then
     IOS_VERSION=18.6
     IOS_PHONE="iPhone 16 Pro"

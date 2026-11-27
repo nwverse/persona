@@ -20,6 +20,14 @@ type memEntrySource struct {
 	listed  int
 }
 
+func entryIDList(entries []proto.AssistantEntry) []string {
+	ids := make([]string, len(entries))
+	for i, entry := range entries {
+		ids[i] = entry.ID
+	}
+	return ids
+}
+
 func (m *memEntrySource) NewestAssistantEntries(_ context.Context, p proto.AssistantEntriesParams, personal bool) (proto.AssistantEntriesResult, error) {
 	m.listed++
 	var match []proto.AssistantEntry
@@ -86,6 +94,7 @@ func memoryAssembleService(t *testing.T) (*Service, *fakeHub, *infoCategoryMemSt
 	f.hello.Assistant.Machines = []string{"qa-machine"}
 	f.mu.Unlock()
 	setSettings(t, s, func(v *Settings) { v.MachineID = "qa-machine" })
+	waitFor(t, "the backfill's read of the to-dos", s.spaceBackfillScanIdle)
 	if got := s.settings(ctx).MachineID; got != "qa-machine" {
 		t.Fatalf("the owner's computer = %q, want qa-machine", got)
 	}
@@ -374,7 +383,7 @@ func TestMemoryDecisionsQueryIsARecall(t *testing.T) {
 	finance, main := entryQAFinance, entryQAMain
 	finance.Type, main.Type = "decision", "decision"
 	ledger := &entriesMemStore{infoCategoryMemStore: st, entries: []proto.AssistantEntry{finance, main}}
-	s.store = func() Store { return ledger }
+	s.setStore(func() Store { return ledger })
 	query := func() string {
 		t.Helper()
 		raw, err := s.toolEntries(ctx, "qa-machine", "qa-main", "decisions_query", json.RawMessage(`{}`))

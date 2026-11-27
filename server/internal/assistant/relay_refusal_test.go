@@ -44,6 +44,9 @@ func TestRelayFailureClassification(t *testing.T) {
 		{"machine_offline from the bus", busError(coded(CodeMachineOffline)), relayFailedNotNow},
 		// The manager's own computers answer an offline machine with the bare error, no code (devices/machine.go).
 		{"offline on the manager's own computer", fmt.Errorf("%s: %w", "box", apierr.ErrOffline), relayFailedNotNow},
+		{"not sent before deadline", rpc.NotSent(context.DeadlineExceeded), relayFailedNotNow},
+		{"not sent before link closed", rpc.NotSent(rpc.ErrClosed), relayFailedNotNow},
+		{"not written before deadline", errors.Join(rpc.ErrNotWritten, context.DeadlineExceeded), relayFailedNotNow},
 		{"node_closed", coded(CodeNodeClosed), relayFailedNotNow},
 
 		{"no_device from the bus", busError(coded(assistantwire.CodeNoDevice)), relayFailedSetup},
@@ -66,7 +69,7 @@ func TestRelayFailureClassification(t *testing.T) {
 	}
 	for _, code := range []string{proto.CodeClaudeMissing, proto.CodeLauncherMissing, proto.CodeNodeOutdated, "no_device",
 		"adapter_credentials_missing", "adapter_disabled", "adapter_config_conflict", "launcher_out_of_scope", "launcher_own_service",
-		"launcher_other_kind", "assistant_launcher_profile_switch"} {
+		"launcher_other_kind", "assistant_launcher_profile_switch", "assistant_model_unresolved"} {
 		cases = append(cases, row{code, coded(code), relayFailedSetup})
 	}
 	for _, code := range relayBusyCodes {

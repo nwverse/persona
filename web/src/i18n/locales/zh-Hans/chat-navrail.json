@@ -17,5 +17,8 @@
   "summary": "主对话里的问题",
   "summary_working": "{count} 个进行中",
   "summary_unread": "{count} 个未读",
-  "summary_open": "打开主对话"
+  "summary_open": "打开主对话",
+  "loading_preview": "正在加载预览…",
+  "load_earlier": "加载更早的消息",
+  "load_later": "加载之后的消息"
 }

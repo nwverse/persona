@@ -30,6 +30,9 @@ var offlineCache struct {
 	// origins: the folders the desktop app's sessions were started in (claudeDesktopIndex.origins, placeClaudeDesktop),
 	// read and replaced the same way.
 	origins map[string]string
+	// folds: the transcripts the desktop app's sessions went on from (foldDesktopEarlier, #14394), read and replaced
+	// the same way.
+	folds desktopFolds
 }
 
 // appendOffline appends to dst the recent transcripts without a live agent, straight into the caller's list (sessionList's);
@@ -41,6 +44,7 @@ func (n *Node) appendOffline(dst []proto.Session, live map[string]bool) []proto.
 		offlineCache.list = n.scanOffline()
 		desktop := readClaudeDesktopIndex(n.home) // its files were just read: unchanged ones are not parsed again
 		offlineCache.parents, offlineCache.origins = desktop.parents, desktop.origins
+		offlineCache.folds = desktopFolds{earlier: desktop.earlier, before: desktop.before}
 		offlineCache.at, offlineCache.home = time.Now(), n.offlineCacheKey()
 	}
 	for i := range offlineCache.list {
@@ -76,6 +80,32 @@ func (n *Node) offlineDesktop() (parents, origins map[string]string) {
 	return offlineCache.parents, offlineCache.origins
 }
 
+// offlineFolds is what the last offline scan of this node's home read of the transcripts the desktop app's sessions
+// went on from (offlineCache.folds); none when another home's scan is cached.
+func (n *Node) offlineFolds() desktopFolds {
+	offlineCache.Lock()
+	defer offlineCache.Unlock()
+	if offlineCache.home != n.offlineCacheKey() {
+		return desktopFolds{}
+	}
+	return offlineCache.folds
+}
+
+// alwaysListed are the sessions the offline scan lists whatever the desktop app's index says of them: the kept ones
+// (the main conversation) and "Branch to New Chat"'s copies (fork.go).
+func (n *Node) alwaysListed() map[string]bool {
+	out := map[string]bool{}
+	for id := range n.keptSessions() {
+		out[id] = true
+	}
+	n.mu.Lock()
+	for id := range n.forked {
+		out[id] = true
+	}
+	n.mu.Unlock()
+	return out
+}
+
 // forgetOfflineScan drops the cached scan of offline transcripts: the next list scans again.
 func forgetOfflineScan() {
 	offlineCache.Lock()
@@ -101,6 +131,10 @@ func (n *Node) scanOffline() []proto.Session {
 		assistants
 		keptOnes
 		desktopOnes // the desktop app's unarchived sessions, whatever their age (claudedesktop.go)
+		// desktopFolded: the ones of them a client draws under another row, not as a row (a side session or a fork under
+		// the session it came from, a scheduled task's earlier runs under its newest): counted apart, so they do not
+		// take the places of the sessions the sidebar lists at the top level (#15279).
+		desktopFolded
 	)
 	type cand struct {
 		path  string
@@ -141,15 +175,21 @@ func (n *Node) scanOffline() []proto.Session {
 			continue
 		}
 		// Another platform's runs (agentfilters.go) go before the newest are counted: hundreds a day would crowd out
-		// the user's own. So do a program's one-shot runs (`claude -p`, claude_oneshot.go).
+		// the user's own. So do a program's one-shot runs (`claude -p`, claude_oneshot.go), unless the desktop app's
+		// sidebar lists the transcript: a session New Agent starts there is written by `claude -p` and taken over by the
+		// app (claudedesktop_new.go), and says only sdk-cli until the app ends a turn in it (#15522).
 		if !forked[id] && n.agentFiltered("claude", p) {
 			continue
 		}
-		if !forked[id] && !unlisted[id] && n.oneShotRun(id, filepath.Base(filepath.Dir(p)), p, st, persona) {
+		if !forked[id] && !unlisted[id] && !inDesktop && n.oneShotRun(id, filepath.Base(filepath.Dir(p)), p, st, persona) {
 			continue
 		}
 		if inDesktop { // counted on their own: they neither take the others' 80 nor are pushed out by them
-			cands = append(cands, cand{p, st, desktopOnes})
+			count := desktopOnes
+			if desktop.parents[id] != "" {
+				count = desktopFolded
+			}
+			cands = append(cands, cand{p, st, count})
 			continue
 		}
 		cands = append(cands, cand{p, st, others})
@@ -157,8 +197,9 @@ func (n *Node) scanOffline() []proto.Session {
 	// Newest first, and only what is listed counts: a session the filters below leave out (a blocked or out-of-scope
 	// directory, a probe that never said anything, an older copy) took one of the 80 and pushed a listed one out.
 	sort.SliceStable(cands, func(i, j int) bool { return cands[i].st.ModTime().After(cands[j].st.ModTime()) })
-	limit := [...]int{others: 80, assistants: maxAssistantOffline, keptOnes: len(cands), desktopOnes: maxDesktopOffline}
-	var counted [4]int
+	limit := [...]int{others: 80, assistants: maxAssistantOffline, keptOnes: len(cands), desktopOnes: maxDesktopOffline,
+		desktopFolded: maxDesktopFolded}
+	var counted [len(limit)]int
 	listed := map[string]bool{}
 	shown := map[string]bool{} // what the desktop app's rules look at: rows are left out before they are counted
 	for _, c := range cands {
@@ -212,7 +253,7 @@ func (n *Node) scanOffline() []proto.Session {
 		// one only had its tail read, and a tail of tool calls under one huge line says nothing; the main conversation is
 		// listed whatever its tail holds. Dropping it left the app and the web with no session for the main chat, and its composer
 		// disabled (#1163: its last turn stopped mid tool call, under a 377 KB line).
-		if m.lastText == "" && m.lastTextAt.IsZero() && m.title == "" && !keep[id] && !forked[id] && c.count != desktopOnes && c.st.Size() <= quickTail {
+		if m.lastText == "" && m.lastTextAt.IsZero() && m.title == "" && !keep[id] && !forked[id] && c.count != desktopOnes && c.count != desktopFolded && c.st.Size() <= quickTail {
 			continue
 		}
 		n.setPath(id, c.path)
@@ -240,6 +281,10 @@ func (n *Node) scanOffline() []proto.Session {
 // scanOffline reads only Claude's projects and codexSessions keeps the assistant's out of Agents, so such a conversation
 // had no row at all, and every client turned its composer off, with nothing left to send the message that resumes it (#2126).
 func (n *Node) codexAssistantsAtRest(seen map[string]bool) []proto.Session {
+	return n.codexAssistantsAtRestIn(seen, nil)
+}
+
+func (n *Node) codexAssistantsAtRestIn(seen map[string]bool, pass *codexListPass) []proto.Session {
 	if n.state == nil || n.codices == nil {
 		return nil
 	}
@@ -258,7 +303,7 @@ func (n *Node) codexAssistantsAtRest(seen map[string]bool) []proto.Session {
 	}
 	var cands []cand
 	for id := range cwds {
-		path := n.codexPath(id)
+		path := n.codexPathIn(id, pass)
 		if path == "" {
 			continue
 		}

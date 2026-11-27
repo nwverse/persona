@@ -670,12 +670,14 @@ extension Machine {
     }
 
     /// An explicit workspace host wins over the machine default, provided the machine enables it.
-    nonisolated func startsInHerdr(host: String?) -> Bool {
+    nonisolated func supportsOmpStartModel(host: String?) -> Bool {
         let herdr = MachineEngine.herdr.rawValue
-        let legacyHerdr = engine == .herdr || engine == .herdrBoth
-        guard engineHosts?.contains(herdr) ?? legacyHerdr else { return false }
-        if let host, !host.isEmpty { return host == herdr }
-        return defaultStartHost == herdr
+        let orca = MachineEngine.orca.rawValue
+        let target: String? = if let host, !host.isEmpty { host } else { defaultStartHost }
+        guard let target, target == herdr || target == orca else { return false }
+        if let engineHosts { return engineHosts.contains(target) }
+        if target == herdr { return engine == .herdr || engine == .herdrBoth }
+        return engine == .orca
     }
 }
 
@@ -716,7 +718,30 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     var title: String {
         let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = trimmed?.isEmpty == false ? trimmed : nil
-        return Self.traeCLITitle(name: name, source: source, agent: runtimeAgent, baseURL: baseURL, displayName: label) ?? label ?? name
+        return Self.traeCLITitle(name: name, source: source, agent: runtimeAgent, baseURL: baseURL, displayName: label)
+            ?? Self.builtinTitle(name: name, displayName: label)
+    }
+    /// Canonical product titles shown for built-in launchers when no explicit custom `display_name` is set.
+    static let builtinTitles: [String: String] = [
+        "claude": "Claude Code",
+        "codex": "Codex",
+        "claude-desktop": "Claude Desktop",
+        "codex-app": "Codex App",
+        "traex": Session.traeCLIName,
+        "traecli": Session.traeCLIName,
+        "trae-cli": Session.traeCLIName,
+        "agy": "Antigravity CLI",
+        "omp": "Oh My Pi",
+        "cursor": "Cursor",
+        "gemini": "Gemini CLI",
+    ]
+    static func builtinTitle(name: String, displayName: String? = nil) -> String {
+        let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = trimmed?.isEmpty == false ? trimmed : nil
+        if let label, label.caseInsensitiveCompare(name) != .orderedSame {
+            return label
+        }
+        return builtinTitles[name.lowercased()] ?? label ?? name
     }
     /// Older hubs and runtime providers can supply a legacy label. Keep other labels chosen by the user.
     static func traeCLITitle(name: String, source: String?, agent: String?, baseURL: String?, displayName: String?) -> String? {
@@ -807,16 +832,19 @@ nonisolated struct LauncherHealth: Codable, Hashable, Sendable {
 
 extension Launcher {
     /// Runs Claude Code or Codex, or is an agent runtime's launcher that says it can: what the Persona assistant can
-    /// use (headless `claude -p`, `codex app-server`, the runtime). Other agents (TRAE CLI…) are left out; the node
-    /// refuses them with a reason too.
+    /// use (headless `claude -p`, `codex app-server`, the runtime). Mirrors the hub's assistant catalog and the web's
+    /// `runsAssistant` (#12569): native Claude Code/Codex launchers, Persona-managed providers of those engines,
+    /// managed Codex included, and runtimes that advertise the assistant. Other agents (TRAE CLI…) are left out; the
+    /// node refuses them with a reason too.
     var runsAssistant: Bool {
         if let assistant { return assistant }
         guard baseURL != "(traex)" else { return false }
-        // Older hubs can ignore purpose=assistant. A runtime's provider is not a shell command, and managed Codex
-        // launchers cannot start the assistant's app-server. Keep the shell fallback for hubs without capabilities.
+        // Older hubs can ignore purpose=assistant. A runtime's provider is not a shell command; keep the shell fallback
+        // for hubs without capabilities. The hub's configured kind wins over the node's agent (`runtimeAgent`).
         let managed = source == "persona" || source == LegacyNames.product
-        guard isMachineLauncher || managed, !(managed && agent == "codex") else { return false }
-        return agent == nil || agent == "" || agent == "claude" || agent == "codex"
+        guard isMachineLauncher || managed else { return false }
+        let kind = runtimeAgent
+        return kind == nil || kind == "" || kind == "claude" || kind == "codex"
     }
 }
 
@@ -1117,6 +1145,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var sessionID: String
     var title: String
     var cwd: String
+    /// The node-verified physical directory used for workspace association.
+    var workspaceCWD: String? = nil
     var status: SessionStatus
     var paneID: String?
     var tabID: String?
@@ -1229,6 +1259,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// nil for the assistant's own. Not a host's space (`spaceKind` / `spaceID` are herdr's and Orca's).
     var assistantSpace: String? = nil
     var spaceKind: String?
+    /// Terminal host reported by the hub ("herdr", "herdr-core", "orca", "tern", "rex", "botmux"); optional on older hubs.
+    var host: String? = nil
     var spaceID: String?
     var spaceName: String?
     var spaceIndex: Int?
@@ -1633,6 +1665,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
+        case workspaceCWD = "workspace_cwd"
         case pendingEffort = "pending_effort", effortChangeFailed = "effort_change_failed"
         case hiddenByDirectory = "hidden_by_directory"
         case serviceTier = "service_tier", serviceTiers = "service_tiers"
@@ -1654,7 +1687,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case machineID = "machine_id", sessionID = "session_id", paneID = "pane_id", tabID = "tab_id",
              workspaceID = "workspace_id", agentName = "agent_name", startedByPersona = "started_by_persona", assistant, archived, state,
              assistantSpace = "space",
-             spaceKind = "space_kind", spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
+             spaceKind = "space_kind", host, spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
              slotID = "slot_id", slotName = "slot_name", slotIndex = "slot_index", paneIndex = "pane_index", seenAt = "seen_at", stateSince = "state_since", queued, background, loop, goal, subagents, workflows, ports,
              updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion, suggestionRisky = "suggestion_risky",
              starting, awaitingFirstMessage = "awaiting_first_message", startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
@@ -1674,6 +1707,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         manager = try c.decodeIfPresent(String.self, forKey: .manager)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+        workspaceCWD = try c.decodeIfPresent(String.self, forKey: .workspaceCWD)
         let rawStatus = try c.decodeIfPresent(String.self, forKey: .status)
         status = rawStatus.flatMap(SessionStatus.init(rawValue:)) ?? .unknown
         wasInterrupted = rawStatus == "interrupted"
@@ -1738,6 +1772,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         hiddenByDirectory = try c.decodeIfPresent(Bool.self, forKey: .hiddenByDirectory)
         assistantSpace = try c.decodeIfPresent(String.self, forKey: .assistantSpace).flatMap { $0.isEmpty ? nil : $0 }
         spaceKind = try c.decodeIfPresent(String.self, forKey: .spaceKind)
+        host = try c.decodeIfPresent(String.self, forKey: .host)
         spaceID = try c.decodeIfPresent(String.self, forKey: .spaceID)
         spaceName = try c.decodeIfPresent(String.self, forKey: .spaceName)
         spaceIndex = try c.decodeIfPresent(Int.self, forKey: .spaceIndex)
@@ -2608,13 +2643,61 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     var tasks: [FoldTasks]? = nil
     /// The hub proved this supervision round is user-visible, even while its visibility tools are folded away.
     var supervisionUser: Bool? = nil
+    /// The files the run's successful edits changed (docs/protocol/protocol.md「Folded work」 `fold.changes`):
+    /// always a list from hubs that compute it (empty when the run edited nothing); nil from older hubs.
+    var changes: [FoldChange]? = nil
     /// What the folded items used (#5426). Omitted when none of them carried usage, and from older nodes.
     var usage: [TokenUsage]? = nil
+    /// Declarative UI views returned out-of-band by folded tool results (`Fold.toolViews`, UI version 12).
+    var toolViews: [FoldToolView]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case items, tools, thoughts, until, images, tasks, usage
+        case items, tools, thoughts, until, images, tasks, changes, usage
+        case toolViews = "tool_views"
         case supervisionUser = "supervision_user"
         case throughSeq = "through_seq", throughID = "through_id"
+    }
+}
+
+/// One file a folded run's successful edits changed (`Fold.changes`, docs/protocol/protocol.md「Folded work」):
+/// the lines added and removed summed over the run's edits of that path. `exact` is false when an edit's input was
+/// clipped for good.
+nonisolated struct FoldChange: Codable, Hashable, Sendable {
+    var path: String
+    var add: Int
+    var del: Int
+    var exact: Bool
+
+    init(path: String, add: Int, del: Int, exact: Bool = true) {
+        self.path = path
+        self.add = add
+        self.del = del
+        self.exact = exact
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        add = try c.decodeIfPresent(Int.self, forKey: .add) ?? 0
+        del = try c.decodeIfPresent(Int.self, forKey: .del) ?? 0
+        exact = try c.decodeIfPresent(Bool.self, forKey: .exact) ?? true
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path, add, del, exact
+    }
+}
+
+/// One declarative UI view returned out-of-band by a folded run's tool_result (`Fold.toolViews`, UI version 12).
+nonisolated struct FoldToolView: Codable, Hashable, Sendable {
+    var itemID: String?
+    var toolUseID: String
+    var tool: String
+    var view: ExtensionView
+
+    enum CodingKeys: String, CodingKey {
+        case tool, view
+        case itemID = "item_id", toolUseID = "tool_use_id"
     }
 }
 
@@ -2823,6 +2906,8 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var sourceFingerprint: String? = nil
     /// The model that wrote this assistant item, including tool work after the last words. Older hubs omit it.
     var model: String? = nil
+    /// kind == .toolResult: out-of-band declarative UI views (maps, routes, search pins) drawn in the chat, never shown to models.
+    var toolViews: [ExtensionView]? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage, model
@@ -2830,6 +2915,7 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
         case sourceFingerprint = "source_fingerprint"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id", supervisionUser = "supervision_user"
+        case toolViews = "tool_views"
     }
 
     /// The text without the line the hub adds where it cut it (the app offers the whole text itself).
@@ -3018,6 +3104,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var ownerProposal: Bool?
     var noExpiry: Bool?
     var ownerApprovalPhrases: [String]?
+    /// True when the card has no interactive computer terminal or UI to hand back to; absent/false keeps hand-back.
+    var noHandBack: Bool?
     var ownerApprovalPhrase: String? {
         guard kind == .permission, ownerProposal == true, let approvalBatchID, !approvalBatchID.isEmpty,
               !machineID.isEmpty, !sessionID.isEmpty,
@@ -3068,7 +3156,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
              agentID = "agent_id", agentType = "agent_type", foldedUnderText = "folded_under",
              foldedUnderMachineIDText = "folded_under_machine_id", foldedAsText = "folded_as",
              foldedSideText = "folded_side", approvalBatchID = "approval_batch_id", approvalItemID = "approval_item_id",
-             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases"
+             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases",
+             noHandBack = "no_hand_back"
     }
 }
 
@@ -3614,7 +3703,7 @@ nonisolated enum DeleteSessionText {
 /// Where an agent was opened (`Session.source`, #2526).
 nonisolated enum SessionSource: String, Sendable {
     case feishu, terminal
-    var label: String { self == .feishu ? String(localized: "Lark Group [Models e86099]") : String(localized: "Terminal") }
+    var label: String { self == .feishu ? String(localized: "Lark Group [Models e86099]") : String(localized: "In a Tab") }
 }
 
 nonisolated extension Int64 {

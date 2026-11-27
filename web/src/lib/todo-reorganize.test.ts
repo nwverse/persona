@@ -15,6 +15,7 @@ const {
   eligibleParentTargets,
   reorganizeDirectionOptions,
   reorganizeTodos,
+  resolveDirectionSections,
 } = await import("./todo-reorganize");
 
 const makeTodo = (id: string, title: string, extra: Partial<Todo> = {}): Todo => ({
@@ -228,6 +229,112 @@ describe("todo-reorganize helpers (#14758)", () => {
         }),
       );
       expect(res).toEqual({ updated, transferred_ids: ["t1"] });
+    });
+  });
+
+  describe("resolveDirectionSections (#15653)", () => {
+    const counts = { working: 1, needs_you: 0, stuck: 0, review: 0 };
+    const tree: DirectionTree = {
+      directions: [
+        {
+          id: "dir-infra",
+          name: "Infrastructure",
+          counts,
+          running: true,
+          tasks: [
+            { id: "t1", title: "Infra A", state: "working" },
+            { id: "t2", title: "Moved to Product", state: "working" },
+          ],
+        },
+        {
+          id: "dir-empty",
+          name: "New Initiative",
+          counts: { working: 0, needs_you: 0, stuck: 0, review: 0 },
+          running: false,
+          tasks: [],
+        },
+        {
+          id: "dir-product",
+          name: "Product",
+          counts,
+          running: false,
+          tasks: [{ id: "t3", title: "Product Native", state: "working" }],
+        },
+        {
+          id: "main",
+          name: "",
+          secretary: true,
+          counts,
+          running: false,
+          tasks: [{ id: "t4", title: "Secretary Task", state: "working" }],
+        },
+      ],
+    };
+
+    const resolveName = (d: DirectionTree["directions"][number]) => (d.secretary ? "Secretary" : d.name || d.id);
+
+    it("ignores explicit direction_id and keeps legacy directionTree grouping when todosV2 is false", () => {
+      const openTodos = [
+        makeTodo("t1", "Infra A"),
+        makeTodo("t2", "Moved to Product", { direction_id: "dir-product" }),
+        makeTodo("t3", "Product Native"),
+        makeTodo("t4", "Secretary Task", { direction_id: "dir-unlisted" }),
+      ];
+
+      const sections = resolveDirectionSections({
+        tree,
+        openTodos,
+        todosV2: false,
+        resolveDirectionName: resolveName,
+      });
+
+      expect(sections.map((s) => [s.d.id, s.todos.map((td) => td.id)])).toEqual([
+        ["dir-infra", ["t1", "t2"]],
+        ["dir-product", ["t3"]],
+        ["main", ["t4"]],
+      ]);
+    });
+
+    it("prioritizes explicit direction_id over runtime tree membership when todosV2 is true, with fallback and synthetic sections", () => {
+      const openTodos = [
+        makeTodo("t1", "Infra A"),
+        makeTodo("t2", "Moved to Product", { direction_id: "dir-product" }),
+        makeTodo("t3", "Product Native", { direction_id: "dir-product" }),
+        makeTodo("t4", "Secretary Task"),
+        makeTodo("t5", "Into Empty Dir", { direction_id: "dir-empty" }),
+        makeTodo("t6", "Into Unlisted Dir", { direction_id: "dir-custom" }),
+      ];
+
+      const sections = resolveDirectionSections({
+        tree,
+        openTodos,
+        todosV2: true,
+        resolveDirectionName: resolveName,
+        resolveFallbackName: (id) => (id === "dir-custom" ? "Custom Direction" : undefined),
+      });
+
+      expect(sections.map((s) => [s.d.id, s.title, s.todos.map((td) => td.id)])).toEqual([
+        ["dir-infra", "Infrastructure", ["t1"]],
+        ["dir-empty", "New Initiative", ["t5"]],
+        ["dir-product", "Product", ["t3", "t2"]],
+        ["dir-custom", "Custom Direction", ["t6"]],
+        ["main", "Secretary", ["t4"]],
+      ]);
+    });
+
+    it("falls back to direction_id itself as title when no fallback name is known", () => {
+      const openTodos = [makeTodo("t-orphan", "Orphan", { direction_id: "dir-raw-id" })];
+
+      const sections = resolveDirectionSections({
+        tree,
+        openTodos,
+        todosV2: true,
+        resolveDirectionName: resolveName,
+      });
+
+      expect(sections.map((s) => [s.d.id, s.title, s.todos.map((td) => td.id)])).toEqual([
+        ["dir-raw-id", "dir-raw-id", ["t-orphan"]],
+      ]);
     });
   });
 });

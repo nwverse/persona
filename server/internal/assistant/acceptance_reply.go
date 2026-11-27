@@ -68,7 +68,7 @@ func (s *Service) conclusionQuestion(ctx context.Context, ev *botcard.MessageEve
 	l := s.botLang(ctx)
 	if err := botAllowed(l, features, target); err != nil {
 		s.chat().Note(ctx, larkhost.Target{}, msg.MessageID, err.Error())
-	} else if err := s.botSend(ctx, ev, *content, target); err != nil {
+	} else if err := s.larkModule().Send(ctx, ev, *content, target); err != nil {
 		s.logf("bots: conclusion question for task %s: %v", id, err)
 		s.chat().Note(ctx, larkhost.Target{}, msg.MessageID, i18n.T(l, "assistant-feishu.not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
 	}
@@ -131,7 +131,7 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 			s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.accept_decided_not_sent", i18n.Args{"error": why}))
 		} else if result.taken {
 			s.chat().Note(ctx, larkhost.Target{}, messageID, acceptedNote(l, &ask))
-		} else { // not this round that waits: answered as its button answers (feishu_card_actions.go), not swallowed
+		} else { // not this round that waits: answered as its button answers (the lark module's card_actions.go), not swallowed
 			s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
 		}
 		return true
@@ -322,12 +322,29 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		b.mu.Unlock()
 		return acceptResult{}, nil
 	}
+	if ownerCheck && !decideAsk(a) && !a.Conclusion && t.DoneAt == nil {
+		if err := s.investigationCloseError(ctx, t); err != nil {
+			b.mu.Unlock()
+			return acceptResult{}, err
+		}
+	}
 	completeDismissal := func() {}
 	if a.OutsideID != "" {
 		asked := a.AskedAt.UTC().Format(timeKeyLayout)
 		recommend := a.Recommend
 		b.mu.Unlock()
 		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: recommend}, byDefault)
+	}
+	if ownerCheck && !resumeOwnerPass {
+		if work := s.unconfirmedTaskClose(ctx, t); work != nil {
+			b.mu.Unlock()
+			return acceptResult{}, errCloseNotConfirmed
+		}
+	}
+	if resumeOwnerPass {
+		// The accepted ask already records the owner's approval. Recovery may
+		// finish its partial write without issuing a second confirmation.
+		ctx = context.WithValue(ctx, ownerCloseKey{}, ownerCloseConfirmation{todo: t.ID, reopened: t.ReopenedAt, recovering: true})
 	}
 	if todoOK && !byDefault {
 		var err error
@@ -365,7 +382,7 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			closed := false
 			if t.DoneAt == nil {
 				var err error
-				closed, err = s.reviewDoneTodo(ctx, id, acceptedNote(s.botLang(ctx), &cp), true)
+				closed, err = s.reviewDoneTodoWithSupervision(ctx, id, acceptedNote(s.botLang(ctx), &cp), true, nil, true)
 				if err != nil {
 					b.mu.Lock()
 					if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
@@ -374,6 +391,9 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 					}
 					b.mu.Unlock()
 					s.askChanged(ctx)
+					if isInvestigationGuardError(err) {
+						return acceptResult{}, err
+					}
 					return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
 				}
 			}

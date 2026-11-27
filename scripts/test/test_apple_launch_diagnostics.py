@@ -690,9 +690,18 @@ class LiveLaunchTests(unittest.TestCase):
                 [sys.executable, "-c", {child!r}] if command[0] == "/usr/bin/log" else command, **kwargs))
             import signal, time
             deadline = time.monotonic() + 5
-            while not root.joinpath("nested.pid").exists() and time.monotonic() < deadline:
+            nested_pid = None
+            while time.monotonic() < deadline:
+                try:
+                    candidate = int(root.joinpath("nested.pid").read_text())
+                    if candidate > 0:
+                        nested_pid = candidate
+                        break
+                except (FileNotFoundError, ValueError):
+                    pass  # creation and writing the PID are separate events
                 time.sleep(0.005)
-            nested_pid = int(root.joinpath("nested.pid").read_text())
+            if nested_pid is None:
+                raise AssertionError("nested PID was not written within five seconds")
             root.joinpath("processes.json").write_text(json.dumps({{
                 "stream": live.process.pid, "nested": nested_pid,
                 "watchdog": live.reaper.pid, "parent": os.getpid()}}))

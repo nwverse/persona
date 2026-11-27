@@ -25,8 +25,10 @@ import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
 import { supervisorHeld } from "./supervisor-held";
 import { inFolderFilter } from "./inbox-folders";
-import { actedText, actOnSuggestion, statusOf, type ChainEntry, type InboxHandling, type InboxRelated, type InboxStatus, type InboxSuggestion, type InboxSuggestionAttempt, type SuggestionAction } from "./inbox-events";
-import type { MailAccount } from "./mail";
+import type { ChainEntry, InboxHandling, InboxRelated, InboxStatus, InboxSuggestion, InboxSuggestionAttempt, SuggestionAction } from "./inbox-events";
+import { actedText, actOnSuggestion, statusOf } from "./inbox-suggestion"; // not inbox-events.ts: that one is the Inbox page's
+import type { MailAccount } from "./agent-settings";
+import type { ExternalRef } from "../features/external-sources/api";
 
 // Not the Inbox's: re-exported from their own modules until their importers import them from there (#11538).
 export { withToken } from "./media-url";
@@ -141,8 +143,15 @@ export interface InboxItem {
   moment?: { post_id: string; notice?: string; reply_to?: string; my_post?: boolean; post_text?: string };
   /** A connector's thread (GitHub…): `source` is the connector's id, `account_name` its name. */
   connector?: InboxConnector;
+  /** The hub's normalized source followed by its ancestors in lookup order. */
+  external_path?: ExternalRef[];
   /** Only in GET /inbox/{id}: the conversation as text. */
   context?: string;
+  /** Only in GET /inbox/{id}, for a mail: whether the hub clipped the newest mail's text when it stored `context`.
+   *  Absent: the hub does not know (or is from before it sent this). Read it through storedMailClipping (lib/mail-stored.ts). */
+  mail_body_truncated?: boolean;
+  /** Only in GET /inbox/{id}: the knowledge base chat it came from, when there is one (#15356). */
+  kb_chat?: { id: string; path?: string } | null;
   agent?: InboxAgent;
   /** Deterministic PR/Issue auto-forward status and linked to-do metadata (#12492). */
   todo_forward?: InboxTodoForward;
@@ -1416,7 +1425,7 @@ export async function setAllDone(items: InboxItem[], action: BulkAction | boolea
 /** "Send": the hub replies in the chat / by mail / in the document (moving the rows' status in `changes` first) and
  * files the item as done. Filed at once; a failure puts the item back and keeps the text and the unticked changes for
  * the draft card and dialog. */
-export async function sendReply(item: InboxItem, text: string, changes: DocChange[] = []): Promise<boolean> {
+export async function sendReply(item: InboxItem, text: string, changes: DocChange[] = [], expectedSender?: "bot" | "user"): Promise<boolean> {
   const key = itemKey(item);
   if (state.sending.includes(key)) return false;
   const before = listed(item);
@@ -1430,7 +1439,7 @@ export async function sendReply(item: InboxItem, text: string, changes: DocChang
   unsentReplies.delete(key);
   droppedChanges.delete(key);
   try {
-    const r = await api<InboxItem>(`${itemPath(item.id)}/reply`, { method: "POST", json: { text, changes: changes.length ? changes : undefined }, headers: itemRequest(item) });
+    const r = await api<InboxItem>(`${itemPath(item.id)}/reply`, { method: "POST", json: { text, changes: changes.length ? changes : undefined, expected_sender_identity: expectedSender }, headers: itemRequest(item) });
     const hub = r?.id === item.id ? keepStamp(r, item) : undefined;
     settleMark(key, mark, true, hub);
     if (hub) replaceItem(withPending([hub])[0]);

@@ -50,7 +50,7 @@ func TestHealthIntakePageTotalsPaginationAndVersions(t *testing.T) {
 	for _, kind := range []string{"water", "protein"} {
 		for _, days := range []int{7, 30} {
 			v := sumHealthIntake(rows, c, now, time.UTC, days)
-			page := drawIntakePage(intakePageState{Kind: kind, Days: days}, c, v, waterReminderState{Reason: "no_device"}, now, time.UTC, "en", 4, true)
+			page := drawIntakePage(intakePageState{Kind: kind, Days: days}, c, v, waterReminderState{Reason: "no_device"}, now, time.UTC, "en", 4, true, true)
 			if err := wire.CheckView(&page); err != nil {
 				t.Fatal(err)
 			}
@@ -238,7 +238,7 @@ func TestHealthIntakePageStatusAndLocalization(t *testing.T) {
 			for _, edit := range []bool{false, true} {
 				c := defaultHealthIntakeSettings()
 				v := sumHealthIntake(nil, c, time.Now(), time.UTC, 7)
-				page := drawIntakePage(intakePageState{Kind: kind, Days: 7, Edit: edit}, c, v, waterReminderState{}, time.Now(), time.UTC, lang, 4, true)
+				page := drawIntakePage(intakePageState{Kind: kind, Days: 7, Edit: edit}, c, v, waterReminderState{}, time.Now(), time.UTC, lang, 4, true, true)
 				if err := wire.CheckView(&page); err != nil {
 					t.Fatal(err)
 				}

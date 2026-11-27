@@ -13,6 +13,10 @@ import kotlinx.coroutines.flow.*
 import persona.core.designsystem.Haptic
 import persona.core.designsystem.ListTapMotion
 import persona.core.designsystem.ListTapMotionKind
+import persona.feature.chat.InteractionReply
+import persona.feature.chat.InteractionSubmission
+import persona.feature.chat.classifyInteractionFailure
+import persona.feature.chat.isCommandInputPermission
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -29,6 +33,18 @@ private data class HeldInputs(val settings: AgentListSettings, val group: GroupF
                               val visible: SessionKey?, val held: HeldChats)
 private data class ListInputs(val settings: AgentListSettings, val group: GroupFilter?, val assistant: persona.core.contracts.api.CurrentAssistant?,
                               val visible: SessionKey?, val held: HeldChats, val workspaces: List<AgentWorkspace>)
+private data class SeenVisitScope(
+    val group: GroupFilter?, val assistantHub: String?, val assistant: String?, val machine: String, val quick: AgentQuickFilter,
+    val range: AgentRange,
+)
+private data class SeenVisitRow(val place: AgentSeenPlace, val version: String)
+private data class SeenVisit(
+    val scope: SeenVisitScope? = null,
+    val candidates: Map<String, SeenVisitRow> = emptyMap(),
+    /** Mark All as Seen suppresses that version while the hub returns its receipt. */
+    val clearedVersions: Map<String, String> = emptyMap(),
+    val revision: Int = 0,
+)
 
 /** What the hub's paged search matches: the search's words, not its conditions ([AgentQuery]), which it does not read. */
 internal fun hubQuery(query: String): String = AgentQuery.parse(query).text.take(256)
@@ -129,6 +145,7 @@ internal class AgentsViewModel(
     private val messageIds = mutableMapOf<String, String>()
     private var changing = false
     private val settings = MutableStateFlow(AgentListSettings())
+    private val seenVisit = MutableStateFlow(SeenVisit())
     private val workspaceCatalog = AgentsWorkspaceCatalog()
     private val workspaceRefresh = MutableStateFlow(0)
 
@@ -181,6 +198,8 @@ internal class AgentsViewModel(
     private var previousContext: List<Any?>? = null
     private val _delivery = MutableStateFlow<Map<String, RequestDelivery>>(emptyMap())
     val delivery = _delivery.asStateFlow()
+    private val _commandInputErrors = MutableStateFlow<Map<String, InteractionReply>>(emptyMap())
+    val commandInputErrors = _commandInputErrors.asStateFlow()
     private val _requestHistory = MutableStateFlow<List<Interaction>>(emptyList())
     val requestHistory = _requestHistory.asStateFlow()
     private val _refreshing = MutableStateFlow(false)
@@ -273,8 +292,10 @@ internal class AgentsViewModel(
     private val projectedPage = combine(renamer?.project(repository.sessions) ?: repository.sessions, repository.machines,
         listPreferences.combine(repository.listStatus) { prefs, status -> prefs to status },
         combine(settings, groupFilter, assistant, visibleChat, heldChat.combine(finishedChat, ::HeldChats)) { settings, group, assistant, visible, held -> HeldInputs(settings, group, assistant, visible, held) }
-            .combine(workspaceCatalog.rows) { inputs, workspaces -> ListInputs(inputs.settings, inputs.group, inputs.assistant, inputs.visible, inputs.held, workspaces) },
-        combine(operationState, todosFlow.combine(directionsFlow, ::Pair), todosSupportedFlow, ::Triple)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant, visible, held, workspaces), (ops, todosAndTree, todosSupported) ->
+            .combine(workspaceCatalog.rows) { inputs, workspaces -> ListInputs(inputs.settings, inputs.group, inputs.assistant, inputs.visible, inputs.held, workspaces) }
+            .combine(seenVisit, ::Pair),
+        combine(operationState, todosFlow.combine(directionsFlow, ::Pair), todosSupportedFlow, ::Triple)) { hubSessions, hubMachines, (localPrefs, pagination), (inputs, visit), (ops, todosAndTree, todosSupported) ->
+        val (settings, group, assistant, visible, held, workspaces) = inputs
         val (todos, directions) = todosAndTree
         val now = Instant.now()
         // The current assistant's (the hub's lists are every manager's, each row with its own).
@@ -286,12 +307,17 @@ internal class AgentsViewModel(
         val machines = if (group == null) everyMachine else everyMachine.filter { group.admits(it.id) }
         val sessions = ops.project(source)
         val grouping = resolvedGrouping(settings.pendingGrouping ?: localPrefs.grouping, todosSupported)
+        val visitScope = SeenVisitScope(group, assistant?.group, assistant?.id, settings.machineFilter, settings.quick, localPrefs.range)
+        val keepSeen = localPrefs.seenRows == AgentSeenRows.Stay
+        val currentVisit = visit.takeIf { keepSeen && it.scope == visitScope }
+        val cleared = currentVisit?.clearedVersions.orEmpty()
         val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes,
-            grouping = grouping, foldedTabs = settings.pendingFoldedTabs ?: localPrefs.foldedTabs)
+            grouping = grouping, foldedTabs = settings.pendingFoldedTabs ?: localPrefs.foldedTabs,
+            seen = if (cleared.isEmpty()) localPrefs.seen else localPrefs.seen + cleared)
         // The shell records these before its read receipt, so a conflated Idle snapshot cannot erase an Unread entry, nor
         // the hub's list without the flag a Just finished one (#9786): while its chat is open the row keeps that place.
-        val heldSession = held.unread?.takeIf { it == visible }?.path
-        val finishedSession = held.finished?.takeIf { it == visible }?.path
+        val heldSession = held.unread?.takeIf { !keepSeen && it == visible }?.path
+        val finishedSession = held.finished?.takeIf { !keepSeen && it == visible }?.path
         val rows = sessions.map { it.listSession(prefs).copy(hierarchyKnown = repository.supportsFeature(it.machineId, "sessions_hierarchy"))
             .let { row -> if (finishedSession != null && row.id == finishedSession) row.heldAsFinished() else row } }
         // A partial machine snapshot must not hide sessions in machine grouping.
@@ -319,10 +345,35 @@ internal class AgentsViewModel(
             prefs.pins, todos, directions, effective.workspaces)
         if (context != previousContext) previous = null
         previousContext = context
-        val projectionSettings = projection.copy(quick = effective.quick, kept = effective.kept)
+        val effectiveScope = visitScope.copy(quick = effective.quick)
+        val candidates = currentVisit?.candidates?.takeIf { effectiveScope == visitScope }.orEmpty().toMutableMap()
+        if (candidates.isNotEmpty()) for (row in rows) {
+            val candidate = candidates[row.id] ?: continue
+            if ((!row.isQuiet && !row.unseen) || row.session.readVersion != candidate.version) candidates.remove(row.id)
+        }
+        val visitPlaces = candidates.mapValues { it.value.place }
+        val projectionSettings = projection.copy(quick = effective.quick, kept = effective.kept, heldSeen = visitPlaces)
         val sorted = scopedAgentList(rows, knownMachines, prefs, projectionSettings, todos, openedRowsOfTheirOwn(previous, effective.kept), directions,
             listAdapter, held = heldSession, now = now)
         val result = retainOpenedRows(sorted, previous, effective.kept).also { previous = it }
+        if (keepSeen) {
+            for (row in result.groups.asSequence().flatMap { it.visibleRows.asSequence() }
+                .filterNot { it.isNestedSubtask || cleared[it.id] == it.session.readVersion }
+            ) {
+                val place = when {
+                    row.state == AgentState.Unread -> AgentSeenPlace.Unread
+                    row.showsJustFinished && !prefs.mutes.mutes(row) -> AgentSeenPlace.JustFinished
+                    else -> continue
+                }
+                candidates[row.id] = SeenVisitRow(place, row.session.readVersion)
+            }
+            val pending = cleared.takeIf { effectiveScope == visitScope }.orEmpty()
+            val next = if (candidates.isEmpty() && pending.isEmpty()) SeenVisit(revision = visit.revision)
+                else visit.copy(scope = effectiveScope, candidates = candidates, clearedVersions = pending)
+            seenVisit.compareAndSet(visit, next)
+        } else if (visit.scope != null) {
+            seenVisit.compareAndSet(visit, SeenVisit(revision = visit.revision + 1))
+        }
         // The chips count what each computer would show under the current range, search and quick filter.
         val everywhere = scopedAgentList(rows, knownMachines, prefs, projectionSettings.copy(machineFilter = "", kept = emptySet()), todos,
             directions = directions, now = now)
@@ -333,7 +384,9 @@ internal class AgentsViewModel(
             // one throttled build behind, and a page built before the load must not say the list is in.
             loaded = pagination.loaded).let { state ->
             // Computer projects use the same held marker as the main projection; ordinary space members stay as before.
-            val spaces = agentSpaces(rows.map { it.copy(heldInList = it.id == heldSession) })
+            val spaces = agentSpaces(rows.map {
+                it.copy(heldInList = it.id == heldSession).placingSeenRow(visitPlaces[it.id], prefs.mutes)
+            })
             state.copy(spaces = spaces, spacesById = spacesByGroup(result, prefs.grouping, spaces), directionsAvailable = directions != null,
                 tapEpoch = maxOf(effective.tapEpoch, ops.tapEpoch), hiddenSessions = hiddenSessions.mapTo(mutableSetOf()) { it.key })
         }
@@ -360,12 +413,15 @@ internal class AgentsViewModel(
         else {
             val counts = status.counts
             val machineCounts = status.machineCounts
+            // A parent marked seen locally stays counted Unread while a side is unread; once held sides are seen, drop immediately (#13524).
+            val clearedUnread = unreadClearedBySeen(projected.sessions, projected.sessions.map { it.listSession(projected.preferences).session })
             val quickCounts = AgentQuickFilter.entries.associateWith { filter ->
                 when (filter) {
                     // The hub counts them among working and apart too (#6045): Working leaves them out, as iOS.
                     AgentQuickFilter.Feishu -> counts.larkGroups(projected.list.counts)
                     AgentQuickFilter.BackgroundWaiting -> counts.backgroundWaiting
                     AgentQuickFilter.Working -> ((counts.state[AgentState.Working.wire] ?: 0) - counts.backgroundWaiting).coerceAtLeast(0)
+                    AgentQuickFilter.Unread -> ((counts.state[AgentState.Unread.wire] ?: 0) - clearedUnread).coerceAtLeast(0)
                     else -> filter.state?.let { counts.state[it.wire] ?: 0 }
                         ?: if (filter == AgentQuickFilter.All) counts.total else projected.list.counts[filter] ?: 0
                 }
@@ -394,8 +450,10 @@ internal class AgentsViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(0), AgentsPageState())
 
     /** Network filters reset the frozen cursor; the repository discards responses from an older selection. */
-    private val remoteFilter = combine(settings, groupFilter, listPreferences.map { it.hiddenBotmuxHubs }.distinctUntilChanged()) { settings, group, hidden ->
-        SessionListFilter(state = settings.quick.state?.wire, machineId = settings.machineFilter.takeIf { it.isNotEmpty() },
+    private val remoteFilter = combine(settings, groupFilter, listPreferences.map { it.hiddenBotmuxHubs to it.seenRows }.distinctUntilChanged()) { settings, group, (hidden, seenRows) ->
+        // The Unread view can keep a row after the hub counts it as seen. Its complete membership includes those rows.
+        val state = settings.quick.state?.wire.takeUnless { settings.quick == AgentQuickFilter.Unread && seenRows == AgentSeenRows.Stay }
+        SessionListFilter(state = state, machineId = settings.machineFilter.takeIf { it.isNotEmpty() },
             // Range, assistant exclusion, host and preference membership are local until #6108 is implemented.
             // A generic server total is not the number of rows this page admits.
             query = hubQuery(settings.query), requiresCompleteMembership = true,
@@ -508,6 +566,8 @@ internal class AgentsViewModel(
                 }
                 previous = pending
                 _delivery.update { RequestDeliveries.prune(it, pending) }
+                val pendingIds = pending.mapTo(mutableSetOf()) { it.id }
+                _commandInputErrors.update { errors -> errors.filterKeys { it in pendingIds } }
             }
         }
         if (operations != null) {
@@ -525,11 +585,13 @@ internal class AgentsViewModel(
     }
 
     fun filter(filter: AgentQuickFilter) {
+        resetSeenVisit()
         previous = null
         settings.update { it.copy(quick = filter, kept = emptySet()) }
     }
     fun sort(sort: AgentSort) = localChange { previous = null; preferences.sort(sort) }
     fun range(range: AgentRange) = localChange {
+        resetSeenVisit()
         previous = null
         settings.update { it.copy(quick = AgentQuickFilter.All, kept = emptySet()) }
         preferences.range(pairingScope, range)
@@ -565,6 +627,7 @@ internal class AgentsViewModel(
     }
 
     fun machine(id: String, animate: Boolean = false) {
+        resetSeenVisit()
         previous = null
         // The chip clears with the list (ChatsView.swift:1646). The menu's picker does not (AgentsMenus.swift:141).
         if (animate) writeTap(ListTapMotionKind.State) { it.copy(machineFilter = id, kept = emptySet()) }
@@ -572,6 +635,7 @@ internal class AgentsViewModel(
     }
     /** Shows one hub group (or every group); a computer chip of another group is let go. */
     fun group(value: GroupFilter?) {
+        resetSeenVisit()
         previous = null
         groupFilter.value = value
         settings.update { if (value.admits(it.machineFilter) || it.machineFilter.isEmpty()) it else it.copy(machineFilter = "", kept = emptySet()) }
@@ -662,6 +726,14 @@ internal class AgentsViewModel(
         change(session.machineId, R.string.agents_notice_renamed) {
             if (renamer != null) renamer.rename(session, edit.title, edit.tabName)
             else it.session(session, AgentSessionEdit(title = edit.title, tab = edit.tabName))
+        }
+    }
+    fun renameUnified(session: Session, name: String) {
+        val edit = SessionRename.unifiedChanges(session, name)
+        if (!edit.changed) return
+        change(session.machineId, R.string.agents_notice_renamed) {
+            if (renamer != null) renamer.renameUnified(session, name)
+            else it.session(session, AgentSessionEdit(title = edit.title, tab = edit.tabName), unified = true)
         }
     }
     fun renameSpace(session: Session, name: String) {
@@ -783,12 +855,54 @@ internal class AgentsViewModel(
             catch (_: Exception) { if (succeeded) _notice.value = AgentText(R.string.agents_notice_saved_stale) }
         }
     }
-    fun opened(row: AgentSession) {
-        if (page.value.settings.quick != AgentQuickFilter.All) settings.update { it.copy(kept = it.kept + row.id) }
+    fun opened(row: AgentSession) = keepQuickRows(listOf(row))
+
+    fun markRead(rows: List<AgentSession>, clear: Boolean = false, release: List<AgentSession> = rows) = localChange {
+        if (clear && page.value.preferences.seenRows == AgentSeenRows.Stay) {
+            val versions = rows.associate { it.id to it.session.readVersion }
+            clearSeen(release.mapTo(mutableSetOf(), AgentSession::id), versions)
+            try {
+                preferences.markSeen(rows.map { it.session })
+            } finally {
+                seenVisit.update { current -> current.copy(clearedVersions =
+                    current.clearedVersions.filterNot { (id, version) -> versions[id] == version }) }
+            }
+        } else {
+            keepQuickRows(rows)
+            preferences.markSeen(rows.map { it.session })
+        }
     }
-    fun markRead(rows: List<AgentSession>) = localChange {
-        if (page.value.settings.quick != AgentQuickFilter.All) settings.update { it.copy(kept = it.kept + rows.map { row -> row.id }) }
-        preferences.markSeen(rows.map { it.session })
+
+    private fun keepQuickRows(rows: List<AgentSession>) {
+        val current = page.value
+        if (current.settings.quick == AgentQuickFilter.All) return
+        val kept = rows.filterNot { current.preferences.seenRows == AgentSeenRows.Stay && (it.unseen || it.seenPlace != null) }
+            .map(AgentSession::id)
+        settings.update { it.copy(kept = it.kept + kept) }
+    }
+
+    fun clearSeen(ids: Set<String>, versions: Map<String, String> = emptyMap()) {
+        val shown = page.value
+        val owner = assistant.value
+        val scope = SeenVisitScope(groupFilter.value, owner?.group, owner?.id, shown.settings.machineFilter,
+            shown.settings.quick, shown.preferences.range)
+        seenVisit.update { current ->
+            current.copy(scope = scope, candidates = current.candidates.takeIf { current.scope == scope }.orEmpty() - ids,
+                clearedVersions = current.clearedVersions.takeIf { current.scope == scope }.orEmpty() + versions,
+                revision = current.revision + 1)
+        }
+        settings.update { it.copy(kept = it.kept - ids) }
+        previous = null
+    }
+
+    private fun resetSeenVisit() {
+        val previousVisit = seenVisit.getAndUpdate { if (it.scope == null) it else SeenVisit(revision = it.revision + 1) }
+        settings.update { it.copy(kept = it.kept - previousVisit.candidates.keys) }
+        previous = null
+    }
+
+    fun showSeenRowsNotice() = localChange {
+        if (preferences.noticeSeenRows()) _notice.value = AgentText(R.string.agents_seen_rows_notice)
     }
     /** The grouping whose stored folds [settings] holds; folds are read again only when it changes (#4338 A6). */
     private var foldsGrouping: AgentGrouping? = null
@@ -988,6 +1102,7 @@ internal class AgentsViewModel(
     }
     fun refresh() {
         if (_refreshing.value) return
+        resetSeenVisit()
         workspaceRefresh.update { it + 1 }
         viewModelScope.launch {
             _refreshing.value = true
@@ -1012,6 +1127,7 @@ internal class AgentsViewModel(
         }
         val result = AnswerBuilder.build(latest, action, draft, AnswerContext(fullPlanRead = fullPlanRead))
         val resolution = result.resolution ?: return
+        _commandInputErrors.update { it - latest.id }
         _delivery.update { it + (interaction.id to RequestDelivery.Sending) }
         viewModelScope.launch {
             try {
@@ -1019,7 +1135,7 @@ internal class AgentsViewModel(
                     interactions.replyOwnerApproval(latest, phrase)
                     ResolveOutcome()
                 } ?: interactions.resolveOutcome(interaction.id, resolution,
-                    handoffCard = interaction.isSecretHandoff && resolution.allow == true)
+                    handoffCard = (latest.isSecretHandoff || latest.secretRun?.delivery == "env") && resolution.allow == true)
                 _delivery.update { it + (interaction.id to RequestDelivery.Sent) }
                 val effective = if (outcome.already) outcome.resolution else resolution
                 // The notice outlives the card: it keeps the answer without a password card's typed value (#1581).
@@ -1030,6 +1146,17 @@ internal class AgentsViewModel(
                 _delivery.update { it + (interaction.id to RequestDelivery.Unknown) }
                 throw e
             } catch (e: Exception) {
+                if (latest.isCommandInputPermission) {
+                    val problem = classifyInteractionFailure(e, keepUnconfirmedReason = true)
+                    if (!problem.withdraw) {
+                        _commandInputErrors.update { it + (latest.id to problem) }
+                        if (problem.submission == InteractionSubmission.Refused) {
+                            _delivery.update { it + (latest.id to RequestDelivery.Retry) }
+                            problem.submission.haptic?.let(_haptics::tryEmit)
+                            return@launch
+                        }
+                    }
+                }
                 // A lost acknowledgement must never cause an automatic duplicate approval.
                 _delivery.update { it + (interaction.id to RequestDelivery.Unknown) }
                 answerFailureHaptic(e)?.let(_haptics::tryEmit)

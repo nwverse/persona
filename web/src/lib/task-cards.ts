@@ -1,6 +1,7 @@
 import type { FeedItem, TaskPlan } from "./feed";
 import { todoBucket, type TodoBucket } from "./todo-triage";
-import type { SessionLookup, Todo } from "./todos";
+import { reviewState } from "./supervision";
+import { taskReviewDecisionAsk, type SessionLookup, type Todo } from "./todos";
 import type { Session } from "./types";
 
 /** Feed upserts identify a plan slot before and after a to-do is attached to it. */
@@ -27,6 +28,12 @@ export function upsertTaskCards(previous: TaskCardMetadata[], incoming?: TaskCar
     }
   }
   return [...cards.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id));
+}
+
+/** Whether a task belongs in this conversation's tray: its origin, or a review this conversation supervises. */
+export function taskInConversation(todo: Todo, conversation: string, everyTodo = false): boolean {
+  const supervisedReview = todo.supervision?.supervisor === conversation && (reviewState(todo) === "user_check" || Boolean(taskReviewDecisionAsk(todo)));
+  return everyTodo || todo.origin === conversation || supervisedReview;
 }
 
 /** Legacy hubs keep their audit events. Fold those events into the same plan-slot identities. `everyTodo`: the main
@@ -80,7 +87,7 @@ export function taskCardSlots(conversation: string, metadata: TaskCardMetadata[]
     });
   }
   for (const todo of todos) {
-    if ((!everyTodo && todo.origin !== conversation) || linked.has(todo.id)) continue;
+    if (!taskInConversation(todo, conversation, everyTodo) || linked.has(todo.id)) continue;
     const id = `task:${todo.id}`;
     if (!slots.has(id)) slots.set(id, { id, todo_id: todo.id, plan_id: todo.plan_id, at: todo.created_at, updated_at: todo.updated_at, state: "not_started" });
   }

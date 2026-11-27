@@ -32,8 +32,13 @@ type HealthIntakeRow struct {
 // Only the default manager's hello enables the health_intake feature in the hub's hello.
 const CapabilityHealthIntake = "health_intake"
 
+// CapabilityHealthItems: the manager keeps the owner's ordered health items and revision.
+const CapabilityHealthItems = "health_items"
+
 func init() {
 	Routes = append(Routes,
+		"GET /api/v1/assistant/health/items",
+		"PUT /api/v1/assistant/health/items",
 		"GET /api/v1/assistant/health/intake",
 		"POST /api/v1/assistant/health/intake",
 		"DELETE /api/v1/assistant/health/intake/{id}",

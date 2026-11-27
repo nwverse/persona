@@ -133,9 +133,15 @@ func (s *Service) ownerHeard(session string) {
 	}
 }
 
+// domainTrackKinds is the in-process source of extension-owned track kinds.
+type domainTrackKinds interface {
+	DomainTrackKindsJSON(context.Context) (json.RawMessage, error)
+}
+
 // SetExtensions gives the service the extensions' tools (before Run).
 func (s *Service) SetExtensions(e ExtensionTools) {
 	s.ext = e
+	s.trackKindsExt, _ = e.(domainTrackKinds)
 	s.heard, _ = e.(ownerHeard)
 	if r, ok := e.(launcherSecrets); ok {
 		s.refs = r
@@ -196,4 +202,6 @@ func (s *Service) mainMachine(ctx context.Context) string { return s.settings(ct
 func (s *Service) userTZ() string { return s.settings(context.Background()).Timezone }
 
 // toolsNow are the assistant's tools (a connector's may not shadow one).
-func (s *Service) toolsNow() []proto.Tool { return s.Tools(context.Background()) }
+func (s *Service) toolsNow() []proto.Tool {
+	return append(s.Tools(context.Background()), toolsNamed(healthToolNames)...)
+}

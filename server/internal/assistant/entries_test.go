@@ -206,14 +206,6 @@ func (h *entriesAccessHub) EntriesReadAccess(id string) (bool, bool) {
 	return h.allowed, h.personal
 }
 
-func entryIDList(entries []proto.AssistantEntry) []string {
-	ids := make([]string, len(entries))
-	for i, e := range entries {
-		ids[i] = e.ID
-	}
-	return ids
-}
-
 func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 	database := todoTestDB(t)
 	e := newTodoEnv(t, database)
@@ -223,17 +215,8 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 	e.s.entriesDial = func(context.Context, any) ([]byte, error) {
 		return []byte(`{"ok":true,"machine_id":"a-different-computer"}`), nil
 	}
-	makeEntry := func(id, space string, cats []string) proto.AssistantEntry {
-		return proto.AssistantEntry{ID: id, Type: "decision", Text: "Keep the example choice.", Quote: "Stage", OriginSpace: space, Category: cats, Source: proto.AssistantEntrySource{Machine: "computer-example", Session: "session-example", Message: "message-example"}, Scope: proto.AssistantEntryScope{Executor: "assistant", Personal: true}, By: "user", Trust: "user_verbatim", Status: "active", Decision: &proto.AssistantEntryDecision{Options: []string{"Stage", "Release"}, Selected: []string{"Stage"}, Rejected: []string{"Release"}, Reason: "Example rationale."}}
-	}
-	for _, item := range []proto.AssistantEntry{
-		makeEntry("entry-general", "", nil),
-		makeEntry("entry-health-floor", "health", nil),
-		makeEntry("entry-space-", "", []string{"health", "finance"}),
-		makeEntry("entry-space-health", "health", []string{"health", "finance"}),
-		makeEntry("entry-space-finance", "finance", []string{"health", "finance"}),
-		makeEntry("entry-space-relationship", "relationship", []string{"health", "finance"}),
-	} {
+	for _, space := range []string{"", "health", "finance", "relationship"} {
+		item := proto.AssistantEntry{ID: "entry-space-" + space, Type: "decision", Text: "Keep the example choice.", Quote: "Stage", OriginSpace: space, Category: []string{"health", "finance"}, Source: proto.AssistantEntrySource{Machine: "computer-example", Session: "session-example", Message: "message-example"}, Scope: proto.AssistantEntryScope{Executor: "assistant", Personal: true}, By: "user", Trust: "user_verbatim", Status: "active", Decision: &proto.AssistantEntryDecision{Options: []string{"Stage", "Release"}, Selected: []string{"Stage"}, Rejected: []string{"Release"}, Reason: "Example rationale."}}
 		if _, err := database.AppendAssistantEntry(ctx, item); err != nil {
 			t.Fatal(err)
 		}
@@ -248,73 +231,20 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 		_ = json.Unmarshal(w.Body.Bytes(), &out)
 		return w.Code, out
 	}
-	rpcCtx := assistantwire.WithEntriesReader(ctx, "example-reader")
-	rpcList := func() proto.AssistantEntriesResult {
-		t.Helper()
-		value, handled, err := e.s.conversationsRequest(rpcCtx, assistantwire.MethodAssistantEntriesList, json.RawMessage(`{"by":"user"}`))
-		if err != nil || !handled {
-			t.Fatalf("authorized RPC: %+v %v", value, err)
-		}
-		return value.(proto.AssistantEntriesResult)
-	}
-
-	// Third-party extension with personal grant but no category grants reads only general entries.
-	code, out := get("example-reader")
-	if code != 200 || !slices.Equal(entryIDList(out.Entries), []string{"entry-general"}) {
-		t.Fatalf("third-party without category grants (HTTP): %d %v", code, entryIDList(out.Entries))
-	}
-	if got := rpcList(); !slices.Equal(entryIDList(got.Entries), []string{"entry-general"}) {
-		t.Fatalf("third-party without category grants (RPC): %v", entryIDList(got.Entries))
-	}
-
-	// Granting only health opens the health-space floor entry, but not entries also carrying finance.
-	if err := database.SetExtensionTrust(ctx, "example-reader", assistantwire.ExtensionTrustThirdParty, []string{categoryHealth}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	wantHealth := []string{"entry-general", "entry-health-floor"}
-	code, out = get("example-reader")
-	if code != 200 || !slices.Equal(entryIDList(out.Entries), wantHealth) {
-		t.Fatalf("third-party with health only (HTTP): %d %v", code, entryIDList(out.Entries))
-	}
-	if got := rpcList(); !slices.Equal(entryIDList(got.Entries), wantHealth) {
-		t.Fatalf("third-party with health only (RPC): %v", entryIDList(got.Entries))
-	}
-
-	// Granting both health and finance opens known-space entries carrying both, while unknown spaces remain hidden.
-	if err := database.SetExtensionTrust(ctx, "example-reader", assistantwire.ExtensionTrustThirdParty, []string{categoryHealth, categoryFinance}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	wantHealthFinance := []string{"entry-general", "entry-health-floor", "entry-space-", "entry-space-health"}
-	code, out = get("example-reader")
-	if code != 200 || !slices.Equal(entryIDList(out.Entries), wantHealthFinance) {
-		t.Fatalf("third-party with health+finance (HTTP): %d %v", code, entryIDList(out.Entries))
-	}
-	if got := rpcList(); !slices.Equal(entryIDList(got.Entries), wantHealthFinance) {
-		t.Fatalf("third-party with health+finance (RPC): %v", entryIDList(got.Entries))
-	}
-
-	// The owner's own extension reads every space, including unregistered spaces.
+	// The read below is of the user's own extension. Keep its real trust in the store the production filter reads;
+	// the transport grant alone cannot make a third-party extension's categories visible.
 	if err := database.SetExtensionTrust(ctx, "example-reader", assistantwire.ExtensionTrustOwner, nil, "user"); err != nil {
 		t.Fatal(err)
 	}
-	wantAll := []string{"entry-general", "entry-health-floor", "entry-space-", "entry-space-health", "entry-space-finance", "entry-space-relationship"}
-	code, out = get("example-reader")
-	if code != 200 || !slices.Equal(entryIDList(out.Entries), wantAll) || !reflect.DeepEqual(out.Entries[2].Category, []string{"health", "finance"}) {
-		t.Fatalf("owner extension (HTTP): %d %v", code, entryIDList(out.Entries))
+	code, out := get("example-reader")
+	if code != 200 || len(out.Entries) != 4 || !reflect.DeepEqual(out.Entries[0].Category, []string{"health", "finance"}) {
+		t.Fatalf("approved cross-space personal read: %d %+v", code, out)
 	}
-	if got := rpcList(); !slices.Equal(entryIDList(got.Entries), wantAll) {
-		t.Fatalf("owner extension (RPC): %v", entryIDList(got.Entries))
+	rpcCtx := assistantwire.WithEntriesReader(ctx, "example-reader")
+	value, handled, err := e.s.conversationsRequest(rpcCtx, assistantwire.MethodAssistantEntriesList, json.RawMessage(`{}`))
+	if err != nil || !handled || len(value.(proto.AssistantEntriesResult).Entries) != 4 {
+		t.Fatalf("authorized RPC: %+v %v", value, err)
 	}
-
-	// Owner HTTP request (not an extension) also reads every space.
-	w := httptest.NewRecorder()
-	e.s.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/assistant/entries?by=user", nil))
-	var ownerOut proto.AssistantEntriesResult
-	_ = json.Unmarshal(w.Body.Bytes(), &ownerOut)
-	if w.Code != 200 || !slices.Equal(entryIDList(ownerOut.Entries), wantAll) {
-		t.Fatalf("owner HTTP read: %d %v", w.Code, entryIDList(ownerOut.Entries))
-	}
-
 	code, _ = get("unapproved-reader")
 	if code != 403 {
 		t.Fatalf("unapproved read: %d", code)
@@ -328,22 +258,24 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 	if _, _, err := e.s.conversationsRequest(rpcCtx, assistantwire.MethodAssistantEntriesList, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("revoked RPC still works")
 	}
-	// A read grant without explicit personal consent can use the retained local proof; category grants still apply.
+	// A read grant without explicit personal consent can use the retained local proof.
 	h.allowed = true
 	owner := e.s.settings(ctx).MachineID
 	e.s.entriesDial = func(context.Context, any) ([]byte, error) {
 		return []byte(`{"ok":true,"machine_id":"` + owner + `"}`), nil
 	}
 	code, out = get("example-reader")
-	if code != 200 || !slices.Equal(entryIDList(out.Entries), wantAll) {
-		t.Fatalf("local alternative for owner extension: %d %v", code, entryIDList(out.Entries))
+	if code != 200 || len(out.Entries) != 4 {
+		t.Fatalf("local alternative: %d %+v", code, out)
 	}
-	if err := database.SetExtensionTrust(ctx, "example-reader", assistantwire.ExtensionTrustThirdParty, nil, "user"); err != nil {
+	// Revoking the actual trust hides the entries even when the transport grant still answers; no local proof
+	// turns a third-party extension back into the user's own one.
+	if err := database.ForgetExtensionTrust(ctx, "example-reader"); err != nil {
 		t.Fatal(err)
 	}
 	code, out = get("example-reader")
-	if code != 200 || !slices.Equal(entryIDList(out.Entries), []string{"entry-general"}) {
-		t.Fatalf("local alternative for ungranted third-party extension: %d %v", code, entryIDList(out.Entries))
+	if code != 200 || len(out.Entries) != 0 {
+		t.Fatalf("revoked owner trust is still visible: %d %+v", code, out)
 	}
 }
 

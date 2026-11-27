@@ -4,7 +4,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Todo } from "../lib/todos";
+import type { Todo, TodoBoardProjection } from "../lib/todos";
 import type { TodoSummary } from "../lib/todo-view-wire";
 
 vi.hoisted(() => {
@@ -42,7 +42,8 @@ const flush = async () => {
 };
 const seed = (patch: Record<string, unknown>) => Object.assign(getState() as unknown as Record<string, unknown>, patch);
 
-const view = (section: string, reason: string, phase: string, rank = 0): TodoSummary => ({ phase, section, reason, rank });
+// The view as the wire carries it: raw strings, which may be a newer hub's values the closed types do not know.
+const view = (section: string, reason: string, phase: string, rank = 0): TodoSummary => ({ phase, section, reason, rank }) as TodoSummary;
 
 const sampleTodos: Todo[] = [
   // Personal to-do without project
@@ -127,6 +128,8 @@ afterEach(async () => {
 const render = async ({
   todos = sampleTodos,
   sharedBlockers = [],
+  todoBoard = null,
+  sessions = {},
   todosV2,
   assistantManager,
   leaders,
@@ -136,19 +139,22 @@ const render = async ({
 }: {
   todos?: Todo[];
   sharedBlockers?: unknown[];
+  todoBoard?: TodoBoardProjection | null;
+  sessions?: Record<string, unknown[]>;
   todosV2?: boolean;
   assistantManager?: string;
   leaders?: string[];
   conversations?: unknown[];
-  grouping?: "status" | "folder";
+  grouping?: "status" | "folder" | "direction";
   selectedId?: string;
 } = {}) => {
   localStorage.setItem("persona.todos.grouping", grouping);
   seed({
     todos,
     sharedBlockers,
+    todoBoard,
     todosLoaded: true,
-    sessions: {},
+    sessions,
     interactions: [],
     answered: {},
     features: ["todo_view"],
@@ -200,40 +206,27 @@ describe("TodosView under todos_v2 Labs toggle (#14642)", () => {
   it("shows All / To-dos / Tasks filter under todos_v2=true with consistent counts before view placement", async () => {
     await render({ todosV2: true });
     expect(kindFilterEl()).toBeTruthy();
-    expect(summary()).toBe(t("todos.summary_triage", { open: 4, parked: 0, shelved: 0, done: 1, cancelled: 0 }));
-    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj", "task_done"]);
+    // Under todos_v2 (#14830), redundant 5-part summary is replaced by concise needs-you pill; Done starts folded.
+    expect(host.querySelector("[data-testid=todos-summary]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-header-attention]")?.textContent).toContain(t("todos.v2_header_needs_you", { count: 1 }));
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj"]);
+    expect(host.querySelector('[data-testid="todo-section"][data-section="done"]')?.getAttribute("data-todos")).toBe("1");
 
-    // Filter to personal To-dos only
+    // Filter to personal To-dos only (no needs_you -> attention pill hides)
     await clickKind(t("todos.kind_filter_todos"));
     expect(visibleTodoIds()).toEqual(["personal_plain", "personal_proj"]);
-    expect(summary()).toBe(
-      t("todos.summary_filtered", {
-        filter: t("todos.kind_filter_todos"),
-        open: 2,
-        parked: 0,
-        shelved: 0,
-        done: 0,
-        cancelled: 0,
-      }),
-    );
+    expect(host.querySelector("[data-testid=todos-header-attention]")).toBeNull();
 
-    // Filter to Agent / supervised Tasks only
+    // Filter to Agent / supervised Tasks only (1 needs_you -> attention pill returns; Done stays folded with count 1)
     await clickKind(t("todos.kind_filter_tasks"));
-    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "task_done"]);
-    expect(summary()).toBe(
-      t("todos.summary_filtered", {
-        filter: t("todos.kind_filter_tasks"),
-        open: 2,
-        parked: 0,
-        shelved: 0,
-        done: 1,
-        cancelled: 0,
-      }),
-    );
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent"]);
+    expect(host.querySelector("[data-testid=todos-header-attention]")?.textContent).toContain(t("todos.v2_header_needs_you", { count: 1 }));
+    expect(host.querySelector('[data-testid="todo-section"][data-section="done"]')?.getAttribute("data-todos")).toBe("1");
 
     // Back to All
     await clickKind(t("todos.kind_filter_all"));
-    expect(summary()).toBe(t("todos.summary_triage", { open: 4, parked: 0, shelved: 0, done: 1, cancelled: 0 }));
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj"]);
+    expect(host.querySelector("[data-testid=todos-header-attention]")?.textContent).toContain(t("todos.v2_header_needs_you", { count: 1 }));
   });
 
   it("shows assigned project tags while omitting empty Uncategorized placeholders under todos_v2=true", async () => {
@@ -401,9 +394,10 @@ describe("TodosView goal folding and blocker surfacing under todos_v2 (#14661)",
     await render({ todos: goalTodos, todosV2: true });
     expect(visibleTodoIds()).toEqual(["child_blocker", "goal_ship", "solo_todo"]);
 
-    // Under Tasks filter, personal parent goal_ship is excluded -> its task children stay visible as top-level rows
+    // Under Tasks filter, personal parent goal_ship is excluded -> its task children stay visible as top-level rows (child_done is inside folded Done)
     await clickKind(t("todos.kind_filter_tasks"));
-    expect(visibleTodoIds()).toEqual(["child_blocker", "child_work", "child_done"]);
+    expect(visibleTodoIds()).toEqual(["child_blocker", "child_work"]);
+    expect(host.querySelector('[data-testid="todo-section"][data-section="done"]')?.getAttribute("data-todos")).toBe("1");
     expect(host.querySelector('[data-testid="todo-parent-goal"]')).toBeNull();
     expect(host.querySelector('[data-testid="todo-goal-toggle"]')).toBeNull();
 
@@ -541,11 +535,11 @@ describe("TodosView shared external blockers strip under todos_v2 (#14728)", () 
     expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent"]);
     expect(host.querySelector("[data-testid=shared-blockers-clear]")).toBeTruthy();
 
-    // Click same blocker again -> toggles off and restores all rows
+    // Click same blocker again -> toggles off and restores all rows (Done remains folded under todos_v2)
     await act(async () => list[0].click());
     await flush();
     expect(list[0].getAttribute("aria-pressed")).toBe("false");
-    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj", "task_done"]);
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj"]);
 
     // Click second blocker, then click Clear filter button -> restores all rows
     await act(async () => chips()[1].click());
@@ -553,7 +547,7 @@ describe("TodosView shared external blockers strip under todos_v2 (#14728)", () 
     expect(visibleTodoIds()).toEqual(["task_agent", "personal_proj"]);
     await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=shared-blockers-clear]")!.click());
     await flush();
-    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj", "task_done"]);
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj"]);
   });
 
   it("auto-clears selection when the selected blocker disappears after refresh, and reverts when todos_v2 is switched off", async () => {
@@ -568,7 +562,7 @@ describe("TodosView shared external blockers strip under todos_v2 (#14728)", () 
       root.render(<TodosView />);
     });
     await flush();
-    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj", "task_done"]);
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj"]);
     expect(host.querySelector("[data-testid=shared-blockers-clear]")).toBeNull();
 
     // Re-select remaining blocker, then turn todos_v2 off -> immediate rollback
@@ -742,5 +736,1197 @@ describe("TodosView batch reorganize mode under todos_v2 (#14758)", () => {
     expect(toggleBtn()).toBeNull();
     expect(barEl()).toBeNull();
     expect(checkboxes()).toHaveLength(0);
+  });
+});
+
+describe("TodoDetail dual template, default-expanded sections & status summary under todos_v2 (#14777, #14851)", () => {
+  const longNotes =
+    "Line 1: Context about the migration plan.\nLine 2: Ensure backward compatibility.\nLine 3: Keep first screen bundle within budget.\nLine 4: Verify rollback path.\nLine 5: Validate i18n keys.\nLine 6: Ship clean PR.";
+
+  const dualTodos: Todo[] = [
+    {
+      id: "personal_note",
+      title: "Pick up groceries",
+      audience: "human",
+      notes: "Milk and eggs",
+      created_at: iso(5 * HOUR),
+      updated_at: iso(4 * HOUR),
+      view: view("todo", "rest", "todo", 0),
+    },
+    {
+      id: "goal_parent",
+      title: "Ship Todos V2",
+      direction_id: "dir-platform",
+      created_at: iso(8 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "work_goal_active",
+      title: "Implement dual-template detail page",
+      part_of: "goal_parent",
+      direction_id: "dir-platform",
+      priority: "high",
+      notes: longNotes,
+      pr_url: "https://github.com/nwverse/persona/pull/14777",
+      agents: [
+        { machine_id: "m1", session_id: "s-active", linked_at: iso(2 * HOUR), title: "Frontend worker" },
+        { machine_id: "m1", session_id: "s-past", linked_at: iso(4 * HOUR), released_at: iso(3 * HOUR), title: "Earlier planner", cwd: "/repo/web" },
+      ],
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+    {
+      id: "work_goal_with_due",
+      title: "Prepare launch notes",
+      part_of: "goal_parent",
+      due_date: "2026-12-01",
+      supervision: { supervisor: "main", state: "needs_user" },
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 2),
+    },
+  ];
+
+  const activeSessions = {
+    m1: [
+      {
+        id: "s-active",
+        machine_id: "m1",
+        session_id: "s-active",
+        agent: "claude",
+        title: "Frontend worker",
+        cwd: "/repo/web",
+        state: "working",
+        updated_at: iso(10 * 60_000),
+      },
+    ],
+  };
+
+  it("keeps TodoDetail DOM 100% identical when todos_v2 is false or omitted by an older Hub", async () => {
+    await render({
+      todos: dualTodos,
+      sessions: activeSessions,
+      todosV2: undefined,
+      selectedId: "work_goal_active",
+      leaders: ["dir-platform"],
+      conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
+    });
+    expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-status-summary]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-priority-subtle]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-summary-open-active-agent]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-notes-collapsed]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-open-pr]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();
+    // Released agent history remains collapsed by default in legacy view
+    expect(host.querySelector("[data-testid=todo-detail]")?.textContent).not.toContain("Earlier planner");
+    const legacyDetailHtml = host.querySelector("[data-testid=todo-detail]")?.innerHTML;
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({
+      todos: dualTodos,
+      sessions: activeSessions,
+      todosV2: false,
+      selectedId: "work_goal_active",
+      leaders: ["dir-platform"],
+      conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
+    });
+    expect(host.querySelector("[data-testid=todo-detail]")?.innerHTML).toBe(legacyDetailHtml);
+  });
+
+  it("keeps personal to-dos on the lightweight template under todos_v2=true", async () => {
+    await render({ todos: dualTodos, todosV2: true, selectedId: "personal_note" });
+    expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-status-summary]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-subtasks]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-plan]")).toBeTruthy();
+    expect(host.querySelector("[data-testid=todo-plan-priority]")?.className).toContain("text-ink-3");
+    expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();
+  });
+
+  it("keeps all sections expanded by default, renders subtle priority & status summary strip, and dynamic CTA for work goals under todos_v2=true", async () => {
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path.startsWith("/todos/work_goal_active/decisions")) {
+        return {
+          decisions: [
+            {
+              id: "d1",
+              todo_id: "work_goal_active",
+              question: "Keep sections expanded by default?",
+              choice: "Yes, expand all sections",
+              reason: "Avoid hiding schedule, notes, and decisions behind toggles",
+              source: "manual",
+              source_machine: "",
+              source_session: "",
+              source_message: "",
+              supersedes_id: "",
+              superseded_by: "",
+              created_at: iso(1 * HOUR),
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await render({
+      todos: dualTodos,
+      sessions: activeSessions,
+      todosV2: true,
+      selectedId: "work_goal_active",
+      leaders: ["dir-platform"],
+      conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
+    });
+
+    // Ownership strip shows template badge, readable direction name, clickable parent goal link, and subtle secondary priority
+    const ownership = host.querySelector("[data-testid=todo-detail-ownership]");
+    expect(ownership).toBeTruthy();
+    expect(host.querySelector("[data-testid=todo-detail-template-badge]")?.textContent).toBe(t("todos.detail_template_work_goal"));
+    expect(host.querySelector("[data-testid=todo-detail-direction]")?.textContent).toContain("Platform Direction");
+    const parentLink = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-link]")!;
+    expect(parentLink.textContent).toContain("Ship Todos V2");
+    const subtlePriority = host.querySelector<HTMLElement>("[data-testid=todo-detail-priority-subtle]")!;
+    expect(subtlePriority).toBeTruthy();
+    expect(subtlePriority.textContent).toContain(t("todos.priority_high"));
+    expect(subtlePriority.className).toContain("text-ink-3");
+
+    // Concise status summary strip uses semantic tokens and surfaces active Agent primary CTA
+    const statusSummary = host.querySelector<HTMLElement>("[data-testid=todo-detail-status-summary]")!;
+    expect(statusSummary).toBeTruthy();
+    expect(statusSummary.className).toContain("bg-inset");
+    expect(statusSummary.className).toContain("border-line");
+    expect(statusSummary.className).toContain("rounded-control");
+    expect(host.querySelector("[data-testid=todo-detail-summary-status]")?.textContent).toBeTruthy();
+    const summaryOpenAgentBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-summary-open-active-agent]")!;
+    expect(summaryOpenAgentBtn.textContent).toBe(t("todos.detail_open_active_agent"));
+
+    // Schedule & reminder fields, priority selector (muted), long notes, decisions, and participated history are ALL expanded by default
+    expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-plan]")).toBeTruthy();
+    expect(host.querySelector("[data-testid=todo-plan-priority]")?.className).toContain("text-ink-3");
+    expect(host.querySelector("[data-testid=todo-detail-notes-collapsed]")).toBeNull();
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(longNotes);
+    expect(host.querySelector("[data-testid=todo-decisions]")?.textContent).toContain("Keep sections expanded by default?");
+    expect(host.querySelector("[data-testid=todo-detail]")?.textContent).toContain("Earlier planner");
+
+    // Dynamic footer action bar: Open active Agent primary CTA + safe Open PR link + demoted Add Agent button
+    const openAgentBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-open-active-agent]")!;
+    expect(openAgentBtn.textContent).toBe(t("todos.detail_open_active_agent"));
+    const openPrLink = host.querySelector<HTMLAnchorElement>("[data-testid=todo-open-pr]")!;
+    expect(openPrLink.getAttribute("href")).toBe("https://github.com/nwverse/persona/pull/14777");
+    expect(openPrLink.getAttribute("target")).toBe("_blank");
+    expect(openPrLink.getAttribute("rel")).toBe("noopener noreferrer");
+    const addAgentBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-add-agent]")!;
+    expect(addAgentBtn.textContent).toBe(t("todos.detail_add_agent"));
+
+    // Clicking parent link navigates to parent goal, which displays its subtasks summary & checklist expanded by default
+    await act(async () => parentLink.click());
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-summary-subtasks]")?.textContent).toContain("0/2");
+    const subtasks = host.querySelector("[data-testid=todo-detail-subtasks]");
+    expect(subtasks).toBeTruthy();
+    const subtaskIds = [...subtasks!.querySelectorAll<HTMLElement>("[data-testid=todo-detail-subtask-item]")].map(
+      (el) => el.dataset.subtaskId,
+    );
+    expect(subtaskIds).toEqual(["work_goal_active", "work_goal_with_due"]);
+
+    // Clicking a subtask with due_date keeps schedule/reminder expanded
+    await act(async () =>
+      subtasks!.querySelector<HTMLButtonElement>('[data-subtask-id="work_goal_with_due"]')!.click(),
+    );
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-plan]")).toBeTruthy();
+
+    // Turning todos_v2 off immediately reverts TodoDetail to legacy layout
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-status-summary]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-subtasks]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();
+  });
+});
+
+describe("TodosView slim header & left pane under todos_v2 (#14830)", () => {
+  const slimTodos: Todo[] = [
+    {
+      id: "task_decision",
+      title: "Approve database cutover",
+      priority: "high",
+      direction_id: "dir-platform",
+      supervision: { supervisor: "main", state: "needs_user" },
+      ask: { verdict: "Proceed with blue-green swap?", asked_at: iso(1 * HOUR), outcome: "decide", recommend: "Proceed" },
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 0),
+    },
+    {
+      id: "task_pr_working",
+      title: "Ship slim left pane",
+      priority: "high",
+      direction_id: "dir-platform",
+      pr_url: "https://github.com/nwverse/persona/pull/14830",
+      agents: [{ machine_id: "m1", session_id: "s-run", linked_at: iso(2 * HOUR) }],
+      created_at: iso(5 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "personal_due",
+      title: "Renew passport",
+      audience: "human",
+      priority: "high",
+      due_date: "2026-12-10",
+      created_at: iso(6 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("todo", "rest", "todo", 0),
+    },
+    {
+      id: "task_parked",
+      title: "Wait for upstream review",
+      supervision: {
+        supervisor: "main",
+        state: "parked",
+        parked: { reason: "Waiting on CI mirror", until: new Date(NOW + 24 * HOUR).toISOString(), waiting_on: "external_event", count: 1 },
+      },
+      created_at: iso(8 * HOUR),
+      updated_at: iso(3 * HOUR),
+      view: view("parked", "parked", "parked", 0),
+    },
+    {
+      id: "task_recent_done",
+      title: "Publish release notes",
+      audience: "autonomous",
+      created_at: iso(10 * HOUR),
+      updated_at: iso(1 * HOUR),
+      done_at: iso(1 * HOUR),
+      view: view("done", "closed", "done", 0),
+    },
+  ];
+
+  it("keeps header, list width, toolbar, and rows 100% pixel-identical when todos_v2 is false or omitted", async () => {
+    await render({ todos: slimTodos, todosV2: undefined, selectedId: "personal_due" });
+    expect(host.querySelector("[data-testid=todos-header-attention]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-v2-labs-link]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-v2-toolbar]")).toBeNull();
+    expect(host.querySelector("[data-todo-row-layout]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-list-column]")?.className).toContain("md:w-[380px]");
+    const normalizeReactIds = (html: string | undefined) => html?.replace(/_r_[0-9a-z]+_/g, "_r_ID_");
+    const legacyHeader = host.querySelector("header")?.innerHTML;
+    const legacyList = normalizeReactIds(host.querySelector("[data-testid=todos-list-column]")?.innerHTML);
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: slimTodos, todosV2: false, selectedId: "personal_due" });
+    expect(host.querySelector("header")?.innerHTML).toBe(legacyHeader);
+    expect(normalizeReactIds(host.querySelector("[data-testid=todos-list-column]")?.innerHTML)).toBe(legacyList);
+  });
+
+  it("renders slim header with needs-you pill & Labs link, narrow single-row toolbar, 1–2 line rows preserving subtle priority & decisions, and folded parked/done sections", async () => {
+    await render({
+      todos: slimTodos,
+      todosV2: true,
+      leaders: ["dir-platform"],
+      conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform" }],
+    });
+
+    // 1. De-duplicated header: no 5-part summary, concise needs-you pill, Labs · v2 link to Settings › Labs
+    expect(host.querySelector("[data-testid=todos-summary]")).toBeNull();
+    const attention = host.querySelector("[data-testid=todos-header-attention]");
+    expect(attention?.getAttribute("data-count")).toBe("1");
+    expect(attention?.textContent).toContain(t("todos.v2_header_needs_you", { count: 1 }));
+    const labsLink = host.querySelector<HTMLAnchorElement>("[data-testid=todos-v2-labs-link]")!;
+    expect(labsLink).toBeTruthy();
+    expect(labsLink.getAttribute("href")).toBe("/settings?tab=labs");
+    expect(labsLink.textContent).toContain(t("todos.v2_labs_badge"));
+
+    // 2. Narrowed left column & single-row compact toolbar
+    const listCol = host.querySelector<HTMLElement>("[data-testid=todos-list-column]")!;
+    expect(listCol.className).toContain("md:w-[356px]");
+    expect(listCol.className).toContain("lg:w-[368px]");
+    const toolbar = host.querySelector("[data-testid=todos-v2-toolbar]")!;
+    expect(toolbar).toBeTruthy();
+    expect(toolbar.querySelector("[data-testid=todos-kind-filter]")).toBeTruthy();
+    expect(toolbar.querySelector("[data-testid=todos-grouping-menu]")).toBeTruthy();
+    expect(toolbar.querySelector("[data-testid=todos-filter]")).toBeTruthy();
+    expect(toolbar.querySelector("[data-testid=todos-reorganize-toggle]")).toBeTruthy();
+
+    // 3. Task rows: max 2 lines, no redundant status line, PR anchor, direction meta, subtle priority & pending decision preserved
+    const workingRow = host.querySelector<HTMLElement>('[data-todo="task_pr_working"]')!;
+    expect(workingRow.dataset.todoRowLayout).toBe("task-slim");
+    expect(workingRow.querySelector("[data-testid=todo-status-line]")).toBeNull();
+    expect(workingRow.querySelector("[data-testid=todo-slim-pr]")?.textContent).toBe("PR #14830");
+    expect(workingRow.querySelector("[data-testid=todo-direction-tag]")?.textContent).toBe("Platform");
+    expect(workingRow.querySelector("[data-testid=todo-priority-subtle]")?.textContent).toContain(t("todos.priority_option_high"));
+
+    const decisionRow = host.querySelector<HTMLElement>('[data-todo="task_decision"]')!;
+    expect(decisionRow.dataset.todoRowLayout).toBe("task-slim");
+    expect(decisionRow.querySelector("[data-testid=todo-ask]")?.textContent).toContain("Proceed with blue-green swap?");
+    expect(decisionRow.querySelector("[data-testid=todo-priority-subtle]")?.textContent).toContain(t("todos.priority_option_high"));
+
+    // 4. Personal to-do: minimal single-line layout with due date & subtle priority
+    const personalRow = host.querySelector<HTMLElement>('[data-todo="personal_due"]')!;
+    expect(personalRow.dataset.todoRowLayout).toBe("personal-slim");
+    expect(personalRow.querySelector("[data-testid=todo-slim-line2]")).toBeNull();
+    expect(personalRow.querySelector("[data-testid=todo-due-compact]")?.textContent).toBeTruthy();
+    expect(personalRow.querySelector("[data-testid=todo-priority-subtle]")?.textContent).toContain(t("todos.priority_option_high"));
+
+    // 5. Parked & Done sections start compactly folded with counts and external wait hint
+    const parkedSec = host.querySelector<HTMLElement>('[data-testid="todo-section"][data-section="parked"]')!;
+    expect(parkedSec.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded")).toBe("false");
+    expect(parkedSec.getAttribute("data-todos")).toBe("1");
+    expect(parkedSec.querySelector("[data-testid=todo-section-folded-hint]")?.textContent).toContain(t("todos.parked_folded_hint"));
+    expect(parkedSec.querySelector('[data-todo="task_parked"]')).toBeNull();
+
+    const doneSec = host.querySelector<HTMLElement>('[data-testid="todo-section"][data-section="done"]')!;
+    expect(doneSec.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded")).toBe("false");
+    expect(doneSec.getAttribute("data-todos")).toBe("1");
+    expect(doneSec.querySelector('[data-todo="task_recent_done"]')).toBeNull();
+
+    // Expanding Parked reveals its compact row
+    await act(async () => parkedSec.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+    await flush();
+    expect(parkedSec.querySelector('[data-todo="task_parked"]')).toBeTruthy();
+
+    // Turning todos_v2 off immediately restores legacy header, width, and rows
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todos-v2-labs-link]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-v2-toolbar]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-summary]")).toBeTruthy();
+    expect(host.querySelector("[data-testid=todos-list-column]")?.className).toContain("md:w-[380px]");
+  });
+});
+
+describe("TodoDetail single-item Change direction control under todos_v2 (#15653)", () => {
+  const dirTodos: Todo[] = [
+    {
+      id: "goal_main",
+      title: "Ship direction wiring",
+      direction_id: "dir-platform",
+      created_at: iso(6 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "sub_task",
+      title: "Update direction picker tests",
+      part_of: "goal_main",
+      direction_id: "dir-platform",
+      agents: [{ machine_id: "m1", session_id: "s-run", linked_at: iso(2 * HOUR) }],
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+  ];
+
+  const leaders = ["dir-platform", "dir-growth"];
+  const conversations = [
+    { machine_id: "m1", session_id: "dir-platform", title: "Platform" },
+    { machine_id: "m1", session_id: "dir-growth", title: "Growth" },
+  ];
+
+  it("renders no Change direction button when todos_v2 is false or omitted", async () => {
+    await render({ todos: dirTodos, todosV2: undefined, selectedId: "goal_main", leaders, conversations });
+    expect(host.querySelector("[data-testid=todo-detail-change-direction]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeNull();
+    const legacyDetail = host.querySelector("[data-testid=todo-detail]")?.innerHTML;
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: dirTodos, todosV2: false, selectedId: "goal_main", leaders, conversations });
+    expect(host.querySelector("[data-testid=todo-detail-change-direction]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail]")?.innerHTML).toBe(legacyDetail);
+  });
+
+  it("submits POST /api/v1/todos/reorganize with transfer_supervision=false by default, optional include_children, and refreshes immediately", async () => {
+    let currentTodos = dirTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/reorganize") {
+        const body = (init as { json?: { direction_id?: string; include_children?: boolean } })?.json;
+        currentTodos = currentTodos.map((td) =>
+          td.id === "goal_main" || (body?.include_children && td.part_of === "goal_main")
+            ? { ...td, direction_id: body?.direction_id || undefined }
+            : td,
+        );
+        return { updated: currentTodos };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    await render({ todos: dirTodos, todosV2: true, selectedId: "goal_main", leaders, conversations });
+
+    const trigger = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-direction]")!;
+    expect(trigger).toBeTruthy();
+    expect(trigger.textContent).toContain(t("todos.detail_change_direction"));
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeNull();
+
+    // Open picker panel
+    await act(async () => trigger.click());
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeTruthy();
+
+    // Parent goal has 1 child -> include_children checkbox is shown and defaults to true (#16138)
+    const includeBox = host.querySelector<HTMLInputElement>("[data-testid=todo-direction-include-children]")!;
+    expect(includeBox).toBeTruthy();
+    expect(includeBox.checked).toBe(true);
+    expect(includeBox.closest("label")?.textContent).toContain(t("todos.direction_include_children", { count: 1 }));
+
+    // Apply disabled while selection equals current direction
+    const applyBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-direction-apply]")!;
+    expect(applyBtn.disabled).toBe(true);
+
+    // Select another active direction -> transfer_supervision appears and defaults to false
+    const select = host.querySelector<HTMLSelectElement>("[data-testid=todo-detail-direction-select]")!;
+    await act(async () => {
+      select.value = "dir-growth";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+
+    const transferBox = host.querySelector<HTMLInputElement>("[data-testid=todo-detail-direction-transfer-supervision]")!;
+    expect(transferBox).toBeTruthy();
+    expect(transferBox.checked).toBe(false);
+    expect(applyBtn.disabled).toBe(false);
+
+    // Submit with default include_children=true and transfer_supervision=false
+    await act(async () => applyBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/reorganize",
+      expect.objectContaining({
+        method: "POST",
+        json: {
+          ids: ["goal_main"],
+          direction_id: "dir-growth",
+          include_children: true,
+          transfer_supervision: false,
+        },
+      }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    // Panel closes and updated direction name renders immediately
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-direction]")?.textContent).toContain("Growth");
+
+    // Re-open and uncheck include_children -> sends include_children=false to move only the parent
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-direction]")!.click());
+    await flush();
+    const includeBox2 = host.querySelector<HTMLInputElement>("[data-testid=todo-direction-include-children]")!;
+    expect(includeBox2.checked).toBe(true);
+    await act(async () => includeBox2.click());
+    await flush();
+    expect(includeBox2.checked).toBe(false);
+
+    const select2 = host.querySelector<HTMLSelectElement>("[data-testid=todo-detail-direction-select]")!;
+    await act(async () => {
+      select2.value = "dir-platform";
+      select2.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-direction-apply]")!.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/reorganize",
+      expect.objectContaining({
+        method: "POST",
+        json: {
+          ids: ["goal_main"],
+          direction_id: "dir-platform",
+          include_children: false,
+          transfer_supervision: false,
+        },
+      }),
+    );
+  });
+
+  it("hides include_children on leaf tasks, shows inline error on failure, and unmounts immediately when todos_v2 turns off", async () => {
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/reorganize") throw new Error("reorganize denied");
+      return {};
+    });
+
+    await render({ todos: dirTodos, todosV2: true, selectedId: "sub_task", leaders, conversations });
+
+    const trigger = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-direction]")!;
+    await act(async () => trigger.click());
+    await flush();
+
+    // Leaf task has no children -> include_children is omitted
+    expect(host.querySelector("[data-testid=todo-direction-include-children]")).toBeNull();
+
+    // Choose "Remove from direction" -> transfer_supervision hides
+    const select = host.querySelector<HTMLSelectElement>("[data-testid=todo-detail-direction-select]")!;
+    await act(async () => {
+      select.value = "";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-direction-transfer-supervision]")).toBeNull();
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-direction-apply]")!.click());
+    await flush();
+
+    // Inline error shown, panel stays open
+    expect(host.querySelector("[data-testid=todo-detail-direction-error]")?.textContent).toContain("reorganize denied");
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeTruthy();
+
+    // Switching todos_v2 off removes both trigger and panel immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-change-direction]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeNull();
+  });
+});
+
+describe("TodosView server-owned board projection consumption (#15800)", () => {
+  const boardTodos: Todo[] = [
+    {
+      id: "order_second",
+      title: "Second by client timestamp",
+      created_at: iso(20 * HOUR),
+      updated_at: iso(20 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 2),
+    },
+    {
+      id: "order_first",
+      title: "First by client timestamp",
+      created_at: iso(1 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 0),
+    },
+    {
+      id: "goal_parent",
+      title: "Launch Q4 Milestone",
+      direction_id: "dir-platform",
+      created_at: iso(5 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "goal_child_folded",
+      title: "Hidden folded subtask",
+      part_of: "goal_parent",
+      direction_id: "dir-platform",
+      created_at: iso(4 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+    {
+      id: "goal_child_surfaced",
+      title: "Blocked child needing approval",
+      part_of: "goal_parent",
+      direction_id: "dir-platform",
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 1),
+    },
+  ];
+
+  // Deliberately order `order_second` before `order_first` and give `counts.needs_you = 9`
+  // so the test proves TodosView renders directly from server `board` instead of re-deriving locally.
+  const serverBoard: TodoBoardProjection = {
+    status_groups: [
+      {
+        key: "needs_you",
+        total_count: 3,
+        visible_count: 3,
+        entries: [
+          { todo_id: "order_second" },
+          { todo_id: "goal_child_surfaced" },
+          { todo_id: "order_first" },
+        ],
+      },
+      {
+        key: "in_progress",
+        total_count: 2,
+        visible_count: 1,
+        entries: [
+          {
+            todo_id: "goal_parent",
+            folded_child_ids: ["goal_child_folded"],
+            surfaced_child_ids: ["goal_child_surfaced"],
+            folded_count: 1,
+          },
+        ],
+      },
+    ],
+    direction_groups: [
+      {
+        direction_id: "dir-platform",
+        label: "Platform Server Label",
+        counts: { needs_you: 1, in_progress: 2, pending_review: 0, waiting: 0, done: 0, total: 3 },
+        todo_ids: ["goal_child_surfaced", "goal_parent", "goal_child_folded"],
+      },
+      {
+        direction_id: "",
+        counts: { needs_you: 2, in_progress: 0, pending_review: 0, waiting: 0, done: 0, total: 2 },
+        todo_ids: ["order_second", "order_first"],
+      },
+    ],
+    sidebar_tree: [],
+    counts: {
+      needs_you: 9,
+      in_progress: 2,
+      pending_review: 0,
+      waiting: 0,
+      someday: 0,
+      done: 0,
+      open_total: 11,
+    },
+  };
+
+  it("strictly renders status sections, goal folding, surfaced blockers, and header count from server board under todos_v2=true", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: true, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).toBe("board");
+
+    // Header attention count reads directly from board.counts.needs_you (9)
+    expect(host.querySelector("[data-testid=todos-header-attention]")?.getAttribute("data-count")).toBe("9");
+
+    // Waiting (needs_you) section renders in exact server order: order_second, goal_child_surfaced, order_first
+    const waitingSection = host.querySelector('[data-testid=todo-section][data-section="waiting"]')!;
+    const waitingIds = [...waitingSection.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(waitingIds).toEqual(["order_second", "goal_child_surfaced", "order_first"]);
+
+    // Working (in_progress) section keeps goal_parent visible and folds goal_child_folded
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    const workingIds = [...workingSection.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(workingIds).toEqual(["goal_parent"]);
+    expect(workingSection.textContent).not.toContain("Hidden folded subtask");
+  });
+
+  it("renders direction grouping directly from server board.direction_groups under todos_v2=true", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: true, grouping: "direction" });
+
+    const groups = [...host.querySelectorAll("[data-testid=todo-group]")];
+    expect(groups.map((el) => el.getAttribute("data-group"))).toEqual([
+      "direction:dir-platform",
+      "direction:secretary",
+    ]);
+    expect(groups[0]!.textContent).toContain("Platform Server Label");
+    const platformIds = [...groups[0]!.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(platformIds).toEqual(["goal_child_surfaced", "goal_parent", "goal_child_folded"]);
+  });
+
+  it("ignores server board completely when todos_v2 is false (100% legacy behavior)", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: false, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).not.toBe("board");
+    expect(host.querySelector("[data-testid=todos-header-attention]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-summary]")).not.toBeNull();
+    // Legacy path keeps folded child unfolded at top level in working
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    expect(workingSection.textContent).toContain("Hidden folded subtask");
+  });
+
+  it("falls back cleanly to client goal folding when todos_v2=true and server omits board (older Hub)", async () => {
+    await render({ todos: boardTodos, todoBoard: null, todosV2: true, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).toBe("view");
+    // Client fallback still folds goal_child_folded under goal_parent
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    expect(workingSection.textContent).not.toContain("Hidden folded subtask");
+  });
+});
+
+describe("TodosView detail parent picker, item_type filter & toggle, and undo auto-seen (#16100)", () => {
+  const uxTodos: Todo[] = [
+    {
+      id: "top_goal",
+      title: "Launch v2 architecture",
+      item_type: "task",
+      origin: "conv-main",
+      created_at: iso(6 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "other_goal",
+      title: "Q4 roadmap",
+      item_type: "task",
+      origin: "conv-main",
+      created_at: iso(5 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("todo", "rest", "todo", 1),
+    },
+    {
+      id: "nested_sub",
+      title: "Wire parent picker",
+      item_type: "task",
+      part_of: "top_goal",
+      origin: "conv-main",
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+    {
+      id: "personal_note",
+      title: "Renew passport",
+      item_type: "personal",
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("todo", "rest", "todo", 2),
+    },
+    {
+      id: "auto_seen_task",
+      title: "Nightly docs sync",
+      item_type: "task",
+      audience: "autonomous",
+      done_at: iso(2 * HOUR),
+      done_by: "auto",
+      seen_at: iso(2 * HOUR),
+      created_at: iso(8 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("done", "closed", "done", 0),
+    },
+  ];
+
+  it("renders none of the #16100 controls when todos_v2 is false or omitted", async () => {
+    await render({ todos: uxTodos, todosV2: false, selectedId: "auto_seen_task" });
+    expect(host.querySelector("[data-testid=todo-detail-change-parent]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-parent-panel]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-item-type]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-unsee-btn]")).toBeNull();
+    expect(kindFilterEl()).toBeNull();
+  });
+
+  it("re-parents and promotes a single todo via TodoParentPicker without interrupting running Agents", async () => {
+    let currentTodos = uxTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/reorganize") {
+        const body = (init as { json?: { ids: string[]; part_of?: string } })?.json;
+        currentTodos = currentTodos.map((td) =>
+          body?.ids.includes(td.id) ? { ...td, part_of: body.part_of || undefined } : td,
+        );
+        return { updated: currentTodos.filter((td) => body?.ids.includes(td.id)) };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    await render({ todos: uxTodos, todosV2: true, selectedId: "top_goal" });
+
+    // Open parent picker on top_goal: excludes self (top_goal), descendant (nested_sub), and done (auto_seen_task)
+    const trigger = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-parent]")!;
+    expect(trigger).toBeTruthy();
+    await act(async () => trigger.click());
+    await flush();
+
+    const select = host.querySelector<HTMLSelectElement>("[data-testid=todo-detail-parent-select]")!;
+    const optionValues = [...select.options].map((o) => o.value);
+    expect(optionValues).toEqual(["", "other_goal", "personal_note"]);
+
+    // Re-parent top_goal under other_goal
+    await act(async () => {
+      select.value = "other_goal";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-apply]")!.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/reorganize",
+      expect.objectContaining({
+        method: "POST",
+        json: {
+          ids: ["top_goal"],
+          part_of: "other_goal",
+          include_children: false,
+          transfer_supervision: false,
+        },
+      }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector("[data-testid=todo-detail-parent-panel]")).toBeNull();
+
+    // Now open parent picker again and promote top_goal back to top-level in one click
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-parent]")!.click());
+    await flush();
+    const promoteBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-promote]")!;
+    expect(promoteBtn).toBeTruthy();
+    await act(async () => promoteBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/reorganize",
+      expect.objectContaining({
+        method: "POST",
+        json: {
+          ids: ["top_goal"],
+          part_of: "",
+          include_children: false,
+          transfer_supervision: false,
+        },
+      }),
+    );
+
+    // Turning todos_v2 off removes the parent picker button immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-change-parent]")).toBeNull();
+  });
+
+  it("filters by server item_type under todos_v2 and toggles personal/task in detail via PATCH /todos/{id}", async () => {
+    let currentTodos = uxTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/personal_note" && (init as { method?: string })?.method === "PATCH") {
+        const body = (init as { json?: { item_type?: "personal" | "task" } })?.json;
+        currentTodos = currentTodos.map((td) =>
+          td.id === "personal_note" ? { ...td, item_type: body?.item_type } : td,
+        );
+        return { todo: currentTodos.find((td) => td.id === "personal_note") };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    await render({ todos: uxTodos, todosV2: true, selectedId: "personal_note" });
+
+    // Filter to personal only -> shows only personal_note
+    await clickKind(t("todos.kind_filter_todos"));
+    expect(visibleTodoIds()).toEqual(["personal_note"]);
+
+    // Filter to tasks only -> excludes personal_note
+    await clickKind(t("todos.kind_filter_tasks"));
+    expect(visibleTodoIds()).not.toContain("personal_note");
+    expect(visibleTodoIds()).toContain("top_goal");
+
+    // Back to All
+    await clickKind(t("todos.kind_filter_all"));
+
+    // Detail item_type switcher starts on "personal"
+    const typeGroup = host.querySelector("[data-testid=todo-detail-item-type]")!;
+    expect(typeGroup).toBeTruthy();
+    const personalBtn = typeGroup.querySelector<HTMLButtonElement>('[data-item-type="personal"]')!;
+    const taskBtn = typeGroup.querySelector<HTMLButtonElement>('[data-item-type="task"]')!;
+    expect(personalBtn.getAttribute("aria-checked")).toBe("true");
+    expect(taskBtn.getAttribute("aria-checked")).toBe("false");
+
+    // Toggle to "task" -> calls PATCH /todos/personal_note with { item_type: "task" } and refreshes
+    await act(async () => taskBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/personal_note",
+      expect.objectContaining({
+        method: "PATCH",
+        json: { item_type: "task" },
+      }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector('[data-testid=todo-detail-item-type] [data-item-type="task"]')?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("exposes Mark unread button on seen/auto-seen todos under todos_v2 and calls DELETE /todos/{id}/seen", async () => {
+    let currentTodos = uxTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/auto_seen_task/seen" && (init as { method?: string })?.method === "DELETE") {
+        currentTodos = currentTodos.map((td) =>
+          td.id === "auto_seen_task" ? { ...td, seen_at: null } : td,
+        );
+        return { todo: currentTodos.find((td) => td.id === "auto_seen_task") };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    // Unseen open todo does not show Mark unread button
+    await render({ todos: uxTodos, todosV2: true, selectedId: "personal_note" });
+    expect(host.querySelector("[data-testid=todo-unsee-btn]")).toBeNull();
+
+    // Auto-seen completed autonomous task shows Mark unread button
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: uxTodos, todosV2: true, selectedId: "auto_seen_task" });
+
+    const unseeBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-unsee-btn]")!;
+    expect(unseeBtn).toBeTruthy();
+    expect(unseeBtn.textContent).toContain(t("todos.detail_mark_unread"));
+
+    await act(async () => unseeBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/auto_seen_task/seen",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+
+    // Turning todos_v2 off hides the button immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-unsee-btn]")).toBeNull();
+  });
+});
+
+describe("TodosView detail active_blockers strip under todos_v2 (#16138)", () => {
+  const blockedTodos: Todo[] = [
+    {
+      id: "blocked_task",
+      title: "Land v2 schema migration",
+      origin: "conv-main",
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("parked", "external_wait", "parked", 0),
+      active_blockers: [
+        {
+          id: "blk_pr",
+          kind: "external_pr",
+          target_ref: "https://github.com/nwverse/persona/pull/16135",
+          state: "active",
+        },
+        {
+          id: "blk_merge",
+          kind: "merge_train",
+          target_ref: "nwverse/persona",
+          state: "active",
+          attempts: 2,
+        },
+        {
+          id: "blk_todo",
+          kind: "todo_done",
+          target_ref: "todo_prereq_1",
+          state: "active",
+        },
+      ],
+    },
+    {
+      id: "unblocked_task",
+      title: "Clean task without blockers",
+      origin: "conv-main",
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+      active_blockers: [],
+    },
+  ];
+
+  it("hides active_blockers when todos_v2 is false or omitted", async () => {
+    await render({ todos: blockedTodos, todosV2: undefined, selectedId: "blocked_task" });
+    expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeNull();
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: blockedTodos, todosV2: false, selectedId: "blocked_task" });
+    expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeNull();
+  });
+
+  it("hides active_blockers under todos_v2=true when the list is empty or absent", async () => {
+    await render({ todos: blockedTodos, todosV2: true, selectedId: "unblocked_task" });
+    expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeNull();
+  });
+
+  it("renders external PR clickable link, localized kind labels, and retry count under todos_v2=true, and hides on rollback", async () => {
+    await render({ todos: blockedTodos, todosV2: true, selectedId: "blocked_task" });
+
+    const strip = host.querySelector("[data-testid=todo-active-blockers]")!;
+    expect(strip).toBeTruthy();
+    expect(strip.textContent).toContain(t("todos.active_blockers_title", { count: 3 }));
+
+    const items = [...strip.querySelectorAll<HTMLElement>("[data-testid=todo-active-blocker-item]")];
+    expect(items).toHaveLength(3);
+
+    // 1. external_pr -> clickable https:// PR link with short label
+    expect(items[0].querySelector("[data-testid=todo-active-blocker-kind]")?.textContent).toBe(
+      t("todos.active_blocker_kind_external_pr"),
+    );
+    const prAnchor = items[0].querySelector<HTMLAnchorElement>("[data-testid=todo-active-blocker-link]")!;
+    expect(prAnchor).toBeTruthy();
+    expect(prAnchor.getAttribute("href")).toBe("https://github.com/nwverse/persona/pull/16135");
+    expect(prAnchor.getAttribute("target")).toBe("_blank");
+    expect(prAnchor.getAttribute("rel")).toBe("noreferrer noopener");
+    expect(prAnchor.textContent).toContain("nwverse/persona#16135");
+    expect(items[0].querySelector("[data-testid=todo-active-blocker-attempts]")).toBeNull();
+
+    // 2. merge_train with attempts=2 -> plain target + retry badge
+    expect(items[1].querySelector("[data-testid=todo-active-blocker-kind]")?.textContent).toBe(
+      t("todos.active_blocker_kind_merge_train"),
+    );
+    expect(items[1].querySelector("[data-testid=todo-active-blocker-target]")?.textContent).toBe("nwverse/persona");
+    expect(items[1].querySelector("[data-testid=todo-active-blocker-attempts]")?.textContent).toBe(
+      t("todos.active_blocker_attempts", { count: 2 }),
+    );
+
+    // 3. todo_done -> plain target without retry badge
+    expect(items[2].querySelector("[data-testid=todo-active-blocker-kind]")?.textContent).toBe(
+      t("todos.active_blocker_kind_todo_done"),
+    );
+    expect(items[2].querySelector("[data-testid=todo-active-blocker-target]")?.textContent).toBe("todo_prereq_1");
+    expect(items[2].querySelector("[data-testid=todo-active-blocker-attempts]")).toBeNull();
+
+    // Turning todos_v2 off hides the strip immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeNull();
+  });
+
+  it("renders no manual blocker add/cancel controls when todos_v2 is false or omitted", async () => {
+    await render({ todos: blockedTodos, todosV2: undefined, selectedId: "unblocked_task" });
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-btn]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-input]")).toBeNull();
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: blockedTodos, todosV2: false, selectedId: "blocked_task" });
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-btn]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-cancel-blocker-blk_pr]")).toBeNull();
+  });
+
+  it("validates https:// URL, submits POST /todos/{id}/blockers, handles failure, and hides add trigger on done to-dos under todos_v2 (#16199)", async () => {
+    let currentTodos: Todo[] = [
+      ...blockedTodos,
+      {
+        id: "closed_task",
+        title: "Already finished",
+        created_at: iso(5 * HOUR),
+        updated_at: iso(2 * HOUR),
+        done_at: iso(1 * HOUR),
+        view: view("done", "closed", "done", 0),
+      },
+    ];
+    let failNextPost = true;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/unblocked_task/blockers" && (init as { method?: string })?.method === "POST") {
+        if (failNextPost) {
+          failNextPost = false;
+          throw new Error("duplicate blocker");
+        }
+        const body = (init as { json?: { kind: string; target_ref: string } })?.json;
+        const created = { id: "blk_added_1", kind: body!.kind, target_ref: body!.target_ref, state: "active" };
+        currentTodos = currentTodos.map((td) =>
+          td.id === "unblocked_task" ? { ...td, active_blockers: [...(td.active_blockers ?? []), created] } : td,
+        );
+        return { blocker: created };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    const setInputValue = async (input: HTMLInputElement, next: string) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      await act(async () => {
+        setter.call(input, next);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+
+    await render({ todos: currentTodos, todosV2: true, selectedId: "unblocked_task" });
+    // Empty blockers still hides the strip, while open to-do exposes the compact "+ Wait on PR" button
+    expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeNull();
+    const addBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-add-pr-blocker-btn]")!;
+    expect(addBtn).toBeTruthy();
+
+    await act(async () => addBtn.click());
+    await flush();
+    const input = host.querySelector<HTMLInputElement>("[data-testid=todo-add-pr-blocker-input]")!;
+    expect(input).toBeTruthy();
+
+    // Non-https URL is rejected client-side without hitting API
+    await setInputValue(input, "http://github.com/nwverse/persona/pull/16199");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-add-pr-blocker-submit]")!.click());
+    await flush();
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-error]")?.textContent).toBe(
+      t("todos.active_blocker_pr_url_invalid"),
+    );
+    expect(api).not.toHaveBeenCalledWith("/todos/unblocked_task/blockers", expect.anything());
+
+    // Valid https:// URL -> server error shows message and preserves input
+    await setInputValue(input, "https://github.com/nwverse/persona/pull/16199");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-add-pr-blocker-submit]")!.click());
+    await flush();
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-error]")?.textContent).toContain("duplicate blocker");
+    expect(host.querySelector<HTMLInputElement>("[data-testid=todo-add-pr-blocker-input]")?.value).toBe(
+      "https://github.com/nwverse/persona/pull/16199",
+    );
+
+    // Retry succeeds -> POSTs exact payload, refreshes /todos, closes form, renders new blocker
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-add-pr-blocker-submit]")!.click());
+    await flush();
+    expect(api).toHaveBeenCalledWith(
+      "/todos/unblocked_task/blockers",
+      expect.objectContaining({
+        method: "POST",
+        json: { kind: "external_pr", target_ref: "https://github.com/nwverse/persona/pull/16199" },
+      }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-input]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeTruthy();
+    expect(host.querySelector("[data-testid=todo-cancel-blocker-blk_added_1]")).toBeTruthy();
+
+    // Closed to-do does not show "+ Wait on PR"
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: currentTodos, todosV2: true, selectedId: "closed_task" });
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-btn]")).toBeNull();
+  });
+
+  it("cancels an active blocker in one click via DELETE /todos/{id}/blockers/{blockerId} and refreshes todos (#16199)", async () => {
+    let currentTodos: Todo[] = blockedTodos.map((td) => ({
+      ...td,
+      active_blockers: td.active_blockers ? [...td.active_blockers] : undefined,
+    }));
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/blocked_task/blockers/blk_pr" && (init as { method?: string })?.method === "DELETE") {
+        currentTodos = currentTodos.map((td) =>
+          td.id === "blocked_task"
+            ? { ...td, active_blockers: (td.active_blockers ?? []).filter((b) => b.id !== "blk_pr") }
+            : td,
+        );
+        return { ok: true };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    await render({ todos: currentTodos, todosV2: true, selectedId: "blocked_task" });
+    // Only one "+ Wait on PR" button (rendered inside the strip header)
+    expect(host.querySelectorAll("[data-testid=todo-add-pr-blocker-btn]")).toHaveLength(1);
+    const cancelBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-cancel-blocker-blk_pr]")!;
+    expect(cancelBtn).toBeTruthy();
+
+    await act(async () => cancelBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/blocked_task/blockers/blk_pr",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector("[data-testid=todo-cancel-blocker-blk_pr]")).toBeNull();
+    expect(host.querySelectorAll("[data-testid=todo-active-blocker-item]")).toHaveLength(2);
+
+    // Turning todos_v2 off hides all blocker controls immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-btn]")).toBeNull();
   });
 });
