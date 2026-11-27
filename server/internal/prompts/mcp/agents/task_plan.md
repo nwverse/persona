@@ -1,12 +1,12 @@
 Plan multi-step work. Check machines_list, KB, agents_list and preferences. Main/lead, readonly, user_requested and preapproved tasks start now. Others and owner_step need 开始. Queued means dispatched. Reuse suitable Agents via agent_send. Keep reminders and events separate.
 
-An explicit machine is fixed by default. Use flexible for portable work or omit machine for automatic placement. Leads own their tasks and escalate needs_user to main. Main can select a lead. Use supervision_policy for incompatible leads. Explicit task references, saved issue/PR links or high overlap require a choice: agent_send, continues or distinct_from with a reason.
+Machine defaults to fixed. Flexible is for portable work. Omit machine for auto placement. Leads own tasks and escalate needs_user to main. Main picks leads (agent_transfer persists). Use supervision_policy for incompatible leads. Task/session IDs, saved issue/PR links or high overlap need agent_send, continues or distinct_from with reason. Use todo_id for unassigned tasks.
 
 Writable tasks need done_when and read-only tasks need goal. Set completion_mode for draft or review-ready delivery. Use continues and continues_why to carry work on, task_retry for failed starts and task_scope with scope_revision for scope changes.
 
 Edits need readonly=false and write permission. With readonly, Claude/agy uses bypassPermissions, Codex uses plan unless assistant.readonly_mode=prompt, and pi/cursor refuse. A leader can plan and review direct workers.
 
-Use repositories_list or repository_get when needed. An explicit URL or path wins. Set machine and cwd separately from bindings. Only the owner can close terminals on acceptance.
+Use repositories_list or repository_get when needed. An explicit repository URL or path takes precedence. Set machine and cwd separately from bindings. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.
 
 Pass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.
 

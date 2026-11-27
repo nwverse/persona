@@ -94,7 +94,7 @@ func profileValue(v string) *string { return &v }
 
 // ModelTier is what an Agent started on a tier (an Agent preset) runs on: a launcher, and its model, effort, start
 // speed and permission mode ("" for its defaults). Description says when to use it (Paseo's "When to use"): the
-// assistant reads it to pick a tier, the New Agent form shows it.
+// assistant reads it to pick a tier, the New Agent form shows it. Host applies to the whole tier.
 //
 // A tier may list several ordered candidates (#14700): the hub picks one at dispatch (pickTierCandidate), in the
 // user's order. The flat fields are always candidate 0, so an older client that reads or writes only them keeps
@@ -107,6 +107,7 @@ type ModelTier struct {
 	Effort         string          `json:"effort,omitempty"`
 	Speed          string          `json:"speed,omitempty"`
 	PermissionMode string          `json:"permission_mode,omitempty"`
+	Host           *string         `json:"host,omitempty"` // tier-wide start host. A profile edit can omit it to keep it or send "" to clear it.
 	Description    string          `json:"description,omitempty"`
 	Candidates     []TierCandidate `json:"candidates,omitempty"`
 	Aliases        []string        `json:"aliases,omitempty"`
@@ -137,7 +138,7 @@ func (t ModelTier) list() []TierCandidate {
 // on is t run on candidate c alone: c's fields with t's description, no other candidate and no alias. A start uses it,
 // so the code after the pick sees the one-candidate tier it always did.
 func (t ModelTier) on(c TierCandidate) ModelTier {
-	return ModelTier{Launcher: c.Launcher, Model: c.Model, Effort: c.Effort, Speed: c.Speed, PermissionMode: c.PermissionMode, Description: t.Description}
+	return ModelTier{Launcher: c.Launcher, Model: c.Model, Effort: c.Effort, Speed: c.Speed, PermissionMode: c.PermissionMode, Host: t.Host, Description: t.Description}
 }
 
 // setFirst replaces candidate 0 with c and keeps the others.
@@ -152,6 +153,13 @@ func (t *ModelTier) setFirst(c TierCandidate) {
 // normalize makes the flat fields candidate 0 and drops a list of one (the flat fields say it all), so a tier with
 // one candidate is stored exactly as before. Aliases are trimmed, in order, without repeats.
 func (t *ModelTier) normalize() {
+	if t.Host != nil {
+		if host := strings.TrimSpace(*t.Host); host != "" {
+			t.Host = &host
+		} else {
+			t.Host = nil
+		}
+	}
 	switch len(t.Candidates) {
 	case 0:
 		t.Candidates = nil
@@ -174,16 +182,22 @@ func (t *ModelTier) normalize() {
 
 // equal: the same candidates, description and aliases.
 func (t ModelTier) equal(o ModelTier) bool {
-	return t.first() == o.first() && t.Description == o.Description && slices.Equal(t.Candidates, o.Candidates) &&
+	return t.first() == o.first() && t.startHost() == o.startHost() && t.Description == o.Description && slices.Equal(t.Candidates, o.Candidates) &&
 		slices.Equal(t.Aliases, o.Aliases)
+}
+
+func (t ModelTier) startHost() string {
+	if t.Host == nil {
+		return ""
+	}
+	return *t.Host
 }
 
 // answersTo: name is t's alias.
 func (t ModelTier) answersTo(name string) bool { return slices.Contains(t.Aliases, name) }
 
-// runs is what the tier runs on, in a line: candidate 0's launcher, then the model, effort, speed and permission mode
-// it sets.
-func (t ModelTier) runs() string { return t.first().runs() }
+// runs is what the tier runs on, in a line: candidate 0's launch settings followed by the tier's host, when set.
+func (t ModelTier) runs() string { return t.withHostLabel(t.first().runs()) }
 
 // allRuns is every candidate in a line, in order (one candidate: runs).
 func (t ModelTier) allRuns() string {
@@ -191,7 +205,14 @@ func (t ModelTier) allRuns() string {
 	for _, c := range t.list() {
 		parts = append(parts, c.runs())
 	}
-	return strings.Join(parts, " / ")
+	return t.withHostLabel(strings.Join(parts, " / "))
+}
+
+func (t ModelTier) withHostLabel(run string) string {
+	if host := t.startHost(); host != "" {
+		return run + " · " + host
+	}
+	return run
 }
 
 func (c TierCandidate) runs() string {
@@ -285,6 +306,9 @@ func cloneModelProfile(p ModelProfile) ModelProfile {
 	if p.Tiers != nil {
 		tiers := make(map[string]ModelTier, len(p.Tiers))
 		for name, tier := range p.Tiers {
+			if tier.Host != nil {
+				tier.Host = new(*tier.Host)
+			}
 			tier.Candidates = slices.Clone(tier.Candidates)
 			tier.Aliases = slices.Clone(tier.Aliases)
 			tiers[name] = tier
