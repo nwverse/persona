@@ -89,7 +89,7 @@ struct LiveActivityStepTests {
     /// #16756: the hub confirming it has no push route for this phone (its token list names none for this credential)
     /// is an outage like a `none` route: nothing could update or end the activity, so it ends as the app goes to the
     /// background (#12982) and starts again in front.
-    @Test func leavingEndsTheActivityWhenTheHubConfirmsNoRoute() {
+    @Test @MainActor func leavingEndsTheActivityWhenTheHubConfirmsNoRoute() {
         var h = PushHealth(notificationsAllowed: true, relay: .registered)
         h.read(nil, group: "g")
         #expect(LiveActivityController.endsOnLeaving(h, group: "g"))
@@ -106,7 +106,7 @@ struct LiveActivityStepTests {
 
     /// A route that reaches the phone keeps the activity: the hub's pushes update and end it. A registration that
     /// brings a route back after a confirmed missing one does too.
-    @Test func leavingKeepsTheActivityWhenTheHubPushesHere() {
+    @Test @MainActor func leavingKeepsTheActivityWhenTheHubPushesHere() {
         var h = PushHealth(notificationsAllowed: true, relay: .registered)
         h.read(APIClient.PushRoute(route: "relay"), group: "g")
         #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
@@ -120,7 +120,7 @@ struct LiveActivityStepTests {
 
     /// An unknown route keeps the activity: an older hub reports no routes, a registration's missing route says nothing
     /// (#9612), and a hub not read yet or no paired hub may well push.
-    @Test func leavingKeepsTheActivityWhenTheRouteIsUnknown() {
+    @Test @MainActor func leavingKeepsTheActivityWhenTheRouteIsUnknown() {
         var h = PushHealth(notificationsAllowed: true, relay: .registered)
         #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
         h.readRegistration(nil, group: "g")
