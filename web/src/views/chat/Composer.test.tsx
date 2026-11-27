@@ -226,6 +226,7 @@ describe("inline selection comment images", () => {
     await send();
     expect(onSend).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(t("chat-comments.preparing_images"));
+    await until(() => expect(reads).toHaveLength(1));
     press("Escape");
     await settle(0);
     expect(getQuotes(key).list).toHaveLength(0);
