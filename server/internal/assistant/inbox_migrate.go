@@ -494,8 +494,9 @@ func (s *Service) replyMigrated(ctx context.Context, r inboxReplyReq) (bool, err
 		return false, i18n.ErrEnglish("inbox-errors.document_only")
 	}
 	if err := s.deliverInboxReply(ctx, r, func(ctx context.Context) error {
-		return s.connectorReply(ctx, migratedConnectorID, connector.InboxReply{Thread: migratedThread(&it), ItemID: it.ID, Last: it.Last,
+		_, err := s.connectorReply(ctx, migratedConnectorID, connector.InboxReply{Thread: migratedThread(&it), ItemID: it.ID, Last: it.Last,
 			Text: r.text, ClientID: clientID, Changes: changes}, r.sendID)
+		return err
 	}); err != nil {
 		return false, err
 	}
@@ -511,7 +512,7 @@ func (s *Service) migratedDocStatus(ctx context.Context, it *InboxItem, ch DocCh
 	b.mu.Lock()
 	thread, itemID, last := migratedThread(it), it.ID, it.Last
 	b.mu.Unlock()
-	if err := s.connectorReply(ctx, migratedConnectorID, connector.InboxReply{Thread: thread, ItemID: itemID, Last: last,
+	if _, err := s.connectorReply(ctx, migratedConnectorID, connector.InboxReply{Thread: thread, ItemID: itemID, Last: last,
 		Changes: []connector.StatusChange{{Ref: ch.Ref, Field: ch.Field, Value: ch.Value}}}, ""); err != nil {
 		return InboxItem{}, err
 	}

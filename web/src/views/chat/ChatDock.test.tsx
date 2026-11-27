@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Interaction, Item, Session } from "../../lib/types";
 import { getState, type AnsweredCard } from "../../lib/store";
 import { Header, spaceAgentsItem } from "./ChatView";
+import { t } from "../../i18n";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { Composer } from "./Composer";
 import { PendingCards, permissionFrom } from "./Interactions";
@@ -50,9 +51,9 @@ describe("Header", () => {
     // the buttons either side sit in slots of one least width, which grow to fit them (#5036)
     expect(html).toContain(`class="${HEADER_SLOT} ${HEADER_SLOT_START} lg:contents"`);
     expect(html).toContain(`class="${HEADER_SLOT} ${HEADER_SLOT_END} lg:contents"`);
-    // the title is hidden there, so ⋯ goes to the right end on a narrow screen and stays after the title on a wide one
-    expect(html).toMatch(/<span class="relative flex shrink-0 max-lg:hidden"><button[^>]*aria-label="更多操作"/);
-    expect(html).toMatch(/<span class="relative flex shrink-0 lg:hidden"><button[^>]*aria-label="更多操作"/);
+    // ⋯ sits once in the right-end slot at every width
+    expect(html.match(/aria-label="更多操作"/g)).toHaveLength(1);
+    expect(html).toMatch(/justify-end lg:contents"[^]*<span class="relative flex shrink-0"><button[^>]*aria-label="更多操作"/);
   });
 
   it("is as before without one", () => {
@@ -106,10 +107,18 @@ describe("Header", () => {
     }
   });
 
-  it("shows the branch after ⋯, wide only", () => {
-    const html = bare(header({ session: { ...session, branch: "feat/net-tests" } as Session }));
-    expect(html).toMatch(/aria-label="更多操作"[^]*data-chat-branch="true"[^>]*@max-\[800px\]:hidden[^>]*>[^]*feat\/net-tests/);
-    expect(header()).not.toContain("data-chat-branch");
+  it("omits the duplicate branch badge from the header and places ⋯ at the right end with a hairline divider", () => {
+    const html = bare(header({ session: { ...session, branch: "feat/net-tests" } as Session, view: "chat", onView: () => {} }));
+    expect(html).not.toContain("data-chat-branch");
+    expect(html).not.toContain("feat/net-tests");
+    const files = html.indexOf('aria-label="文件"');
+    const terminal = html.indexOf(`aria-label="${t("lib-terminals.terminal")}"`);
+    const divider = html.indexOf("data-header-divider");
+    const more = html.indexOf('aria-label="更多操作"');
+    expect(files).toBeGreaterThan(-1);
+    expect(terminal).toBeGreaterThan(files);
+    expect(divider).toBeGreaterThan(terminal);
+    expect(more).toBeGreaterThan(divider);
   });
 
   it("has no 同空间 button: the space's other agents are in ⋯ at every width, which carries their attention", () => {
@@ -154,9 +163,15 @@ describe("Header in a task's or an Agent's side panel (#3333, #5424)", () => {
     expect(html).not.toContain("代理的待办");
   });
 
-  it("puts what the panel gives beside the title (a task's ⌄ for its agents), before ⋯", () => {
+  it("puts what the panel gives beside the title (a task's ⌄ for its agents), with ⋯ in the right toolbar before close", () => {
     const html = header({ panel: { onClose: () => {}, title: "修登录崩溃", beside: <button aria-label="切换 Agent" /> } });
-    expect(html).toMatch(/>修登录崩溃<\/h1><button aria-label="切换 Agent"><\/button><span[^>]*><button[^>]*aria-label="更多操作"/);
+    expect(html).toMatch(/>修登录崩溃<\/h1><button aria-label="切换 Agent"><\/button>/);
+    const beside = html.indexOf('aria-label="切换 Agent"');
+    const more = html.indexOf('aria-label="更多操作"');
+    const close = html.indexOf('aria-label="关闭面板"');
+    expect(beside).toBeGreaterThan(-1);
+    expect(more).toBeGreaterThan(beside);
+    expect(close).toBeGreaterThan(more);
   });
 
   it("is as before outside a panel", () => {
@@ -182,17 +197,17 @@ describe("spaceAgentsItem, ⋯'s 同空间 row (#3576, #5421)", () => {
 describe("Header, the terminal view (#2419, #5421)", () => {
   it("is one button to the other view at every width", () => {
     const chat = bare(header({ view: "chat", onView: () => {} }));
-    expect(chat).toMatch(/<span class="relative flex shrink-0"><button[^>]*aria-label="终端"/);
+    expect(chat).toMatch(new RegExp(`<span class="relative flex shrink-0"><button[^>]*aria-label="${t("lib-terminals.terminal")}"`));
     expect(chat).not.toContain("radiogroup");
     const term = bare(header({ view: "term", onView: () => {} }));
     expect(term).toMatch(/<span class="relative flex shrink-0"><button[^>]*aria-label="对话"/);
   });
   it("is not there without a terminal to switch to", () => {
-    expect(header()).not.toContain('aria-label="终端"');
+    expect(header()).not.toContain(`aria-label="${t("lib-terminals.terminal")}"`);
   });
   it("marks 对话 when the terminal shows and something wants an answer", () => {
-    expect(header({ view: "term", onView: () => {}, viewDot: true })).toMatch(/aria-label="对话"[^]*?<\/button><span aria-hidden="true" class="pointer-events-none absolute[^"]*bg-attention"/);
-    expect(header({ view: "term", onView: () => {} })).not.toMatch(/aria-label="对话"[^]*?<\/button><span aria-hidden/);
+    expect(header({ view: "term", onView: () => {}, viewDot: true })).toMatch(/aria-label="对话"(?:(?!<\/button>).)*<\/button><span aria-hidden="true" class="pointer-events-none absolute[^"]*bg-attention"/);
+    expect(header({ view: "term", onView: () => {} })).not.toMatch(/aria-label="对话"(?:(?!<\/button>).)*<\/button><span aria-hidden/);
   });
 });
 
@@ -594,4 +609,3 @@ describe("restoreQueued in a Persona chat (#4342)", () => {
     }
   });
 });
-

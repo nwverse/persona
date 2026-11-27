@@ -38,6 +38,7 @@ import (
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/streams"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -46,6 +47,8 @@ type Node struct {
 	segmentStarts segmentStarts
 	segmentInputs segmentInputs
 	runtimeUsage  runtimeUsageReports
+	// usageDirs resolves the directories the usage names, while this connection's manager keeps them (usage_dirs.go).
+	usageDirs usageDirsOn
 
 	// Only the manager's initial node.info can negotiate source delivery on this connection.
 	managerInfoOnce sync.Once
@@ -124,6 +127,8 @@ type Node struct {
 	uid          string // the computer's own id (machineuid.go); empty when it could not be read or made
 	// Program is what bin is (nodeproto.ProgramPersonad / ProgramPersonaNode), for node.info; "" says nothing.
 	Program string
+	// Edition is the edition bin was built as (nodeproto.EditionFull when nothing says), for node.info.
+	Edition nodeproto.Edition
 	// managed: launchers kept by the hub (managed.go)
 	managed managedLaunchers
 	// external is registered only by this node's trusted local configuration.
@@ -217,6 +222,7 @@ type Node struct {
 	fulls               map[string]*fullClient            // client id -> a full herdr client running for the web (fullclient.go)
 	focus               focusState                        // focus sync for the full views (focus.go)
 	suggests            map[string]*suggestState          // session id -> Claude's suggested next message (suggestion.go)
+	checkpoints         checkpointTracker                 // per-turn working-tree snapshots (checkpoint.go)
 	driving             map[string]bool                   // session id -> Persona is working its TUI (a picker it opened is not "blocked")
 	blockedAt           map[string]time.Time              // session id -> when host status first became blocked without clearing
 	dialogs             paneDialogs                       // pane -> the dialog its last screen read showed (dialogstatus.go)
@@ -390,8 +396,6 @@ type Node struct {
 	larkCfgAt    time.Time
 	larkCfgTryAt time.Time // the last attempt to refresh it, kept even when that failed
 	larkAllowed  map[string]bool
-	// editedAnswers carries an editable card's answer from askOnce to larkGateWithEdit, keyed by interaction id.
-	editedAnswers sync.Map
 	// secrets is a test's own hand-offs; nil: the process's, shared by every connection (secretenv.go handoffs).
 	secrets *secretStage
 	// gp is the proxy that adds the gates' credentials, made at its first use (gateproxy.go, #1317).
@@ -649,6 +653,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 	go n.meterUsage(ctx, n.stateReady)
 	go n.backfillUsage(ctx, n.stateReady) // the days before the hub's history, once (usage_backfill.go)
+	go n.resplitUsage(ctx, n.stateReady)  // the last week split by directory, once (usage_resplit.go)
 	go n.runUsageWindows(ctx)
 	go n.sampleMetrics(ctx)
 	go n.watchPorts(ctx)
@@ -859,7 +864,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.handleUpdate(ctx, method, params)
 	}
 	if method == "task.workspace.capabilities" {
-		return map[string]any{"capability": "task_workspace_v1", "start": true}, nil
+		return taskworkspace.Capabilities{Capability: taskworkspace.Capability, Start: true, EmptyRepositories: true, LocalGit: true}, nil
 	}
 	if strings.HasPrefix(method, "task.workspace.") {
 		return n.taskWorkspace(ctx, strings.TrimPrefix(method, "task.workspace."), params, nil)
@@ -1005,7 +1010,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		ResumeOnly       bool                          `json:"resume_only"`
 		OnlyRunning      bool                          `json:"only_running"` // assistant.compact: refuse not_running rather than start the process
 		IsMain           bool                          `json:"is_main"`
-		MainCompact      int                           `json:"main_compact_window"` // assistant.send, session.send, assistant.warm: with is_main (model_config.go)
+		MainCompact      int                           `json:"main_compact_window"` // assistant.send, session.send, assistant.warm: the main or a leader conversation's (model_config.go)
 		FollowsSetting   bool                          `json:"follows_setting"`
 		Interject        bool                          `json:"interject_background"`
 		Public           bool                          `json:"public"` // a public mention turn: no owner live snapshot on this input
@@ -1133,7 +1138,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				}
 				return n.sendFirstCodexCall(ctx, w, params, p.Text, p.Images)
 			}
-			if r, err, handled := n.codexWaitCalls(method, p.SessionID); handled {
+			if r, err, handled := n.codexWaitCalls(method, p.SessionID, p.UserInputs); handled {
 				return r, err
 			}
 		}
@@ -1158,6 +1163,15 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 					params = raw
 				}
 			}
+		}
+	}
+	if sessionSend || method == "session.start" && p.ResumeSessionID != "" {
+		id := p.SessionID
+		if method == "session.start" {
+			id = p.ResumeSessionID
+		}
+		if err := n.waitCheckpoint(ctx, id); err != nil {
+			return nil, err
 		}
 	}
 	if n.codexBlocked(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.") || method == "assistant.send" || method == assistantwire.DeviceAssistantAnswerAgain || method == "assistant.permissions.reset") {
@@ -1187,6 +1201,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.sessionSkillCatalog(ctx, p.SkillOwner, p.SessionID)
 	}
 	if devicewire.IsSessionStart(method) && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(withStartHost(ctx, p.Host), p.ResumeSessionID) { // codex_resume.go
+		if src, ok := n.codexSource(p.ResumeSessionID); ok && codexAppOrigin(src) {
+			if running, _ := n.codexAppRunningNow(src.home); running {
+				return nil, refusal("codex_read_only", i18n.T(i18n.From(ctx), "codex-takeover.app_running"), nil)
+			}
+		}
 		return nil, refusal("codex_read_only", "外部 Codex 会话只能接入原 app-server，不能用启动器恢复", nil)
 	}
 	// session.modes with a launcher (launcher_switch.go): a switch to another launcher is checked and kept here, before
@@ -1198,8 +1217,23 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			From string `json:"from"`
 		}
 		_ = json.Unmarshal(params, &pick)
-		if handled, err := n.launcherModes(ctx, p.SessionID, p.Launcher, pick.From, p.Model, p.PermissionMode, p.Effort); handled {
-			return ok(err)
+		handled, changed, err := n.launcherModes(ctx, p.SessionID, p.Launcher, pick.From, p.Model, p.PermissionMode, p.Effort)
+		if handled {
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"ok": true, "changed": changed}, nil
+		}
+		if changed {
+			defer func() {
+				if resultErr != nil {
+					resultErr = partialModesErr(resultErr)
+					return
+				}
+				if m, ok := result.(map[string]any); ok {
+					m["changed"] = true
+				}
+			}()
 		}
 	}
 	// A session a connected runtime lists is the runtime's, also when its thread is in this machine's own Codex inventory
@@ -1237,26 +1271,62 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		done, err := n.retire(ctx, p.SessionID, a.CloseTerminal, a.AfterExit, a.StopCause)
 		return map[string]any{"closed": done}, err
 	}
-	if method == "session.stop" {
+	if method == "session.retire_guarded" {
 		var a struct {
-			Retire    bool            `json:"retire"`
-			StopCause proto.StopCause `json:"stop_cause"`
+			CloseTerminal     bool            `json:"close_terminal"`
+			StopCause         proto.StopCause `json:"stop_cause"`
+			ExpectedRev       int64           `json:"expected_rev"`
+			HasExpectedRev    bool            `json:"has_expected_rev"`
+			ExpectedUpdatedAt time.Time       `json:"expected_updated_at"`
+			ExpectedPane      string          `json:"expected_pane_id"`
+		}
+		if err := json.Unmarshal(params, &a); err != nil {
+			return nil, refusal(notRetirable, "invalid guarded retire parameters: "+err.Error(), nil)
+		}
+		guard := retireActivityGuard{
+			Active:            true,
+			ExpectedRev:       a.ExpectedRev,
+			HasExpectedRev:    a.HasExpectedRev,
+			ExpectedUpdatedAt: a.ExpectedUpdatedAt,
+			ExpectedPane:      a.ExpectedPane,
+		}
+		done, err := n.retire(ctx, p.SessionID, a.CloseTerminal, false, a.StopCause, guard)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"closed": done, "guard_verified": true}, nil
+	}
+	if method == "session.stop" || method == nodeproto.StopIfIdle {
+		var a struct {
+			Retire        bool            `json:"retire"`
+			CloseTerminal bool            `json:"close_terminal"`
+			StopCause     proto.StopCause `json:"stop_cause"`
 		}
 		_ = json.Unmarshal(params, &a)
+		if method == nodeproto.StopIfIdle && (!a.Retire || !a.StopCause.AllowsSupervisorResume()) {
+			return nil, refusal(notRetirable, "an automatic stop needs retire and an automatic stop cause", nil)
+		}
+		if method == nodeproto.StopIfIdle && a.CloseTerminal && a.StopCause != proto.StopTaskCompleted && a.StopCause != proto.StopIdle {
+			return nil, refusal(notRetirable, "automatic terminal close requires a completed task or idle stop", nil)
+		}
 		cause := proto.StopUser
 		if a.Retire && a.StopCause.AllowsSupervisorResume() {
 			cause = a.StopCause
 		} else if !a.Retire && a.StopCause == proto.StopTimeout {
 			cause = proto.StopTimeout
 		}
-		stopped, err := n.stopWithCause(ctx, p.SessionID, a.Retire, cause)
+		if method == nodeproto.StopIfIdle && a.CloseTerminal {
+			stopped, closed, err := n.closeIdleTerminal(ctx, p.SessionID, cause)
+			return map[string]any{"stopped": stopped, "closed": closed}, err
+		}
+		stopped, err := n.stopWithGuard(ctx, p.SessionID, a.Retire, cause, method == nodeproto.StopIfIdle)
 		return map[string]any{"stopped": stopped}, err
 	}
 	if method == "session.restore_model" { // model_restore.go (#2528): closes an idle headless process, sends nothing
 		return n.restoreModel(ctx, p.SessionID)
 	}
 	if method == "session.speed" {
-		return ok(n.setCodexSpeed(ctx, p.SessionID, p.ServiceTier))
+		return ok(n.setSessionSpeed(ctx, p.SessionID, p.ServiceTier))
 	}
 	if method == "session.ultracode" {
 		return ok(n.setUltracode(ctx, p.SessionID, p.Ultracode, p.DismissLost))
@@ -1271,7 +1341,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		// The companion's agy-<conversation> while an agy in a terminal has it open (agypresence.go, #13603): a message
 		// or an interrupt goes to the pane running it; nothing else may drive it from the companion.
 		if pane != "" && (method == "session.send" || method == "session.interrupt") {
-			if res, err, handled := n.workAgentCalls(ctx, method, pane, a, params, paneMessage{Text: p.Text, Images: p.Images}); handled {
+			if res, err, handled := n.workAgentCalls(ctx, method, pane, a, params, paneMessage{Text: p.Text, Images: p.Images, Source: p.MessageSource}); handled {
 				return res, err
 			}
 		}
@@ -1295,7 +1365,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	} else if a, ok := n.agent(p.SessionID); ok && (a.Agent == cursorAgent || a.Agent == agyAgent) {
 		// Herdr drives the pane (workagent.go). Messages go through agent.prompt, and Persona sends Esc through
 		// herdr to interrupt. Agy reads the verified pane conversation when available. Cursor shows a terminal notice.
-		if res, err, handled := n.workAgentCalls(ctx, method, p.SessionID, a, params, paneMessage{Text: p.Text, Images: p.Images}); handled {
+		if res, err, handled := n.workAgentCalls(ctx, method, p.SessionID, a, params, paneMessage{Text: p.Text, Images: p.Images, Source: p.MessageSource}); handled {
 			return res, err
 		}
 	} else if r, ok := n.terminalOnly(p.SessionID); ok { // a pi or opencode without its extension, any other agent (opencode.go)
@@ -1606,7 +1676,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if !p.Configured && p.AgentType == "" && !n.knownLauncher(ctx, p.Name) { // either: the hub vouches, from hub.json
 			return nil, fmt.Errorf("unknown launcher %q", p.Name)
 		}
-		return n.launcherModels(withLauncherPurpose(withStartHost(ctx, p.Host), p.Purpose), p.Name, p.AgentType, p.Refresh) // in that host (#8140)
+		modelCtx := withLauncherPurpose(withStartHost(ctx, p.Host), p.Purpose) // in that host (#8140)
+		res, err := n.launcherModels(modelCtx, p.Name, p.AgentType, p.Refresh)
+		if err == nil && res.Agent == "codex" && n.terminalStartSpeedSupported(modelCtx, p.Name) {
+			_, res.SupportsStartServiceTier = n.codexLauncher(modelCtx, p.Name)
+		}
+		return res, err
 	case "launchers.http":
 		if err := n.runnableLauncher(ctx, p.Name, p.Configured); err != nil {
 			return nil, err
@@ -1672,6 +1747,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, err
 		}
 		p.Speed = speed
+		if err := n.checkStartServiceTier(withStartHost(ctx, p.Host), p.ServiceTier, p.Speed, p.Launcher, p.ResumeSessionID); err != nil {
+			return nil, err
+		}
 		rawPrompt := p.Prompt
 		echoImages := 0
 		var runtimeImages []proto.Image
@@ -1730,7 +1808,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				return nil, err
 			}
 		}
-		if n.stopCause(p.ResumeSessionID).AllowsSupervisorResume() {
+		if n.effectiveStopCause(p.ResumeSessionID).AllowsSupervisorResume() {
 			// Consume the old stop before starting: a failed/interrupted resume is not another confirmed idle stop.
 			if err := n.saveStopCause(ctx, p.ResumeSessionID, proto.StopUnknown); err != nil {
 				return nil, err
@@ -1878,14 +1956,13 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		// Only Claude Code has a session id before it starts; another agent picks its own (start_agent.go).
 		asyncAgent := n.startAgentType(p.Launcher, p.AgentType)
-		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") &&
-			asyncAgent != traexAgent && asyncAgent != ompAgent && asyncAgent != agyAgent {
+		if p.Async && p.ResumeSessionID == "" && asyncAgent == "claude" {
 			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace})
 			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 		}
 		r := resumed{cwd: p.Cwd, launcher: p.Launcher, mode: p.PermissionMode, effort: p.Effort, tab: tab,
 			taskID: p.TaskID, workspaceID: p.WorkspaceID, workspaceLabel: p.WorkspaceLabel,
-			execution: modelExecution{CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace}}
+			execution: modelExecution{CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace}}
 		if p.ResumeSessionID != "" {
 			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
@@ -1943,8 +2020,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "assistant.execution":
 		return n.assistantExecution(ctx, p.SessionID), nil
 	case "assistant.send", assistantwire.DeviceAssistantAnswerAgain:
-		if p.ResumeOnly && !n.assistantResumable(p.SessionID) {
-			return nil, fmt.Errorf("conversation %s is gone", p.SessionID)
+		if p.ResumeOnly {
+			if err := n.checkAssistantResumable(ctx, p.SessionID, p.Launcher); err != nil {
+				return nil, err
+			}
 		}
 		sctx := withSkillOwner(ctx, p.SkillOwner)
 		if p.TaskInput {
@@ -2080,11 +2159,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			QueueEffort bool `json:"queue_effort"`
 		}
 		_ = json.Unmarshal(params, &options)
-		pending, err := n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort, options.QueueEffort)
+		pending, changed, err := n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort, options.QueueEffort)
 		if err != nil {
 			return nil, err
 		}
 		answer := n.modesAnswer(p.SessionID, p.PermissionMode)
+		answer["changed"] = changed
 		if pending {
 			answer["pending_effort"] = p.Effort
 		}
@@ -2538,6 +2618,19 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		f, err := read(p.SessionID)
 		if err != nil {
+			if !p.StrictRead {
+				if conv, ok := strings.CutPrefix(p.SessionID, agyAgent+"-"); ok && uuidRe.MatchString(conv) {
+					dir := n.agyDataRoot()
+					if root, rerr := agyBrain(dir, conv); rerr == nil {
+						defer root.Close()
+						if h, _, aerr := n.agyRead(root, filepath.Join(dir, conv), conv, nil); aerr == nil {
+							var ap agyPageParams
+							_ = json.Unmarshal(params, &ap)
+							return h.pageWith(ap, p.SessionID, &n.toolViews), nil
+						}
+					}
+				}
+			}
 			if !p.StrictRead && n.startingSession(p.SessionID) { // nothing written yet: an empty chat; else not_found with its reason
 				if p.UserInputs {
 					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
@@ -2588,12 +2681,14 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if p.ThroughSeq > 0 { // a fold being opened: the lines it stands for
 			page, more := f.Range(p.FromSeq, p.ThroughSeq, 1000)
+			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, false)
 			n.toolViews.attach(p.SessionID, page, false, f)
 			n.ttft.annotate(p.SessionID, page, false)
 			return map[string]any{"items": items(page), "more": more}, nil
 		}
 		// Pages counted back from the end fold the agent's work for callers that ask (transcript.FoldWork).
 		fold := func(page []proto.Item) []proto.Item {
+			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, false)
 			n.toolViews.attach(p.SessionID, page, p.BeforeSeq == 0, f)
 			n.ttft.annotate(p.SessionID, page, p.BeforeSeq == 0)
 			if p.FoldWork {
@@ -2604,6 +2699,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if p.AfterSeq != nil {
 			// more_after: the 500 cap cut it short; the caller asks again after the last seq (or takes the latest page).
 			page, more, span := f.After(*p.AfterSeq, 500)
+			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, true)
 			n.toolViews.attach(p.SessionID, page, true, f)
 			n.ttft.annotate(p.SessionID, page, true)
 			return withSpan(map[string]any{"items": items(page), "has_more": false, "more_after": more}, span, true), nil
@@ -2773,6 +2869,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "computer.status", "computer.call", "computer.install", "computer.grant", "computer.cancel", "computer.clipboard",
 		"computer.cursor", "computer.nolock", "computer.lock",
 		"browser.status", "browser.install", "browser.open", "browser.cancel", "browser.call",
+		"browser.download_info", "browser.download_chunk",
 		"browser.cookies.list", "browser.cookies.import", "browser.cookies.clear":
 		return legacyBuiltinCall(ctx, method, params, n.lcuComputerCall)
 	case methodFsStat: // detail: the Info sheet (files_info.go)
@@ -2908,9 +3005,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return map[string]any{"skills": assistantskills.List(assistantskills.UserDir(), n.skillSelection(cwd))}, nil
 	case "assistant.prepare":
 		var a struct {
-			Dir         string `json:"dir"`
-			ClaudeMD    string `json:"claude_md"`
-			WorkGuideMD string `json:"work_guide_md"`
+			Dir          string `json:"dir"`
+			ClaudeMD     string `json:"claude_md"`
+			WorkGuideMD  string `json:"work_guide_md"`
+			ViewsGuideMD string `json:"views_guide_md"`
 			// Connectors are the hub's signed in: the built-in skills that need one go in the directory (Requires).
 			Connectors []string `json:"connectors"`
 			// CLIs are their command lines (name → connector id), on the assistant's PATH (node/clicall.go).
@@ -2944,6 +3042,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
+		fullClaudeMD := a.ClaudeMD
+		compactViews := false
 		n.assistantSkillsMu.Lock()
 		defer n.assistantSkillsMu.Unlock()
 		// Before every message: a connector signed out since the last one takes its skill (and tg) away.
@@ -2969,8 +3069,17 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if err := n.syncAssistantSkills(dir); err != nil {
 			n.logger.Printf("assistant: skills: %v", err)
-		} else if a.WorkGuideMD != "" && assistantskills.WorkGuideReady(dir) {
-			a.ClaudeMD = a.WorkGuideMD
+		} else {
+			workReady := a.WorkGuideMD != "" && assistantskills.WorkGuideReady(dir)
+			switch {
+			case a.ViewsGuideMD != "" && assistantskills.ViewsGuideReady(dir) && (a.WorkGuideMD == "" || workReady):
+				// This is the final compact form: if work guidance was requested, its skill is ready too.
+				a.ClaudeMD = a.ViewsGuideMD
+				compactViews = true
+			case workReady:
+				// Keep the complete view procedure until its own managed skill is ready.
+				a.ClaudeMD = a.WorkGuideMD
+			}
 		}
 		if a.Space != nil {
 			spaceMD, err := prepareSpaceDir(dir, *a.Space)
@@ -2984,6 +3093,18 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				}
 			}
 			return map[string]any{"cwd": dir, "plugin_skills_need": need, "space_md_digest": digestOf(spaceMD)}, nil
+		}
+		// Keep the complete source beside compact instructions. A later per-send skill sync can revoke readiness;
+		// assistantRuntimeSkills restores these bytes instead of leaving a compact prompt with a personal guide.
+		mode := assistantInstructionModeFull
+		if compactViews {
+			mode = assistantInstructionModeViews
+		}
+		if err := writeIfChanged(filepath.Join(dir, assistantInstructionFallback), []byte(fullClaudeMD)); err != nil {
+			return nil, err
+		}
+		if err := writeIfChanged(filepath.Join(dir, assistantInstructionMode), []byte(mode)); err != nil {
+			return nil, err
 		}
 		// Bounded entry files and native rules preserve the same complete instructions for every launcher.
 		if err := writeAssistantInstructionFiles(dir, a.ClaudeMD); err != nil {
@@ -3077,7 +3198,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 				n.codexDesktopEffortRow(&row, src, quickMeta{})
 				model, effort = row.Model, row.Effort
 			}
-			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": model, "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.stopCause(id)}, nil
+			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": model, "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.effectiveStopCause(id)}, nil
 		}
 		return nil, err
 	}
@@ -3112,7 +3233,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 		"git_branch": m.GitBranch, "version": m.Version, "permission_mode": mode, "effort": effort,
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,
-		"stop_cause": st.StopCause,
+		"stop_cause": n.effectiveStopCause(id),
 		"task_id":    st.TaskID, "task_workspace_id": st.WorkspaceID, "workspace_label": st.WorkspaceLabel,
 	}, nil
 }
@@ -3172,11 +3293,13 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 	return proto.NodeInfo{
 		Protocol:           nodeproto.Version,
 		Program:            n.Program,
-		Executable:         cmp.Or(n.exe, n.bin), // the update target: the file, never a link to it
+		Edition:            nodeproto.Edition(n.Edition.Marker()), // left out by a full build
+		Executable:         cmp.Or(n.exe, n.bin),                  // the update target: the file, never a link to it
 		ProtocolMin:        nodeproto.MinManagerVersion,
 		Capabilities:       n.capabilities(), // secret_env only from a resident node (secretenv.go)
 		NodeUpdate:         canUpdate,
 		NodeUpdateReason:   updateReason,
+		UpdateDraining:     n.reload.UpdateDraining(),
 		ModelConfiguration: true,
 		Hostname:           host,
 		OS:                 runtime.GOOS,
@@ -3266,10 +3389,12 @@ func interactiveShell() (string, error) {
 	return "", errors.New("这台电脑上没有 Git Bash（Git for Windows）：Claude Code 在 Windows 上也要它，装上后再试")
 }
 
-// loginShell runs a command in an interactive zsh so ~/.zshrc functions and PATH are available (loginShellProgram:
-// bash without zsh, Git Bash on Windows).
+// loginShell runs a command in the user's shell the way their terminal starts it, so the rc files' functions and PATH
+// are available (loginShellProgram, shellFlag: zsh -ic, or bash -ic; on macOS the account's own bash or zsh, -lic; Git
+// Bash on Windows).
 func loginShell(ctx context.Context, script string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, loginShellProgram(), "-ic", script)
+	shell := loginShellProgram()
+	cmd := exec.CommandContext(ctx, shell, shellFlag(shell), script)
 	cmd.Stdin = nil
 	return cmd
 }

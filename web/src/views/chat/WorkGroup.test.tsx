@@ -41,15 +41,30 @@ describe("WorkGroup", () => {
     expect(html).not.toContain("data-work-detail"); // a lazy Collapse: nothing until it opens
   });
 
-  it("done: no leading layers icon, 已工作 Xs followed directly by chevron, folded", () => {
+  it("done: no leading layers icon; the completed summary's disclosure follows its label", () => {
     const html = renderToStaticMarkup(<WorkGroup g={group([tool("t1", "Bash", { command: "ls" })], false, 65_000)} p={props} />);
     expect(html).toContain(">已工作 1m 5s<");
+    expect(html).toMatch(/>已工作 1m 5s<\/span><svg/);
+    expect(html.match(/<svg/g)).toHaveLength(1);
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain("data-live-preview");
     // Only one svg in the completed top-level header: the disclosure chevron right after the heading (no leading layers icon, no flex-1 spacer)
     expect(html.match(/<svg /g)).toHaveLength(1);
     expect(html).not.toContain("flex-1");
     expect(html.indexOf("已工作 1m 5s")).toBeLessThan(html.indexOf("<svg "));
+  });
+
+  it("done: a top-level header keeps the elapsed heading without a tool-count suffix (#16777)", () => {
+    const inner = group([tool("r1", "Read", { file_path: "/a.ts" }), tool("e1", "Edit", { file_path: "/a.ts", old_string: "x", new_string: "y" })], false, 2000);
+    const outer: WorkGroupNode = { kind: "group", id: "work-outer", children: [inner, { kind: "step", step: tool("c1", "Bash", { command: "echo ok" }) }], live: false, durationMs: 5000 };
+    const html = renderToStaticMarkup(<WorkGroup g={outer} p={props} />);
+    expect(html).toContain(">已工作 5s<");
+    expect(html).toMatch(/>已工作 5s<\/span><svg/);
+    expect(html).not.toContain("data-work-summary");
+    expect(html).not.toContain("读 1 个文件、编辑 1 处、运行 1 条命令");
+
+    const liveHtml = renderToStaticMarkup(<WorkGroup g={group([tool("t1", "Bash", { command: "ls" }, false), tool("t2", "Read", { file_path: "/a" })], true)} p={props} />);
+    expect(liveHtml).toContain("已执行 2 步");
   });
 
   it("every nonempty live group can be manually opened and never previews tools", () => {
@@ -330,13 +345,10 @@ describe("summarizeWorkSteps", () => {
     expect(summarizeWorkSteps([])).toBe("");
   });
 
-  it("recursively collects tools from nested WorkGroupNodes and renders in WorkGroup header", () => {
+  it("recursively collects nested tools and keeps the live step count", () => {
     const inner = group([tool("r1", "Read", { file_path: "/a.ts" }), tool("e1", "Edit", { file_path: "/a.ts", old_string: "x", new_string: "y" })], false, 2000);
     const outer: WorkGroupNode = { kind: "group", id: "work-outer", children: [inner, { kind: "step", step: tool("c1", "Bash", { command: "echo ok" }) }], live: false, durationMs: 5000 };
     expect(summarizeWorkSteps(outer.children)).toBe("读 1 个文件、编辑 1 处、运行 1 条命令");
-    const html = renderToStaticMarkup(<WorkGroup g={outer} p={props} />);
-    expect(html).toContain(">已工作 5s<");
-    expect(html).toContain("读 1 个文件、编辑 1 处、运行 1 条命令");
 
     const liveHtml = renderToStaticMarkup(<WorkGroup g={group([tool("t1", "Bash", { command: "ls" }, false), tool("t2", "Read", { file_path: "/a" })], true)} p={props} />);
     expect(liveHtml).toContain(">正在工作…<");

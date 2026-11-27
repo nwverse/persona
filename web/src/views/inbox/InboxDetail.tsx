@@ -5,7 +5,8 @@
 // summary, recap, the suggestion, the handling chain); "Original" and the chain's source entries open the thing itself,
 // "Handling" goes back, and browser Back follows the same step. A chat item's event sits above its chat and a mail event
 // above its message instead. Their original starts collapsed and unmounted so merely opening the event cannot report it
-// read; Original expands it, and the chain's source entries expand it before focusing a message (#3262, #5471).
+// read; Original expands it, and the chain's source entries expand it before focusing a message (#3262, #5471). An item
+// from a chat the knowledge base has opens that chat's page too ("Knowledge page", InboxKBChat.tsx, #15356).
 import { useEffect, useState } from "react";
 import { ItemManager, useKnownDefault } from "../../lib/manager-choice";
 import { hasEvent, itemAtUid } from "../../lib/inbox-events";
@@ -33,9 +34,10 @@ import { AgentWorking, ItemAvatar, Spark, Tag } from "./InboxParts";
 import { InboxExtensionBody } from "./InboxExtensionBody";
 import { InboxLine } from "./InboxLine";
 import { InboxTaskLinks } from "./InboxTaskLinks";
+import { KBChatButton } from "./InboxKBChat";
 import { EventBody, type SourceAt } from "./InboxEvent";
 import { chatOfItem, LarkThread } from "./LarkThread";
-import { useLarkItemReadOnly } from "./lark-write-gate";
+import { useItemReadOnly } from "./item-write-gate";
 import { lazyDialog } from "../LazyOverlay";
 import type { ExternalSourceBindingEditorProps } from "../../features/external-sources/ExternalSourceBindingEditor";
 
@@ -91,7 +93,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
   // A chat item's event sits above its chat (#3262), and a mail event above its message (#5471), whether an extension
   // offers a page for the source or not. A chain entry focuses the chat or mail in place instead of switching the page.
   const embed = event && Boolean(item?.lark || item?.mail);
-  const larkReadOnly = useLarkItemReadOnly(item);
+  const readOnly = useItemReadOnly(item);
   const unsentDraft = useUnsentReply(originalKey);
   // Other events replace their body with the original. Give that page its own same-address entry so Back returns to
   // the event; "Handling" closes it and takes the entry back off. Item navigation takes the entry with it instead.
@@ -220,7 +222,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
             {!showEvent && <InboxLine item={item} />}
             {!done && !item.handling && agentWorking(item) && <div className="mt-2"><AgentWorking it={item} /></div>}
             <div className="mt-3 flex flex-wrap gap-2">
-              {canDraft(item) && (!larkReadOnly || hasDraft) ? (
+              {canDraft(item) && (!readOnly || hasDraft) ? (
                 <Button tone="accent" icon="write" onClick={() => setDialog("draft")}>{draft && !done ? t("inbox-inboxdetail.view_draft") : t("inbox-inboxdetail.ai_draft")}</Button>
               ) : (
                 // Answered in the source's own app (a CI run has nothing to answer: only "Hand to AI").
@@ -232,6 +234,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                 </Button>
               )}
               {item.source !== "assistant" && <Button tone="secondary" icon="spark" onClick={() => setDialog("handoff")}>{t("inbox-inboxdetail.hand_to_ai")}</Button>}
+              <KBChatButton item={item} />
             </div>
           </div>
         </div>

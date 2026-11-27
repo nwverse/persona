@@ -380,6 +380,11 @@ data class ExtensionPermissions(
      */
     @SerialName("agent_runtimes") val agentRuntimes: Boolean? = null,
     /**
+     * The routine sends its local date and language to this extension and may include its facts and report sections
+     * in the briefing.
+     */
+    @SerialName("routine_facts") val routineFacts: Boolean? = null,
+    /**
      * It receives the error and crash reports of the hub and the user's devices, scrubbed (no message text, tokens,
      * user names, machine names or IP addresses). Needed by contributes.error_reports.
      */
@@ -437,6 +442,7 @@ data class ExtensionContributes(
     @SerialName("triage_templates") val triageTemplates: List<ExtensionTriageTemplateItem>? = null,
     @SerialName("agent_filters") val agentFilters: List<ExtensionAgentFilterItem>? = null,
     val tunnels: List<ExtensionTunnelItem>? = null,
+    @SerialName("routine_facts") val routineFacts: List<ExtensionRoutineFactsItem>? = null,
     @SerialName("error_reports") val errorReports: List<ExtensionErrorReportsItem>? = null,
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
     @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
@@ -476,6 +482,7 @@ private data class ExtensionContributesKnown(
     @SerialName("triage_templates") val triageTemplates: List<ExtensionTriageTemplateItem>? = null,
     @SerialName("agent_filters") val agentFilters: List<ExtensionAgentFilterItem>? = null,
     val tunnels: List<ExtensionTunnelItem>? = null,
+    @SerialName("routine_facts") val routineFacts: List<ExtensionRoutineFactsItem>? = null,
     @SerialName("error_reports") val errorReports: List<ExtensionErrorReportsItem>? = null,
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
     @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
@@ -487,7 +494,7 @@ private data class ExtensionContributesKnown(
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -522,6 +529,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             triageTemplates = fields.triageTemplates,
             agentFilters = fields.agentFilters,
             tunnels = fields.tunnels,
+            routineFacts = fields.routineFacts,
             errorReports = fields.errorReports,
             authRelay = fields.authRelay,
             secretProviders = fields.secretProviders,
@@ -562,6 +570,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             triageTemplates = value.triageTemplates,
             agentFilters = value.agentFilters,
             tunnels = value.tunnels,
+            routineFacts = value.routineFacts,
             errorReports = value.errorReports,
             authRelay = value.authRelay,
             secretProviders = value.secretProviders,
@@ -584,6 +593,10 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
 @Serializable
 data class ExtensionSkillItem(
     val id: String = "",
+    /**
+     * What the extension's contributions list calls it; the id when absent.
+     */
+    val title: String? = null,
     /**
      * The directory, relative to the package (or to the data directory with source data).
      */
@@ -979,6 +992,25 @@ object ExtensionRepositoryLinkKind {
 }
 
 /**
+ * Identifies one routine facts source within its extension. It encodes as the bare string.
+ */
+@Serializable
+@JvmInline
+value class ExtensionRoutineContributionID(val raw: String) {
+    override fun toString(): String = raw
+}
+
+/**
+ * A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
+ * permissions.routine_facts.
+ */
+@Serializable
+data class ExtensionRoutineFactsItem(
+    val id: ExtensionRoutineContributionID = ExtensionRoutineContributionID(""),
+    val title: String = "",
+)
+
+/**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
  * program to speak the protocol, on_startup and permissions.error_reports.
  */
@@ -1166,6 +1198,10 @@ data class ExtensionAPIReceipt(
 @Serializable
 data class ExtensionAssistantItem(
     val id: String = "",
+    /**
+     * What the extension's contributions list calls it; the id when absent.
+     */
+    val title: String? = null,
     val skills: List<String>? = null,
     val instructions: String? = null,
     val gate: String? = null,
@@ -1182,6 +1218,10 @@ data class ExtensionMCPServerItem(
      * The server's name for the assistant; not persona or persona.
      */
     val id: String = "",
+    /**
+     * What the extension's contributions list calls it; the id when absent.
+     */
+    val title: String? = null,
     /**
      * Looked up on PATH, then in ~/bin.
      */
@@ -4058,7 +4098,8 @@ data class ExtensionAction(
      */
     val reply: String? = null,
     /**
-     * Assistant only: an https URL or a validated persona/persona session, task, kb or file target, opened inside the
+     * Assistant only, except that a full extension page may open persona://session/<machine>/<session> or
+     * persona://task/<id>: an https URL or a validated persona session, task, kb or file target, opened inside the
      * app.
      */
     val open: String? = null,

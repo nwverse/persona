@@ -145,6 +145,24 @@ stands as far below the group before it, all within 0.5 px (iOS: `SidebarHeading
 mock's own requests leave the browser. Screenshots and `results.json` go to the artifact directory; a four-minute
 watchdog ends the run, and the last line is the verdict.
 
+## Unread Persona chats in the sidebar (#13425)
+
+```sh
+MOCK_LEADERS=1 MOCK_RECENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --host 127.0.0.1 --port <web port> --strictPort &)
+node web/e2e/sidebar-unread-chats.mjs <loopback-web-origin> <loopback-mock-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English, at 1440 × 1000 and 390 × 844 (the phone's drawer),
+standard and Large text, light and dark. The mock's `GET /mock/incoming` puts a reply nobody has opened in two pinned leads (one with Agents
+at work under it, whose arc its own Unread replaces) and two Recent chats, pushed as the hub pushes it; each row is
+measured before and after: its height and where its mark's slot, title and time sit stay, the slot draws the unread
+mark in place of the chat icon and the title takes the unread weight. Folded, Recent's heading counts its two and the
+Persona chats heading all four ("Folded chats: N unread"); open, neither does. Opening a chat clears its mark at once
+(the time from the click is recorded) and it stays clear after the hub has it; closed, a later reply brings it back.
+Screenshots of the sidebar read, unread and folded, and `results.json`, go to the artifact directory; a four-minute
+watchdog ends the run, and the last line is the verdict.
+
 ## Start page (#9071)
 
 ```sh
@@ -240,6 +258,23 @@ clamped to 320–900; and the Overview card draws the same
 graph as a 200-px still preview whose only press is opening Full screen. It waits for the page's finite animations to end,
 never for a fixed time. Only the mock's own requests leave the browser. Screenshots and `results.json` go to the artifact
 directory; a 180-second watchdog ends the run, and the last line is the verdict.
+
+## An extension's home scene: UI version 11's scene (#12641)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_SCENE=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-scene.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English, light and dark at 1440 × 900. It checks a nonempty Canvas,
+`alt` / floor labels / pins reading order, opaque pin contrast of at least 4.5:1, the default camera, keyboard orbit, zoom buttons,
+Reset, drag, wheel and real Chromium two-finger touch events. A pin opens its device page and Back keeps the touched camera through
+a state redraw. Full screen keeps every pin inside the canvas and hit-testable, closes with Escape and returns focus. The Overview
+card checks its 200 px still preview, absence of nested controls and interactive Full screen. Large text and Reduce Motion add
+light/dark page, compact and full-screen captures, pin hit-testing and immediate camera input without a scene animation. Only the
+loopback origin is allowed; expected mock 404 resources are excluded from console errors, while page errors and other console errors fail the run. Screenshots
+go to the artifact directory, never the repository. A 180-second watchdog ends the run and the last line is the verdict.
 
 ## User-input navigation acceptance
 
@@ -595,3 +630,8 @@ the gateway's 用量 (none named) neutral, that the open page keeps `--ink`, tha
 and that every colored icon reads at 3:1 on the sidebar and on the hover fill, as the browser resolves them.
 `--monochrome-only` takes only the Monochrome part, to set its screenshots beside another build's. Screenshots and
 `results.json` go to the artifact directory; a five-minute watchdog ends the run, and the last line is the verdict.
+
+### Native fetch receiver and Settings
+
+After building the web bundle, run `node web/e2e/native-fetch-settings.mjs <artifact-directory>` with an output directory outside the checkout.
+The runner starts its own loopback HTTP hub fixture on an ephemeral port and opens the actual Managers settings page in installed Chrome, in light and dark mode. It uses a fresh browser context and synthetic credentials, blocks external requests, rejects HTTP writes, and leaves native browser fetch untouched. It checks that hub-provided manager data reaches the settings UI, that health and explicitly bound fetch succeed, and that the original member-call pattern really throws `Illegal invocation`. JSON results and screenshots stay outside the repository. This verifies browser transport and rendering against an isolated fixture, not a deployed hub or account.

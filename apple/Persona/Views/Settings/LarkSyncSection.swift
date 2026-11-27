@@ -142,7 +142,7 @@ struct LarkSyncSections: View {
                 Spacer(minLength: Theme.Space.s)
                 Toggle(String(localized: "Sync \(name) every day"), isOn: Binding(get: { b.enabled }, set: { on in Task { await model.setEnabled(b, on) } }))
                     .labelsHidden()
-                    .disabled(busy || authorize)
+                    .disabled(busy || (authorize && b.health != "scope_missing"))
             }
             if let e = b.error, !e.isEmpty, b.running != true {
                 Text(e).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
@@ -431,9 +431,8 @@ private struct LarkOAuthSheet: View {
                 .navigationTitle(String(localized: "Lark"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button { dismiss() } label: { Text("Cancel").lineLimit(1) }
-                    }
+                    // The sheet's way out, ✕ at the top leading corner (#9653, #16676).
+                    SheetClose { dismiss() }
                 }
         }
     }

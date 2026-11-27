@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -52,6 +53,13 @@ const (
 	MethodRename = "devices.rename"
 )
 
+var (
+	ConnectedMethod       = buswire.Method[Connected, ConnectedReply]{Name: MethodConnected}
+	ConnectorCredMethod   = buswire.Method[ConnectorCredRequest, ConnectorCred]{Name: MethodConnectorCred}
+	ConnectorPairedMethod = buswire.Method[ConnectorCred, buswire.None]{Name: MethodConnectorPaired}
+	RenameMethod          = buswire.Method[Rename, RenameReply]{Name: MethodRename}
+)
+
 // Rename is devices.rename's params: Name "" is the computer's id again.
 type Rename struct {
 	MachineID string `json:"machine_id"`
@@ -77,6 +85,9 @@ const (
 	// MethodFileCall has NodeCall's params too, but only for a long file.copy / file.zip whose caller may cancel it.
 	// Keeping it separate leaves ordinary devices.call completion semantics unchanged when an HTTP client disconnects.
 	MethodFileCall = "devices.file_call"
+	// MethodRetireCall forwards only session.stop_if_idle and propagates cancellation.
+	// An old manager refuses it; unlike a file call, it has no unconditional fallback.
+	MethodRetireCall = "devices.retire_call"
 	// EventNotify {machine_id, event, params}: a one-way event to a node (terminal input, a port's bytes).
 	EventNotify = "devices.notify"
 	// EventConfig Config: what the hub hands the manager changed (an entry added on the admin page, the mesh, the
@@ -112,6 +123,14 @@ const (
 	// leaves and puts it in the one it goes to, so a change of owner does not change the engine (#3611).
 	MethodEngineGet = "devices.engine.get"
 	MethodEnginePut = "devices.engine.put"
+)
+
+var (
+	MachinesPutMethod    = buswire.Method[MachinePut, buswire.None]{Name: MethodMachinesPut}
+	MachinesRemoveMethod = buswire.Method[MachineRef, MachineRemoved]{Name: MethodMachinesRemove}
+	MachinesGetMethod    = buswire.Method[MachineRef, MachineEntry]{Name: MethodMachinesGet}
+	EngineGetMethod      = buswire.Method[MachineRef, MachineEngine]{Name: MethodEngineGet}
+	EnginePutMethod      = buswire.Method[MachineEngine, buswire.None]{Name: MethodEnginePut}
 )
 
 // MachineEngine is one machine's engine choice (devices.engine.get's answer, devices.engine.put's params).
@@ -208,6 +227,7 @@ type Config struct {
 	NodePackagesURL   string             `json:"node_packages_url,omitempty"`
 	NodePackagesProxy string             `json:"node_packages_proxy,omitempty"`
 	DevelopmentTarget *DevelopmentTarget `json:"development_target,omitempty"`
+	PublishedTarget   *DevelopmentTarget `json:"published_target,omitempty"`
 	DevelopmentHold   bool               `json:"development_hold,omitempty"`
 	// LinkPingMS / LinkPingTimeoutMS: the heartbeats of the links and streams, hub.json's link section (0: the
 	// protocol's, link.PingEvery / PingTimeout; tests shorten them). The manager tells Persona Link them too.
@@ -437,6 +457,20 @@ type ConnectedReply struct {
 	Calls []NodeCall `json:"calls,omitempty"`
 }
 
+// ConnectorCredRequest asks for the credential of one machine.
+type ConnectorCredRequest MachineRef
+
+// UnmarshalJSON keeps the hub's legacy decode through ConnectorCred. Only the
+// machine ID is used, but malformed fields must still produce the same error.
+func (r *ConnectorCredRequest) UnmarshalJSON(data []byte) error {
+	legacy := ConnectorCred{MachineID: r.MachineID}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	r.MachineID = legacy.MachineID
+	return nil
+}
+
 // ConnectorCred is a computer of kind service's pin and credential (the token in the clear: the bus is the manager's).
 type ConnectorCred struct {
 	MachineID string `json:"machine_id"`
@@ -522,8 +556,8 @@ var TransferRoutes = []string{
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
-// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, and
-// the history: the days, the last days by the hour).
+// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, the
+// history: the days, the last days by the hour, and by project: usage_projects.go).
 var MetricsRoutes = []string{
 	"GET /api/v1/metrics",
 	"GET /api/v1/machines/{id}/metrics",
@@ -531,6 +565,8 @@ var MetricsRoutes = []string{
 	"GET /api/v1/usage",
 	"GET /api/v1/usage/days",
 	"GET /api/v1/usage/hours",
+	"GET /api/v1/usage/projects",
+	"GET /api/v1/usage/projects/detail",
 }
 
 // UsageRoutes are the subscription usage windows' routes (internal/devices usagewindows.go, docs/server/usage-windows.md),

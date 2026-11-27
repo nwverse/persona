@@ -119,7 +119,10 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 Windows: herdr has native Windows support since 0.9.5; except live terminal, capabilities match above. Orca works too. See [windows.md](../operations/windows.md), "herdr."
 
 **Antigravity CLI panes** show chat history once the pane's conversation ID is known. Two sources report it, and either is
-enough: Persona's own hooks (below) and the hook installed by `herdr integration install antigravity-cli`. Persona reads
+enough: Persona's own hooks (below) and the hook installed by `herdr integration install antigravity-cli`. On Linux the
+node also reads it from the `presence/<conversation>.lock` the pane's foreground agy holds open, in herdr, Herdr App and
+Orca panes (#16531), so a pane is known before its first hook fires and after a node restart; a pane whose agy processes
+hold two conversations' locks stays unknown. Persona reads
 that conversation's local `transcript.jsonl` from the node's Antigravity data directory, or `transcript_full.jsonl` when
 the compact export is absent. Switching export sources resets the history cursor. The node uses the conversation ID to
 restore Persona-started panes with `agy --conversation`. The pane's row is then titled after that conversation, as the Antigravity
@@ -145,6 +148,11 @@ dropped when its pane no longer runs agy. A pane is only readable under an engin
 `personad node doctor` has an `agy-hooks` line (installed / missing / stale when the binary moved; `--fix` rewrites it).
 `personad node agy-hooks [status|install|uninstall]` manages the entries; `uninstall` also tells the node not to put
 them back.
+
+Assistant's `agent_read` and `agents_list` show an AGY pane's working or finished turn only when a native hook matches
+the current input in its verified transcript. A successful idle `Stop` must also have a completed reply. The list
+gets its preview from the bound transcript. Terminal controls still use the engine's status, including the window
+between typing a prompt and AGY taking it.
 
 A conversation's row changes ID with the pane that shows it (#14395). While a live pane shows it, the row is the pane's,
 `agy-<workspace>-<pane>`, and the companion's own row for the conversation, `agy-<conversation id>`, is left out. With no
@@ -374,6 +382,40 @@ since the card was made is refused without a keypress (`prompt_changed`).
 Nothing else comes from this host: no spaces, slots, terminal tab, live stream or starting sessions. A message still goes through the session's peer
 inbox when it has one. tmux is added next to whichever engine the machine selected and needs no choice.
 
+## Commands waiting for input
+
+An Agent sometimes runs a command that stops at a prompt: a login asking for a password, a CLI that wants a pasted token, a sign-in that
+prints a URL and waits for the code (#14527). The line goes straight into the command from a card the owner answers on any client, never
+through the model, so it needs no turn of the Agent's and never enters its context.
+
+- **Antigravity (agy) in a terminal pane** (herdr, Herdr App, Orca, Tern). agy runs a long command as a background task of its conversation,
+  outside the pane, and holds every message while a non-daemon task runs: neither a chat message (nor Send now) nor typing in the pane reaches
+  it, and a message that carries the answer does not start a turn until the task ends. The node reads the pane's conversation instead
+  (`server/internal/node/agyinput.go`, once a second with the Codex cards): a task log in `<agy data>/brain/<conversation>/.system_generated/tasks/`
+  that ends at a prompt and has not changed for 2 seconds, with no end message from the task (`Task id … finished`) and no restart notice
+  after it in the conversation's `messages/`, written since the pane's agy started, is a `command_input` card in the node's card list
+  (`codex.interactions`). A prompt is the output's last line with no newline after it, at most 300 characters, ending in `:`, `?`, `>`, `]`
+  or `)` (`proto.CommandPrompt`). The card carries the task's description from the transcript's start step, the prompt and up to 20 lines
+  before it, escapes and blank lines removed.
+- **The answer** goes back as a Codex card's does (`codex.answer`). The node checks that the task still waits on the same prompt (otherwise
+  `prompt_changed`, nothing typed), finds the language server of the pane's agy in the environment agy gives the commands it runs
+  (`ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CSRF_TOKEN`, read from a process under the pane's agy; a loopback address only), and posts
+  `SendAgentMessage {recipient: "<conversation>/<task>", senderId: "<conversation>", content: "<line>\n"}`, the message agy's own
+  `manage_task send_input` sends. The task's pseudo-terminal types it, and the task wakes agy when it ends. Not now and a hand-back type
+  nothing; after either, and after the line went in, the same prompt is not asked again. Refusals reach the device that answered, in its
+  language, and the card stays: `command_input_line` (empty, a line break or another control character, too long), `command_input_unreachable`
+  (no language server found or reached: nothing typed), `command_input_refused` (agy answered with an error: nothing typed) and
+  `command_input_unconfirmed` (the request went out and no answer came: the line may be in, so look before sending it again).
+- **A prompt in the pane itself** (a shell, `ssh`, `sudo` in a herdr or tmux pane): a blocked Agent gets a screen card as before, with a
+  password field when its last line is a password prompt, and the web terminal's key bar has a line key that types one hidden line and Return
+  into the pane (`docs/web/web.md`, "Terminal").
+- **Not yet**: Claude Code's and Codex's shell tools give a command no terminal anyone can type into, so such a command fails or waits without
+  a prompt Persona can answer; agy on the Antigravity companion (ACP); Windows, where agy's environment cannot be read. #14527 lists them.
+
+Limit: agy itself keeps what reaches a task in the task's mailbox file and, when the prompt echoes, in its log, as it does for its own
+`send_input`. Persona keeps no copy: the card's field is secret, so the hub records `<redacted>` (`docs/protocol/protocol.md`, "Commands
+waiting for input").
+
 ## botmux
 
 [botmux](https://github.com/deepcoldy/botmux) maps each Lark topic to a Claude Code / Codex / compatible CLI session in its own tmux. It is not an engine:
@@ -389,10 +431,17 @@ Typical use: work Agents in botmux, personal Agents in herdr, viewed together.
   Without matching rollout, omit: newly opened sessions before initial prompt enters rollout (next refresh finds them), or custom bot-specific `CODEX_HOME` / `TRAE_HOME` directories unknown to node
   (Codex reads known homes, compatible fork only `~/.trae/cli`). `codex-app` (botmux drives Codex through app-server, without session-ID prompts) and other CLIs omitted.
   Space is cwd (like Herdr App terminals outside spaces; trim trailing `/` to avoid duplicates), named by final directory component. If it matches parent case-insensitively, include parent (`Botmux/botmux`, #1836). Derive only from its own path, not other listed sessions, so name-based pin / mute / group-to-do bindings stay stable.
-- **Sending**: same for all three, delivered through botmux dashboard `POST /api/trigger` targeting the session, not terminal input. Botmux queues while busy,
+- **Sending**: same for all three, delivered through botmux dashboard `POST /api/trigger` targeting the session (`target.kind: "turn"`, `botId`, `sessionId`), not terminal input. Botmux queues while busy,
   resumes suspended sessions itself (no separate herdr `claude --resume`, also for suspended beyond 7 days / unlisted), and sends replies back to Lark topics.
-  Node gets dashboard token through `botmux dashboard current`, memory-only, connecting only to local 127.0.0.1. Claude receives botmux task tags and an external-event explanation.
+  Node gets the dashboard token through `botmux dashboard current`, memory-only, connecting only to local 127.0.0.1.
+  Before sending, the node checks capabilities via the read-only `GET /api/sessions/:id/turns` probe (cached per botmux instance and re-probed after dashboard restart, token rotation, or CLI upgrade; never probed with a real message and never retried after delivery).
+  When `capabilities` includes `ownerActor`, `POST /api/trigger` sends top-level `actor: "owner"` (with no `envelope.payload` or `envelope.rawText`) and confirms the echoed `actor: "owner"` in the response, so botmux delivers the turn as the bot owner with `<sender>` and `<message_location>`.
+  On older botmux versions (below 3.59.23, where the endpoint returns `404` or `ownerActor` is absent), the node sends the existing external-event trigger and sets `botmux_external_trigger: true` on the session so the composer shows a one-line upgrade notice (`3.59.23+`).
 - **Unsupported**: screen reads, keys, dialogs (answer in Lark), close, rename, create, live terminal; app hides or explains by capabilities.
+- **Showing it as in Lark**: **structured turns first, wrapper parsing as per-turn fallback.**
+  When the local botmux dashboard serves `GET /api/sessions/:id/turns` (`botmux.session-turns.v1`, `server/internal/node/hostbotmux_turns.go`, `server/internal/transcript/botmux_turns.go`), the node reads turns incrementally by `seq` cursor and matches each turn to its transcript entry by `anchor.cliEntryId` or `anchor.inputSha256`, filling `Item.botmux` with the inbound text, sender display name, attachment metadata, thread placement, mentions, and full reply text (including `--content-file` and `--card-file` replies).
+  When the endpoint returns `404` (older botmux) or a turn has no structured record (e.g., turns before a botmux upgrade), the node falls back per turn to wrapper and `botmux send` parsing (`server/internal/transcript/botmux.go`).
+  The transcript text is always unchanged so the original stays one tap away, and only display names leave the node (never `open_id` or `messageId`). Formats and fallbacks: `docs/protocol/protocol.md` ("BotMux messages").
 - **Why it needs you / open in Lark**: reason from `botmux send --attention` goes into `attention_reason` while Needs you;
   app shows it in list rows / chat top. Raw observe topic link (`feishuThreadLink`, HTTPS only) becomes `external_url` for "Open in Lark."
   Both are raw botmux fields, not stable APIs; omit if absent.
