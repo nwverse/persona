@@ -522,7 +522,8 @@ describe("the list by project, on a hub with the catalog", () => {
     vi.mocked(api).mockClear();
     await browseBy("project");
     // name, how many need the user, count
-    expect(sections().map(summary)).toEqual(["app 1 3", "notes 2", "tool 1", `${t("paged-agents.no_folder")} 1`]);
+    // a project on two computers names neither; one only on Lab names it, the list being on several (#16877)
+    expect(sections().map(summary)).toEqual(["app 1 3", "notes 2", "tool · Lab 1", `${t("paged-agents.no_folder")} 1`]);
     // one read names the projects and counts the ones that need the user
     expect(reads("catalog").map((path) => Object.fromEntries(params(path)))).toEqual([{ catalog: "1" }]);
 
@@ -809,7 +810,7 @@ describe("the chosen Browse by", () => {
     await show();
     await settle();
     expect(chosen()).toBe(t("paged-agents.project"));
-    expect(sections().map((s) => heading(s).textContent)).toEqual(["app", "notes", "tool", t("paged-agents.no_folder")]);
+    expect(sections().map((s) => heading(s).textContent)).toEqual(["app", "notes", "tool · Lab", t("paged-agents.no_folder")]);
 
     await browseBy("recent");
     act(() => root.unmount());
