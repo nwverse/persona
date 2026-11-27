@@ -86,6 +86,7 @@ type codexCards struct {
 	outsideAskCache map[string]outsideAskCacheEntry // session id → stat-cached bounded read-only pending AskUserQuestion
 	pagerAt         map[string]time.Time            // pane → when its transcript pager was last closed to show a dialog
 	joins           map[string]codexJoinState       // session id → joining it on its app-server (codex_daemon.go)
+	input           agyInputs                       // commands waiting for input in agy panes (agyinput.go)
 }
 
 // watchCodexCards lists the open Codex questions and approvals to the hub whenever they change.
@@ -109,8 +110,9 @@ func (n *Node) syncCodexCards(ctx context.Context) {
 		cards = append(cards, c.ix)
 	}
 	// The questions of Claude sessions outside Persona's terminals ride along: the hub keeps them as it keeps these
-	// (claudeoutside_ask.go).
+	// (claudeoutside_ask.go). So do the commands waiting for input in agy panes (agyinput.go).
 	cards = append(cards, n.outsideAskCards()...)
+	cards = append(cards, n.commandInputCards(ctx)...)
 	// Matching blocked folders may resolve a symlink on the filesystem.
 	cards = slices.DeleteFunc(cards, func(ix proto.Interaction) bool { return n.sessionBlocked(ix.SessionID, ix.Cwd) })
 	now := time.Now()
@@ -647,6 +649,9 @@ func (n *Node) codexApprovalOn(ctx context.Context, pane string) (d *screen.Code
 func (n *Node) codexAnswer(ctx context.Context, session, id string, r proto.Resolution) error {
 	if strings.HasPrefix(id, outsideAskPrefix) {
 		return n.outsideAnswer(ctx, session, id, r) // a Claude session's question outside Persona's terminals
+	}
+	if strings.HasPrefix(id, proto.CommandInputPrefix) {
+		return n.commandInputAnswer(ctx, session, id, r) // a command waiting for input in an agy pane
 	}
 	if r.Cancel {
 		return fmt.Errorf("question cancellation is unavailable for terminal-only questions")
