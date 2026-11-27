@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1403,5 +1405,157 @@ func TestPRFeedbackPaginationRetry(t *testing.T) {
 				t.Fatalf("successful pagination left cursor %+v", c)
 			}
 		})
+	}
+}
+
+func TestPRFeedbackHeadChange(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	s, f, task := newBoundPRTask(t, &memStore{}, feedbackTestAgent(now, false))
+	turnPREventsRouteOn(t, s)
+	feedbackTestSendReceipt(f, agentSendReply{OK: true})
+	source, forge := newFeedbackTestForge(t)
+	s.deploy.forge = forge
+	s.sweepPRStatuses(t.Context(), now)
+
+	old := feedbackTestReview(1, now, "Please revise the old implementation.")
+	newHead := feedbackTestReview(2, now, "Please revise the current implementation.")
+	newHead.CommitID = "head-two"
+	source.mu.Lock()
+	source.reviews = []githubPRReview{old, newHead}
+	source.headAfterList = newHead.CommitID
+	source.mu.Unlock()
+	before := len(sentToAgent(f))
+	s.sweepPRStatuses(t.Context(), now.Add(deployRecheck))
+	if len(sentToAgent(f)) != before || !storedFeedbackTestCursor(t, s.store(), task).At.IsZero() {
+		t.Fatal("feedback from a moving head was handled")
+	}
+	s.sweepPRStatuses(t.Context(), now.Add(2*deployRecheck))
+	if sent := sentToAgent(f)[before:]; len(sent) != 1 || !strings.Contains(sent[0], "current implementation") {
+		t.Fatalf("new head was lost or old head was replayed: %q", sent)
+	}
+}
+
+type feedbackTestFaultStore struct {
+	*memStore
+	key  string
+	fail atomic.Bool
+}
+
+func (s *feedbackTestFaultStore) PutSetting(ctx context.Context, key string, v any) error {
+	if key == s.key && s.fail.Load() {
+		return errors.New("injected write failure")
+	}
+	return s.memStore.PutSetting(ctx, key, v)
+}
+
+func TestPRFeedbackConcurrentAndRestartDedup(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	st := &feedbackTestFaultStore{memStore: &memStore{}, key: prFeedbackCursorsKey}
+	agent := feedbackTestAgent(now, false)
+	agent.State, agent.Status = proto.StateWorking, proto.StatusWorking
+	s, f, task := newBoundPRTask(t, st, agent)
+	turnPREventsRouteOn(t, s)
+	feedbackTestSendReceipt(f, agentSendReply{Queued: true})
+	source, forge := newFeedbackTestForge(t)
+	s.deploy.forge = forge
+	s.sweepPRStatuses(t.Context(), now)
+	source.mu.Lock()
+	source.reviews = []githubPRReview{feedbackTestReview(1, now, "Please handle the error.")}
+	source.mu.Unlock()
+	var observed prFeedback
+	status, err := forge.readPRStatus(t.Context(), "example/app", 12, &observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status.URL, status.CheckedAt = task.PRURL, now.Add(deployRecheck)
+	if err := s.applyPRStatus(t.Context(), task, status); err != nil {
+		t.Fatal(err)
+	}
+	before := len(sentToAgent(f))
+	st.fail.Store(true)
+	var group sync.WaitGroup
+	for range 4 {
+		group.Go(func() {
+			if err := s.routePRFeedback(t.Context(), task.ID, status, forge, observed); err == nil {
+				t.Error("cursor write failure was reported as handled")
+			}
+		})
+	}
+	group.Wait()
+	if sent := sentToAgent(f)[before:]; len(sent) != 1 || !strings.Contains(sent[0], "Please handle the error.") {
+		t.Fatalf("concurrent attempts queued duplicate or missing work: %q", sent)
+	}
+	if c := storedFeedbackTestCursor(t, st, task); !c.At.IsZero() {
+		t.Fatalf("failed write advanced the cursor: %+v", c)
+	}
+
+	st.fail.Store(false)
+	restarted, rf := newQuietServiceOn(t, st)
+	holdDigest(restarted)
+	turnPREventsRouteOn(t, restarted)
+	if err := restarted.ensureTodosLoaded(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// The settings fake keeps the cursor and receipts. Restore the task that a production store would load.
+	restored := todoNow(s, task.ID)
+	restarted.todos.mu.Lock()
+	restarted.todos.todos[restored.ID] = &restored
+	restarted.todos.activeBySession[[2]string{agent.MachineID, agent.SessionID}] = restored.ID
+	restarted.todos.mu.Unlock()
+	rf.setSessions(agent.MachineID, agent)
+	feedbackTestSendReceipt(rf, agentSendReply{Queued: true})
+	status.CheckedAt = now.Add(2 * deployRecheck)
+	if err := restarted.applyPRStatus(t.Context(), todoNow(restarted, task.ID), status); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := restarted.prFeedbackTarget(task.ID, status.URL, status.HeadOID); !ok {
+		t.Fatalf("task or PR binding was not restored for feedback: %+v", todoNow(restarted, task.ID))
+	}
+	if err := restarted.routePRFeedback(t.Context(), task.ID, status, forge, observed); err != nil {
+		t.Fatal(err)
+	}
+	if sent := sentToAgent(rf); len(sent) != 0 {
+		t.Fatalf("restart replayed a queued review with a saved receipt: %q", sent)
+	}
+	if c := storedFeedbackTestCursor(t, st, task); !c.At.Equal(now) || !slices.Equal(c.IDsAt, []string{"review:1"}) {
+		t.Fatalf("restart did not catch up the cursor: %+v", c)
+	}
+}
+
+func TestPREventsRouteStoppedAgentNotResumedForPlainCommentedReview(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	st := &feedbackTestFaultStore{memStore: &memStore{}, key: relayKey}
+	s, f, task := newBoundPRTask(t, st, feedbackTestAgent(now, true))
+	turnPREventsRouteOn(t, s)
+	source, forge := newFeedbackTestForge(t)
+	s.deploy.forge = forge
+	s.sweepPRStatuses(t.Context(), now)
+	source.mu.Lock()
+	approval := feedbackTestReview(1, now, "LGTM")
+	approval.State = "APPROVED"
+	source.reviews = []githubPRReview{approval, feedbackTestReview(2, now, "Please handle the missing receipt."), feedbackTestReview(3, now, "Please preserve the cursor.")}
+	source.mu.Unlock()
+	beforeStarts, beforeSends := len(startCalls(f)), len(sentToAgent(f))
+	st.fail.Store(true)
+	s.sweepPRStatuses(t.Context(), now.Add(deployRecheck))
+	if entries := storedSupervisePending(t, s); len(entries) != 0 || !storedFeedbackTestCursor(t, st, task).At.IsZero() {
+		t.Fatalf("failed outbox write was treated as delivery: %+v", entries)
+	}
+	st.fail.Store(false)
+	s.sweepPRStatuses(t.Context(), now.Add(2*deployRecheck))
+	if len(startCalls(f)) != beforeStarts || len(sentToAgent(f)) != beforeSends {
+		t.Fatal("plain COMMENTED review resumed or sent to the stopped Agent")
+	}
+	entries := storedSupervisePending(t, s)
+	if len(entries) != 2 {
+		t.Fatalf("expected two distinct durable supervisor notifications: %+v", entries)
+	}
+	for _, signal := range entries {
+		if signal.PREventID == "" || !strings.Contains(signal.Detail, prEventUntrustedOpenTag) || !s.prEventSignalStillHolds(todoNow(s, task.ID), signal) {
+			t.Errorf("post-approval supervisor notification cannot be delivered: %+v", signal)
+		}
+	}
+	if c := storedFeedbackTestCursor(t, st, task); !c.At.Equal(now) || !slices.Equal(c.IDsAt, []string{"review:2", "review:3"}) {
+		t.Fatalf("durable fallback left cursor %+v", c)
 	}
 }
