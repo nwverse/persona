@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,7 +79,8 @@ func (d *DB) NoteConversationInputBlocked(ctx context.Context, machine, session 
 
 // Historical settlement never resolves the current switch, clears its handoff,
 // changes its target, or requeues another input. Positive and definitive negative receipts
-// are terminal for this attempt; missing receipts remain ambiguous.
+// close this attempt; a definite refusal requeues the same message in place.
+// Missing receipts remain ambiguous and never authorize automatic replay.
 func (d *DB) ResolveHistoricalConversationDelivery(ctx context.Context, machine, session string, epoch int64, input ConversationInput, outcome string) error {
 	if outcome != "accepted" && outcome != "rejected" {
 		return errors.New("invalid historical delivery outcome")
@@ -89,6 +91,21 @@ func (d *DB) ResolveHistoricalConversationDelivery(ctx context.Context, machine,
 		}
 		if input.DispatchEpoch <= 0 || input.DispatchEpoch >= epoch || input.DispatchSegment == "" {
 			return ErrConversationEpoch
+		}
+		if outcome == "rejected" {
+			// Definite non-delivery can retry safely. Preserve the old attempt and
+			// payload in audit before the next claim records its new target.
+			key := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%d", input.ClientMsgID, input.DispatchEpoch, input.Version)))
+			p := ConversationInputResolution{RequestID: fmt.Sprintf("receipt-requeue:%x", key), ExpectedEpoch: epoch, Input: input, Action: "replay", Reason: "original dispatch explicitly refused input; retry original FIFO position"}
+			raw, err := json.Marshal(p)
+			if err != nil {
+				return err
+			}
+			if err := recordConversationInputResolution(ctx, tx, machine, session, "runtime_receipt", p, raw); err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `UPDATE conversation_inputs SET state='queued',delivery_version=delivery_version+1,dispatch_segment='',dispatch_machine='',dispatch_session='',dispatch_epoch=0,blocked_reason='',last_reconciled_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, input.ClientMsgID)
+			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE conversation_inputs SET state=$4,delivery_version=delivery_version+1,blocked_reason='',last_reconciled_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, input.ClientMsgID, outcome); err != nil {
 			return err
@@ -147,8 +164,7 @@ func (d *DB) ResolveConversationInputManually(ctx context.Context, machine, sess
 		if err := lockConversationDelivery(ctx, tx, machine, session, p.ExpectedEpoch, p.Input); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO conversation_input_resolutions(logical_machine,logical_session,request_id,client_msg_id,actor,reason,action,request,original_payload,payload_hash,dispatch_segment,dispatch_machine,dispatch_session,dispatch_epoch)
- SELECT logical_machine,logical_session,$4,client_msg_id,$5,$6,$7,$8,payload,payload_hash,dispatch_segment,dispatch_machine,dispatch_session,dispatch_epoch FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, p.Input.ClientMsgID, p.RequestID, actor, p.Reason, p.Action, raw); err != nil {
+		if err := recordConversationInputResolution(ctx, tx, machine, session, actor, p, raw); err != nil {
 			return err
 		}
 		state := p.Action
@@ -179,4 +195,10 @@ func (d *DB) ResolveConversationInputManually(ctx context.Context, machine, sess
 		}
 		return nil
 	})
+}
+
+func recordConversationInputResolution(ctx context.Context, tx pgx.Tx, machine, session, actor string, p ConversationInputResolution, raw []byte) error {
+	_, err := tx.Exec(ctx, `INSERT INTO conversation_input_resolutions(logical_machine,logical_session,request_id,client_msg_id,actor,reason,action,request,original_payload,payload_hash,dispatch_segment,dispatch_machine,dispatch_session,dispatch_epoch)
+ SELECT logical_machine,logical_session,$4,client_msg_id,$5,$6,$7,$8,payload,payload_hash,dispatch_segment,dispatch_machine,dispatch_session,dispatch_epoch FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, p.Input.ClientMsgID, p.RequestID, actor, p.Reason, p.Action, raw)
+	return err
 }

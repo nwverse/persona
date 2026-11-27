@@ -104,7 +104,15 @@ func TestHistoricalDeliverySettlementPreservesCurrentSwitchAndFIFO(t *testing.T)
 				t.Fatalf("original handoff settlement mismatch: %s %v", originalHandoff, err)
 			}
 			row, err := restarted.ClaimConversationInput(ctx, "root", "chat", 4)
-			if err != nil || row == nil || row.ClientMsgID != "next" || row.DispatchSegment != "s4" || row.DispatchEpoch != 4 {
+			want := "next"
+			if outcome == "rejected" {
+				want = "old"
+				var original []byte
+				if err := d.pool.QueryRow(ctx, `SELECT original_payload FROM conversation_input_resolutions WHERE actor='runtime_receipt' AND client_msg_id='old'`).Scan(&original); err != nil || string(original) != string(input.Payload) {
+					t.Fatalf("definite refusal lost original dispatch audit: %q %v", original, err)
+				}
+			}
+			if err != nil || row == nil || row.ClientMsgID != want || row.DispatchSegment != "s4" || row.DispatchEpoch != 4 {
 				t.Fatalf("next input not claimed in order: %+v %v", row, err)
 			}
 			if again, err := d.ClaimConversationInput(ctx, "root", "chat", 4); err != nil || again != nil {
@@ -116,6 +124,12 @@ func TestHistoricalDeliverySettlementPreservesCurrentSwitchAndFIFO(t *testing.T)
 			c, _ = d.LogicalConversation(ctx, "root", "chat")
 			if c.Switch != nil {
 				t.Fatalf("new target receipt failed acceptance: %+v", c.Switch)
+			}
+			if outcome == "rejected" {
+				next, err := d.ClaimConversationInput(ctx, "root", "chat", 4)
+				if err != nil || next == nil || next.ClientMsgID != "next" {
+					t.Fatalf("later input lost or overtook refused message: %+v %v", next, err)
+				}
 			}
 		})
 	}

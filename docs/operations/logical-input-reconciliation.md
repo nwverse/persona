@@ -6,7 +6,9 @@ stable. A missing receipt is uncertain delivery; it never authorizes replay.
 
 The reconciler queries `assistant.segment.input` on the recorded target. An
 `accepted: true` receipt settles that attempt. Only an explicit `rejected: true`
-receipt proves rejection; `accepted: false` means unknown. Contradictory receipts
+receipt proves non-delivery and requeues the original message at its original FIFO
+position, recording the refused attempt and full payload in audit as actor
+`runtime_receipt`. `accepted: false` means unknown. Contradictory receipts
 fail closed. Historical settlement checks the current root epoch and original
 attempt CAS, then settles only the old input. It cannot accept a new switch,
 consume its handoff or move its target. A positive historical receipt consumes
