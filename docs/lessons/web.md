@@ -10,6 +10,12 @@ and a body that breaks off, into `HubUnreachableError`. Only that, or a TypeErro
 message, is a gap (`isNetworkFailure`). Any other TypeError says what broke ("Something went wrong on this page: …") and
 is not retried. When code needs to know whether a request reached the hub, use `isNetworkFailure`, not `instanceof TypeError`.
 
+## Closed-task links keep native navigation and the app base (#6819)
+
+Build closed-task banner links with the router's `href` and handle clicks with `onLinkClick`. Plain clicks stay
+in-app, modified clicks retain native navigation, and native destinations retain the reverse-proxy base path.
+Test the rendered anchor and its click behavior at both the root and a nested base path, not only the router helper.
+
 ## Reopening a model picker can reuse the computer's catalog (#15481)
 
 The browser's repeat read and the computer's forced discovery are separate. Use the opening read for fast results
@@ -32,6 +38,13 @@ section of that name. When either is ambiguous, keep it apart. A fixture where e
 reaches this fallback, so test sessions with a removed tree's bare `cwd`. Check the folder is at the computer's home: a
 cwd in a folder of a repository's own tree (`/code/app/.worktrees/feature/src`) has the same shape, and joining by the
 tree's name moved its Agent into an unrelated repository's section.
+
+## Approval waiting is not delivery waiting (#9762)
+
+Settings and the Sent ledger can share a localization namespace. Keep the
+permission-card waiting message separate from a pending delivery outcome;
+reusing `pending` silently replaced the approval instructions with a delivery
+badge. Exercise the pending card and the outcome badge independently.
 
 ## A folded launcher must retain its identity (#10249)
 
@@ -739,6 +752,13 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 
 - Assistant conversation rows use `showState={false}` to retain their chat / pin icon and timestamp rather than the full Agent-row presentation. That must not suppress the working `StatusMark`: use the existing status token while working, restore the idle icon when work ends, and leave the timestamp and layout alone.
 - Automatic conversation groups have their own working tally; that does not cover individual recent or pinned conversations. Regress first load and live session updates for both, including pinned `/agent` chats and legacy hubs that only report `status`.
+
+## Unread marks on Persona chat rows (2026-11-23, #13425)
+
+- **A row that hides its state hides every state it does not let through**: `showState={false}` kept the chat icon in the slot, and #5870 let only the working arc back in, so an unread Persona chat under Pinned or Recent looked read on the web while the main row and the iOS and Android drawers marked it. When a row turns its state column off, list each state it must still say (working, Unread, Just finished, needs you's count) and regress each one on that row.
+- **One slot, one rank**: a lead's arc for work running under it and the lead's own state compete for the same 14 px. Decide by the list rank, as iOS's `RowStateMark` does: its own needs you, working or Unread wins; Just finished ranks after Working and gives way. Draw Unread with the predicate the row uses (`unreadShown`: a turn a usage limit stopped is drawn seen), and count with the same one, or a folded heading counts a chat its row draws read.
+- **Count what the reference tally counts, in its words**: the folded heading reuses the Agents list's `StateTally`, which counts Unread but not Just finished, and whose spoken label said "Folded agents"; a list of chats needs its own noun (`chats`), or a screen reader hears agents.
+- **A chat on screen is seen on every store update**: `set` marks each viewed chat that turns Unread seen at once (`seeViewed`), so a test of "a later reply brings the mark back" must close the chat's view first; with it open, the reply is seen as it lands, as it should be. In the browser, the open chat's row is the current row, medium weight like every current row: check a read title's weight after leaving the chat.
 
 ## Knowledge counts change pill wrapping (2026-11-06, #4047)
 

@@ -39,11 +39,12 @@ import (
 
 // larkCall is one gated command's or lark-cli's invocation read off a Bash command.
 type larkCall struct {
-	Gate   int    // the command gate (index in the config's Gates); -1 for lark-cli
-	Method string // HTTP method; "CLI" for a lark-cli command (larkcligate.go)
-	Path   string // without /agent/v1 and the query string; a lark-cli command's words joined by "/"
-	Query  string
-	Body   string // JSON text, a file's content (@file, cut), or "upload file X" (in Chinese)
+	Gate    int    // the command gate (index in the config's Gates); -1 for lark-cli
+	Method  string // HTTP method; "CLI" for a lark-cli command (larkcligate.go)
+	Path    string // without /agent/v1 and the query string; a lark-cli command's words joined by "/"
+	Query   string
+	Body    string // JSON text, a file's content (@file, cut), or "upload file X" (in Chinese)
+	Account string // Agent API's actual routed account; "1" is normalized to the primary "".
 
 	CLI  bool     // lark-cli
 	Risk string   // lark-cli's own risk level for a "CLI" call: read | write | high-risk-write ("" unknown, larkCLIMissing)
@@ -116,8 +117,15 @@ func (n *Node) larkCheckOutcome(ctx context.Context, session, cwd, command strin
 	if slices.ContainsFunc(cfg.Gates, func(g proto.CommandGate) bool { return g.Auth != nil }) {
 		n.gates() // the proxy goes by this Node's config from now on (a resident node's next connection)
 	}
-	analysisCommand := normalizeLarkCommand(command, cwd, cfg.Gates)
-	v := classifyLarkWith(command, cfg.Gates, cwd, n.larkCLIRisk(cfg), n.larkLoginPATH)
+	inSpace := n.gates().spaceSession(session) || identity.InSpace(cwd)
+	remote := n.isRemoteRuntimeSession(session)
+	confirmWrites := inSpace || remote
+	mode, _ := n.modesOf(session)
+	bypass := !confirmWrites && mode == proto.ModeBypass && n.isAssistantSession(session) && n.guestOf(session) == nil
+	// Only bypass reads file-driven read loops and notes through path variables as what they are (#15860): every
+	// other mode keeps the usual reading and its cards.
+	analysisCommand := normalizeLarkCommandRelaxed(command, cwd, cfg.Gates, nil, bypass)
+	v := classifyLarkRelaxed(command, cfg.Gates, cwd, n.larkCLIRisk(cfg), n.larkLoginPATH, bypass)
 	origin, launchCwd := n.assistantOriginCwd(session)
 	if origin == originInbox && inboxLarkOutbound(cfg, v, analysisCommand) {
 		return larkCheckOutcome{decision: "deny", reason: inboxLarkRefusal}, nil
@@ -125,11 +133,6 @@ func (n *Node) larkCheckOutcome(ctx context.Context, session, cwd, command strin
 	if v.deny != "" {
 		return larkCheckOutcome{decision: "deny", reason: v.deny}, nil
 	}
-	inSpace := n.gates().spaceSession(session) || identity.InSpace(cwd)
-	remote := n.isRemoteRuntimeSession(session)
-	confirmWrites := inSpace || remote
-	mode, _ := n.modesOf(session)
-	bypass := !confirmWrites && mode == proto.ModeBypass && n.isAssistantSession(session) && n.guestOf(session) == nil
 	// classified: every call read off the command and nothing else in it that the gate cannot follow.
 	classified := !v.unparsed && !v.unknown && !v.unsure
 	for _, c := range v.calls {
@@ -149,7 +152,7 @@ func (n *Node) larkCheckOutcome(ctx context.Context, session, cwd, command strin
 		// Only a rule-allowed call needs no query-bound grant. A confirmation-required GET needs one too, and a non-Auth
 		// script has no proxy backstop. Writes in a space or remote runtime always need confirmation. Refuse every unknown query in those cases
 		// rather than confirm different bytes.
-		needsConfirmation := decision != "allow" || (confirmWrites && !larkRead(c))
+		needsConfirmation := decision != "allow" || (confirmWrites && !larkCallRead(cfg.Gates, c))
 		if c.queryUnknown && needsConfirmation {
 			return larkCheckOutcome{decision: "deny", reason: "查询要在执行时才能确定，无法绑定这次确认；请把查询直接写在路径或 --url-query 参数里。"}, nil
 		}
@@ -171,7 +174,7 @@ func (n *Node) larkCheckOutcome(ctx context.Context, session, cwd, command strin
 		// A write through a gate whose credentials are at the proxy goes there only as a call read off the command and
 		// let through here: in a command the gate cannot follow it would be refused after the phone said yes.
 		for _, c := range v.calls {
-			if !c.CLI && c.Gate >= 0 && cfg.Gates[c.Gate].Auth != nil && !larkRead(c) {
+			if !c.CLI && c.Gate >= 0 && cfg.Gates[c.Gate].Auth != nil && !larkCallRead(cfg.Gates, c) {
 				return larkCheckOutcome{decision: "deny", reason: "Proxy-authenticated writes must be standalone gated calls, outside loops, scripts and substitutions."}, nil
 			}
 		}
@@ -196,7 +199,7 @@ func (n *Node) larkCheckOutcome(ctx context.Context, session, cwd, command strin
 			title := wholeCommandTitle(cfg.Gates, v, analysisCommand, g, write)
 			if title != "" {
 				what := "写"
-				if wholeCommandReads(v, write) {
+				if wholeCommandReads(cfg.Gates, v, write) {
 					what = "读"
 				}
 				ix.ToolName, ix.Summary = title, "以你的身份在"+title+"上"+what+"（命令较复杂，整条显示）\n"+prettyBody(command)
@@ -205,7 +208,7 @@ func (n *Node) larkCheckOutcome(ctx context.Context, session, cwd, command strin
 				// which could be anything, the CLI included. Still asked, as the ordinary Bash card it is (#4890).
 				ix.ToolName, ix.Summary = cmp.Or(ix.ToolName, "Bash"), prettyBody(command)
 			}
-			ix.OutwardWrite = wholeCommandOutwardWrite(v, write, title)
+			ix.OutwardWrite = wholeCommandOutwardWrite(cfg.Gates, v, write, title)
 			return n.confirmLark(ctx, session, ix, nil, confirmWrites, title)
 		}
 		return larkCheckOutcome{}, nil
@@ -226,7 +229,7 @@ func (n *Node) larkCheckOutcome(ctx context.Context, session, cwd, command strin
 			}
 			decision = "confirm" // unconfigured outbound/deletion still requires confirmation
 		}
-		if decision == "allow" && confirmWrites && !larkRead(c) {
+		if decision == "allow" && confirmWrites && !larkCallRead(cfg.Gates, c) {
 			decision = "confirm"
 		}
 		switch decision {
@@ -252,7 +255,8 @@ func (n *Node) larkCheckOutcome(ctx context.Context, session, cwd, command strin
 		}
 		return larkCheckOutcome{decision: "allow", reason: "读操作"}, nil
 	}
-	ix.Kind, ix.ToolName, ix.Summary = proto.IxPermission, callTitle(cfg.Gates, ask[0]),
+	title := callTitle(cfg.Gates, ask[0])
+	ix.Kind, ix.ToolName, ix.Summary = proto.IxPermission, cmp.Or(title, "Bash"),
 		larkSummaryWithContext(cfg.Gates, ask, n.larkCardContexts(ctx, cfg, ask), i18n.From(ctx))
 	// The hub remembers these routes for assistant conversations and checks them again on every call.
 	ix.AlwaysKeys = nil
@@ -265,7 +269,7 @@ func (n *Node) larkCheckOutcome(ctx context.Context, session, cwd, command strin
 	if confirmWrites || bypass {
 		remember = nil // hard boundaries are confirmed each time
 	}
-	ix.OutwardWrite = slices.ContainsFunc(ask, larkCallOutwardWrite)
+	ix.OutwardWrite = slices.ContainsFunc(ask, func(c larkCall) bool { return larkCallOutwardWrite(cfg.Gates, c) })
 	out, err := n.confirmLark(ctx, session, ix, remember, confirmWrites, ix.ToolName)
 	if out.decision == "allow" {
 		// When the owner changed editable_text, never mint an unedited grant for the original body: the edit path
@@ -361,17 +365,20 @@ func callTitle(gates []proto.CommandGate, c larkCall) string {
 	if c.Gate >= 0 && c.Gate < len(gates) && gates[c.Gate].Title != "" {
 		return gates[c.Gate].Title
 	}
-	return "飞书" // lark-cli
+	if r := larkGateRules(); r != nil {
+		return r.DefaultTitle()
+	}
+	return ""
 }
 
 // wholeCommandReads says whether every call the gate identified is an ordinary read. An opaque non-Lark part may
 // still need the whole-command card, but does not turn those identified reads into writes. Zero calls, an explicit
 // write, an outbound/delete action, an unknown CLI risk or an expanded command name keeps the existing wording.
-func wholeCommandReads(v larkVerdict, write bool) bool {
+func wholeCommandReads(gates []proto.CommandGate, v larkVerdict, write bool) bool {
 	if write || v.cliWrite || v.dynamic || len(v.calls) == 0 {
 		return false
 	}
-	return !slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkRead(c) || !larkBypassSafe(c) })
+	return !slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkCallRead(gates, c) || !larkBypassSafe(c) })
 }
 
 // wholeCommandTitle is what a whole-command card names as the place the command acts on, from what the command

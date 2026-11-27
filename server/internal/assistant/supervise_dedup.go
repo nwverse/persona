@@ -28,8 +28,8 @@ type superviseFingerprint struct {
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
-	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery {
-		// One durable wake per to-do and canonical prerequisite/children set or outage episode, independent of restarts or sweeps.
+	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery || g.Kind == sigOrphaned && g.WorkerSet != "" {
+		// One durable wake per to-do and canonical prerequisite/children set, outage episode, or accepted-worker set, independent of restarts or sweeps.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind})
 		sum := sha256.Sum256([]byte(g.Key))
 		return string(key), hex.EncodeToString(sum[:])

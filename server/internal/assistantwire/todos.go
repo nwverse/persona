@@ -41,7 +41,8 @@ type TodoLink struct {
 	TodoID    string `json:"todo_id"`
 	Title     string `json:"title"` // the todo's
 	// Task: the todo is a task an assistant conversation opened (its agents' cards name it: proto.Interaction.TaskTitle).
-	Task bool `json:"task,omitempty"`
+	Task      bool `json:"task,omitempty"`
+	Cancelled bool `json:"cancelled,omitempty"` // completed ownership ended by cancellation, not completion
 }
 
 // TodoHandoff is assistant.todo_handoff's params: an agent is handed work for a todo (POST /api/v1/sessions or
@@ -54,6 +55,8 @@ type TodoHandoff struct {
 	New       bool   `json:"new,omitempty"`
 	MachineID string `json:"machine_id,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
+	// Agent is the kind that will receive Text. An empty value keeps the legacy prompt order.
+	Agent string `json:"agent,omitempty"`
 }
 
 // TodoHandoffResult is assistant.todo_handoff's answer: the todo (Found false: no such todo) and Text with the todo's
