@@ -674,7 +674,6 @@ func newFleetTest(t *testing.T) *fleetTest {
 	d.add("mac", "Mac")
 	st := newFleetMem()
 	s := New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), Devices: d})
-	configureFleetReviewer(t, s, f)
 	return &fleetTest{t: t, s: s, d: d, f: f, st: st}
 }
 
@@ -685,28 +684,7 @@ func newFleetTestNoStore(t *testing.T) *fleetTest {
 	d := newFleetDevs()
 	d.add("mac", "Mac")
 	s := New(Options{Hub: f, Logf: testLogf(t), Devices: d})
-	configureFleetReviewer(t, s, f)
 	return &fleetTest{t: t, s: s, d: d, f: f}
-}
-
-// Fleet lifecycle tests need a configured authority now that an internal card
-// without a reviewer ends unanswered. Routing-specific tests override this fixture.
-func configureFleetReviewer(t *testing.T, s *Service, f *fakeHub) {
-	t.Helper()
-	f.setHello(func(h *Hello) {
-		if h.Assistant.MachineID == "" {
-			h.Assistant.MachineID = "mac"
-		}
-		h.Assistant.Machines = append(h.Assistant.Machines, "mac")
-	})
-	if _, err := s.updateSettings(context.Background(), func(v *Settings) error {
-		if v.Main == "" {
-			v.Main, v.MachineID = "fixture-reviewer", "mac"
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // event is a node's event on machine as the devices hand it over.

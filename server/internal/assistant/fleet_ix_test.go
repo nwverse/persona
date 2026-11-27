@@ -32,7 +32,7 @@ func TestResolveRequiresDecisionForInteractionKind(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ft := newFleetTest(t)
-			ix := proto.Interaction{ID: "ix_decision", MachineID: "mac", SessionID: "s1", Kind: tc.kind}
+			ix := proto.Interaction{ID: "ix_decision", MachineID: "mac", SessionID: "s1", Kind: tc.kind, OutwardWrite: tc.kind == proto.IxPermission}
 			announced := make(chan struct{})
 			done := make(chan proto.Resolution, 1)
 			go func() {
