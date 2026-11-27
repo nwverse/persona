@@ -678,7 +678,7 @@ type ConversationInput struct {
 	DispatchEpoch int64 `json:"dispatch_epoch"`
 	Version int64 `json:"version"`
 	BlockedReason string `json:"blocked_reason,omitempty"`
-	LastReconciledAt *time.Time `json:"last_reconciled_at,omitempty"`
+	LastReconciledAt *time.Time `json:"last_reconciled_at"`
 }
 
 // Enqueue is idempotent by the original client message ID, not its text.
@@ -1020,6 +1020,7 @@ func (d *DB) ConversationSegmentDispatched(ctx context.Context, machine, session
 	err := d.pool.QueryRow(ctx, `SELECT
 		NOT EXISTS(SELECT 1 FROM conversation_segments WHERE id=$3 AND logical_machine=$1 AND logical_session=$2)
 		OR EXISTS(SELECT 1 FROM conversation_segments WHERE id=$3 AND logical_machine=$1 AND logical_session=$2 AND dispatched)
+		OR EXISTS(SELECT 1 FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND state IN ('sending','in_doubt'))
 		OR NOT EXISTS(SELECT 1 FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND target_segment=$3)
 		OR EXISTS(
 			SELECT 1 FROM conversation_inputs i
