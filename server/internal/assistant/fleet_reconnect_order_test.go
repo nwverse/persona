@@ -144,7 +144,7 @@ type delayedStartupStore struct {
 	persisted chan struct{}
 }
 
-func (s *delayedStartupStore) ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, []string, error) {
+func (s *delayedStartupStore) ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, []proto.Interaction, error) {
 	close(s.scanning)
 	<-s.release
 	return s.restoreMem.ExpireStaleInteractions(ctx)

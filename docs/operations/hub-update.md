@@ -601,8 +601,9 @@ it does not reconnect and replay the remote publication. Keepalives reduce idle
 connection loss but do not prove a broken route has recovered. Preserve the failed
 run and let its sole runtime owner decide a subsequent explicit retry.
 
-A Hub-only edge switch may proceed while sessions on proven resident nodes or remote herdr/herdr-core hosts run:
-their processes belong to the terminal host and survive the transport reconnect.
+A Hub-only edge switch may proceed while sessions on proven resident nodes or remote herdr, herdr-core or Orca hosts
+run: their processes belong to the terminal host (Orca's terminals to the Orca app) and survive the transport reconnect
+(`hub/selfupdate_install.go` `updateBusy`).
 Local and unknown/direct assistant sessions still wait for idle. Fleet upgrades
 retain the conservative wait for every working session.
 

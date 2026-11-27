@@ -820,14 +820,14 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		closing = &taskReviewClose{reason: reason, accepted: verdict == reviewAccepted}
 	}
 	var cancelCheckedAgents []TodoAgent
-	cancelStaleAllowed := false
+	cancelWorkersGone := false
 	if verdict == reviewCancelled {
-		cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, t)
+		cancelCheckedAgents, cancelWorkersGone = s.checkStaleInvestigationCancelWorkers(ctx, t)
 	}
 	var guard func(Todo) bool
 	if verdict == reviewAccepted || verdict == reviewCancelled {
 		guard = func(cur Todo) bool {
-			if !(verdict == reviewCancelled && cancelStaleAllowed && staleInvestigationCancelAllowed(cur, cancelCheckedAgents)) {
+			if !(verdict == reviewCancelled && staleInvestigationCancelAllowed(cur, cancelCheckedAgents, cancelWorkersGone)) {
 				findingErr = s.investigationTransitionError(ctx, cur, cur.Supervision, nil)
 			}
 			if findingErr == nil {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -173,6 +174,97 @@ func TestStageOf(t *testing.T) {
 		t.Errorf("open at develop = %s", got)
 	}
 	_ = context.Background
+}
+
+func TestStageOfSelectsOnlyAnUnambiguousLegacyPR(t *testing.T) {
+	const delivery = "https://github.com/example/project/pull/12"
+	const unrelated = "https://github.com/example/project/pull/13"
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{"one distinct PR", delivery + "\n" + delivery + "#discussion_r123", delivery},
+		{"multiple prose PRs", delivery + "\n" + unrelated, ""},
+		{"explicit closeout", delivery + "\n<closeout status=\"done\">\nartifact: pr " + unrelated + "\nartifact: url " + delivery + "\n</closeout>", unrelated},
+		{"closeout without a PR", unrelated + "\n" + researchNoPRCloseout, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, got := stageOf(tc.text); got != tc.want {
+				t.Fatalf("stage PR = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAdvanceTaskReplyPreservesDeliveryBinding(t *testing.T) {
+	const delivery = "https://github.com/example/project/pull/12"
+	const english = "https://github.com/example/project/pull/13"
+	const chinese = "https://github.com/example/project/pull/14"
+	const replacement = "https://github.com/example/project/pull/15"
+	s, f, todo := newSupervisedServiceOn(t, repositorystore.New(todoTestDB(t)))
+	agent := todo.Agents[0]
+	ctx := t.Context()
+	store := s.store().(todoRepositoryImportStore)
+	if _, _, err := store.ImportTodoRepositoryLinks(ctx, todo.ID, []string{delivery}, "explicit"); err != nil {
+		t.Fatal(err)
+	}
+	// A repository link alone is enough to disable prose-based delivery extraction.
+	s.advanceTaskReply(ctx, todo, "", "", "Checked for overlap with "+english)
+	if got := todoNow(s, todo.ID).PRURL; got != "" {
+		t.Fatalf("prose assigned a stage PR despite a repository binding: %q", got)
+	}
+	// A structured closeout can explicitly set the primary PR. The following reports use a stale
+	// snapshot so the stored PR must win even if the caller has not seen it.
+	text := "<closeout status=\"done\">\nartifact: pr " + delivery + "\n</closeout>"
+	reply := artifactReportProof(f, todo, text, delivery)
+	s.advanceTaskReplyAt(ctx, todo, agent.MachineID, agent.SessionID, text, reply.TS)
+	for _, enabled := range []bool{true, false} {
+		setSettings(t, s, func(v *Settings) { v.TodosV2 = &enabled })
+		s.advanceTaskReply(ctx, todo, "", "", "Checked for overlap with "+english+"\n与 "+chinese+" 无重叠。") // i18n-ignore: task report fixture
+		s.advanceTaskReply(ctx, todo, "", "", "Related work: "+delivery)
+		s.advanceTaskReply(ctx, todo, "", "", "Checked no overlap with PR #16")
+		if got := todoNow(s, todo.ID); got.PRURL != delivery || len(got.PRs) != 0 {
+			t.Fatalf("todos_v2=%v: stored PR = %q, earlier PRs = %v", enabled, got.PRURL, got.PRs)
+		}
+	}
+	text = "Checked " + english + "\n<closeout status=\"done\">\nartifact: pr " + replacement + "\nartifact: url " + chinese + "\n</closeout>"
+	reply = artifactReportProof(f, todo, text, replacement)
+	s.advanceTaskReplyAt(ctx, todo, agent.MachineID, agent.SessionID, text, reply.TS)
+	if got := todoNow(s, todo.ID).PRURL; got != replacement {
+		t.Fatalf("explicit replacement PR = %q, want %q", got, replacement)
+	}
+	roles := linkRoles(t, s, todo.ID)
+	for u, want := range map[string]string{
+		delivery: repository.LinkRoleDelivery, replacement: repository.LinkRoleDelivery,
+		english: repository.LinkRoleReference, chinese: repository.LinkRoleReference,
+	} {
+		if roles[u] != want {
+			t.Errorf("role of %s = %q, want %q", u, roles[u], want)
+		}
+	}
+}
+
+func TestAdvanceTaskReplyLegacyDeliveryAfterReferences(t *testing.T) {
+	const reference = "https://github.com/example/project/pull/12"
+	const other = "https://github.com/example/project/pull/13"
+	const delivery = "https://github.com/example/project/pull/14"
+	s, f, todo := newSupervisedServiceOn(t, repositorystore.New(todoTestDB(t)))
+	agent := todo.Agents[0]
+	ctx := t.Context()
+	s.advanceTaskReply(ctx, todo, "", "", reference+" and "+other)
+	s.advanceTaskReply(ctx, todo, "", "", reference)
+	if got := todoNow(s, todo.ID).PRURL; got != "" {
+		t.Fatalf("prose selected a saved reference as the PR: %q", got)
+	}
+	text := "Opened " + delivery
+	reply := artifactReportProof(f, todo, text, delivery)
+	s.advanceTaskReplyAt(ctx, todo, agent.MachineID, agent.SessionID, text, reply.TS)
+	if got := todoNow(s, todo.ID).PRURL; got != delivery {
+		t.Fatalf("legacy single PR = %q, want %q", got, delivery)
+	}
+	roles := linkRoles(t, s, todo.ID)
+	if roles[reference] != repository.LinkRoleReference || roles[other] != repository.LinkRoleReference || roles[delivery] != repository.LinkRoleDelivery {
+		t.Fatalf("stored roles = %v, want only the single legacy PR as delivery", roles)
+	}
 }
 
 // A decision whose question card the bot already posted (cards / all_cards) is not told again as waiting.

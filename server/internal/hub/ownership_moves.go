@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -323,19 +324,29 @@ func (h *Hub) withdrawCardsOn(mid, to string) {
 	}
 	f := &h.reported
 	f.mu.Lock()
-	var gone []string
+	var gone []proto.Interaction
+	withdrawn := map[string]bool{}
 	for id, ix := range f.interactions {
 		if cmp.Or(ix.Manager, assistantwire.AssistantID) == to {
 			continue
 		}
 		if ix.MachineID == mid || ix.MachineID == "" && ix.SessionID != "" && on[ix.SessionID] {
-			gone = append(gone, id)
+			gone = append(gone, ix)
+			withdrawn[id] = true
+			delete(f.interactions, id)
+		}
+	}
+	for id, ix := range f.interactions {
+		if withdrawn[ix.MirrorOf] {
+			// A display copy lives at Main's destination, not on the moved
+			// machine. It must end with its authoritative card nonetheless.
+			gone = append(gone, ix)
 			delete(f.interactions, id)
 		}
 	}
 	f.mu.Unlock()
-	for _, id := range gone {
-		h.broadcast(map[string]any{"type": "interaction_resolved", "id": id})
+	for _, ix := range gone {
+		h.broadcastInteractionResolved(ix, interactionResolvedEvent(ix))
 	}
 }
 

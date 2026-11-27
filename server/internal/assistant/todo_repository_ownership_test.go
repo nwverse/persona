@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -33,7 +34,7 @@ func TestTaskRepositoryOwnershipDeploymentReportCannotClaimOthersPRs(t *testing.
 		t.Run(entry, func(t *testing.T) {
 			st := repositorystore.New(todoTestDB(t))
 			s, f := newQuietServiceOn(t, st)
-			todo := agentTask(t, s, f)
+			todo := artifactTask(t, s, f)
 			urls := []string{}
 			for _, number := range []int{17, 18, 19, 20, 21, 22} {
 				urls = append(urls, fmt.Sprintf("https://github.com/example/project/pull/%d", number))
@@ -65,8 +66,19 @@ func TestTaskRepositoryOwnershipDeploymentReportCannotClaimOthersPRs(t *testing.
 			s.linkInboxTaskURLs(t.Context())
 			set, saved := savedArtifactURLs(t, st, todo.ID)
 			current := todoNow(s, todo.ID)
-			if set.Revision != 0 || len(saved) != 0 || current.PRURL != "" || len(current.PRs) != 0 {
-				t.Fatalf("referenced PRs polluted repository links or legacy routing: links=%v, task=%+v", saved, current)
+			// Prose may retain incidental URLs as references. None may become
+			// delivery evidence, or be saved merely because a closeout claimed it.
+			if entry == "progress report" {
+				for url, role := range linkRoles(t, s, todo.ID) {
+					if role != repository.LinkRoleReference {
+						t.Fatalf("foreign PR %s gained role %q", url, role)
+					}
+				}
+			} else if set.Revision != 0 || len(saved) != 0 {
+				t.Fatalf("unproved artifacts were saved: %v", saved)
+			}
+			if current.PRURL != "" || len(current.PRs) != 0 {
+				t.Fatalf("foreign PRs polluted legacy routing: %q %v", current.PRURL, current.PRs)
 			}
 		})
 	}
@@ -77,7 +89,7 @@ func TestTaskRepositoryOwnershipRequiresIndependentPublishedHead(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			st := repositorystore.New(todoTestDB(t))
 			s, f := newQuietServiceOn(t, st)
-			todo := agentTask(t, s, f)
+			todo := artifactTask(t, s, f)
 			url, author, branch, oid := artifactPR, "contributor", "fix/parser", "abc"
 			switch name {
 			case "own push", "wrong push branch", "other author":
@@ -141,7 +153,7 @@ func TestTaskRepositoryOwnershipNativeCreateMustSucceedAfterTaskLink(t *testing.
 		t.Run(name, func(t *testing.T) {
 			st := repositorystore.New(todoTestDB(t))
 			s, f := newQuietServiceOn(t, st)
-			todo := agentTask(t, s, f)
+			todo := artifactTask(t, s, f)
 			artifactCreationProof(f, todo, artifactPR)
 			f.mu.Lock()
 			it := &f.items[0]
@@ -172,7 +184,7 @@ func TestTaskRepositoryOwnershipNativeCreateMustSucceedAfterTaskLink(t *testing.
 func TestTaskRepositoryOwnershipAlreadyLinkedElsewhereDoesNotPolluteLegacyPR(t *testing.T) {
 	st := repositorystore.New(todoTestDB(t))
 	s, f := newQuietServiceOn(t, st)
-	todo := agentTask(t, s, f)
+	todo := artifactTask(t, s, f)
 	owner, err := s.createPlainTodo(t.Context(), "Existing owner", "", db.TodoEdit{})
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +208,7 @@ func TestTaskRepositoryOwnershipAlreadyLinkedElsewhereDoesNotPolluteLegacyPR(t *
 func TestTaskRepositoryOwnershipConflictingSavedLinkIsNotAnAcceptedClaim(t *testing.T) {
 	st := repositorystore.New(todoTestDB(t))
 	s, f := newQuietServiceOn(t, st)
-	todo := agentTask(t, s, f)
+	todo := artifactTask(t, s, f)
 	owner, err := s.createPlainTodo(t.Context(), "Existing owner", "", db.TodoEdit{})
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +241,7 @@ func TestTaskRepositoryOwnershipUsesNativeCLIResultsNotReportedCommands(t *testi
 		t.Run(name, func(t *testing.T) {
 			st := repositorystore.New(todoTestDB(t))
 			s, f := newQuietServiceOn(t, st)
-			todo := agentTask(t, s, f)
+			todo := artifactTask(t, s, f)
 			args := map[string]string{"cmd": "gh pr create --title Fix --body-file /tmp/body.md", "workdir": "/code/feature"}
 			tool, output := "functions.exec_command", artifactPR
 			switch name {
@@ -335,7 +347,7 @@ func TestTaskRepositoryOwnershipUsesNativeCLIResultsNotReportedCommands(t *testi
 func TestTaskRepositoryOwnershipDeliveryRecoveryCannotClaimReferencePR(t *testing.T) {
 	st := repositorystore.New(todoTestDB(t))
 	s, f := newQuietServiceOn(t, st)
-	todo := agentTask(t, s, f)
+	todo := artifactTask(t, s, f)
 	s.deploy.forge = &fakeForge{}
 	artifactNodeProof(f, artifactPR, "contributor", "contributor", "local/integration", "fix/parser", "abc", "abc")
 	f.setItems(proto.Item{Role: "user", Kind: proto.KindText, Text: todo.Notes},
@@ -352,7 +364,7 @@ func TestTaskRepositoryOwnershipDeliveryRecoveryCannotClaimReferencePR(t *testin
 func TestTaskRepositoryOwnershipRechecksAgentAfterNodeRead(t *testing.T) {
 	st := repositorystore.New(todoTestDB(t))
 	s, f := newQuietServiceOn(t, st)
-	todo := agentTask(t, s, f)
+	todo := artifactTask(t, s, f)
 	f.answerNode("git.pr", func(string, json.RawMessage) (any, error) {
 		now := time.Now()
 		s.todos.mu.Lock()

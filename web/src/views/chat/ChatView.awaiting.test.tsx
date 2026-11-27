@@ -38,7 +38,7 @@ vi.mock("../../lib/router", async (importOriginal) => ({ ...await importOriginal
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
 const { ChatView } = await import("./ChatView");
-const { t } = await import("../../i18n");
+const { initI18n, t } = await import("../../i18n");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let host: HTMLDivElement;
@@ -329,10 +329,10 @@ describe("a message the launcher switch refused", () => {
       box().dispatchEvent(new Event("input", { bubbles: true }));
     });
   const sent = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith("/messages")).map(([, init]) => JSON.parse(String((init as RequestInit).body)));
-  const send = async (text: string, answer: Record<string, unknown>, waits = true, status = 409) => {
+  const send = async (text: string, answer: Record<string, unknown>, waits = true, status = 409, assistant = false) => {
     fetcher.mockImplementation(async (url) => (String(url).endsWith("/messages") ? new Response(JSON.stringify(answer), { status }) : new Response("{}")));
     captured.session = { ...captured.session, pending_switch: waits ? { launcher: "work" } : undefined };
-    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant={assistant} />));
     await flush();
     typeInto(text);
     act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.send")}"]`)!.click());
@@ -365,6 +365,28 @@ describe("a message the launcher switch refused", () => {
     await send("Carry on with the tests", { error: "A dialog is open in the terminal", code: "dialog_open", delivered: "none" });
     expect(box().value).toBe("");
     expect(outsideBox()).toContain("Carry on with the tests");
+  });
+
+  it("opens the terminal named by the send refusal from an Assistant conversation", async () => {
+    const start = location.pathname + location.search;
+    await initI18n("en");
+    try {
+      history.replaceState(null, "", "/persona/c1");
+      await send("Carry on from Assistant", {
+        error: "A dialog is open", code: "dialog_open", delivered: "none", dialog: "Choose a workspace",
+        machine_id: "other-box", session_id: "blocked-session",
+      }, false, 423, true);
+      const bubble = [...host.querySelectorAll("[data-outbox]")].find((b) => b.textContent?.includes("Carry on from Assistant"));
+      const alert = bubble?.querySelector('[role="alert"]');
+      expect(alert?.textContent).toContain("Choose a workspace");
+      const openTerminal = [...alert!.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Open terminal");
+      expect(openTerminal).toBeDefined();
+      act(() => openTerminal!.click());
+      expect(location.pathname + location.search).toBe("/s/other-box/blocked-session?view=term&standalone=1");
+    } finally {
+      history.replaceState(null, "", start);
+      await initI18n("zh-Hans");
+    }
   });
 });
 

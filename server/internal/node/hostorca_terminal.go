@@ -312,6 +312,7 @@ func (h *orcaHost) guardedClose(ctx context.Context, pane host.PaneRef, beforeCl
 	if err == nil {
 		h.mu.Lock()
 		delete(h.made, pane.ID)
+		delete(h.agentTabs, pane.ID)
 		h.mu.Unlock()
 	}
 	if errors.Is(err, errNoOrcaTerminal) || orcart.IsCode(err, "terminal_handle_stale") ||

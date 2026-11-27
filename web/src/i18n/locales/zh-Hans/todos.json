@@ -501,5 +501,10 @@
   "grouping_v2_request": "按要求",
   "detail_direction_inherited_hint": "继承自「{name}」",
   "detail_direction_inherited_picker_hint": "当前继承自「{name}」。点击「应用」可显式固定，也可以改选其他方向或移出方向。",
-  "detail_subtask_direction_mismatch": "所属方向：{direction}"
+  "detail_subtask_direction_mismatch": "所属方向：{direction}",
+  "direction_uncategorized": "未分类",
+  "done_direction_filter_label": "按方向筛选已完成待办",
+  "direction_done_count": "已完成 {count}",
+  "direction_review_done_label": "回顾「{direction}」的 {count} 项已完成",
+  "detail_subtasks_done_toggle": "已完成子任务 · {count}"
 }

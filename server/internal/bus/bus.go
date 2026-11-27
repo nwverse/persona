@@ -298,11 +298,16 @@ func dial(ctx context.Context, hub, token string, client *http.Client, mode webs
 		CompressionMode: mode,
 	})
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-			if errorCode(resp) == CodeTokenRevoked {
-				return nil, ErrRevoked
+		if resp != nil {
+			if resp.Body != nil {
+				defer resp.Body.Close()
 			}
-			return nil, ErrRejected
+			if resp.StatusCode == http.StatusUnauthorized {
+				if errorCode(resp) == CodeTokenRevoked {
+					return nil, ErrRevoked
+				}
+				return nil, ErrRejected
+			}
 		}
 		return nil, err
 	}

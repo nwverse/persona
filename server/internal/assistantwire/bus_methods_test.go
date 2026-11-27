@@ -6,7 +6,29 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/buswire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestCoreAssistantBusMethodsWire(t *testing.T) {
+	checkMethodWire[assistantwire.Snapshot, assistantwire.SnapshotResult](t, assistantwire.SnapshotMethod, "manager.snapshot",
+		`{"epoch":"test-epoch","seq":7,"at":"2026-01-02T00:00:00Z","sessions":[],`+
+			`"interactions":null,"tasks":null,"todos":null,"profile":null,"work":null,"channels":null}`,
+		`{"ok":true,"seq":7}`)
+	checkMethodWire[assistantwire.SessionRef, assistantwire.ToolsResult](t, assistantwire.ToolsMethod, "assistant.tools",
+		`{"machine_id":"box","session_id":"conversation"}`,
+		`{"tools":[{"name":"example","description":"Run an example","input_schema":{"type":"object"},"defer_loading":true}]}`)
+	checkJSONRoundTrip[assistantwire.ToolsResult](t, `{"tools":null}`)
+	checkJSONRoundTrip[assistantwire.ToolsResult](t, `{"tools":[]}`)
+	checkMethodWire[assistantwire.ToolCall, proto.ToolResult](t, assistantwire.ToolMethod, "assistant.tool",
+		`{"name":"example","arguments":{"query":"example"},"machine_id":"box","session_id":"conversation"}`,
+		`{"content":[{"type":"text","text":"Try again"}],"is_error":true,"error_kind":"rate_limited","retry_after":2}`)
+	checkMethodWire[assistantwire.ContextParams, assistantwire.ContextResult](t, assistantwire.ContextMethod, "assistant.context",
+		`{"session_id":"conversation","machine_id":"box","query":"What changed?"}`,
+		`{"text":"Live context","view_errors":"Missing summary","view_error_receipts":[{"item_id":"reply","digest":"check"}]}`)
+	checkMethodWire[assistantwire.Action, assistantwire.ActionResult](t, assistantwire.ActionMethod, "manager.action",
+		`{"action_id":"answer","session_id":"conversation","op":"answer","interaction_id":"prompt","interaction_version":2,"answer":{"allow":true}}`,
+		`{"ok":true,"seq":9}`)
+}
 
 func TestExtensionBusMethodsWire(t *testing.T) {
 	checkMethodWire(t, assistantwire.ExtensionIdentityMethod, "extensions.identity", `{}`, `{"supported":true}`)

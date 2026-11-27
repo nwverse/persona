@@ -226,7 +226,7 @@ func TestClientOpRetryNodeGotNothing(t *testing.T) {
 		todoRouteOp:         {offline},
 		todoCreateOp:        {offline},
 		"resolve":           nil,
-		"message":           nil,
+		"message":           {offline},
 		"start":             nil,
 		"worktree_create":   nil,
 		"lark_send":         nil,

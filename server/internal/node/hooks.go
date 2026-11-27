@@ -494,8 +494,12 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		return nil, nil
 	}
 
+	createdAt := time.Now().UTC() // legacy client without occurrence transport
+	if req.CreatedAt != nil && !req.CreatedAt.IsZero() {
+		createdAt = *req.CreatedAt
+	}
 	ix := proto.Interaction{
-		ID: interactionID(in, req.Attempt), SessionID: in.SessionID, Cwd: in.Cwd, CreatedAt: time.Now().UTC(),
+		ID: interactionID(in, req.Attempt), SessionID: in.SessionID, Cwd: in.Cwd, CreatedAt: createdAt,
 		ExpiresAt: time.Now().Add(nodeclient.HookTimeout).UTC(), ToolName: in.ToolName, ToolUseID: in.ToolUseID, ToolInput: in.ToolInput,
 		Resumable: req.Attempt != "",
 		AgentID:   in.AgentID, AgentType: in.AgentType, MCPServerName: in.MCPServerName, MCPConfigSource: in.MCPConfigSource,
@@ -637,7 +641,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		if req.Resume && n.restoreQuestionFromTranscript(in, req.Attempt, time.Now()) {
 			// Several identical calls fit no exact PostToolUse. Hand this attempt back to the terminal and withdraw
 			// its restored card instead of waiting for a completion that may never come (#2382).
-			_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
+			_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID, "created_at": ix.CreatedAt})
 			return nil, nil
 		}
 		ctx, otherAnswered, stopOther := n.decided.watch(ctx, permissionKey(in))
@@ -649,7 +653,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		if n.decided.grace(ctx, answered) {
 			if questionAnswered() {
 				// No new ask means askOnce cannot withdraw the resumable card retained by the hub (#2382).
-				_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
+				_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID, "created_at": ix.CreatedAt})
 			}
 			return nil, nil
 		}
@@ -983,10 +987,10 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 			return res, false, errNodeGone
 		}
 		if d, _ := ctx.Value(terminalDecidedKey{}).(*terminalDecided); d != nil && d.Load() {
-			_ = n.peer.Notify("interaction.dismiss", map[string]any{"id": ix.ID}) // answered in the terminal (planthen.go)
+			_ = n.peer.Notify("interaction.dismiss", map[string]any{"id": ix.ID, "created_at": ix.CreatedAt}) // answered in the terminal (planthen.go)
 			return res, false, nil
 		}
-		_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
+		_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID, "created_at": ix.CreatedAt})
 		return res, false, nil
 	}
 	if res.Cancel && (ix.Kind != proto.IxQuestion || !ix.CanCancel || !res.IsQuestionCancel()) {
