@@ -19,6 +19,11 @@ an explicit host selection overrides it. Other offline sessions use the default 
 The web is wired: the machine page's Engine section is a checklist with "Make default", New Agent has "Open in", and a session live in
 two hosts shows "Also open in …" above the composer. iOS and Android still pick one engine, and the single engine picked keeps working;
 iOS and Android also offer "No Terminal Engine", the empty set, last in Choose Engine when the hub reports `engine_hosts` (#3302).
+A phone's pick never shrinks a set it can't show (#17052): on a computer with several engines set up on the web, picking one already in the
+set only makes it the default (the hub keeps the others even for an older app's `{"engine"}`, `docs/protocol/protocol.md` "Engines").
+Android names the whole set on the machine page ("herdr + Orca + Paseo"), says in Choose Engine which engines it holds, which is the default
+and that the web edits the set, sends a pick inside it as the set with a new default, and enables Save only once the choice changes
+(the pairing step still confirms the engine shown). iOS follows in #17056.
 
 - **Only enabled hosts are registered.** An engine that is not checked gets no client, no polling and no event subscription; it is only probed once in
   `node.info` (for "Detected"). An engine that is not installed or not running does not slow the others down.
