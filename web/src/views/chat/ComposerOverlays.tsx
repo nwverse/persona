@@ -8,6 +8,7 @@ import { cx, EASE } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { useModalFocus } from "../../ui/overlay";
 import { ComposerField } from "./ComposerField";
+import { ComposerImageStage, type ComposerImageStageProps } from "./ComposerImageStage";
 import type { InlineMentionInputHandle } from "./InlineMentionInput";
 
 type ExpandedProps = {
@@ -28,9 +29,11 @@ type PasteProps = {
   onRemove: (id: string) => void;
   onExpand: (id: string, text: string) => void;
 };
+type ImageStageOverlayProps = { imageStage: ComposerImageStageProps };
 
 /** Conditional composer extras share one chunk and one first-screen loader. */
-export function ComposerOverlay(props: ExpandedProps | SuggestionProps | PasteProps) {
+export function ComposerOverlay(props: ExpandedProps | SuggestionProps | PasteProps | ImageStageOverlayProps) {
+  if ("imageStage" in props) return <ComposerImageStage {...props.imageStage} />;
   if ("pastedBlocks" in props) return <PastedBlocks {...props} />;
   return "value" in props ? <ExpandedComposer {...props} /> : <SuggestionPill {...props} />;
 }
