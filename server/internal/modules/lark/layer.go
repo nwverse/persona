@@ -343,6 +343,12 @@ func (l *Layer) Message(ctx context.Context, p assistantwire.FeishuMessage) erro
 	return l.chat().FeishuMessage(ctx, p)
 }
 
+// Menu takes the owner's press on the bot's menu (feishu.menu): in line with the messages, once, and in the
+// background (menu.go).
+func (l *Layer) Menu(ctx context.Context, p assistantwire.FeishuMenu) error {
+	return l.chat().FeishuMenu(ctx, p)
+}
+
 // Action answers a press of one of the bot's cards (feishu.card_action, or a companion's); action is the owner's
 // action for the card it presses.
 func (l *Layer) Action(ctx context.Context, a *botcard.CardAction, action string) *botcard.CardResponse {

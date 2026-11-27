@@ -95,6 +95,7 @@ type (
 	ChannelNoted         = assistantwire.ChannelNoted
 	FeishuMessage        = assistantwire.FeishuMessage
 	FeishuAction         = assistantwire.FeishuAction
+	FeishuMenu           = assistantwire.FeishuMenu
 	FeishuView           = assistantwire.FeishuView
 	FeishuAgent          = assistantwire.FeishuAgent
 	FeishuOwner          = assistantwire.FeishuOwner

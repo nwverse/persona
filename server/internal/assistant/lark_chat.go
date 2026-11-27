@@ -41,6 +41,11 @@ func (s *Service) FeishuMessage(ctx context.Context, p FeishuMessage) error {
 	return s.larkModule().Message(ctx, p)
 }
 
+// FeishuMenu is feishu.menu: the owner pressed an entry of the bot's menu (the module's menu.go).
+func (s *Service) FeishuMenu(ctx context.Context, p FeishuMenu) error {
+	return s.larkModule().Menu(ctx, p)
+}
+
 // FeishuAction is feishu.card_action: the owner pressed one of the bot's cards (the hub checked it is the owner); the
 // answer is the toast and the card to show instead. Feishu waits 3 seconds for it.
 func (s *Service) FeishuAction(ctx context.Context, p FeishuAction) (*botcard.CardResponse, error) {

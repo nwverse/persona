@@ -205,6 +205,8 @@ type Chat interface {
 	// (feishu.card_action, or a companion's), action being the owner's action for it; Owner is feishu.owner,
 	// Recalled feishu.recalled and View feishu.view.
 	Message(ctx context.Context, p assistantwire.FeishuMessage) error
+	// Menu takes the owner's press on the bot's menu (feishu.menu), in line with the messages.
+	Menu(ctx context.Context, p assistantwire.FeishuMenu) error
 	Action(ctx context.Context, a *botcard.CardAction, action string) *botcard.CardResponse
 	Owner(ctx context.Context, p assistantwire.FeishuOwner)
 	Recalled(p assistantwire.FeishuRecalled)
@@ -490,6 +492,7 @@ func (None) AsksCatchUp(context.Context, map[string]bool)      {}
 // The chat without a channel: a bot switched off. Nothing is taken or answered, nothing waits, no target is set, and
 // its records are empty: what is kept in them is dropped.
 func (None) Message(context.Context, assistantwire.FeishuMessage) error { return nil }
+func (None) Menu(context.Context, assistantwire.FeishuMenu) error { return nil }
 func (None) DecideTopicTodo(context.Context, channel.Run, string, string) (string, error) {
 	return "", ErrNoChannel
 }
