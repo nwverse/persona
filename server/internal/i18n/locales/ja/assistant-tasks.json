@@ -128,5 +128,6 @@
   "placement_hit_launcher_unhealthy": "ランチャー {launcher} が利用不可（{kind}）",
   "placement_hit_no_resources": "リソース指標が未報告",
   "inbox_link_removed": "受信トレイの話題が変わったため、自動リンクを解除しました。タスクは開始できます。",
-  "inbox_candidates": "関連する可能性のある受信トレイの項目：{items}。自動リンクは行っていません。リンクする前に送信元を確認してください。"
+  "inbox_candidates": "関連する可能性のある受信トレイの項目：{items}。自動リンクは行っていません。リンクする前に送信元を確認してください。",
+  "placement_hit_scratch_unsupported": "管理対象の scratch ワークスペース非対応（Persona Node の更新が必要）"
 }

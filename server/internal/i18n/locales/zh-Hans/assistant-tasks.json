@@ -128,5 +128,6 @@
   "placement_hit_launcher_unhealthy": "启动器 {launcher} 不可用（{kind}）",
   "placement_hit_no_resources": "未上报资源指标",
   "inbox_link_removed": "收件箱话题已变化，自动关联已取消；任务仍可启动。",
-  "inbox_candidates": "可能相关的收件箱卡：{items}。未自动关联，请确认来源后再关联。"
+  "inbox_candidates": "可能相关的收件箱卡：{items}。未自动关联，请确认来源后再关联。",
+  "placement_hit_scratch_unsupported": "节点版本过旧，不支持受管 scratch 工作区"
 }

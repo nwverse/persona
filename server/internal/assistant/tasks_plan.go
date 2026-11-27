@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -185,8 +186,19 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", fmt.Errorf("task %d: expect_minutes must be zero or a positive number of minutes", i+1)
 		}
 		t.DoneWhen, t.ExpectMinutes = cleanDoneWhen(t.DoneWhen), min(t.ExpectMinutes, 24*60)
-		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() && !s.canInferContainerWorkspace(ctx, *t) {
+		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() && !s.canInferContainerWorkspace(ctx, *t) && !t.scratchWorkspace() {
 			return "", fmt.Errorf("task %d: title, prompt and cwd are required", i+1)
+		}
+		if t.scratchWorkspace() && t.Cwd != "" {
+			if identity.IsAssistantDir(t.Cwd) {
+				return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
+			}
+			if t.Machine != "" {
+				if m, ok := s.machineByName(ctx, t.Machine); ok && assistantWorkspace(m, proto.ExpandHome(t.Cwd, m.Home)) {
+					return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
+				}
+			}
+			return "", fmt.Errorf("task %d: workspace %q cannot be combined with cwd; omit cwd to use a managed scratch directory", i+1, workspaceScratch)
 		}
 		t.Brief = nil // the hub's (planBriefs below), never the tool call's
 		t.Goal, t.OutOfBounds = clip(oneLine(t.Goal), 300), cleanDoneWhen(t.OutOfBounds)
@@ -695,6 +707,9 @@ func applyPlanEdit(t *PlanTask, e PlanTask) {
 	}
 	if e.Workspace != nil {
 		t.Workspace, t.WorkspaceResolved, t.WorkspaceInferred = e.Workspace, nil, false
+		if e.Workspace.Mode == workspaceScratch && strings.TrimSpace(e.Cwd) == "" {
+			t.Cwd = ""
+		}
 	}
 	if s := strings.TrimSpace(e.Title); s != "" {
 		t.Title = s
@@ -708,6 +723,9 @@ func applyPlanEdit(t *PlanTask, e PlanTask) {
 			// The user's explicit retarget supersedes a plan-time health detour: drop the stale reroute so the receipt
 			// names the machine the task will actually run on, not the old landing (#2271).
 			t.Reroute, t.Placement = nil, nil
+			if t.scratchWorkspace() && (t.WorkspaceResolved == nil || (!t.WorkspaceResolved.Created && !t.WorkspaceResolved.Reused)) {
+				t.WorkspaceResolved = nil
+			}
 		}
 		t.Machine = s
 	}
