@@ -141,7 +141,7 @@ func TestAgyBridgeCommandKeepsExternalRuntimeStore(t *testing.T) {
 	if _, err := os.Stat(idleProxy); !os.IsNotExist(err) {
 		t.Fatalf("idle built-in generation was not reclaimed: %v", err)
 	}
-	for _, flag := range []string{"--socket", sock, "--agy-bin", "/usr/local/bin/agy", "--no-update", "--parent-stdin", "--instance", "builtin-agy-1-1"} {
+	for _, flag := range []string{"--socket", sock, "--agy-bin", "/usr/local/bin/agy", "--no-update", "--parent-stdin", "--native-proxy-file", filepath.Join(filepath.Dir(sock), "agy-proxy"), "--instance", "builtin-agy-1-1"} {
 		if !slices.Contains(cmd.Args, flag) {
 			t.Fatalf("cmd.Args %v missing %q", cmd.Args, flag)
 		}

@@ -765,6 +765,20 @@ socket, lists CLI transcripts, and uses `agy acp` for terminal-less session crea
 serve as an assistant backend through the optional assistant contract above. It requires an installed, authenticated `agy`
 with ACP support; `--agy-bin`, `--agy-dir`, `--personad-bin`, `--socket`, `--no-update` and `--parent-stdin` override the
 executable, CLI data directory, node program, node socket, automatic updates and parent-pipe shutdown. When `--agy-dir` is passed explicitly, the companion also sets `ANTIGRAVITY_CLI_CONFIG_DIR` for its spawned `agy` child processes (`acp` and `models`) so discovery, ACP sessions, and transcript reads share the same directory.
+On macOS the node-supervised native sign-in can require a local HTTP or HTTPS forward proxy. Put its URL on a single
+line in `agy-proxy` beside the node runtime socket (normally `~/.persona/agy-proxy`, or under `PERSONA_HOME`).
+Use a loopback address such as `http://127.0.0.1:<port>`. The port is configurable. The setting is read when the
+companion starts and lives outside the versioned runtime package. Remove the file to restore inherited proxy settings
+at the next companion start. An empty, unreadable or invalid setting fails closed. Embedded credentials and remote
+proxy addresses are unsupported.
+
+With the file present, native `agy models` and `agy acp` override ambient proxy and bypass variables. A TCP check
+reports a stopped proxy before launching a request. A macOS per-process network sandbox restricts the CLI and its
+descendants to outbound IP connections to the loopback proxy port, including retries on a live ACP session.
+Unix sockets, ACP stdio and the companion's connection to AGY's local API continue to work. Tools started by a guarded
+AGY process must also use the proxy for outbound IP traffic. Other runtimes, shell sessions and managed provider
+channels retain their own networking. On systems without this macOS enforcement, an explicit setting returns an error.
+
 To run an additional companion instance alongside the default `agy` companion (for example, a wrapped `agy` executable or separate configuration directory), pass a distinct `--runtime <id>` (default `agy`), and optionally `--launcher <name>` (default `<runtime>`), `--display-name <label>` (default `Antigravity`), `--prefix <prefix>` (default `<runtime>-`), and `--assistant-for <launcher>` to point a non-assistant Agent launcher at this companion in the main-chat picker. Custom runtime IDs keep `agent: "agy"` and do not cause the node's built-in `agy` companion to yield.
 Models come from authenticated `agy models` discovery and ACP session metadata. The companion discovers the catalog at
 startup and again every five minutes in the background, with backoff on sign-in timeouts (#15481). It reuses a fresh

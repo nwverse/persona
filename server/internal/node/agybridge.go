@@ -304,7 +304,8 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 		return nil, err
 	}
 	args := []string{filepath.Join(dir, "antigravity", "companion.mjs"),
-		"--socket", rh.dialPath(), "--agy-bin", agyBin, "--no-update", "--parent-stdin"}
+		"--socket", rh.dialPath(), "--agy-bin", agyBin, "--no-update", "--parent-stdin",
+		"--native-proxy-file", filepath.Join(filepath.Dir(rh.path), "agy-proxy")}
 	if instance != "" {
 		args = append(args, "--instance", instance)
 	}
