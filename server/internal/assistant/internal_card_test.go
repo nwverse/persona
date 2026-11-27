@@ -306,6 +306,13 @@ func TestInternalRequestWithoutReviewerEndsUnanswered(t *testing.T) {
 	if e.pushesOf(ix.ID) != 0 || len(workEventsOf(e.s, "ask_internal_unavailable")) != 1 {
 		t.Fatal("unavailable reviewer pushed to owner or lost its terminal audit")
 	}
+	text, err := e.s.toolAskUser(ctx, "server", "standalone-agent", json.RawMessage(`{"decision_scope":"internal","questions":[{"question":"Which verification?","options":[{"label":"Read"},{"label":"Wait"}]}]}`))
+	if err != nil || !strings.Contains(text, "internal question") || !strings.Contains(text, "Nothing was authorized") || strings.Contains(text, "The user") {
+		t.Fatalf("internal unavailable receipt blamed the owner: %q, %v", text, err)
+	}
+	if len(e.s.pendingQuestions()) != 0 || len(e.f.pushed()) != 0 {
+		t.Fatal("unavailable internal question remained pending or pushed to the owner")
+	}
 }
 
 func TestInternalQuestionRetainsCredentialConstraintWithoutRequestingIt(t *testing.T) {

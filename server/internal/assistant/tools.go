@@ -1553,6 +1553,9 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		return "", err
 	}
 	if r.Cancel {
+		if questionOwnerSource(ix) == "" {
+			return "The internal question was cancelled. Nothing was authorized.", nil
+		}
 		return prompts.RenderQuestionCancelled(), nil
 	}
 	if s.askExpiredResolution(ix, r) && questionOwnerSource(ix) == "" {
@@ -1566,6 +1569,9 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		s.logf("ask_user %s: expired, and no to-do could be made: %v", ix.ID, err)
 	}
 	if r.Dismiss || len(r.Answers) == 0 {
+		if questionOwnerSource(ix) == "" {
+			return "The internal question ended without a supervisor answer. Nothing was authorized; ask again if still needed.", nil
+		}
 		return "The user did not answer (dismissed or timed out). Don't go ahead with what you asked about; say what is waiting for them.", nil
 	}
 	var b strings.Builder
