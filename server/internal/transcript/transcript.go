@@ -847,7 +847,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 			it := mk(0, "system", proto.KindNotice)
 			it.Text, it.Wake = text, true
-			it.NativeLoopID = cmp.Or(e.LoopTaskID, "native-loop")
+			it.NativeLoopID = proto.NativeLoopID(cmp.Or(e.LoopTaskID, "native-loop"))
 			return []proto.Item{it}
 		case "away_summary":
 			recap := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rawString(e.Content)), "(disable recaps in /config)"))

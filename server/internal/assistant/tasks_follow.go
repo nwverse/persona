@@ -818,12 +818,12 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	// A paged reply may have lost its tail (the file lines and the closeout are there): read the whole item.
 	text = s.taskAnswer(cctx, last.MachineID, last.SessionID, items, text)
 	current, ok := s.todoNow(t.ID)
-	if !ok || current.DoneAt != nil || current.Cancelled() || current.AgentAborted(machine, sid) {
-		s.logf("task %s: closed or agent %s/%s aborted: not issuing done receipt", t.ID, machine, sid)
+	if !ok || current.Cancelled() || current.AgentAborted(machine, sid) {
+		s.logf("task %s: cancelled or agent %s/%s aborted: not issuing done receipt", t.ID, machine, sid)
 		return settleRefused
 	}
 	fire := nativeLoopStart(items)
-	if evidence := nativeLoopNoopEvidence(current, fire, text); named && !stopped && evidence != "" {
+	if evidence := nativeLoopNoopEvidence(current, fire, text); current.DoneAt == nil && named && !stopped && evidence != "" {
 		s.takeTurnAs(cctx, t, last, items, end, true, since, turnLoopNoop, "", evidence)
 		s.signalNativeLoopNoop(cctx, t)
 		return settleTaken

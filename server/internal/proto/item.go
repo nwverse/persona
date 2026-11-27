@@ -221,6 +221,9 @@ type QuestionReply struct {
 	Answer   string `json:"answer,omitempty"`
 }
 
+// NativeLoopID identifies a schedule within a runtime session.
+type NativeLoopID string
+
 // Item is one content block of a Claude Code transcript.
 type Item struct {
 	// Stored identifies an incomplete durable copy. Its source can be requested from
@@ -258,7 +261,7 @@ type Item struct {
 	// (not one absorbed mid-turn): the exchange before it is over and its last words are an answer.
 	Wake bool `json:"wake,omitempty"`
 	// NativeLoopID identifies the runtime schedule that fired on a wake item.
-	NativeLoopID string `json:"native_loop_id,omitempty"`
+	NativeLoopID NativeLoopID `json:"native_loop_id,omitempty"`
 	// Narration marks public progress text (Claude narration or Codex commentary), including on unfolded pages.
 	Narration bool `json:"narration,omitempty"`
 	// From names the Claude session that sent this message (cross-session messaging), not the user.

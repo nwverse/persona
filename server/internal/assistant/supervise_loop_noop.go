@@ -24,11 +24,11 @@ const (
 // The latest completed turn stores the streak, so replaying a turn or
 // restarting the manager does not count it again.
 type nativeLoopNoopStreak struct {
-	Job      string    `json:"job"`
-	Since    time.Time `json:"since"`
-	End      time.Time `json:"end"`
-	Count    int       `json:"count"`
-	Evidence string    `json:"evidence,omitempty"`
+	Job      proto.NativeLoopID `json:"job"`
+	Since    time.Time          `json:"since"`
+	End      time.Time          `json:"end"`
+	Count    int                `json:"count"`
+	Evidence string             `json:"evidence,omitempty"`
 }
 
 func nativeLoopStart(items []proto.Item) proto.Item {
