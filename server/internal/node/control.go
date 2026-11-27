@@ -58,8 +58,14 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return nil, externalRefusal(ctx, "adapter_purpose_unsupported")
 	}
 	if resume != "" {
-		if st, ok := n.state.get(resume); ok {
-			execution.TaskInstructions = st.TaskInstructions
+		// A resume whose transcript is gone starts a fresh conversation under the same id: never carry the
+		// kept record's task instructions into it (#12216).
+		if n.transcriptPath(resume) != "" {
+			if st, ok := n.state.get(resume); ok {
+				execution.TaskInstructions = st.TaskInstructions
+			}
+		} else {
+			execution.TaskInstructions = ""
 		}
 	}
 	// A start named to a failed start's kept tab holds it from here, sync and async alike: newTab uses it, else it is
@@ -408,6 +414,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if !prev.StartedAt.IsZero() { // a branch (fork.go) has none: it starts now
 			st.StartedAt = prev.StartedAt
 		}
+		st.Cwd = keepSpaceCwd(prev.Cwd, st.Cwd)
 		st.Ultracode = prev.Ultracode
 		// A switch to another launcher still waits for the next message (launcher_switch.go): a Resume on the launcher
 		// the agent ran on keeps it; the switch's own start leaves it for the switch to clear.
@@ -575,6 +582,14 @@ func (n *Node) resumeOutsideHealth(ctx context.Context, id string) bool {
 		}
 	}
 	return started
+}
+
+// keepSpaceCwd keeps a session record's folder inside its space when a resume names a directory outside that space (#12216).
+func keepSpaceCwd(prevCwd, cwd string) string {
+	if space := identity.SpaceAt(prevCwd); space != "" && identity.SpaceAt(cwd) != space {
+		return prevCwd
+	}
+	return cwd
 }
 
 // retypeStart types a start's line again into pane once its shell is at rest (settleShell), after leaving the
