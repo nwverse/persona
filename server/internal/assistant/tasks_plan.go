@@ -542,22 +542,14 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, a cross-provider
-	// or cross-launcher continuation handoff (#12980), an implicit health-detour or non-orchestrator cross-machine
-	// handoff, an explicit owner step, and an ordinary conversation's writable work where the owner has not let such
-	// work start by itself. Main chat and direction leaders explicitly moving a task to another owned machine on the
-	// same engine/launcher auto-start once continuation blockers and non-escalation checks pass (still recording an
-	// auditable TodoContextHandoff).
+	// Launcher/provider choice is part of an authorized supervisor's dispatch authority. Continuations
+	// have already passed the safety, approval and non-escalation checks above; startPlan rechecks them.
+	// Private hand-off policy, request prerequisites, implicit health detours and real owner steps still
+	// hold the plan. Ordinary conversations still need their existing auto-start authorization.
 	step := planOwnerStep(p.Tasks)
 	needsOwner := policy.ConfirmOutbound || step != "" ||
 		slices.ContainsFunc(p.Tasks, func(task PlanTask) bool {
-			if task.RequestGate != "" {
-				return true
-			}
-			if task.HandoffOperationID == "" {
-				return false
-			}
-			return task.handoffLauncherSwitch || task.Reroute != nil || !orchestrates
+			return task.RequestGate != "" || task.continuationNeedsOwner(orchestrates)
 		})
 	var autoStartReasons []string
 	if !needsOwner && !orchestrates {
@@ -580,7 +572,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			// The owner is talking in this very conversation: the card is in front of them, a push would only repeat it.
 			return b.String(), nil
 		}
-		// A card below the answer is easy to miss: push it as well.
+		// A blocked plan stays in the conversation/feed. Missing dispatch authority, prerequisites or a
+		// private-boundary confirmation is not itself one of the owner's six decision categories. Do not
+		// turn that internal wait into a category-zero phone notification or an owner decision report.
+		if step == "" {
+			return b.String(), nil
+		}
+		// A real owner step below the answer is easy to miss: push its typed card as well.
 		titles := make([]string, 0, len(p.Tasks))
 		for _, t := range p.Tasks {
 			titles = append(titles, t.Title)
