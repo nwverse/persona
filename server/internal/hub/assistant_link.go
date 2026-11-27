@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/managerconf"
@@ -193,7 +194,7 @@ func (l assistantLink) helloBase() assistantwire.Hello {
 	h := l.h
 	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go). ArchivedApart: it takes a
 	// machine's archived rows apart from its list (fleet.archived, fleet_link.go).
-	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true}
+	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true, ApprovalMirrors: true}
 	if m, ok := h.mutesEvent(); ok { // the hub's mutes, before the manager pushes anything (fleet_link.go)
 		out.Mutes = m.Mutes
 	}
@@ -274,7 +275,8 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 		case assistantwire.DeviceInteractionsList:
 			list := []proto.Interaction{}
 			for _, ix := range h.pendingInteractions() {
-				if cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
+				// A manager reconnects authoritative operations; display copies belong only in app snapshots.
+				if ix.MirrorOf == "" && cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
 					list = append(list, ix)
 				}
 			}
@@ -298,7 +300,8 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 		}
 		list := []proto.Interaction{}
 		for _, ix := range h.pendingInteractions() {
-			if (ix.MachineID == "" || ix.MachineID == m.cfg.ID) && cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
+			// A manager reconnects authoritative operations; display copies belong only in app snapshots.
+			if ix.MirrorOf == "" && (ix.MachineID == "" || ix.MachineID == m.cfg.ID) && cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
 				list = append(list, ix)
 			}
 		}
@@ -484,20 +487,16 @@ func init() {
 		out, err := assistantLink{h}.appCallFrom(ctx, c.managerID(), p)
 		return out, busCodedError(err)
 	})
-	handleBus(assistantwire.MethodNotify, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p assistantwire.NotifyRequest
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodNotify + ": " + err.Error()}
-		}
+	handleTypedBus(assistantwire.NotifyMethod, assistantwire.MethodNotify+": ", func(h *Hub, ctx context.Context, c *busConn, p assistantwire.NotifyRequest) (assistantwire.NotifyResult, error) {
 		from, id := c.managerID(), p.Notification.ID
 		var release func()
 		if id != "" {
 			first, rel, paused := h.beginHandOver(ctx, from, id)
 			if paused {
-				return nil, &rpc.Error{Code: bus.CodeStoreUnavailable, Message: "hub writes are paused"}
+				return assistantwire.NotifyResult{}, &rpc.Error{Code: bus.CodeStoreUnavailable, Message: "hub writes are paused"}
 			}
 			if !first {
-				return map[string]any{"ok": true}, nil // delivered already: it came again (outbox_relay.go)
+				return assistantwire.NotifyResult{OK: true}, nil // delivered already: it came again (outbox_relay.go)
 			}
 			release = rel
 		}
@@ -510,7 +509,7 @@ func init() {
 			if id != "" {
 				h.forgetHandOver(from, id, release != nil)
 			}
-			return nil, busCodedError(err)
+			return assistantwire.NotifyResult{}, busCodedError(err)
 		}
 		return notifyAnswer(out), nil
 	})
@@ -529,21 +528,22 @@ func init() {
 // the assistant's notify_user tell the model the notice went to the briefing, not the phone; devices (always there when
 // out is) the devices it was handed to, and with none, reason "no_device" or "filtered" as POST /api/v1/notify; kept the
 // offline devices that get it when they connect again. A hub before devices answered only ok and held.
-func notifyAnswer(out *pushOutcome) map[string]any {
-	res := map[string]any{"ok": true}
+func notifyAnswer(out *pushOutcome) assistantwire.NotifyResult {
+	res := assistantwire.NotifyResult{OK: true}
 	if out == nil {
 		return res
 	}
-	res["devices"] = out.devices
+	devices := out.devices
+	res.Devices = &devices
 	if out.kept > 0 {
-		res["kept"] = out.kept
+		res.Kept = out.kept
 	}
 	switch {
 	case out.held != "":
-		res["held"] = true
-		res["reason"] = out.held
+		res.Held = true
+		res.Reason = out.held
 	case out.devices == 0:
-		res["reason"] = out.reason()
+		res.Reason = out.reason()
 	}
 	return res
 }
@@ -741,6 +741,12 @@ func (a assistantRemote) call(ctx context.Context, method string, params, out an
 	return assistantOffline(a.h.callBus(ctx, a.to(ctx), method, params, out))
 }
 
+// callAssistant applies the assistant's routing and offline error to a typed call.
+func callAssistant[P, R any](ctx context.Context, a assistantRemote, method buswire.Method[P, R], params P) (R, error) {
+	result, err := buswire.Call(ctx, a.h.managerCaller(a.to(ctx)), method, params)
+	return result, assistantOffline(err)
+}
+
 // callAsIs is call with ctx's own deadline, or none (callBusAsIs): a card is waited for as long as it lives
 // (waitInteraction).
 func (a assistantRemote) callAsIs(ctx context.Context, method string, params, out any) error {
@@ -845,15 +851,11 @@ func (a assistantRemote) InteractionRaised(_ context.Context, r assistantwire.In
 // The todos' (assistant_todos.go).
 
 func (a assistantRemote) TodoHandoff(ctx context.Context, p assistantwire.TodoHandoff) (assistantwire.TodoHandoffResult, error) {
-	var res assistantwire.TodoHandoffResult
-	err := a.call(ctx, assistantwire.MethodTodoHandoff, p, &res)
-	return res, err
+	return callAssistant(ctx, a, assistantwire.TodoHandoffMethod, p)
 }
 
 func (a assistantRemote) TodoLink(ctx context.Context, p assistantwire.TodoLinkParams) (assistantwire.TodoLinkResult, error) {
-	var res assistantwire.TodoLinkResult
-	err := a.call(ctx, assistantwire.MethodTodoLink, p, &res)
-	return res, err
+	return callAssistant(ctx, a, assistantwire.TodoLinkMethod, p)
 }
 
 func (a assistantRemote) TodoSpaceRenamed(_ context.Context, r assistantwire.TodoSpaceRenamed) {

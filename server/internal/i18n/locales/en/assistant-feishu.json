@@ -168,6 +168,7 @@
   "read_held_from": "From your /read in a group: {ask}",
   "read_held_from_bare": "From your /read in a group",
   "read_held_waiting": "Only you can see this. Post it under your /read in the group?",
+  "read_working": "Reading the group and checking its leads. The answer comes here when it is done; you decide then whether to post it to the group.",
   "read_held_post": "Post to group",
   "read_held_skip": "Don't post",
   "read_held_open": "Open the group",

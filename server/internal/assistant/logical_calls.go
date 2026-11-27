@@ -461,8 +461,25 @@ func (s *Service) logicalSendModel(ctx context.Context, machine, session string,
 	if launcher == "" {
 		return true, logicalRefusal(ctx, "unknown_engine")
 	}
-	if model, _ := p["model"].(string); model == "" {
-		p["model"] = a.Model
+	if model, _ := p["model"].(string); strings.TrimSpace(model) == "" {
+		if a.Model != "" {
+			p["model"] = a.Model
+		} else if inherited, _ := p[larkAgentInheritedModelKey].(bool); !inherited && !proto.IsExternalLauncher(launcher) {
+			if effort, _ := p["effort"].(string); effort == "" && a.Effort != "" {
+				p["effort"] = a.Effort
+			}
+			if mode, _ := p["permission_mode"].(string); mode == "" && a.PermissionMode != "" {
+				p["permission_mode"] = a.PermissionMode
+			}
+			delete(p, "model")
+			purpose := s.conversationModelPurpose(ctx, machine, session)
+			if err := preservePermissionMode(p, func() error { return s.applyModel(ctx, purpose, p) }); err != nil {
+				return true, err
+			}
+			return true, nil
+		} else {
+			p["model"] = a.Model
+		}
 	} else if err := checkModelID(model); err != nil {
 		return true, err
 	}

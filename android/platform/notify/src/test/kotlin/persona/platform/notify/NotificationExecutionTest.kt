@@ -100,6 +100,17 @@ class NotificationExecutionTest {
         assertEquals(mapOf("target" to "terminal", "machine" to "machine & test", "session" to "session/分支"), parameters)
     }
 
+    @Test fun staleNotificationOccurrenceCannotAnswerItsReplacement() = runBlocking {
+        val original = request.copy(createdAt = "2030-01-01T00:00:00.000000001Z")
+        val replacement = original.copy(createdAt = "2030-01-01T00:00:00.000000002Z")
+        val center = Center(original).apply { remote = replacement }
+        val executor = NotificationActionExecutor(center, { error("A stale occurrence must not be claimed") }, { now })
+        assertEquals(NotificationActionResult.Gone, executor.execute(original.id, "allow", null, { false },
+            createdAt = original.createdAt))
+        assertEquals(1, center.refreshes)
+        assertEquals(0, center.writes)
+    }
+
     @Test fun staleNotificationChoiceCannotSubmitAfterAnIrreversibleRefresh() = runBlocking {
         val card = request.copy(kind = "question", questions = listOf(
             Question("Continue?", options = listOf(QuestionOption("Continue"))),

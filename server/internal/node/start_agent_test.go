@@ -129,3 +129,36 @@ func TestOtherAgentStartFlattensForAGuessedShell(t *testing.T) {
 		})
 	}
 }
+
+// Resuming a non-Claude terminal session outside its space keeps the kept record's folder inside that space (#12216).
+func TestOtherAgentResumeKeepsRecordFolderInSpace(t *testing.T) {
+	const run = "0a1b2c3d-7777-4f60-8a7b-9c0d1e2f3a44"
+	n, f, home := herdrNode(t)
+	charts := mkdir(t, filepath.Join(home, ".persona", "health", "charts"))
+	elsewhere := mkdir(t, filepath.Join(home, "elsewhere"))
+	n.state.put(run, sessionState{Launcher: "codex-wrap", Cwd: charts, Model: "m1", ModelEffort: "high"})
+
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	f.reply("session.snapshot", snapshot(nil, nil, []any{map[string]any{
+		"agent":         "codex",
+		"agent_status":  "idle",
+		"pane_id":       "w1:p2",
+		"tab_id":        "w1:t2",
+		"workspace_id":  "w1",
+		"cwd":           elsewhere,
+		"agent_session": map[string]any{"kind": "id", "value": run},
+	}}, nil))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if _, err := n.startOtherAgent(ctx, n.hosts.Get(host.Herdr).(*herdrHost), elsewhere, "codex-wrap", "codex", "", run, "w1", ""); err != nil {
+		t.Fatalf("startOtherAgent resume: %v", err)
+	}
+	st, ok := n.state.get(run)
+	if !ok {
+		t.Fatal("missing session state after resume")
+	}
+	if st.Cwd != charts {
+		t.Fatalf("record Cwd = %q, want %q (stay in health space)", st.Cwd, charts)
+	}
+}

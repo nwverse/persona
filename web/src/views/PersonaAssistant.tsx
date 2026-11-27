@@ -374,7 +374,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
       )}
       <MainRuntimeSlot starting={Boolean(main && sending)} />
       <div className={docked ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-5 pb-[10vh]"}>
-        <div className={docked ? "contents" : "w-full max-w-[640px]"} style={docked ? undefined : { animation: `fade-up 450ms ${EASE} both` }}>
+        <div className={docked ? "contents" : "w-full max-w-[640px]"} style={docked ? undefined : { animation: `fade-up 450ms ${EASE} backwards` }}>
           {sending ? (
             // the conversation page's middle (ChatView): the message where its bubble will be, "Preparing" where the answer comes
             <div className="relative min-h-0 flex-1 overflow-y-auto" data-start-pending>

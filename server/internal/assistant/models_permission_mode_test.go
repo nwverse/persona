@@ -643,19 +643,19 @@ func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 	}{
 		{
 			name: "api purpose with permission_mode",
-			body: `{"revision":1,"name":"Bad API","purposes":{"kb":{"provider":"launcher.direct","permission_mode":"acceptEdits"}}}`,
+			body: `{"revision":0,"name":"Bad API","purposes":{"kb":{"provider":"launcher.direct","permission_mode":"acceptEdits"}}}`,
 		},
 		{
 			name: "purpose with runtime-unsupported permission_mode",
-			body: `{"revision":1,"name":"Bad Grok","purposes":{"agent.new":{"provider":"launcher.grok","permission_mode":"plan"}}}`,
+			body: `{"revision":0,"name":"Bad Grok","purposes":{"agent.new":{"provider":"launcher.grok","permission_mode":"plan"}}}`,
 		},
 		{
 			name: "purpose with discovered omp alias",
-			body: `{"revision":1,"name":"Bad OMP Alias","purposes":{"agent.new":{"provider":"launcher.alias-omp","permission_mode":"acceptEdits"}}}`,
+			body: `{"revision":0,"name":"Bad OMP Alias","purposes":{"agent.new":{"provider":"launcher.alias-omp","permission_mode":"acceptEdits"}}}`,
 		},
 		{
 			name: "tier with runtime-unsupported permission_mode",
-			body: `{"revision":1,"name":"Bad Grok Tier","tiers":{"fast":{"launcher":"grok","permission_mode":"plan"}}}`,
+			body: `{"revision":0,"name":"Bad Grok Tier","tiers":{"fast":{"launcher":"grok","permission_mode":"plan"}}}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -666,11 +666,11 @@ func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 	}
 
 	// Supported mode on discovered runtime succeeds.
-	if w := request(s, http.MethodPut, "/api/v1/model-profiles/custom", `{"revision":1,"name":"Good Grok","purposes":{"agent.new":{"provider":"launcher.grok","permission_mode":"bypassPermissions"}}}`); w.Code != http.StatusOK {
+	if w := request(s, http.MethodPut, "/api/v1/model-profiles/custom", `{"revision":0,"name":"Good Grok","purposes":{"agent.new":{"provider":"launcher.grok","permission_mode":"bypassPermissions"}}}`); w.Code != http.StatusOK {
 		t.Fatalf("supported runtime permission_mode rejected: %d %s", w.Code, w.Body.String())
 	}
 
-	// captureModels preserves purpose permission_mode but never copies assistant/agent.new permission_mode into seeded tiers.
+	// Capture preserves purpose permission_mode and leaves the generated presets' permission modes empty.
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", PermissionMode: "bypassPermissions"})
 	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.claude", PermissionMode: "acceptEdits"})
 	purposes, _, tiers, err := s.captureModels(ctx)
@@ -681,7 +681,7 @@ func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 		t.Fatalf("captured purposes missing permission_mode: %+v", purposes)
 	}
 	if len(tiers) != 2 || tiers["core"].PermissionMode != "" || tiers["dev"].PermissionMode != "" {
-		t.Fatalf("captureModels leaked permission_mode into seeded tiers: %+v", tiers)
+		t.Fatalf("captureModels leaked permission_mode into captured tiers: %+v", tiers)
 	}
 	if !slices.Equal(tiers["core"].Aliases, []string{"strong"}) || !slices.Equal(tiers["dev"].Aliases, []string{"standard"}) {
 		t.Fatalf("captured tiers do not answer to their older names: %+v", tiers)

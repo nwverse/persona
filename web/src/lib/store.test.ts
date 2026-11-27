@@ -731,6 +731,16 @@ describe("the hub withdrawing an answered card (#4877)", () => {
     expect(getState().answered.ix_e?.withdrawn).toBe(true);
   });
 
+  it("does not carry an earlier withdrawal into a replacement answer", async () => {
+    const { cardWithdrawn, mergeInteractions } = await import("./store");
+    const first = { id: "ix_r", machine_id: "m", session_id: "s", kind: "permission", created_at: "2026-01-02T03:04:05.000000001Z" } as const;
+    const replacement = { ...first, created_at: "2026-01-02T03:04:05.000000002Z" };
+    cardWithdrawn(first.id, first.created_at);
+    expect(mergeInteractions([replacement], Number.MAX_SAFE_INTEGER)).toEqual([replacement]);
+    endInteraction(first.id, { ix: replacement, resolution: { allow: true } });
+    expect(getState().answered.ix_r?.withdrawn).toBeFalsy();
+  });
+
   it("knows an already-answered card is withdrawn", () => {
     const ix = { id: "ix_a", machine_id: "m", session_id: "s", kind: "permission" } as const;
     endInteraction("ix_a", { ix, resolution: { allow: true }, already: true });

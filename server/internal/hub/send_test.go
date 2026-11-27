@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -238,6 +240,128 @@ func TestSendMessageDeliveryRefusalReturns409AndFailedClientOp(t *testing.T) {
 			op, err := store.ClientOp(context.Background(), tc.opID)
 			if err != nil || op == nil || op.State != "failed" {
 				t.Fatalf("client_op = %+v (err=%v), want state=failed", op, err)
+			}
+		})
+	}
+}
+
+type sendReceiptStore struct {
+	*sentStore
+	ops *clientOpsStore
+}
+
+func (s *sendReceiptStore) BeginClientOp(ctx context.Context, op db.ClientOp) (*db.ClientOp, bool, error) {
+	return s.ops.BeginClientOp(ctx, op)
+}
+func (s *sendReceiptStore) ClientOp(ctx context.Context, id string) (*db.ClientOp, error) {
+	return s.ops.ClientOp(ctx, id)
+}
+func (s *sendReceiptStore) FinishClientOp(ctx context.Context, id, state string, result json.RawMessage) error {
+	return s.ops.FinishClientOp(ctx, id, state, result)
+}
+func (s *sendReceiptStore) ForgetClientOp(_ context.Context, id string) error {
+	s.ops.mu.Lock()
+	defer s.ops.mu.Unlock()
+	delete(s.ops.ops, id)
+	return nil
+}
+
+// #15251: 503 assistant_offline from sendMessageOnce (assistantSend or todoHandoff) happens before ClaimSend / deliverOnce,
+// so the response carries delivered:"none" and retryable:true, ForgetClientOp drops the receipt, and retrying with the
+// same X-Persona-Op-Id succeeds once the assistant reconnects.
+func TestSendMessageAssistantOfflineReleasesClientOpAndRetriesWithSameID(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		opID      string
+		assistant bool
+		body      string
+	}{
+		{
+			name:      "assistant_send",
+			opID:      "00000000-0000-4000-8000-000000000511",
+			assistant: true,
+			body:      `{"text":"hello assistant"}`,
+		},
+		{
+			name:      "todo_handoff",
+			opID:      "00000000-0000-4000-8000-000000000512",
+			assistant: false,
+			body:      `{"text":"work on todo","todo_id":"todo-1"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &sendReceiptStore{sentStore: newSentStore(), ops: &clientOpsStore{ops: map[string]db.ClientOp{}}}
+			h := newTestHub(t)
+			h.store = store
+			var typed atomic.Int32
+			pipeNode(t, h, "box", func(context.Context) error {
+				typed.Add(1)
+				return nil
+			})
+			m := h.byID["box"]
+			editSessions(m, func([]proto.Session) []proto.Session {
+				return []proto.Session{{SessionID: "s1", Assistant: tc.assistant, Status: proto.StatusIdle}}
+			})
+
+			post := func() *httptest.ResponseRecorder {
+				req := httptest.NewRequest(http.MethodPost, sendPath, strings.NewReader(tc.body))
+				req.RemoteAddr = "127.0.0.1:12345"
+				req.Header.Set("Authorization", "Bearer "+h.cfg.Token)
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("X-Persona-Op-Id", tc.opID)
+				w := httptest.NewRecorder()
+				h.routes().ServeHTTP(w, req)
+				return w
+			}
+
+			// 1. While the assistant is offline, return 503 with delivered:"none", retryable:true and release client_ops.
+			w := post()
+			var out map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatalf("decode offline response %d %q: %v", w.Code, w.Body.String(), err)
+			}
+			if w.Code != http.StatusServiceUnavailable || out["code"] != assistantwire.CodeAssistantOffline ||
+				out["delivered"] != "none" || out["retryable"] != true {
+				t.Fatalf("offline response = %d %v, want 503 assistant_offline delivered=none retryable=true", w.Code, out)
+			}
+			if typed.Load() != 0 {
+				t.Fatalf("node was called while assistant was offline: %d", typed.Load())
+			}
+			if op, err := store.ClientOp(context.Background(), tc.opID); err != nil || op != nil {
+				t.Fatalf("client_op after assistant_offline = %+v (err=%v), want forgotten (nil)", op, err)
+			}
+
+			// 2. Reconnect the assistant manager and retry with the exact same X-Persona-Op-Id.
+			h.bus.idents = &memIdents{}
+			bmux := http.NewServeMux()
+			h.busRoutes(bmux)
+			srv := httptest.NewServer(bmux)
+			t.Cleanup(srv.Close)
+			tok, err := h.createBusToken(context.Background(), assistantwire.AssistantID, "Test manager")
+			if err != nil {
+				t.Fatal(err)
+			}
+			connectGuardManagerWith(t, srv.URL, assistantwire.AssistantID, tok, func(method string, raw json.RawMessage) (any, error) {
+				switch method {
+				case assistantwire.MethodSendParams:
+					var p assistantwire.SendParams
+					_ = json.Unmarshal(raw, &p)
+					return map[string]any{"params": p.Params}, nil
+				case assistantwire.MethodTodoHandoff:
+					var p assistantwire.TodoHandoff
+					_ = json.Unmarshal(raw, &p)
+					return assistantwire.TodoHandoffResult{Found: true, Text: p.Text}, nil
+				default:
+					return map[string]any{"ok": true}, nil
+				}
+			})
+
+			w = post()
+			if w.Code != http.StatusOK {
+				t.Fatalf("retry after reconnect = %d %s, want 200", w.Code, w.Body.String())
+			}
+			if typed.Load() != 1 {
+				t.Fatalf("node typed = %d, want 1", typed.Load())
 			}
 		})
 	}

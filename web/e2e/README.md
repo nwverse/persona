@@ -635,3 +635,17 @@ and that every colored icon reads at 3:1 on the sidebar and on the hover fill, a
 
 After building the web bundle, run `node web/e2e/native-fetch-settings.mjs <artifact-directory>` with an output directory outside the checkout.
 The runner starts its own loopback HTTP hub fixture on an ephemeral port and opens the actual Managers settings page in installed Chrome, in light and dark mode. It uses a fresh browser context and synthetic credentials, blocks external requests, rejects HTTP writes, and leaves native browser fetch untouched. It checks that hub-provided manager data reaches the settings UI, that health and explicitly bound fetch succeed, and that the original member-call pattern really throws `Illegal invocation`. JSON results and screenshots stay outside the repository. This verifies browser transport and rendering against an isolated fixture, not a deployed hub or account.
+
+## Click a word to look it up (#10977)
+
+```sh
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<unused port> npx vite --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/text-lookup.mjs <loopback-web-origin> <artifact-directory> [--chromium <executable>]
+```
+
+Opens the real app with every hub request and the socket answered in the browser by invented data. In light and dark
+it clicks a word in an assistant reply, an Agent transcript and an Inbox item and waits for the word card with its
+meaning; it checks the saved-word underline is painted (Custom Highlight ranges, one style element, the text node
+not split); and with `available: false` and with no `text_lookup` feature it checks the same click adds no card, no
+style and no highlight. Fails on any page error. Writes `results.json` and screenshots; a 180-second watchdog ends
+the run with a timeout verdict.

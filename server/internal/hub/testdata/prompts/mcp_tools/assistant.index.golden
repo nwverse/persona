@@ -55,6 +55,8 @@ model_profile_get
 model_profile_switch
 model_profile_rollback
 model_profile_capture
+model_profile_deactivate
+model_profile_clear
 model_probe
 launcher_import
 repositories_list

@@ -9195,6 +9195,302 @@
     {
       "name": "machine_cpu_load",
       "value": "CPU & Load"
+    },
+    {
+      "name": "token_usage_title",
+      "value": "Token Usage"
+    },
+    {
+      "name": "token_usage_quick_subtitle",
+      "value": "12-week heatmap & projects"
+    },
+    {
+      "name": "token_usage_unsupported",
+      "value": "Update hub to view token usage"
+    },
+    {
+      "name": "token_usage_total_12w",
+      "value": "Last 12 weeks"
+    },
+    {
+      "name": "token_usage_hit_rate",
+      "value": "Cache Hit"
+    },
+    {
+      "name": "token_usage_input",
+      "value": "Input"
+    },
+    {
+      "name": "token_usage_output",
+      "value": "Output"
+    },
+    {
+      "name": "token_usage_cache_read",
+      "value": "Cache Read"
+    },
+    {
+      "name": "token_usage_cache_write",
+      "value": "Cache Write"
+    },
+    {
+      "name": "token_usage_heatmap_title",
+      "value": "Token Activity"
+    },
+    {
+      "name": "token_usage_heatmap_tap_hint",
+      "value": "Tap a day"
+    },
+    {
+      "name": "token_usage_less",
+      "value": "Less"
+    },
+    {
+      "name": "token_usage_more",
+      "value": "More"
+    },
+    {
+      "name": "token_usage_by_project",
+      "value": "Usage by Project"
+    },
+    {
+      "name": "token_usage_no_projects",
+      "value": "No project usage in this range"
+    },
+    {
+      "name": "token_usage_range_today",
+      "value": "Today"
+    },
+    {
+      "name": "token_usage_range_3d",
+      "value": "3d"
+    },
+    {
+      "name": "token_usage_range_7d",
+      "value": "7d"
+    },
+    {
+      "name": "token_usage_by_machine",
+      "value": "By Computer"
+    },
+    {
+      "name": "token_usage_by_model",
+      "value": "By Model"
+    },
+    {
+      "name": "token_usage_share",
+      "value": "Share"
+    },
+    {
+      "name": "token_usage_project_home",
+      "value": "Home Folder"
+    },
+    {
+      "name": "token_usage_project_temp",
+      "value": "Temporary Folders"
+    },
+    {
+      "name": "token_usage_project_assistant",
+      "value": "Assistant"
+    },
+    {
+      "name": "token_usage_project_unknown",
+      "value": "Unknown Folder"
+    },
+    {
+      "name": "todo_wait_heading",
+      "value": "Waiting"
+    },
+    {
+      "name": "todo_wait_from_step",
+      "value": "From step: {step}"
+    },
+    {
+      "name": "todo_wait_waiting_on",
+      "value": "Waiting on"
+    },
+    {
+      "name": "todo_wait_blocked_by",
+      "value": "Blocked by"
+    },
+    {
+      "name": "todo_wait_details",
+      "value": "Details"
+    },
+    {
+      "name": "todo_wait_wakes_when",
+      "value": "Wakes when"
+    },
+    {
+      "name": "todo_wait_scheduled_wake",
+      "value": "Scheduled wake"
+    },
+    {
+      "name": "todo_wait_check_in_due_label",
+      "value": "Check-in due"
+    },
+    {
+      "name": "todo_wait_until_label",
+      "value": "Until"
+    },
+    {
+      "name": "todo_wait_sent_via",
+      "value": "Sent via {channel}"
+    },
+    {
+      "name": "todo_wait_open_message",
+      "value": "Open Message"
+    },
+    {
+      "name": "todo_wait_view_pr",
+      "value": "View PR"
+    },
+    {
+      "name": "todo_wait_open_source",
+      "value": "Open Source"
+    },
+    {
+      "name": "todo_wait_waiting_since",
+      "value": "Waiting since {time}"
+    },
+    {
+      "name": "todo_wait_kind_person_reply",
+      "value": "Waiting for reply"
+    },
+    {
+      "name": "todo_wait_kind_merge_review",
+      "value": "Waiting for review"
+    },
+    {
+      "name": "todo_wait_kind_pr_merge",
+      "value": "Waiting to merge"
+    },
+    {
+      "name": "todo_wait_kind_external_event",
+      "value": "Waiting on external event"
+    },
+    {
+      "name": "todo_wait_kind_date",
+      "value": "Waiting until date"
+    },
+    {
+      "name": "todo_wait_kind_todo_handoff",
+      "value": "Waiting on another to-do"
+    },
+    {
+      "name": "todo_wait_kind_agent",
+      "value": "Waiting on another Agent"
+    },
+    {
+      "name": "todo_wait_kind_usage_limit",
+      "value": "Usage limit reached"
+    },
+    {
+      "name": "todo_wait_kind_computer_offline",
+      "value": "Computer offline"
+    },
+    {
+      "name": "todo_wait_kind_scheduled_report",
+      "value": "Scheduled report"
+    },
+    {
+      "name": "todo_wait_kind_parked",
+      "value": "Parked"
+    },
+    {
+      "name": "todo_wait_blocker_review_required",
+      "value": "Needs review"
+    },
+    {
+      "name": "todo_wait_blocker_changes_requested",
+      "value": "Changes requested"
+    },
+    {
+      "name": "todo_wait_blocker_checks_pending",
+      "value": "Checks running"
+    },
+    {
+      "name": "todo_wait_blocker_checks_failing",
+      "value": "Checks failing"
+    },
+    {
+      "name": "todo_wait_blocker_conflicts",
+      "value": "Merge conflicts"
+    },
+    {
+      "name": "todo_wait_usage_limit_target",
+      "value": "{target} reached its usage limit"
+    },
+    {
+      "name": "todo_wait_waiting_to_merge_target",
+      "value": "Waiting to merge {target}"
+    },
+    {
+      "name": "todo_wait_waiting_on_target",
+      "value": "Waiting on {target}"
+    },
+    {
+      "name": "todo_wait_back_at",
+      "value": "Back {time}"
+    },
+    {
+      "name": "todo_wait_wakes_at",
+      "value": "Wakes {time}"
+    },
+    {
+      "name": "todo_wait_check_in_due",
+      "value": "Check-in due ({time})"
+    },
+    {
+      "name": "todo_wait_until_at",
+      "value": "Until {time}"
+    },
+    {
+      "name": "todo_wait_since_at",
+      "value": "Since {time}"
+    },
+    {
+      "name": "personal_agents",
+      "value": "Personal Agents"
+    },
+    {
+      "name": "personal_agents_hide",
+      "value": "Hide"
+    },
+    {
+      "name": "personal_agents_restore",
+      "value": "Restore"
+    },
+    {
+      "name": "personal_agents_removed",
+      "value": "Removed ({count})"
+    },
+    {
+      "name": "knowledge_minutes_debates",
+      "value": "Disagreements"
+    },
+    {
+      "name": "knowledge_minutes_debate_open",
+      "value": "Open"
+    },
+    {
+      "name": "knowledge_minutes_debate_settled",
+      "value": "Settled"
+    },
+    {
+      "name": "knowledge_minutes_debate_outcome",
+      "value": "Outcome"
+    },
+    {
+      "name": "kb_chat_in_inbox",
+      "value": "In Inbox"
+    },
+    {
+      "name": "kb_chat_inbox_done_count",
+      "value": "{count} done"
+    },
+    {
+      "name": "kb_chat_knowledge_page",
+      "value": "Knowledge Page"
     }
   ]
 }

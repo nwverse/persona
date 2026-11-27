@@ -24,7 +24,7 @@ vi.mock("./assistant/Persona", async (importOriginal) => ({ ...(await importOrig
 const session: Session = { machine_id: "mac", session_id: "s1", title: "整理文档", cwd: "/code", status: "idle", state: "idle" };
 const rowProps = { s: session, k: "s:mac/s1", reg: () => () => {}, hover: () => {}, to: { name: "session", mid: "mac", sid: "s1" } as const, go: () => () => {}, onMenu: () => {} };
 const link = (html: string) => html.match(/<a [^>]*>/)![0];
-const more = (html: string) => html.match(/<button [^>]*aria-label="Agent 的操作"[^>]*>/)![0];
+const more = (html: string) => html.match(/<button [^>]*aria-label="Agent 操作"[^>]*>/)![0];
 
 describe("unread shown in sidebar counts", () => {
   const unseen: Session["view"] = { phase: "done", reason: { kind: "unseen" }, rank: 30 };
@@ -90,7 +90,7 @@ describe("where an agent was opened, as a mark at its row's end (#2526)", () => 
   it("draws Lark's mark for a Lark group, a link to its topic when it has one", () => {
     expect(mark(render({ pane_id: "botmux:oc_1/t1" }))).toMatch(/^<span data-source="feishu" role="img"[^>]*aria-label="飞书群"/);
     const linked = mark(render({ pane_id: "botmux:oc_1/t1", external_url: "https://example.com/topic" }));
-    expect(linked).toMatch(/^<span data-source="feishu" role="link" tabindex="0"[^>]*aria-label="飞书群 · 在飞书里打开这个话题"/);
+    expect(linked).toMatch(/^<span data-source="feishu" role="link" tabindex="0"[^>]*aria-label="飞书群 · 在飞书中打开该话题"/);
     expect(linked).toContain("<img");
   });
   it("keeps the source mark and pending count without trailing age", () => {
@@ -221,10 +221,10 @@ describe("Persona's main row", () => {
   });
   it("has a ⋯ for the conversation's menu when the main conversation is there", () => {
     const html = renderToStaticMarkup(<PersonaRow {...props} active={false} onMenu={() => {}} />);
-    expect(html).toMatch(/<button [^>]*aria-label="对话的操作"[^>]*aria-haspopup="menu"/);
+    expect(html).toMatch(/<button [^>]*aria-label="对话操作"[^>]*aria-haspopup="menu"/);
   });
   it("draws no ⋯ without it", () => {
-    expect(renderToStaticMarkup(<PersonaRow {...props} main={undefined} active={false} />)).not.toContain("对话的操作");
+    expect(renderToStaticMarkup(<PersonaRow {...props} main={undefined} active={false} />)).not.toContain("对话操作");
   });
   it("whose menu has only 复制会话 ID and 结束…", () => {
     expect(conversationMenuItems(main, { main: true }).map((i) => i.key)).toEqual(["copy", "end"]);
@@ -242,7 +242,7 @@ describe("a 常驻 lead row (#6214 keepTrailing)", () => {
     const counts = html.match(/<span[^>]*>在做 1 · 等你 1<\/span>/)![0];
     expect(counts).not.toContain("group-hover/row:invisible");
     // the ⋯ is an in-flow fader, not an absolute overlay covering the words
-    const button = html.match(/<button [^>]*aria-label="Agent 的操作"[^>]*>/)![0];
+    const button = html.match(/<button [^>]*aria-label="Agent 操作"[^>]*>/)![0];
     expect(button).toContain("opacity-0 group-hover/row:opacity-100");
     expect(button).not.toContain("absolute");
     // and the anchor reserves no overlay room of its own

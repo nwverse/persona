@@ -174,17 +174,20 @@ func codexHomeArgv(argv []string, srcHome, defaultHome string) []string {
 	return append([]string{"CODEX_HOME=" + srcHome}, argv...)
 }
 
-// takeoverHost selects an enabled non-Orca terminal host.Launcher (herdr, herdr-core, tern, ...).
+// takeoverHost selects an enabled terminal host.Launcher (herdr, herdr-core, Orca, tern, ...): the start's host first,
+// then the engine set's. Orca resumes a Codex thread as herdr does since #17044 (resumeCodex: a new terminal in the
+// worktree holding the thread's directory); before that a takeover never went to Orca, and an Orca-only computer had no
+// terminal engine for it.
 func (n *Node) takeoverHost(ctx context.Context) (context.Context, error) {
 	if n == nil || n.hosts == nil {
 		return ctx, noEngineRefusal()
 	}
 	var candidates []string
-	if start := n.startKind(ctx); start != "" && start != host.Orca && !proto.RuntimeEngine(start) {
+	if start := n.startKind(ctx); start != "" && !proto.RuntimeEngine(start) {
 		candidates = append(candidates, start)
 	}
 	for _, kind := range n.engineChoice().Hosts {
-		if kind == "" || kind == host.Orca || proto.RuntimeEngine(kind) || slices.Contains(candidates, kind) {
+		if kind == "" || proto.RuntimeEngine(kind) || slices.Contains(candidates, kind) {
 			continue
 		}
 		candidates = append(candidates, kind)

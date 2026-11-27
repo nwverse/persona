@@ -29,8 +29,9 @@ import (
 // MemoryReadBounds are the bounds of reading one memory_sources contribution for an assembly; the assistant gives
 // them (memory_extension_wire.go), so they are written once.
 type MemoryReadBounds struct {
-	// PageLimit is the limit each call asks for. ReadTimeout and TotalMost bound the complete read, never a prefix.
+	// PageLimit is the limit each call asks for. MaxPages (when > 0), ReadTimeout and TotalMost bound the complete read, never a prefix.
 	PageLimit   int
+	MaxPages    int
 	ReadTimeout time.Duration
 	TotalMost   int
 	// CallTimeout bounds one call; AnswerMost is the most bytes one answer may hold.
@@ -127,6 +128,9 @@ func readMemoryPages(ctx context.Context, proc memoryCaller, contribution string
 		pages = append(pages, page)
 		if !page.HasMore || page.After == "" {
 			return pages, nil
+		}
+		if b.MaxPages > 0 && len(pages) >= b.MaxPages {
+			return nil, fmt.Errorf("incomplete memory read: over %d pages", b.MaxPages)
 		}
 		if sent[page.After] {
 			return nil, errors.New("incomplete memory read: repeated cursor")
