@@ -43,10 +43,6 @@ func ownerProfilePlanFrom(ctx context.Context) *ownerProfilePlan {
 	return plan
 }
 
-func withoutOwnerProfilePlan(ctx context.Context) context.Context {
-	return context.WithValue(ctx, ownerProfilePlanContextKey{}, (*ownerProfilePlan)(nil))
-}
-
 // advanceOwnerProfilePlan applies one prepared catalog write only to the
 // batch's private planning snapshot. The database remains untouched until each
 // approved direct call passes its exact revision and display checks.
