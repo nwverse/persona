@@ -334,9 +334,64 @@ func stripAssistantFields(v *View, keepPageNavigation bool) []string {
 		drop("assistant_action")
 		v.Filter = nil
 	}
+	filterRowActions := func(in []RowAction) []RowAction {
+		var out []RowAction
+		changed := false
+		for i := range in {
+			if assistantOnlyAction(&in[i].Action, keepPageNavigation) {
+				drop("assistant_action")
+				if !changed {
+					out = append([]RowAction(nil), in[:i]...)
+					changed = true
+				}
+				continue
+			}
+			if changed {
+				out = append(out, in[i])
+			}
+		}
+		if !changed {
+			return in
+		}
+		return out
+	}
+	filterComposerButtons := func(in []ComposerButton) ([]ComposerButton, bool) {
+		var out []ComposerButton
+		changed := false
+		for i := range in {
+			if assistantOnlyAction(&in[i].Action, keepPageNavigation) {
+				drop("assistant_action")
+				if !changed {
+					out = append([]ComposerButton(nil), in[:i]...)
+					changed = true
+				}
+				continue
+			}
+			if changed {
+				out = append(out, in[i])
+			}
+		}
+		if !changed {
+			return in, false
+		}
+		return out, true
+	}
 	if v.Tabs != nil && assistantOnlyAction(&v.Tabs.Action, keepPageNavigation) {
 		drop("assistant_action")
 		v.Tabs = nil
+	}
+	if v.Review != nil {
+		if kept, changed := filterComposerButtons(v.Review.Buttons); changed {
+			if len(kept) == 0 {
+				v.Review = nil
+			} else {
+				v.Review.Buttons = kept
+			}
+		}
+		if v.Review != nil && assistantOnlyAction(v.Review.Discard, keepPageNavigation) {
+			drop("assistant_action")
+			v.Review.Discard = nil
+		}
 	}
 	sections := make([]Section, 0, len(v.Sections))
 	for i := range v.Sections {
@@ -367,6 +422,41 @@ func stripAssistantFields(v *View, keepPageNavigation bool) []string {
 				drop("assistant_action")
 				e.Button = nil
 			}
+			if kept, changed := filterComposerButtons(e.Buttons); changed {
+				if e.Type == ComponentComposer && len(kept) == 0 {
+					continue
+				}
+				e.Buttons = kept
+			}
+			for _, ap := range []**Action{&e.Expand, &e.Load, &e.Comment, &e.Reply, &e.Context, &e.MarkViewed, &e.Draft} {
+				if assistantOnlyAction(*ap, keepPageNavigation) {
+					drop("assistant_action")
+					*ap = nil
+				}
+			}
+			if e.Control != nil && assistantOnlyAction(&e.Control.Action, keepPageNavigation) {
+				drop("assistant_action")
+				e.Control = nil
+			}
+			e.Actions = filterRowActions(e.Actions)
+			for k := range e.Crumbs {
+				if assistantOnlyAction(e.Crumbs[k].Action, keepPageNavigation) {
+					drop("assistant_action")
+					e.Crumbs[k].Action = nil
+				}
+			}
+			for k := range e.Tiles {
+				t := &e.Tiles[k]
+				if assistantOnlyAction(t.Action, keepPageNavigation) {
+					drop("assistant_action")
+					t.Action = nil
+				}
+				if t.Control != nil && assistantOnlyAction(&t.Control.Action, keepPageNavigation) {
+					drop("assistant_action")
+					t.Control = nil
+				}
+				t.Actions = filterRowActions(t.Actions)
+			}
 			// a graph's nodes keep their place; only their assistant-only action goes
 			for k := range e.Nodes {
 				if assistantOnlyAction(e.Nodes[k].Action, keepPageNavigation) {
@@ -386,6 +476,16 @@ func stripAssistantFields(v *View, keepPageNavigation bool) []string {
 				if assistantOnlyAction(e.Markers[k].Action, keepPageNavigation) {
 					drop("assistant_action")
 					e.Markers[k].Action = nil
+				}
+			}
+			for k := range e.Threads {
+				if assistantOnlyAction(e.Threads[k].Reply, keepPageNavigation) {
+					drop("assistant_action")
+					e.Threads[k].Reply = nil
+				}
+				if assistantOnlyAction(e.Threads[k].Resolve, keepPageNavigation) {
+					drop("assistant_action")
+					e.Threads[k].Resolve = nil
 				}
 			}
 			items = append(items, e)
