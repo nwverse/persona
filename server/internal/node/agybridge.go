@@ -258,6 +258,11 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 	if instance != "" {
 		args = append(args, "--instance", instance)
 	}
+	// The companion attaches `<this program> mcp` to its chats for Persona's tools, and is told which program that is:
+	// a Persona Link install calls it persona-node, which a lookup for personad does not find (#14582).
+	if bin := ownProgram(); bin != "" {
+		args = append(args, "--personad-bin", bin)
+	}
 	cmd := exec.Command(js.Path, args...)
 	cmd.Env = js.env(agyBridgeEnv(ctx, rh, os.Environ()))
 	cmd.Dir = dir

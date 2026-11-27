@@ -196,6 +196,7 @@ func (h *Hub) setKept(ctx context.Context, mid, o string) error {
 			return fmt.Errorf("%w: %v", errOwnersUnknown, err)
 		}
 	}
+	before := h.machineOwner(mid)
 	d.mu.Lock()
 	next := make(map[string]string, len(d.kept)+1)
 	for k, v := range d.kept {
@@ -215,6 +216,9 @@ func (h *Hub) setKept(ctx context.Context, mid, o string) error {
 	d.mu.Lock()
 	d.kept = next
 	d.mu.Unlock()
+	if before != h.machineOwner(mid) {
+		h.fleetClientsRefresh()
+	}
 	return nil
 }
 

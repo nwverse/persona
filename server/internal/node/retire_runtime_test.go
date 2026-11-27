@@ -141,7 +141,7 @@ func TestStopAndRetireClassifyNonHexRuntimeSessions(t *testing.T) {
 	})
 
 	t.Run("malformed_ids_stay_invalid", func(t *testing.T) {
-		for _, bad := range []string{"", "../escape", "bad id", "unknown-session"} {
+		for _, bad := range []string{"", "../escape", "bad id"} {
 			_, err := nodeCall(t, n, "session.stop", map[string]any{"session_id": bad})
 			if err == nil || !strings.Contains(err.Error(), "invalid session id") {
 				t.Fatalf("session.stop(%q) = %v, want invalid session id", bad, err)

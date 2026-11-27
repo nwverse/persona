@@ -25,7 +25,7 @@ vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" })
 
 import { applyCompleteSessions, reset, setOutbox } from "../../lib/store";
 import type { Session } from "../../lib/types";
-import { t } from "../../i18n";
+import { initI18n, t } from "../../i18n";
 import { ChatView } from "./ChatView";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -35,8 +35,9 @@ const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)
 
 let host: HTMLDivElement;
 let root: Root;
-beforeEach(() => {
+beforeEach(async () => {
   media.phone = false;
+  await initI18n("en");
   localStorage.clear();
   vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [], to_seq: 0 } : {}), { status: 200, headers: { "Content-Type": "application/json" } }))));
   host = document.createElement("div");
@@ -55,7 +56,7 @@ async function open(view: React.ReactElement, session = row()) {
   act(() => root.render(view));
   for (let i = 0; i < 6; i++) await settle();
 }
-const terminalButton = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.terminal")}"]`);
+const terminalButton = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("lib-terminals.terminal")}"]`);
 const dot = () => terminalButton()?.parentElement?.querySelector("[data-terminal-waits]") ?? null;
 async function menuItems(): Promise<string[]> {
   act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
@@ -65,15 +66,18 @@ async function menuItems(): Promise<string[]> {
   return items;
 }
 
-it("on the agent's page: desktop shows the terminal toolbar button without duplicating it in ⋯, phone keeps ⋯ › Terminal", async () => {
+it.each(["en", "zh-Hans", "ja"])("on the agent's page: localized terminal entries, no dot while nothing waits (%s)", async (lang) => {
+  await initI18n(lang);
+  expect(t("lib-terminals.terminal")).not.toBe("lib-terminals.terminal");
   await open(<ChatView mid="mac" sid="s1" inPage />);
   expect(terminalButton()).not.toBeNull();
   expect(dot()).toBeNull();
-  expect((await menuItems()).some((x) => x.includes(t("chat-chatview.terminal")))).toBe(false);
+  // The desktop's existing toolbar button owns Terminal; the phone puts it in ⋯.
+  expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(false);
 
   media.phone = true;
-  await open(<ChatView key="phone" mid="mac" sid="s1" inPage />);
-  expect((await menuItems()).some((x) => x.includes(t("chat-chatview.terminal")))).toBe(true);
+  await open(<ChatView key={`phone-${lang}`} mid="mac" sid="s1" inPage />);
+  expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(true);
 });
 
 it("in the side panel: the terminal button opens the agent's page in its terminal view and closes the panel", async () => {
@@ -83,10 +87,31 @@ it("in the side panel: the terminal button opens the agent's page in its termina
   try {
     await open(<ChatView mid="mac" sid="s1" panel={{ onClose, items: [] }} />);
     expect(terminalButton()).not.toBeNull();
-    expect((await menuItems()).some((x) => x.includes(t("chat-chatview.terminal")))).toBe(false);
+    expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(false);
     act(() => terminalButton()!.click());
     expect(navigate).toHaveBeenCalledWith({ name: "session", mid: "mac", sid: "s1", view: "term" });
     expect(onClose).toHaveBeenCalled();
+  } finally {
+    navigate.mockRestore();
+  }
+});
+
+it("the side panel's localized terminal menu item opens the terminal page and closes the panel", async () => {
+  await initI18n("zh-Hans");
+  media.phone = true;
+  const router = await import("../../lib/router");
+  const navigate = vi.spyOn(router, "navigate").mockImplementation(() => {});
+  const onClose = vi.fn();
+  try {
+    await open(<ChatView mid="mac" sid="s1" panel={{ onClose, items: [] }} />);
+    act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
+    await settle();
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
+      .find((x) => x.textContent?.includes(t("lib-terminals.terminal")));
+    expect(item).toBeDefined();
+    act(() => item!.click());
+    expect(navigate).toHaveBeenCalledWith({ name: "session", mid: "mac", sid: "s1", view: "term" });
+    expect(onClose).toHaveBeenCalledOnce();
   } finally {
     navigate.mockRestore();
   }

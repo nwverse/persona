@@ -128,14 +128,14 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `usage` (version 1, #12402) | `usage.` | `id`, `name`, `hosts?` (gateway host names, may start with `*.`) | Process speaks the protocol, permission `launcher_keys` | Rows of the **subscription usage bars** from a gateway whose usage answer has its own shape, see "Usage extensions" below |
 | `providers` (version 1) | `provider.` | `id`, `name`, `description?`, `kind?` (`launcher` / `api`), `api?` (`messages` / `responses`), `base_url`, `model?`, `small_model?`, `models?: [{id, name?}]`, `dynamic_models?`, `key_hint?` | Declarative is enough; `dynamic_models` needs the process to speak the protocol | **From Extension** in **Settings › Model Providers**, see "Model providers" below |
 | `api` (version 1) | `api.` | `id`, `prefix` (one path segment), `features?`, `events?`, `receipts?` (`[{method, path, kind}]`: writes that need send receipts) | `runtime.http`, `on_startup`; with `events`, the process must speak the protocol | A block of App-facing API `/api/v1/<prefix>/…`, see "App API" below |
-| `assistant` (version 1) | `assistant.` | `id`, `skills?` (directories in the package, each with `SKILL.md`), `instructions?` (an `.md` in the package), `gate?` (a `.json` in the package: the gate for one command in a skill) | These files exist in the package; `gate` requires `skills`, and when credentials are needed the process speaks the protocol | The assistant's skills, instructions and command gates, see "Assistant" below |
-| `mcp_servers` (version 1) | `mcp.` | `id` (`a-z0-9_-`, cannot be `persona` or the legacy server name), `command`, `env?`, `args?`, `requires?`, `allow?`, `deny?` | Declarative is enough; the command is installed on the computer that runs the assistant | One more MCP server for the Claude assistant (tool names `mcp__<id>__*`), see "MCP servers" below |
+| `assistant` (version 1) | `assistant.` | `id`, `title?` (≤ 40 characters, for the contribution switch), `skills?` (directories in the package, each with `SKILL.md`), `instructions?` (an `.md` in the package), `gate?` (a `.json` in the package: the gate for one command in a skill) | These files exist in the package; `gate` requires `skills`, and when credentials are needed the process speaks the protocol | The assistant's skills, instructions and command gates, see "Assistant" below |
+| `mcp_servers` (version 1) | `mcp.` | `id` (`a-z0-9_-`, cannot be `persona` or the legacy server name), `title?` (≤ 40 characters, for the contribution switch), `command`, `env?`, `args?`, `requires?`, `allow?`, `deny?` | Declarative is enough; the command is installed on the computer that runs the assistant | One more MCP server for the Claude assistant (tool names `mcp__<id>__*`), see "MCP servers" below |
 | `ui` (version 12) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` and `icon_color?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `group?` (only `nav_page`: `{"id", "title"}`, the sidebar group the page goes in, see "UI slots"), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
 | `agent_sources` (version 1) | `agentsrc.` | `id` (`a-z0-9_-`, also the source segment of session ids `<id>:<sessionKey>`), `name`, `providers?` (`a-z0-9_`, e.g. `grok_bot`) | Process speaks the protocol, `on_startup` | Personal Agents on the Agents page (the hub has no sources of its own; all come from extensions), see "Personal Agent sources" below |
 | `channel` (version 1) | `channel.` | `id` (`^[a-z][a-z0-9_]{0,31}$`, cannot be 8 hex digits), `name`, `kind` (`im`), `connector?` (binding and status come from this connector of the same extension), `bind?` (`qr` / `code` / `fields`), `description?`, `capabilities` (receive images / files / voice, `format`, `max_text`, `asks`, `push`, `typing`, `progress`, `threads`) | Process speaks the protocol; `on_startup` when there is no `connector` | A channel for talking to Persona: the hub runs the shared pipeline (into the chat, tracking the turn, sending the answer back, questions), and the extension only talks to the IM; see [channels.md](channels.md) |
 | `events` (version 1) | `event.` | `id`, `subscribe` (a list of event names, see "Events") | Process speaks the protocol, `on_startup` | Only tells the extension what happened on the hub, see "Events" below |
 | `shortcuts` (version 1) | `shortcut.` | `id`, `title` (1–40 characters), `description?` (≤ 200 characters), `params?` (≤ 8 `{name, title, kind: text / number / toggle / choice, choices?, required?}`), `ui?` (a full page from the same extension) | Process speaks the protocol | Actions in Shortcuts and Siri (iPhone, Mac, Apple Watch), see "System-level placements" below |
-| `skills` (version 1) | — | `id`, `dir` (a directory in the package with `SKILL.md`), `source?` (`package` / `data`: with `data`, `dir` is in the extension's data directory and holds one skill per subdirectory) | Declarative is enough | The assistant's skills, delivered the same way as `assistant.skills`, see "Declarative contributions" and "Assistant content from the data directory" below |
+| `skills` (version 1) | — | `id`, `title?` (≤ 40 characters, for the contribution switch), `dir` (a directory in the package with `SKILL.md`), `source?` (`package` / `data`: with `data`, `dir` is in the extension's data directory and holds one skill per subdirectory) | Declarative is enough | The assistant's skills, delivered the same way as `assistant.skills`, see "Declarative contributions" and "Assistant content from the data directory" below |
 | `prompts` (version 1) | — | `id`, `kind`: `instructions` (`file`: an `.md` in the package, or in the data directory with `source: "data"`) / `quick` (`title`, `text`) / `project_context` (`dir` in the data directory) / `inbox_context` (`file` in the data directory, `never_quote?`); `source?` (`package` / `data`, not for `quick`; the two context kinds are always `data`) | Declarative is enough | Instructions appended to the assistant's CLAUDE.md; quick prompts in the App's input box; a new Agent's project background; the Inbox's triage and draft prompts; see "Declarative contributions" and "Assistant content from the data directory" |
 | `themes` (version 1) | — | `id`, `name`, `light` / `dark`: `#RRGGBB` for the role colors `accent` (required), `positive`, `caution`, `danger`, `ai` | Declarative is enough | One more option in **Settings › Appearance › Theme Color**, see "Declarative contributions" |
 | `looks` (version 1) | — | `id` (`^[a-z0-9][a-z0-9-]{0,31}$`), `name`, `names?`, `subtitle?`, `subtitles?`, `avatar` (`sizes`: PNG, `svg?`, `safe?`, `dark?`), `colors?`, `dot?`, `app_icon_fallback` (id of a built-in avatar) | Declarative is enough; the package has the images it names | One more **Avatar** in settings: Persona's name, picture, colors and status dot, plus the App icon where it can be changed; see "Avatars" below |
@@ -1170,10 +1170,14 @@ and the extensions' `agent.needs_you` / `agent.finished` events still leave the 
   repositories), and `todo.changed` and
   `todo.decision` are not sent of it; one that only cannot be told yet waits rather than being dropped, and is sent once
   it can be told (judged again after 30 seconds, then less often, up to every 10 minutes; at most 512 wait; a manager
-  restart in between drops what waits). Nor can a token take onto a to-do of its own a run of the space, one of such a
-  to-do, or a space such a to-do has or such a run is in (404), nor a run its computer does not list yet (409
-  `agent_not_listed`, with `Retry-After`: an Agent just started is answered before its computer lists it, so try
-  again). Every to-do it is shown reads as a device reads it,
+  restart in between drops what waits). Nor is such a to-do answered as one that does not exist, which an extension
+  that mirrors the to-dos would take as a deletion (#12216): every route of it answers 503 `todo_not_told_yet` with
+  `Retry-After`, `GET /api/v1/todos` leaves it out but says `"partial": true`, so keep your copy and read again later,
+  and a store that cannot tell the to-dos' history answers 503 on the list and on their routes. Nor can a token take onto a to-do of its own a run of the space, one of such a
+  to-do, or a space such a to-do has or such a run is in (404). A run its computer does not list is answered by the
+  computer (#12216): 404 `machine_not_found` for a computer that is not one of the hub's, 503 `machine_offline` with
+  `Retry-After` for one that is off now, and on one that is on 409 `agent_not_listed`, with `Retry-After` (an Agent
+  just started is answered before its computer lists it, so try again). Every to-do it is shown reads as a device reads it,
   and the list's `counts` are a device's, which count, as numbers, the to-dos it is not shown too. What told a to-do's history stays: a run's link keeps a directory in the
   space when the run's shell leaves it, and a space's unlink, move or void releases such a link rather than delete it.
   Such a task's outcome is not written into a knowledge-base project's timeline or worker memory (`memory.jsonl`) either, where `kb.read` would read it:
@@ -1507,6 +1511,25 @@ Owner-facing API/CLI requests resolve only historical names of that committed in
 Before any renamed node upload/start/sync, the manager probes authenticated `plugin.node.identity` capability. Incompatible or unavailable nodes cannot receive a sync that would mistake the absent old ID for uninstall.
 Before the rename commits (`checkRenameNodeCapabilities`), every computer picked in an enabled extension's `node.machines` setting must be online with an identity-aware node. The refusal names the computers: `extension-identity.node_unreachable` for one that is offline or did not answer the probe, `extension-identity.node_outdated` for one whose node is too old. A picked ID that is not one of the hub's computers (removed, or left from before the hub moved) is skipped and logged rather than refused (#2510): the fleet lists offline computers too, so no node with that ID can connect, and one added again under it gets the guarded sync above. The settings form keeps showing it as "(no such machine)" for the owner to remove; removing a computer does not rewrite extensions' settings. Identity-aware nodes persist slot/revision bindings, preserve disabled/offline data and rollback packages, and reject late starts, uploads and events. The assistant's authenticated `extensions.identity` probe similarly guards stable model/knowledge ownership across manager versions. Do not manually move data or secret rows, or use uninstall/reinstall as a migration.
 
+### Moving a built-in provider to the official marketplace
+
+A host release can opt a built-in provider into a same-ID marketplace upgrade. Volcengine speech
+uses this path. When an eligible package is available, the owner can preview it in the official
+catalog, inspect the requested permissions, and confirm the upgrade. The first marketplace version
+can have a lower version number than the installed hub because the package has its own release cycle.
+
+The host checks the registered built-in ID, the official catalog and its pinned signing key, and
+the downloaded package digest. The owner confirms the preview's permission digest even for a package
+with the same permissions. The replacement uses the same installation slot, so existing settings,
+sealed credentials, stored data and contribution switches stay with their owner. The database
+transaction records the change of source and checks the saved row before committing. A change to the
+owner's choices during the transaction requires a fresh attempt.
+
+After the first upgrade, **Roll back** restores the built-in provider supplied by the running host.
+The host reads the saved installation record after a restart to find that predecessor. On a hub
+that has never had the built-in provider, installing the package follows the ordinary installation
+flow. The existing marketplace rename rules apply to packages with a declared former ID.
+
 ### Command-line programs (tools)
 
 When an extension works through some command-line tool (for example, wrapping the CLI of a company's internal service), it lists it in the manifest's `tools`, and the hub installs it at install time, so computers that never had that CLI can use it right away (#4507).
@@ -1683,6 +1706,21 @@ If there is no hub.json on this machine it errors out; it does not connect anywh
 An option the command does not take, a missing argument or an extra one is refused with exit code 1 before anything is sent to the hub (a mistyped `--keep-data` does not delete the data).
 `new`, `test` and `pack` below do not need the hub; everything else needs the hub running.
 What the commands print reads in the terminal's language (`PERSONA_LANG`, else `LC_ALL` / `LC_MESSAGES` / `LANG`; English when none is set or it is `C`), and they ask the hub for its text (errors, permission lines, statuses) in the same language, not in the user language an app last set ([i18n.md](../protocol/i18n.md), "Command line"). `show` stays JSON. The quotes below are the English text.
+
+Commands that can change an extension (`install`, `upgrade`, `rollback`, `attach` / `detach`, `enable` / `disable`,
+`sandbox`, `auth login` / `logout`, `config`, `secret`, `auto-upgrade`, `contribution`, `market` writes, `dev` and
+`uninstall`) print the resolved state directory and loopback hub before their preview or first request:
+
+```text
+PERSONA_HOME: /absolute/path/to/state
+Hub: http://127.0.0.1:18660
+```
+
+`--yes` skips the confirmation, not this target line. For scripts, add `--expect-home <absolute path>` and/or
+`--expect-hub <host:port>` to make a wrong target impossible: a mismatch fails before any preview, HTTP request or
+filesystem change, and the error names both the expected and actual target. Without either flag, an ordinary install
+keeps its existing behavior apart from the extra target line. The old `JARVIS_HOME` environment name is still accepted;
+when neither variable is set, the default is `$HOME/.persona` (or the old state directory when that is what exists).
 
 ```text
 personad extension list                              One line each: id, version, source, status, name; errors are shown on failing ones, and ones needing setup show "; still needs: …"
@@ -2321,10 +2359,21 @@ manifest can ask for four things. A hub from before them refuses the manifest, s
   - Deleting a secret is never checked.
 - **`open_url: "persona://settings/extensions/<its own id>"`** from an action: the apps open 设置 › 扩展 › that extension
   (the web `/settings?tab=extensions&extension=<id>`). Another extension's id is refused like any non-https link.
+- **`open_url: "persona://settings/extensions/<its own id>?set=<url-encoded JSON object>"`** from an action: the Web
+  settings form opens that extension with the proposed ordinary configuration values filled in. `set` may name only
+  known configuration fields of this extension, with valid values; secrets, entry lists, unknown fields, another
+  extension's id, an extra path/query/fragment, malformed JSON or more than 2 KiB decoded are refused. This is only a
+  prefill: the saved configuration stays the base and nothing is written until the owner presses Save. Apple and Android
+  do not apply this prefill in this slice; the host-drawn confirmation sheet remains the broader follow-up.
+- **`open_url: "persona://compose?prompt=<quick prompt id>&text=<url-encoded prompt text>"`** from an action: the web
+  and Android put that prompt's `text` in the assistant's main composer without sending it; Android opens the
+  new-chat page when there is no main conversation yet. The id and text must be exactly one of this extension's own
+  `quick` prompts; another extension's prompt, an arbitrary text, extra query parameters, a path or a fragment are
+  refused. iOS does not yet handle this link.
 
 Code: `extension/configured.go`, `extension/egress` (`Target`, `dialConfigured`, `Proxy.Check`), `extmgr/extension_settings_check.go`,
-`sdk/go/ext/settings_check.go`;
-the clients `web/src/lib/extensions.ts`, `web/src/views/settings/Extensions.tsx`,
+`sdk/go/ext/settings_check.go`; the Web prefill is `web/src/lib/extension-ui.ts`, `web/src/lib/settings-prefill.ts`,
+`web/src/lib/extensions.ts`, `web/src/views/settings/Extensions.tsx`; Apple's settings pages
 `apple/Persona/Views/Settings/ExtensionsModel.swift`, `ExtensionUIModel.swift`.
 
 ## The hub's API
@@ -2599,6 +2648,13 @@ Extensions **do not run code in the app**: they return a View (a few fixed kinds
 and button actions go back to the extension. Views and components are defined in `schema/extension/view.schema.json` (the types on all four clients are generated from it, see [schema/extension/README.md](../../schema/extension/README.md));
 the hub first checks against the schema (`wire.Validate`, `sdk/go/wire`), then checks what the schema cannot express (item count per page, no duplicate field names, consistent labels across chart series), in `server/internal/extension/ui.go`.
 
+A full page (`nav_page`, `extension_page`) may also use an action's `open` to navigate to an existing Persona **session**
+(`persona://session/<machine>/<session>`) or **to-do** (`persona://task/<id>`). A tap only routes, using the same validated
+targets and in-app routes as assistant cards: it sends no message, changes no destination data, returns no destination
+content to the extension, and Back returns to the page with its state. Every other `open` target (https, knowledge files,
+machine files) and the other assistant-only action fields (`reply`, `pop`, a page `push`) stay unavailable to extensions;
+cards (`overview_card`, `capsule_card`) keep no `open` at all.
+
 **Where it goes** (the `placement` of a `ui` contribution): see the slot table in the next section, "UI slots". The first two:
 
 | placement | Appears in | Extra |
@@ -2696,8 +2752,8 @@ In the manifest:
 ```
 
 - Only `nav_page` can name a `group` (#9071): `{"id": "workbench", "title": "工作台"}`, the id `^[a-z][a-z0-9-]{0,31}$` and the title 1–40 characters in the manifest's language, translated in `l10n/<language>.json` under `groups` (`{"groups": {"workbench": "Workbench"}}`). Pages of any extension naming the same id share the group (the first one listed names it). It is only where the page goes by default: the user can move any page to another group, rename, reorder or remove groups, and a removed group's pages go back to **Pages**. `GET …/-/ui` lists it as the place's `group`, its title in the request's language. A hub from before reads manifests strictly and refuses one with `group`; iOS and Android ignore the field until their own PRs.
-- Only `nav_page` can set `icon`, picked from a fixed few: `plugin` (default), `chart`, `gauge`, `list`, `bell`, `doc`, `calendar`, `money`; each client maps them to the icon with the same meaning in its own design system,
-  and draws unknown ones as `plugin`. Extensions cannot supply images or SF Symbol names, and their only color is `icon_color` below.
+- Only `nav_page` can set `icon`, picked from the fixed set a row's icon uses (`NavIcon`, "Row icon / avatar / thumbnail" below): `extension` (default, old name `plugin`), `chart`, `gauge`, `list`, `bell`, `doc`, `calendar`, `money`, `person`, `chat`, `mail`, `link`, `folder`, `star`, `check`, `warning`, `clock`, `tag`, `search`, `settings`, the code-hosting names of UI version 4 (`branch`, `commit`, `code`, `pull_request`, `merge`, `file`) and the names UI version 6 adds; each client maps them to the icon with the same meaning in its own design system (the same one a row draws for the name),
+  and draws unknown ones as `extension`. The web drew only the first eight, the code-hosting four and the UI version 6 names on a `nav_page` before #16281 (the rest as `extension`); iOS and Android drew the whole set. Extensions cannot supply images or SF Symbol names, and their only color is `icon_color` below.
 - Only `nav_page` can set `icon_color` (#10822): one of the named colors (`Color`, the same as a row's `icon_color`), for the page's icon in the sidebar. It is drawn only while the owner chose **Colored** in Settings › Appearance › **Sidebar icons** (off by default, `docs/design/DESIGN_SYSTEM.md` "Sidebar icon colors"); in **Monochrome**, and for a page without it, the icon stays the sidebar's neutral ink, and the open page's icon keeps the open row's ink either way. `GET …/-/ui` lists it as the place's `icon_color`. A hub from before reads manifests strictly and refuses one with `icon_color`; iOS and Android ignore the field until their own PRs (#10822 tracks them).
 - Only `overview_card` can set `opens`: the id of a `nav_page` or `plugin_page` of the same extension; without it the card is not tappable (buttons and rows inside the card still are).
 - Titles are 1–40 characters; when they do not fit in navigation, each client truncates them (single line), never wrapping.
@@ -2718,7 +2774,7 @@ When the app draws a slot, it states in `context` whom it is drawing for and whe
 | --- | --- | --- |
 | `placement` | — | This contribution's slot |
 | `size` | Optional: `compact` / `full` | If not sent, the size from the slot table; `compact` is a card and must be compact (see the limits under "New items") |
-| `ui_version` | The UI version the app can draw: the hub knows `11`; iOS sends `11` on iPhone and iPad and `8` on Apple's other systems (Vision Pro, the Mac), the web and Android send `10` (the web's native stream `7`), HarmonyOS `6` over HTTP and `7` on its native stream; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
+| `ui_version` | The UI version the app can draw: the hub knows `12`; iOS sends `11` on iPhone and iPad and `8` on Apple's other systems (Vision Pro, the Mac), the web sends `12`, Android sends `11` (the web's native stream `7`), HarmonyOS `6` over HTTP and `7` on its native stream; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
 | `tz` | The user's time zone (IANA name, `Asia/Shanghai`) | Passed on only if it loads; if not sent or invalid, the user time zone the hub knows (reported by the app, or from assistant settings), empty if neither. "Today" is computed in it |
 | `locale` | The app's language (`zh-Hans-CN`) | Passed on only if it looks like a language tag, otherwise empty |
 | `platform` | `ios` / `mac` / `android` / `web` | Other values are dropped |
@@ -3011,7 +3067,7 @@ The app sends `4` in `context.ui_version`; `hub.extension_points.ui` in `initial
 - **`Action.values`** (at most 8): values carried by the action. After a tap, `values` sent to `ui.action` merge in this order: page fields (with `submit`) → the component's own values (documented below for each component) → the action's values (win on duplicate names).
   A row of commits or a sequence of paths no longer needs parameters embedded in `id`.
 - **`Filter.choices`**: at most 100 (previously 20; branch dropdowns). Older apps receive at most 20, always including the selected one.
-- New icons: `branch`, `commit`, `code`, `pull_request`, `merge`, `file` (`nav_page` can use `branch` / `code` / `pull_request` / `merge` from these).
+- New icons: `branch`, `commit`, `code`, `pull_request`, `merge`, `file` (`nav_page` can use them all; the web drew `commit` and `file` there as `extension` before #16281).
 
 ### Components
 
@@ -3521,8 +3577,10 @@ extension sees that). One new component, `scene`, authoritative in `schema/exten
 its `Scene*` definitions, `x-since: 11`); the example is `schema/extension/examples/View.v11-scene-flat.json`. **An app sends
 11 only when it draws all of the below** (and all of 10). **iOS** (#12544) draws `scene` in
 `apple/Persona/Views/Settings/ExtensionScene.swift` (`ExtensionSceneGeometry.swift`, `ExtensionSceneModel.swift`) and sends `11`
-for pages and cards (`pageVersion` and `cardVersion`, including Share as Image's direct still snapshot); **web** (#12641) and
-**Android** (#12642) stay on `10` and get the downgrade below until their renderers land.
+for pages and cards (`pageVersion` and `cardVersion`, including Share as Image's direct still snapshot). **Android** (#12642)
+draws the scene in both places with Compose; `HttpExtensionManagement.UI_VERSION` is `11`. **Web** (#12641) draws
+it in `web/src/views/extensions/ViewBody11.tsx` and `scene-geometry.ts` and sends `12` for pages and cards, including
+all of UI version 11.
 
 Extensions still run no code in the app and send no model file: they say what the shapes are, and each app builds them with
 its own engine. A list of simple shapes is the contract because no 3D file format is drawn by every client (SceneKit reads
@@ -3546,6 +3604,17 @@ angles in degrees, counter-clockwise from +x seen from above. A box at `yaw` 0 h
 **Colors.** A scene's shapes are content, like the pixels of an `image`, so their colors are the extension's own: walls, floors
 and sofas need colors no role or named color has. Pins and every control around the model keep the app's: a pin's dot is a
 `tone` or a named `color`, its text the app's ink on the app's surface. Dark mode changes the model's lighting, never its colors.
+
+**The web renderer** uses a lazy Canvas 2D chunk, with no WebGL or new dependency and no scene code in the cold first screen.
+It builds rounded and beveled boxes, cylinders and prisms, projects the same orthographic camera around the shapes' bounds, and
+reuses geometry when a redraw leaves the shapes' content unchanged. The optional `wall` flag is preserved and drawn as an ordinary
+box, as the contract allows; this renderer does not add a camera-following cutaway. Drag and arrow keys orbit; wheel, pinch, +/- and the Zoom
+buttons zoom; `0` and Reset restore the extension's current default. Camera changes are immediate, including with reduced motion.
+A touched camera survives redraws by owner scope and component `key` in a bounded 64-entry store; an untouched one follows a new
+default. Opaque design-system chips carry labels and pins in `alt`, `labels`, `pins`, controls reading order, and remain inside the
+viewport. A page uses the graph's responsive canvas height and Full screen; a compact card is a non-interactive 200 px preview
+whose single button opens the same interactive scene. `web/e2e/extension-scene.mjs` covers Chromium light/dark rendering, gestures,
+pin actions, camera persistence, contrast, full-screen visibility and the compact preview against `MOCK_EXTENSION_SCENE=1`.
 
 **The hub's checks** (`sdk/go/wire/viewcheck11.go`; the whole page is refused otherwise): every number finite; a shape at least
 0.005 tall; a box's `round` at most half its smaller size and no field of another kind (a box's `radius`, a prism's
@@ -3572,6 +3641,8 @@ An interactive 2D geographic map showing routes, points of interest, markers and
 
 **Coordinates**: WGS-84 decimal degrees everywhere (`lat` in `[-90, 90]`, `lon` in `[-180, 180]`), regardless of vendor coordinate systems (for example, an extension reading GCJ-02 or BD-09 converts to WGS-84 before returning). Renderers draw with native map views matching the shell's light and dark appearance.
 
+Android draws the supplied points and routes on its own map canvas. An inline view opens the full-screen controls for pan, zoom, route selection and camera reset. The same renderer draws read-only tool views in the transcript, including views on folded work. The Android client declares `tool_views` for both HTTP transcript reads and the live socket. It advertises UI version 12 and requests fallback components for `scene`.
+
 | Field | What it does |
 | --- | --- |
 | `alt` (required, 1–200) | Sentence summary of what the map shows; used for accessibility and fallback |
@@ -3589,7 +3660,7 @@ An interactive 2D geographic map showing routes, points of interest, markers and
 
 **An older app, native streams, or `unsupported: ["map"]`** (`downgrade12`, `server/internal/extension/ui_v12.go`): replaces the `map` component with version 11 primitives: an optional `text` summary (`title` / `caption`), a `row` per route (showing travel mode label, duration/distance or `summary`, and a localized badge when `selected`), a `row` per marker (carrying `label`, `subtitle`, `detail`, `icon`, `icon_color` and `action`), and a `link` item per external link (or `alt` as `text` when empty). In compact slots (`overview_card`, `capsule_card`, `inbox_item`), output stays bounded by `CompactItems`.
 
-**The web** (#14998) draws `map` in its own lazy chunk (`web/src/views/extensions/ViewBody12.tsx`) and inline chat `tool_views` in `web/src/views/chat/ToolViews.tsx` (collected via `web/src/lib/turn-tool-views.ts`). Because the web has not added a `scene` renderer yet, REST headers and WebSocket `client_hello` (`web/src/lib/api.ts`) declare `tool_views`, while `renderContext` (`web/src/lib/extension-ui.ts`) declares `ui_version: 12` and `unsupported: ["scene"]`. An extension page draws an interactive cosine-corrected vector canvas (`320–900 px`) with graticule, metric scale bar, coordinate readout, route tabs, stop list, marker details and actions, verified HTTPS links and Full screen mode; compact cards and chat `tool_views` draw a `200 px` still preview that opens Full screen when clicked (unless `static: true`), preserving per-`(owner, key)` camera and selection state. `web/e2e/extension-map.mjs` verifies extension page, Full screen, overview card, chat inline `tool_views`, and downgrade fallback against `MOCK_EXTENSIONS=1 MOCK_EXTENSION_MAP=1`.
+**The web** (#14998) draws `map` in its own lazy chunk (`web/src/views/extensions/ViewBody12.tsx`) and inline chat `tool_views` in `web/src/views/chat/ToolViews.tsx` (collected via `web/src/lib/turn-tool-views.ts`). REST headers and WebSocket `client_hello` (`web/src/lib/api.ts`) declare `tool_views`, while `renderContext` (`web/src/lib/extension-ui.ts`) declares `ui_version: 12` without a `scene` downgrade because the web also renders UI version 11 scenes. An extension page draws an interactive cosine-corrected vector canvas (`320–900 px`) with graticule, metric scale bar, coordinate readout, route tabs, stop list, marker details and actions, verified HTTPS links and Full screen mode; compact cards and chat `tool_views` draw a `200 px` still preview that opens Full screen when clicked (unless `static: true`), preserving per-`(owner, key)` camera and selection state. `web/e2e/extension-map.mjs` verifies extension page, Full screen, overview card, chat inline `tool_views`, and downgrade fallback against `MOCK_EXTENSIONS=1 MOCK_EXTENSION_MAP=1`.
 
 ## System-level placements (#1858)
 

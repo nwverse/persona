@@ -41,6 +41,10 @@ const MCPWait = "mcp_wait_v1"
 // contract. A legacy peer remains compatible, but cannot produce idle evidence.
 const ManagerUpdateInventory = "manager_update_inventory_v1"
 
+// StopIfIdle is an additive automatic-stop RPC. Old peers refuse it before
+// stopping anything; callers must never fall back to unconditional session.stop.
+const StopIfIdle = "session.stop_if_idle"
+
 // ExternalLauncherInventory is optional source-scoped discovery from a trusted node-local adapter registration.
 // It is announced dynamically only while that registration is enabled, never as execution authority.
 const ExternalLauncherInventory = "external_launcher_inventory_v1"
@@ -90,6 +94,8 @@ const (
 	// SessionStartSpeed: session.start and session.start.work take speed for a new terminal Codex or Claude Code Agent.
 	// A node without it would silently drop the explicit choice and start at the launcher's own speed.
 	SessionStartSpeed = "session_start_speed"
+	// SessionStartServiceTier lets session.start apply a native Codex service_tier before the first turn.
+	SessionStartServiceTier = "session_start_service_tier"
 	// NodeUpdate: the node.update.* methods (docs/operations/node-update.md). Whether an update can run right now is still
 	// node.info's node_update / node_update_reason.
 	NodeUpdate = "node_update"
@@ -290,7 +296,7 @@ type TaskWorkspaceCapabilities struct {
 const MarkdownCloseout = "closeout.markdown.v1"
 
 // Announced is what a node built from this code announces.
-var Announced = []string{MarkdownCloseout, TaskWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, SecretRunEnv, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, NodeUpdateDrain, PaneNewSpace, MachineDiagnose, MachineStorageUsage, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, HerdrSessionsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs, StartOpID}
+var Announced = []string{MarkdownCloseout, TaskWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, SessionStartServiceTier, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, SecretRunEnv, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, NodeUpdateDrain, PaneNewSpace, MachineDiagnose, MachineStorageUsage, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, HerdrSessionsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs, StartOpID}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

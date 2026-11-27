@@ -31,10 +31,14 @@ type Record struct {
 	StorageID  string   `json:"storage_id,omitempty"`
 	PreviousID string   `json:"previous_id,omitempty"`
 	Aliases    []string `json:"aliases,omitempty"`
-	// ExpectedID, ExpectedVersion and ExpectedConfig are transaction-only compare-and-swap guards.
-	ExpectedID      string          `json:"-"`
-	ExpectedVersion string          `json:"-"`
-	ExpectedConfig  json.RawMessage `json:"-"`
+	// Transaction-only compare-and-swap guards.
+	ExpectedSource    string          `json:"-"`
+	ExpectedUpdatedAt time.Time       `json:"-"`
+	ExpectedID        string          `json:"-"`
+	ExpectedVersion   string          `json:"-"`
+	ExpectedConfig    json.RawMessage `json:"-"`
+	// BuiltinPredecessor marks state handed to a same-ID official package by the host.
+	BuiltinPredecessor bool `json:"builtin_predecessor,omitempty"`
 	// DeleteSecrets removes these sealed rows in the same transaction as the record write.
 	DeleteSecrets   []string `json:"-"`
 	NewInstallation bool     `json:"-"`
@@ -102,7 +106,8 @@ type Sealer interface {
 
 // Extension is one registered extension.
 type Extension struct {
-	Record Record
+	Record                Record
+	builtinDefaultEnabled bool // the compiled default to restore after explicit uninstall
 	// Manifest is what takes effect: the manifest without the contributions the user switched off (Without). Full is
 	// the manifest as installed: what the extension may do (permissions, the ids it holds) and every contribution the
 	// user can switch.
@@ -123,7 +128,9 @@ type Extension struct {
 }
 
 // ReadOnly: hub.json's, changed there only.
-func (p *Extension) ReadOnly() bool { return p.Record.Source == SourceHubJSON }
+func (p *Extension) ReadOnly() bool {
+	return p.Record.Source == SourceHubJSON || errors.Is(p.problemErr, ErrIdentity)
+}
 
 // ProblemText is the compatibility problem in the client's language, when a translation is available.
 func (p *Extension) ProblemText(l i18n.Lang) string {
@@ -186,8 +193,9 @@ type Registry struct {
 	previews       map[string]*Preview
 	now            func() time.Time
 	// yields: built-in plugins an installed one of the same id takes the place of (Yields); yielded: those put aside.
-	yields  map[string]bool
-	yielded map[string]*Extension
+	handoffs map[string]bool
+	yields   map[string]bool
+	yielded  map[string]*Extension
 	// devSecrets are the secrets of the extensions being written (SourceDev), in memory only.
 	devSecrets map[string]map[string]string
 	// refSchemes: the schemes each extension's secrets reference, by id (secret_refs.go), noted at each read.
@@ -207,7 +215,7 @@ type keptOff struct {
 func NewRegistry(dir string, store Store, seal Sealer, build int64) *Registry {
 	return &Registry{dir: dir, store: store, seal: seal, build: build, platform: runtime.GOOS + "-" + runtime.GOARCH,
 		extensions: map[string]*Extension{}, reserved: map[string]map[string]string{}, previews: map[string]*Preview{}, now: time.Now,
-		yields: map[string]bool{}, yielded: map[string]*Extension{}}
+		handoffs: map[string]bool{}, yields: map[string]bool{}, yielded: map[string]*Extension{}}
 }
 
 // Yields marks the built-in plugin id as one an installed plugin of the same id takes the place of, while it moves out
@@ -277,7 +285,7 @@ func (r *Registry) AddBuiltin(m *Manifest, dir string, enabled bool) error {
 	raw, _ := json.Marshal(m)
 	mutation := r.settingsWriteLocked(m.ID)
 	r.extensions[m.ID] = &Extension{Record: Record{ID: m.ID, Source: SourceBuiltin, Version: m.Version, Manifest: raw,
-		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: enabled}, Manifest: m, Full: m, Schema: schema, Dir: dir}
+		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: enabled}, Manifest: m, Full: m, Schema: schema, Dir: dir, builtinDefaultEnabled: enabled}
 	mutation.finishLocked()
 	return nil
 }
@@ -340,10 +348,22 @@ func (r *Registry) Load(ctx context.Context) error {
 			if k := r.keptOff[row.ID]; k != nil {
 				k.row, cur.Record.Enabled = row.Enabled, false
 			}
+			cur.Record.PackOff = row.PackOff
 			cur.Record.DisabledContributions = row.DisabledContributions
 			cur.Manifest = cur.Full.Without(row.DisabledContributions)
 			cur.Record.InstalledAt, cur.Record.UpdatedAt = row.InstalledAt, row.UpdatedAt
 			mutation.finishLocked()
+		case row.Source == SourceInstalled && cur != nil && cur.Record.Source == SourceBuiltin && r.handoffs[row.ID]:
+			// A pre-existing, unrelated install keeps its own slot. It has no
+			// authority to restore or expose a built-in under its identity.
+			next := r.fromRow(row)
+			r.yielded[row.ID] = cur // uninstalling a conflicting install also restores the compiled default
+			if !row.VerifiedBuiltinPredecessor() || r.keptOff[row.ID] != nil {
+				next.Problem = ErrIdentity.Error()
+				next.problemErr = ErrIdentity
+				next.Record.Enabled = false
+			}
+			r.extensions[row.ID] = next
 		case row.Source == SourceInstalled && cur == nil:
 			mutation := r.settingsWriteLocked(row.ID)
 			r.extensions[row.ID] = r.fromRow(row)
@@ -361,6 +381,7 @@ func (r *Registry) Load(ctx context.Context) error {
 // fromRow is an installed plugin as its row says.
 func (r *Registry) fromRow(row Record) *Extension {
 	row.ExpectedID, row.ExpectedVersion, row.NewInstallation = "", "", false
+	row.ExpectedSource, row.ExpectedUpdatedAt = "", time.Time{}
 	row.ExpectedConfig, row.DeleteSecrets = nil, nil
 	p := &Extension{Record: row}
 	m, err := Parse(row.Manifest)
@@ -584,6 +605,7 @@ func (r *Registry) write(ctx context.Context, row Record) error {
 	if row.Source == SourceInstalled {
 		row.ExpectedID, row.ExpectedVersion = row.ID, row.Version
 	}
+	row.ExpectedSource = row.Source
 	var err error
 	if len(row.DeleteSecrets) > 0 {
 		store, ok := r.store.(PlanStore)
@@ -597,6 +619,13 @@ func (r *Registry) write(ctx context.Context, row Record) error {
 	var unknown *CommitUnknownError
 	if errors.As(err, &unknown) {
 		r.planProblem = err
+	}
+	if err == nil && row.Source == SourceBuiltin {
+		r.mu.Lock()
+		if current := r.extensions[row.ID]; current != nil && current.Record.Source == SourceBuiltin && current.Record.InstalledAt.IsZero() {
+			current.Record.InstalledAt = row.InstalledAt
+		}
+		r.mu.Unlock()
 	}
 	return err
 }

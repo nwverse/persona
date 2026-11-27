@@ -49,6 +49,8 @@ export interface PagedSessionListProps<T> {
   /** The personal list's Browse by account: the mark drawn before an account's name (its provider's), in its group's
    *  heading and in the account picker. The id `label` replaces stays the name's tooltip there. */
   accountMark?: (account: string) => ReactNode;
+  /** The personal list's provider choices: the products its loaded sessions actually use, by display name. */
+  providerOptions?: { key: string; label: string }[];
   /** The hub's computer order, shared with the complete list; count maps alone cannot carry it (#11801). */
   machineOrder?: readonly string[];
   /** The hub names this collection's projects and spaces (`sessions_catalog`): a repository checked out on several
@@ -136,7 +138,7 @@ export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, accountMark, machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, excludeIdentities, grouping, failureText = sameText, holdCounts }: PagedSessionListProps<T>) {
+export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, accountMark, providerOptions = [], machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, excludeIdentities, grouping, failureText = sameText, holdCounts }: PagedSessionListProps<T>) {
   const [query, setQuery] = useState("");
   const [typed, setTyped] = useState("");
   // the sidebar's groupings take ⌘K's words (#6589); every other list its own field's, once typing pauses
@@ -151,11 +153,10 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const chosen = grouping?.dimension;
   useEffect(() => { setPicked(null); setMachine(""); }, [chosen]);
   const [provider, setProvider] = useState("");
-  const [providerQuery, setProviderQuery] = useState("");
   useEffect(() => {
-    const timer = setTimeout(() => { setTyped(query.trim()); setProvider(providerQuery.trim()); }, SESSION_LIST_METRICS.searchDelay);
+    const timer = setTimeout(() => setTyped(query.trim()), SESSION_LIST_METRICS.searchDelay);
     return () => clearTimeout(timer);
-  }, [query, providerQuery]);
+  }, [query]);
   // the hub's catalog names projects and spaces; computers, and every group of a hub without it, come from the counts
   const cataloged = catalog && !personal && (dimension === "project" || dimension === "group");
   // a space id is one computer's: without the catalog a second pill picks the computer it is read on
@@ -456,6 +457,10 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     return picked && !listed.some((g) => g.key === picked.key) ? [...listed, allGroups?.find((g) => g.key === picked.key) ?? { ...picked, count: 0, needs: 0 }] : listed;
   }, [allGroups, picked]);
   const machines = useMemo(() => Object.entries(rootPage.counts?.machine ?? {}).filter(([id]) => id).sort(([a], [b]) => a.localeCompare(b)), [rootPage.counts]);
+  // By space with sessions on more than one computer: each computer's spaces under its heading (#13522, as iOS's By
+  // Project). The whole list's computers decide it, so a chip that leaves one computer's sessions moves no level.
+  const computers = rootPage.counts ? machines.filter(([, n]) => n > 0).length : groupMachines(allGroups ?? []);
+  const byComputer = cataloged && dimension === "group" && computers > 1;
   const dimensions: { key: typeof dimension; label: string }[] = personal
     ? [{ key: "", label: t("paged-agents.recent") }, { key: "group", label: t("paged-agents.account") }]
     : [{ key: "", label: t("paged-agents.recent") }, { key: "machine", label: t("paged-agents.machine") }, { key: "project", label: t("paged-agents.project") }, { key: "group", label: t("paged-agents.group") }];
@@ -543,7 +548,15 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
           {dimension && <PickChip label={t("paged-agents.group_filter")} header={dimensionLabel} value={value} shown={picked ? groupName(picked) : allOf} lead={picked ? groupLead?.(picked) : undefined} grow
             items={[{ key: "", label: allOf }, ...groups.map((g) => ({ key: g.key, label: groupName(g), hint: String(g.count), detail: groupDetail(g), lead: groupLead?.(g), tip: groupTip?.(g) }))]}
             onChoose={chooseGroup} />}
-          {personal && <SearchField value={providerQuery} onChange={setProviderQuery} placeholder={t("paged-agents.provider")} tone="inset" icon={false} className="min-w-0 flex-1" />}
+          {personal && providerOptions.length > 0 && <PickChip
+            label={t("paged-agents.provider")}
+            header={t("paged-agents.provider")}
+            value={provider}
+            shown={provider ? (providerOptions.find((p) => p.key === provider)?.label ?? provider) : t("paged-agents.all_providers")}
+            items={[{ key: "", label: t("paged-agents.all_providers") }, ...providerOptions]}
+            onChoose={(id) => { setProvider(id); setPicked(null); }}
+            grow
+          />}
         </div>}
         <div className="-mx-1 flex min-w-0 items-center justify-between gap-2 px-2">
           <p className="min-w-0 truncate text-xs text-ink-3" data-session-total>{shownTotal === null ? "\u00a0" : t("paged-agents.count", { count: shownTotal })}</p>
@@ -556,7 +569,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       {sections && <>
         {allGroups && (allGroups.length > 0 || (dimension === "state" && Boolean(heldSeen?.rows.length) && (chipless || chip.state === "unread"))) && <Suspense fallback={loadingLine}>
           <GroupedSessions groups={allGroups} dimension={dimension as GroupDimension} kind={personal ? "personal" : "runtime"} scope={groupScope} source={source}
-            renderRow={renderRow} groupName={groupName} groupLead={groupLead} groupTip={groupTip} machineName={machineName} open={openPlace} foldScope={grouping?.foldScope} heldSeen={heldSeen} placeOf={placeOf} justFinished={justFinished} chipless={chipless} />
+            renderRow={renderRow} groupName={groupName} groupLead={groupLead} groupTip={groupTip} machineName={machineName} open={openPlace} foldScope={grouping?.foldScope} heldSeen={heldSeen} placeOf={placeOf} justFinished={justFinished} chipless={chipless} byComputer={byComputer} machineOrder={machineOrder} />
         </Suspense>}
         {!allGroups && !grouped.error && loadingLine}
         {grouped.error && <ListError text={failureText(grouped.error)} onRetry={grouped.retry} />}

@@ -46,4 +46,24 @@
     <string name="shortcuts_new_todo_label">New to-do</string>
     <string name="shortcuts_new_todo_title">New to-do in Persona</string>
     <string name="shortcuts_open_session">Open %1$s</string>
+    <string name="shortcuts_main_chat_header_title" translatable="false">Persona</string>
+    <string name="shortcuts_main_chat_widget_label">Persona Chat</string>
+    <string name="shortcuts_main_chat_widget_description">Main conversation status, waiting decisions, and quick ask</string>
+    <string name="shortcuts_main_chat_status_needs_you">Needs you · %1$d</string>
+    <string name="shortcuts_main_chat_status_thinking">Thinking</string>
+    <string name="shortcuts_main_chat_unpaired_hint">Open Persona to connect your hub</string>
+    <string name="shortcuts_main_chat_idle_greeting">Ready whenever you are.</string>
+    <string name="shortcuts_main_chat_working_fallback">Working on your request…</string>
+    <string name="shortcuts_main_chat_ask_hint">Ask Persona…</string>
+    <string name="shortcuts_main_chat_pending_more" translatable="false">+%1$d</string>
+    <string name="shortcuts_main_chat_pending_plan">Plan awaiting approval</string>
+    <string name="shortcuts_main_chat_pending_permission">Waiting for your approval</string>
+    <string name="shortcuts_main_chat_pending_question">Has a question</string>
+    <string name="shortcuts_main_chat_pending_screen">Terminal needs you</string>
+    <string name="shortcuts_main_chat_pending_default">Needs you</string>
+    <string name="shortcuts_main_chat_todo_needs_you">Needs you</string>
+    <string name="shortcuts_main_chat_todo_review">To verify</string>
+    <string name="shortcuts_main_chat_todo_stuck">Stuck</string>
+    <string name="shortcuts_main_chat_todo_working">In progress</string>
+    <string name="shortcuts_main_chat_todo_planned">Not started</string>
 </resources>

@@ -196,6 +196,8 @@ type extensions struct {
 	// switchMu puts the user's Enabled switches one after another (switchExtension, enableChannel): a pack's switch
 	// reads and writes its record of members (#1830). Taken before any registry operation, never inside one.
 	switchMu sync.Mutex
+	// Keeps concurrent config reconciliation and provider cutover from starting two speech processes.
+	speechApplyMu sync.Mutex
 
 	h    *Manager
 	ctx  context.Context
@@ -790,6 +792,10 @@ func (ps *extensions) runtimeContext(fallback context.Context) context.Context {
 // it starts again if it is there, switched on, compatible and set up. The started process and its setup belong to the
 // manager's lifecycle (runtimeContext), never to a short-lived caller request context.
 func (ps *extensions) apply(ctx context.Context, id string) {
+	if id != "" && id == volcID(ps.modules()) {
+		ps.speechApplyMu.Lock()
+		defer ps.speechApplyMu.Unlock()
+	}
 	ctx = ps.runtimeContext(ctx)
 	ps.mu.Lock()
 	old := ps.byID[id]
@@ -1368,7 +1374,13 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			extensionConnectors.Store(c.ID, p.Record.Source)
 		}
 		cfg := proc.Config{ID: c.ID, Name: c.Name, Manifest: ps.knownOnly(id, connectorManifest(c)), Secrets: secrets, KB: kbase,
-			Logf: ps.logf, Link: link}
+			Logf: ps.logf, Link: link, Identity: &connector.ExtensionIdentity{
+				Extension: p.Record.ID,
+				Version:   p.Record.Version,
+				Source:    p.Record.Source,
+				MarketKey: p.Record.MarketKey,
+				Remote:    p.Record.Remote != nil,
+			}}
 		cfg.RecallNotBefore = hp.recallNotBefore // the program is not asked about a send before this install, whoever asks
 		if p.Record.Granted.GhLogin && ps.h != nil {
 			cfg.GhToken = ps.h.ghTokenFor

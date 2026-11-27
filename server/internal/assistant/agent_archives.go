@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 const agentArchivesKey = "sessions.archived"
@@ -150,6 +151,14 @@ func (svc *Service) loadAgentArchivesLocked(ctx context.Context) error {
 	if records == nil {
 		records = map[string]agentArchive{}
 	}
+	for key, rec := range records {
+		// A snapshot saved before titles were cut (#16343) can hold a whole opening prompt as its title: the archive's
+		// rows go out with the cut one, and the next write saves it.
+		if title := transcript.ListTitle(rec.Session.Title); title != rec.Session.Title {
+			rec.Session.Title = title
+			records[key] = rec
+		}
+	}
 	b.records, b.pending, b.loaded = records, map[string]bool{}, true
 	b.snapshot.Store(&records)
 	return nil
@@ -207,14 +216,15 @@ func archiveSnapshot(s proto.Session) proto.Session {
 		caps.Terminal = s.Capabilities.Terminal
 	}
 	return proto.Session{
-		MachineID: s.MachineID, SessionID: s.SessionID, Title: s.Title,
+		MachineID: s.MachineID, SessionID: s.SessionID, Title: transcript.ListTitle(s.Title),
 		Cwd: s.Cwd, WorkspaceCwd: s.WorkspaceCwd, RepoRoot: s.RepoRoot, Worktree: s.Worktree, Branch: s.Branch,
 		Space: s.Space,
 		Agent: s.Agent, AgentLabel: s.AgentLabel, AgentName: s.AgentName,
 		SourceKind: s.SourceKind, SourceThreadID: s.SourceThreadID, SourceInstanceID: s.SourceInstanceID,
 		ParentThreadID: s.ParentThreadID, ParentSessionID: s.ParentSessionID, RootSessionID: s.RootSessionID, IsSubagent: s.IsSubagent,
 		UpdatedAt: s.UpdatedAt, LastText: string(preview),
-		Status: proto.StatusOffline, State: proto.StateOffline,
+		ReadOnlyReason: s.ReadOnlyReason,
+		Status:         proto.StatusOffline, State: proto.StateOffline,
 		Capabilities: caps,
 	}
 }
@@ -433,6 +443,16 @@ func markAgentArchives(machine string, list []proto.Session, records map[string]
 		}
 		list[i].Archived = rec.Archived && !restoring && !active
 		list[i].ArchiveChangedAt = archiveChangedAt(rec.ChangedAt)
+		if list[i].Archived && !rec.ClosedAt.IsZero() && rec.Session.ReadOnlyReason != "" && !agentArchiveBusy(list[i]) {
+			list[i].ReadOnlyReason = rec.Session.ReadOnlyReason
+			list[i].Status, list[i].State = proto.StatusOffline, proto.StateOffline
+			caps := &proto.SessionCapabilities{Read: true, Terminal: list[i].PaneID != ""}
+			if current := list[i].Capabilities; current != nil {
+				caps.Terminal = caps.Terminal || current.Terminal
+				caps.StopCause = current.StopCause
+			}
+			list[i].Capabilities = caps
+		}
 	}
 	return listed.String()
 }
