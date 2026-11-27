@@ -1,6 +1,6 @@
 Split code, repo research and multi-step work; check machines_list, KB, agents_list, preferences. Main/lead, readonly, user_requested and preapproved start now; others/owner_step need 开始. Queued=dispatched. Reuse suggested idle Agents via agent_send (even after closure) if context/permissions fit. Keep reminders/events separate.
 
-Explicit machine: fixed (default, refuses unavailable launchers) or flexible (health-based moves, explain why); omit for auto placement with placement_constraints. Leads own tasks; main owns its own, receives needs_user, may pick a lead (agent_transfer persists); incompatible leads need supervision_policy. Pass todo_id for unassigned to-dos. Unique task, registered issue/PR URL, or high overlap requires a choice: send to its Agent, use continues, or give distinct_from with reason.
+Explicit machine: fixed (default, refuses unavailable launchers) or flexible (health-based moves, explain why); omit for auto placement with placement_constraints. Leads own tasks; main owns its own, receives needs_user, may pick a lead (agent_transfer persists); incompatible leads need supervision_policy. Use todo_id for unassigned to-dos. Explicit task references, saved issue/PR links or high overlap require a choice: agent_send, continues or distinct_from with a reason.
 
 Started tasks keep a hub brief (owner request/started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults merged+closed unless PR/draft-only); readonly needs goal. expect_minutes: omit=auto, positive overrides. Use continues+continues_why, task_retry (failed starts), task_scope+scope_revision (approved changes).
 
@@ -8,9 +8,9 @@ Edits need readonly=false+write permission; replace readonly Codex for fixes or 
 
 Use repositories_list/repository_get when needed; explicit repository URL or path takes precedence. Bindings never imply machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only owner closes terminals on acceptance.
 
-Saved workspace plan on existing todo: {"backend":{"operation_id":"<id>"}}. Multi-repo container: {"container":{"selected_repo_ids":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.
+Saved workspace plan on existing todo: {"backend":{"operation_id":"id"}}. Multi-repo container: {"container":{"selected_repo_ids":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.
 
-Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default task/<todo id>); reuse needs a clean, unused checkout. {"existing":"<cwd or id>","queue":true} selects it without switching; busy queues FIFO only if requested or owner waits. "none" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.
+Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default task/{todo id}); reuse needs a clean, unused checkout. {"existing":"<cwd or id>","queue":true} selects it without switching; busy queues FIFO only if requested or owner waits. "none" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.
 
 `wait_seconds` observes <=50s after dispatch, appending `Inline observation` JSON (`completed`+`reply`, `question`+`interaction_id`, `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids). Never answers, accepts, resends or cancels; `task_review` supervision applies. Older nodes may time out. Only one immediately dispatchable task waits; cards/multi-task return immediately.{{template "shared/mcp_language" .}}
 
@@ -249,7 +249,7 @@ Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default
           },
           "inbox_item": {
             "type": "string",
-            "description": "Inbox ID or 'none' to skip. Omit to link the sole eligible handoff. Multiple need an ID. No handoff leaves it unlinked. Never files or replies."
+            "description": "Inbox ID or 'none' to skip; omit to link sole eligible handoff (multiple need ID; none stays unlinked). Never files/replies."
           },
           "tier": {
             "type": "string",

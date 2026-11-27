@@ -18,14 +18,6 @@ import (
 
 const artifactPR = "https://github.com/example/project/pull/7"
 
-func artifactTask(t *testing.T, s *Service, f *fakeHub) Todo {
-	t.Helper()
-	todo := agentTask(t, s, f)
-	a := todo.Agents[0]
-	s.workStarted(t.Context(), a.MachineID, a.SessionID, a.LinkedAt)
-	return todo
-}
-
 func artifactCreationProof(f *fakeHub, todo Todo, urls ...string) {
 	f.setItems(artifactCreationItems(todo, urls...)...)
 }
@@ -105,7 +97,7 @@ func TestTaskRepositoryArtifactsRouteFeedbackToExistingAgent(t *testing.T) {
 			if err := s.inboxReady(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			todo := artifactTask(t, s, f)
+			todo := agentTask(t, s, f)
 			artifactCreationProof(f, todo, artifactPR, "https://github.com/example/project/pull/8")
 			before := len(sentToAgent(f))
 			work := artifactWork(todo)
@@ -172,7 +164,7 @@ func TestTaskRepositoryArtifactsStayOnCurrentTask(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			st := repositorystore.New(todoTestDB(t))
 			s, f := newQuietServiceOn(t, st)
-			todo := artifactTask(t, s, f)
+			todo := agentTask(t, s, f)
 			work := artifactWork(todo)
 			now := time.Now()
 			switch name {
@@ -220,7 +212,7 @@ func (st *artifactImportStore) ImportTodoRepositoryLinks(ctx context.Context, id
 func TestTaskRepositoryArtifactsRetryAfterReloadWithoutResurrectingRemovedLinks(t *testing.T) {
 	st := &artifactImportStore{Store: repositorystore.New(todoTestDB(t))}
 	s, f := newQuietServiceOn(t, st)
-	todo := artifactTask(t, s, f)
+	todo := agentTask(t, s, f)
 	artifactCreationProof(f, todo, artifactPR, "https://github.com/example/project/pull/8")
 	st.fail.Store(true)
 	s.putWork(t.Context(), artifactWork(todo))

@@ -17,7 +17,7 @@ func TestTaskRepositoryOwnershipNativeEvidenceIsBoundToReportTurn(t *testing.T) 
 			t.Run(entry+"/"+evidence, func(t *testing.T) {
 				st := repositorystore.New(todoTestDB(t))
 				s, f := newQuietServiceOn(t, st)
-				todo := artifactTask(t, s, f)
+				todo := agentTask(t, s, f)
 				at := todo.Agents[0].LinkedAt
 				create := artifactCreationItems(todo, artifactPR)
 				if evidence == "same turn push" || evidence == "earlier turn push" {
@@ -90,7 +90,7 @@ func TestTaskRepositoryOwnershipNativeEvidenceIsBoundToReportTurn(t *testing.T) 
 func TestTaskRepositoryOwnershipIdenticalReplyInNewTurnIsRechecked(t *testing.T) {
 	st := repositorystore.New(todoTestDB(t))
 	s, f := newQuietServiceOn(t, st)
-	todo := artifactTask(t, s, f)
+	todo := agentTask(t, s, f)
 	agent := todo.Agents[0]
 	at := artifactTurnAt(todo)
 	text := "Report: " + artifactPR

@@ -572,17 +572,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			return outboundNotDone(outcome, "The user declined on the phone: nothing was sent to that agent.", "nothing was sent to that agent"), nil
 		}
-		if err := s.checkExistingTaskInbox(self, source, inboxTodo); err != nil {
-			if resumeTodo != "" {
-				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
-			}
-			return "", fmt.Errorf("%w; nothing was sent", err)
-		}
 		if err := s.externalSessionRefusal(ctx, self, am, c); err != nil {
-			if resumeTodo != "" {
-				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
-			}
 			return "", err
+		}
+		if err := s.checkExistingTaskInbox(self, source, inboxTodo); err != nil {
+			return "", fmt.Errorf("%w; nothing was sent", err)
 		}
 		var task *handedTask
 		if a.Task != nil {

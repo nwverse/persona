@@ -200,8 +200,7 @@ func TestAdvanceTaskReplyPreservesDeliveryBinding(t *testing.T) {
 	const english = "https://github.com/example/project/pull/13"
 	const chinese = "https://github.com/example/project/pull/14"
 	const replacement = "https://github.com/example/project/pull/15"
-	s, f, todo := newSupervisedServiceOn(t, repositorystore.New(todoTestDB(t)))
-	agent := todo.Agents[0]
+	s, todo, _ := linkRoleTask(t)
 	ctx := t.Context()
 	store := s.store().(todoRepositoryImportStore)
 	if _, _, err := store.ImportTodoRepositoryLinks(ctx, todo.ID, []string{delivery}, "explicit"); err != nil {
@@ -214,9 +213,11 @@ func TestAdvanceTaskReplyPreservesDeliveryBinding(t *testing.T) {
 	}
 	// A structured closeout can explicitly set the primary PR. The following reports use a stale
 	// snapshot so the stored PR must win even if the caller has not seen it.
-	text := "<closeout status=\"done\">\nartifact: pr " + delivery + "\n</closeout>"
-	reply := artifactReportProof(f, todo, text, delivery)
-	s.advanceTaskReplyAt(ctx, todo, agent.MachineID, agent.SessionID, text, reply.TS)
+	a := todo.Agents[0]
+	f := s.hub.(*fakeHub)
+	deliveryText := "<closeout status=\"done\">\nartifact: pr " + delivery + "\n</closeout>"
+	deliveryReply := artifactReportProof(f, todo, deliveryText, delivery)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, deliveryText, deliveryReply.TS)
 	for _, enabled := range []bool{true, false} {
 		setSettings(t, s, func(v *Settings) { v.TodosV2 = &enabled })
 		s.advanceTaskReply(ctx, todo, "", "", "Checked for overlap with "+english+"\n与 "+chinese+" 无重叠。") // i18n-ignore: task report fixture
@@ -226,9 +227,9 @@ func TestAdvanceTaskReplyPreservesDeliveryBinding(t *testing.T) {
 			t.Fatalf("todos_v2=%v: stored PR = %q, earlier PRs = %v", enabled, got.PRURL, got.PRs)
 		}
 	}
-	text = "Checked " + english + "\n<closeout status=\"done\">\nartifact: pr " + replacement + "\nartifact: url " + chinese + "\n</closeout>"
-	reply = artifactReportProof(f, todo, text, replacement)
-	s.advanceTaskReplyAt(ctx, todo, agent.MachineID, agent.SessionID, text, reply.TS)
+	replacementText := "Checked " + english + "\n<closeout status=\"done\">\nartifact: pr " + replacement + "\nartifact: url " + chinese + "\n</closeout>"
+	replacementReply := artifactReportProof(f, todo, replacementText, replacement)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, replacementText, replacementReply.TS)
 	if got := todoNow(s, todo.ID).PRURL; got != replacement {
 		t.Fatalf("explicit replacement PR = %q, want %q", got, replacement)
 	}
@@ -247,17 +248,17 @@ func TestAdvanceTaskReplyLegacyDeliveryAfterReferences(t *testing.T) {
 	const reference = "https://github.com/example/project/pull/12"
 	const other = "https://github.com/example/project/pull/13"
 	const delivery = "https://github.com/example/project/pull/14"
-	s, f, todo := newSupervisedServiceOn(t, repositorystore.New(todoTestDB(t)))
-	agent := todo.Agents[0]
+	s, todo, _ := linkRoleTask(t)
 	ctx := t.Context()
 	s.advanceTaskReply(ctx, todo, "", "", reference+" and "+other)
 	s.advanceTaskReply(ctx, todo, "", "", reference)
 	if got := todoNow(s, todo.ID).PRURL; got != "" {
 		t.Fatalf("prose selected a saved reference as the PR: %q", got)
 	}
-	text := "Opened " + delivery
-	reply := artifactReportProof(f, todo, text, delivery)
-	s.advanceTaskReplyAt(ctx, todo, agent.MachineID, agent.SessionID, text, reply.TS)
+	a := todo.Agents[0]
+	openText := "Opened " + delivery
+	openReply := artifactReportProof(s.hub.(*fakeHub), todo, openText, delivery)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, openText, openReply.TS)
 	if got := todoNow(s, todo.ID).PRURL; got != delivery {
 		t.Fatalf("legacy single PR = %q, want %q", got, delivery)
 	}
