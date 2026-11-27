@@ -61,6 +61,8 @@ type passive struct {
 	// handlers: the streams' handlers still running (serve waits for them when it stops).
 	handlers sync.WaitGroup
 
+	// syncMu serializes reading link.json and applying it to s.cfg (lock order: syncMu -> mu).
+	syncMu  sync.Mutex
 	mu      sync.Mutex
 	cfg     Passive
 	streams map[*pstream]struct{}
@@ -79,6 +81,11 @@ type passive struct {
 	logged     time.Time
 	suppressed int
 
+	// testAfterPairUpdate, when non-nil in tests, runs in pair after Update releases
+	// the file lock and before syncing in-memory config.
+	testAfterPairUpdate func()
+	// testReadConfig, when non-nil in tests, replaces Read inside syncFromDisk.
+	testReadConfig func(string) (*Config, error)
 	// testAfterKeepNameUpdate, when non-nil in tests, runs in keepMachineName
 	// after Update releases the file lock and before acquiring s.mu.
 	testAfterKeepNameUpdate func()
@@ -224,21 +231,16 @@ func (s *passive) serve(ctx context.Context, ln net.Listener) {
 				continue
 			}
 			was = now
-			c, err := Read(o.Path)
-			if err != nil || c.CurrentMode() != ModePassive {
+			modeOK, addr, err := s.syncFromDisk(nil, listenAddr)
+			if err != nil || !modeOK {
 				running = false // Run's watcher ends ctx as well
 				continue
 			}
-			p := Passive{}
-			if c.Passive != nil {
-				p = *c.Passive
-			}
-			if p.ListenAddr() != listenAddr {
-				o.Logf("passive: moving from %s to %s", listenAddr, p.ListenAddr())
+			if addr != listenAddr {
+				o.Logf("passive: moving from %s to %s", listenAddr, addr)
 				running = false
 				continue
 			}
-			s.setConfig(p)
 		}
 	}
 	s.mu.Lock()
@@ -270,8 +272,18 @@ func (s *passive) config() Passive {
 // longer the one end.
 func (s *passive) setConfig(p Passive) {
 	s.mu.Lock()
+	s.setConfigLocked(p)
+	s.reportLocked()
+	s.mu.Unlock()
+}
+
+func (s *passive) setConfigLocked(p Passive) bool {
+	changed := !samePassive(s.cfg, p)
 	if !p.Paired() || p.TokenSHA256 != s.cfg.TokenSHA256 {
-		s.attention = nil // another hub's, or none's
+		if s.attention != nil {
+			s.attention = nil // another hub's, or none's
+			changed = true
+		}
 	}
 	s.cfg = p
 	for st := range s.streams {
@@ -279,8 +291,121 @@ func (s *passive) setConfig(p Passive) {
 			st.end(closeCredential, "credential replaced")
 		}
 	}
+	return changed
+}
+
+type pairSync struct {
+	paired     Passive
+	prevPaired bool
+	prevToken  string
+	from       string
+}
+
+// syncFromDisk reloads passive mode's config from link.json under syncMu so concurrent pair()
+// calls and serve()'s config watcher cannot roll s.cfg backward to a stale snapshot. When ps
+// is non-nil, lastSeen/from are updated only if the latest on-disk config still holds that pairing;
+// if Read hits a transient non-ErrNotExist error after pair()'s Update, ps.paired is applied only
+// while s.cfg still matches the exact pre-pair credential state, so a concurrent newer pairing can
+// never be rolled back while the previous credential is still revoked immediately.
+// When expectedListen is non-empty and the mode ended or listen address moved, s.cfg is left
+// untouched so serve() shuts down streams with closeStopping.
+func (s *passive) syncFromDisk(ps *pairSync, expectedListen string) (modeOK bool, listenAddr string, err error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	read := Read
+	if s.testReadConfig != nil {
+		read = s.testReadConfig
+	}
+	c, err := read(s.o.Path)
+	if err != nil {
+		if expectedListen == "" {
+			if errors.Is(err, os.ErrNotExist) {
+				s.mu.Lock()
+				if !samePassive(s.cfg, Passive{}) || s.attention != nil {
+					s.cfg, s.attention = Passive{}, nil
+					s.reportLocked()
+				}
+				s.mu.Unlock()
+			} else if ps != nil {
+				s.o.Logf("passive: reload after pair: %v", err)
+				s.mu.Lock()
+				matchesPrePair := (ps.prevPaired && s.cfg.Paired() && s.cfg.TokenSHA256 == ps.prevToken) ||
+					(!ps.prevPaired && !s.cfg.Paired())
+				if matchesPrePair {
+					changed := s.setConfigLocked(ps.paired)
+					if !s.seenLocked(ps.from) && changed {
+						s.reportLocked()
+					}
+				}
+				s.mu.Unlock()
+			}
+		}
+		return false, "", err
+	}
+	if c.CurrentMode() != ModePassive {
+		if expectedListen == "" {
+			s.mu.Lock()
+			if !samePassive(s.cfg, Passive{}) || s.attention != nil {
+				s.cfg, s.attention = Passive{}, nil
+				s.reportLocked()
+			}
+			s.mu.Unlock()
+		}
+		return false, "", nil
+	}
+	cur := Passive{}
+	if c.Passive != nil {
+		cur = *c.Passive
+	}
+	listenAddr = cur.ListenAddr()
+	if expectedListen != "" && listenAddr != expectedListen {
+		return true, listenAddr, nil
+	}
+	s.mu.Lock()
+	changed := s.setConfigLocked(cur)
+	if ps != nil && samePairing(cur, ps.paired) {
+		if !s.seenLocked(ps.from) && changed {
+			s.reportLocked()
+		}
+	} else if changed {
+		s.reportLocked()
+	}
 	s.mu.Unlock()
-	s.report()
+	return true, listenAddr, nil
+}
+
+func sameTimePtr(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
+func samePairCode(a, b *PairCode) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.SHA256 == b.SHA256 && a.Expires.Equal(b.Expires)
+}
+
+func samePassive(a, b Passive) bool {
+	return a.Listen == b.Listen &&
+		a.HubID == b.HubID &&
+		a.HubName == b.HubName &&
+		a.Machine == b.Machine &&
+		a.MachineName == b.MachineName &&
+		a.TokenSHA256 == b.TokenSHA256 &&
+		sameTimePtr(a.PairedAt, b.PairedAt) &&
+		samePairCode(a.Code, b.Code)
+}
+
+func samePairing(cur, paired Passive) bool {
+	return cur.Paired() &&
+		cur.TokenSHA256 == paired.TokenSHA256 &&
+		cur.HubID == paired.HubID &&
+		cur.HubName == paired.HubName &&
+		cur.Machine == paired.Machine &&
+		sameTimePtr(cur.PairedAt, paired.PairedAt)
 }
 
 // report says what the listener is doing: connected while a stream is open, else listening (paired) or unpaired.
@@ -481,11 +606,14 @@ func (s *passive) pair(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	var paired Passive
+	var prevPaired bool
+	var prevToken string
 	err := Update(s.o.Path, func(c *Config) error {
 		p := c.Passive
 		if c.CurrentMode() != ModePassive || p == nil || p.Code == nil || !now.Before(p.Code.Expires) || !sameHash(req.Code, p.Code.SHA256) {
 			return errBadCode
 		}
+		prevPaired, prevToken = p.Paired(), p.TokenSHA256
 		at := now.UTC()
 		p.HubID, p.HubName, p.Machine, p.TokenSHA256, p.PairedAt, p.Code = hubID, hubName, machine, hashHex(req.Token), &at, nil
 		p.MachineName = clipName(req.MachineName)
@@ -502,8 +630,15 @@ func (s *passive) pair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.o.Logf("passive: paired with hub %q (%s) as %q, from %s", hubName, hubID, machine, maskSource(remoteIP(r)))
-	s.setConfig(paired) // the streams of a hub paired before end now
-	s.seen(r)
+	if s.testAfterPairUpdate != nil {
+		s.testAfterPairUpdate()
+	}
+	_, _, _ = s.syncFromDisk(&pairSync{
+		paired:     paired,
+		prevPaired: prevPaired,
+		prevToken:  prevToken,
+		from:       remoteHost(r),
+	}, "") // streams of a hub paired before end now; never roll back a newer link.json
 	writeJSON(w, http.StatusOK, map[string]string{"version": s.o.Version})
 }
 
