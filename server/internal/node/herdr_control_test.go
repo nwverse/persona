@@ -437,50 +437,64 @@ func TestHerdrAResumeElsewhereDoesNotLetAnExtensionPastAHealthRunsRecord(t *test
 // A resume of a run whose transcript is gone starts fresh under the same id without the kept record's task
 // instructions, and keeps a record's folder inside its space (#12216 item 10).
 func TestHerdrResumeWithoutTranscriptDropsTaskInstructionsAndKeepsSpaceFolder(t *testing.T) {
-	t.Run("claude dedicated channel", func(t *testing.T) {
-		const run = "0a1b2c3d-7777-4f60-8a7b-9c0d1e2f3a42"
-		const rules = "Log the dose every night"
-		n, f, home := herdrNode(t)
-		charts := mkdir(t, filepath.Join(home, ".persona", "health", "charts"))
-		elsewhere := mkdir(t, filepath.Join(home, "elsewhere"))
-		n.state.put(run, sessionState{
-			Launcher:               "claude",
-			Cwd:                    charts,
-			TaskInstructions:       rules,
-			TaskInstructionChannel: "claude",
-		})
-		f.reply("workspace.list", map[string]any{"workspaces": []any{}})
-		f.reply("workspace.create", map[string]any{"workspace": map[string]any{"workspace_id": "w8"},
-			"tab": map[string]any{"tab_id": "w8:t1"}, "root_pane": map[string]any{"pane_id": "w8:p1"}})
-		startHerdr(f, "w8:p1", proto.StatusDone)
-		f.setScreen("w8:p1", screenFixture(t, "claude-2.1.312-empty-162.txt"))
+	for _, tc := range []struct {
+		name        string
+		refusalOnly bool
+	}{
+		{name: "claude dedicated channel without a transcript"},
+		{name: "claude dedicated channel after removing a refusal-only transcript", refusalOnly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const run = "0a1b2c3d-7777-4f60-8a7b-9c0d1e2f3a42"
+			const rules = "Log the dose every night"
+			n, f, home := herdrNode(t)
+			charts := mkdir(t, filepath.Join(home, ".persona", "health", "charts"))
+			elsewhere := mkdir(t, filepath.Join(home, "elsewhere"))
+			n.state.put(run, sessionState{
+				Launcher:               "claude",
+				Cwd:                    charts,
+				TaskInstructions:       rules,
+				TaskInstructionChannel: "claude",
+			})
+			if tc.refusalOnly {
+				path := writePruneFile(t, refusalTurnLines("one"))
+				n.mu.Lock()
+				n.paths[run] = path
+				n.mu.Unlock()
+			}
+			f.reply("workspace.list", map[string]any{"workspaces": []any{}})
+			f.reply("workspace.create", map[string]any{"workspace": map[string]any{"workspace_id": "w8"},
+				"tab": map[string]any{"tab_id": "w8:t1"}, "root_pane": map[string]any{"pane_id": "w8:p1"}})
+			startHerdr(f, "w8:p1", proto.StatusDone)
+			f.setScreen("w8:p1", screenFixture(t, "claude-2.1.312-empty-162.txt"))
 
-		if _, err := request(t, n, "session.start", map[string]any{
-			"cwd":               elsewhere,
-			"launcher":          "claude",
-			"resume_session_id": run,
-			"task_instructions": "Caller rule must not apply to transcriptless resume",
-		}); err != nil {
-			t.Fatalf("resume without transcript: %v", err)
-		}
-		sent := strings.Join(f.trace("pane.send_input"), "\n")
-		if !strings.Contains(sent, "--session-id "+run) || strings.Contains(sent, "--resume "+run) {
-			t.Fatalf("expected fresh --session-id start, got pane.send_input:\n%s", sent)
-		}
-		if strings.Contains(sent, "--append-system-prompt-file") || strings.Contains(sent, rules) {
-			t.Fatalf("transcriptless resume carried task instructions:\n%s", sent)
-		}
-		st, ok := n.state.get(run)
-		if !ok {
-			t.Fatal("missing session state after resume")
-		}
-		if st.Cwd != charts {
-			t.Fatalf("record Cwd = %q, want %q (stay in health space)", st.Cwd, charts)
-		}
-		if st.TaskInstructions != "" || st.TaskInstructionFile != "" || st.TaskInstructionChannel != "" {
-			t.Fatalf("record kept task instructions after transcriptless resume: %+v", st)
-		}
-	})
+			if _, err := request(t, n, "session.start", map[string]any{
+				"cwd":               elsewhere,
+				"launcher":          "claude",
+				"resume_session_id": run,
+				"task_instructions": "Caller rule must not apply to transcriptless resume",
+			}); err != nil {
+				t.Fatalf("resume without transcript: %v", err)
+			}
+			sent := strings.Join(f.trace("pane.send_input"), "\n")
+			if !strings.Contains(sent, "--session-id "+run) || strings.Contains(sent, "--resume "+run) {
+				t.Fatalf("expected fresh --session-id start, got pane.send_input:\n%s", sent)
+			}
+			if strings.Contains(sent, "--append-system-prompt-file") || strings.Contains(sent, rules) {
+				t.Fatalf("transcriptless resume carried task instructions:\n%s", sent)
+			}
+			st, ok := n.state.get(run)
+			if !ok {
+				t.Fatal("missing session state after resume")
+			}
+			if st.Cwd != charts {
+				t.Fatalf("record Cwd = %q, want %q (stay in health space)", st.Cwd, charts)
+			}
+			if st.TaskInstructions != "" || st.TaskInstructionFile != "" || st.TaskInstructionChannel != "" {
+				t.Fatalf("record kept task instructions after transcriptless resume: %+v", st)
+			}
+		})
+	}
 
 	t.Run("fallback channel bare resume succeeds without kept instructions", func(t *testing.T) {
 		const run = "0a1b2c3d-7777-4f60-8a7b-9c0d1e2f3a43"
