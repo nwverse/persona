@@ -17,7 +17,7 @@ import (
 // ask_user with wait false raises its card and returns at once; whatever ends the card is told to the asking
 // conversation as one message (#4928, ask_later.go). All ids are placeholders.
 
-const askLaterArgs = `{"wait":false,"questions":[{"question":"Merge the release PR now?","header":"Merge","options":[` +
+const askLaterArgs = `{"why_owner":"priority","wait":false,"questions":[{"question":"Merge the release PR now?","header":"Merge","options":[` +
 	`{"label":"Merge (Recommended)","description":"CI is green"},{"label":"Wait","description":"until the review is in"}]}]}`
 
 // askLater has c1x1x1 ask without waiting and returns the card it put up and what the tool said. The call must not
@@ -227,7 +227,7 @@ func TestAskUserNoWaitCardStaysWhenTheUserWritesInTheChat(t *testing.T) {
 // With several questions, the message lists each answer given and says the others got none.
 func TestAskUserNoWaitSaysWhichQuestionsGotNoAnswer(t *testing.T) {
 	e := newAskTodoEnv(t, nil)
-	ix, _ := e.askLater(`{"wait":false,"questions":[{"question":"Merge?","options":[{"label":"Yes"},{"label":"No"}]},` +
+	ix, _ := e.askLater(`{"why_owner":"priority","wait":false,"questions":[{"question":"Merge?","options":[{"label":"Yes"},{"label":"No"}]},` +
 		`{"question":"Tag it?","options":[{"label":"Yes"},{"label":"No"}]}]}`)
 	e.mustEnd(ix.ID, `{"answers":{"Tag it?":"No"}}`)
 	got := e.told("c1x1x1")
@@ -403,7 +403,7 @@ func TestAskUserNoWaitCardIsClaimedBackAfterARestart(t *testing.T) {
 // askLater has s1 ask without waiting on s and waits until its card is on the queue.
 func (a *askRig) askLater(t *testing.T, s *Service) proto.Interaction {
 	t.Helper()
-	args := strings.Replace(askUserArgs, `{"questions"`, `{"wait":false,"questions"`, 1)
+	args := strings.Replace(askUserArgs, `{"why_owner"`, `{"wait":false,"why_owner"`, 1)
 	if _, err := s.toolAskUser(context.Background(), "mac", "s1", json.RawMessage(args)); err != nil {
 		t.Fatal(err)
 	}

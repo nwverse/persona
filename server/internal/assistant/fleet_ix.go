@@ -2590,6 +2590,7 @@ func (s *Service) restoreInteractionSnapshots(ctx context.Context, store Store, 
 // restart is not kept: a question that may have rung then only goes back on the apps when its time is up, while an
 // approval rings (ringAsks). True when it was routed.
 func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
+	if s.internalCard(ix) { return s.handNonOwnerCard(ix) }
 	if !routable(ix) {
 		return false
 	}

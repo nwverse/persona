@@ -912,7 +912,7 @@ func TestRestartResolvesTheCardsTheLastManagerLeft(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel) // the first manager's call: it is gone with its process, nobody ends it
 	go func() {
-		_, _ = ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"questions":[{"header":"Merge","question":"Merge it?",
+		_, _ = ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"why_owner":"priority","questions":[{"header":"Merge","question":"Merge it?",
 			"options":[{"label":"Merge"},{"label":"Not yet"}]}]}`))
 	}()
 	asked := ft.waitPending(1)[0]

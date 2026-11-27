@@ -1459,11 +1459,20 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		} `json:"questions"`
 		// Wait false: the card goes up and the tool returns at once (ask_later.go). Unset is true.
 		Wait *bool `json:"wait"`
+		DecisionScope string `json:"decision_scope"`
+		WhyOwner string `json:"why_owner"`
+		OwnerAction string `json:"owner_action"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil || len(a.Questions) == 0 {
 		return "", fmt.Errorf("questions are required")
 	}
-	var da askDeadlineArgs
+	if a.WhyOwner != "" && !slices.Contains(whyOwners, a.WhyOwner) {
+  return "", fmt.Errorf("why_owner is one of %s", strings.Join(whyOwners, ", "))
+ }
+ if a.OwnerAction != "" && !slices.Contains([]string{"personal_unlock", "login", "second_factor", "experience_check", "spending"}, a.OwnerAction) {
+  return "", errors.New("owner_action must name a personal unlock, login, second factor, experience check or spending")
+ }
+ var da askDeadlineArgs
 	if err := json.Unmarshal(args, &da); err != nil {
 		return "", fmt.Errorf("arguments: %v", err) // a deadline or reversible of the wrong type is no deadline to ignore
 	}
@@ -1472,6 +1481,15 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	if err != nil {
 		return "", err
 	}
+ if a.DecisionScope != "" && a.DecisionScope != "internal" && a.DecisionScope != "owner" {
+  return "", errors.New("decision_scope must be internal or owner")
+ }
+ if a.WhyOwner == "" && a.OwnerAction == "" && a.DecisionScope != "internal" {
+  return "", errors.New("say decision_scope=internal for execution questions, or supply why_owner/owner_action for an owner decision; personal unlocks must use owner_action=personal_unlock, never provide a private key")
+ }
+ if a.DecisionScope == "internal" && (a.WhyOwner != "" || a.OwnerAction != "") {
+  return "", errors.New("an owner reason or personal action cannot be labelled internal")
+ }
 	expires := now.Add(askUserWait)
 	if !deadline.At.IsZero() {
 		// The deadline is kept as a time in the question's arguments (askDeadlineOf reads it back when it expires), and
@@ -1503,13 +1521,18 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 			Recommend: askRecommend(da, i, q.Options)})
 	}
 	keepAskDecision(&ix, da, deadline)
+ if !deadline.At.IsZero() && deadline.Reversible && (a.OwnerAction != "" || a.WhyOwner == whyVisible || a.WhyOwner == whyIrreversible) {
+  return "", errors.New("personal actions, outward writes, spending and irreversible decisions cannot take a default")
+ }
 	markRecommended(s.lang(ctx), s.location(ctx), ix.Questions, deadline)
 	// Answers come back keyed by question text: two questions with the same text would lose one answer.
 	if proto.HasDuplicateQuestionText(ix.Questions) {
 		return "", i18n.Err("hub-hub.duplicate_question")
 	}
-	if err := s.promoteSupervision(sessionID); err != nil {
-		return "", err
+	if questionOwnerSource(ix) != "" {
+		if err := s.promoteSupervision(sessionID); err != nil {
+			return "", err
+		}
 	}
 	if a.Wait != nil && !*a.Wait {
 		return s.askLaterStart(ctx, ix)
@@ -1531,7 +1554,10 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	if r.Cancel {
 		return prompts.RenderQuestionCancelled(), nil
 	}
-	if s.askExpiredResolution(ix, r) { // nobody answered in time: it waits as a to-do (ask_todo.go)
+	if s.askExpiredResolution(ix, r) && questionOwnerSource(ix) == "" {
+  return "The internal question expired without a supervisor answer. Nothing was authorized; ask again if still needed.", nil
+ }
+ if s.askExpiredResolution(ix, r) { // nobody answered in time: it waits as a to-do (ask_todo.go)
 		t, err := s.askExpired(context.WithoutCancel(ctx), ix)
 		if err == nil {
 			return s.askExpiredResult(context.WithoutCancel(ctx), ix, t, deadline), nil
@@ -1542,7 +1568,11 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		return "The user did not answer (dismissed or timed out). Don't go ahead with what you asked about; say what is waiting for them.", nil
 	}
 	var b strings.Builder
-	b.WriteString("The user answered:\n")
+	if r.AnsweredBy == proto.AnsweredByAssistant {
+  b.WriteString("The designated supervisor answered as the assistant:\n")
+ } else {
+  b.WriteString("The user answered:\n")
+ }
 	for _, q := range a.Questions {
 		if ans, ok := r.Answers[q.Question]; ok {
 			fmt.Fprintf(&b, "- %s → %s\n", q.Question, ans)

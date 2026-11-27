@@ -975,7 +975,7 @@ func TestAskWithoutLeadersRoutesSupervisedAsksToMain(t *testing.T) {
 			e.s.fleet.mu.Unlock()
 			confirmOut := proto.Interaction{
 				ID: "ix_confirm_outbound", MachineID: "mac", SessionID: "worker-1", Kind: proto.IxPermission,
-				ToolName: "agent_send", Summary: "Hand off sensitive details", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+				ToolName: "agent_send", OwnerProposal: true, Summary: "Hand off sensitive details", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 			}
 			e.s.cardAsks.Store(confirmOut.ID, cardConfirmOutbound)
 			t.Cleanup(func() { e.s.cardAsks.Delete(confirmOut.ID) })

@@ -19,7 +19,7 @@ func TestFleetReconnectPreservesAnUnansweredAskUser(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		answer, toolErr = ft.s.toolAskUser(ctx, "mac", "conversation", []byte(`{"questions":[{"question":"Which?","options":[{"label":"A"},{"label":"B"}]}]}`))
+		answer, toolErr = ft.s.toolAskUser(ctx, "mac", "conversation", []byte(`{"why_owner":"priority","questions":[{"question":"Which?","options":[{"label":"A"},{"label":"B"}]}]}`))
 	}()
 	defer func() { cancel(); <-done }()
 	ix := ft.waitPending(1)[0]

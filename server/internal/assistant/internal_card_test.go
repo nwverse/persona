@@ -1,0 +1,257 @@
+package assistant
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
+)
+
+// The source contract is the same for a waiting tool and a durable asynchronous
+// question, including one raised by a direction lead or the main conversation.
+func TestInternalAskUserSourceMatrix(t *testing.T) {
+	for _, wait := range []bool{true, false} {
+		for _, source := range []string{"worker-1", "lead1", "conv1"} {
+			t.Run(fmt.Sprintf("wait=%t/%s", wait, source), func(t *testing.T) {
+				e := newRouteEnv(t, nil, true)
+				setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
+				e.f.mu.Lock()
+				e.f.known["bg1"] = true
+				e.f.mu.Unlock()
+				e.sessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+					proto.Session{SessionID: "lead1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+					proto.Session{SessionID: "bg1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle})
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				done := make(chan error, 1)
+				go func() {
+					_, err := e.s.toolAskUser(ctx, "mac", source, json.RawMessage(fmt.Sprintf(`{"decision_scope":"internal","wait":%t,"questions":[{"question":"Which verification shard?","options":[{"label":"Affected"},{"label":"All"}]}]}`, wait)))
+					done <- err
+				}()
+				var ix proto.Interaction
+				waitFor(t, "question source published", func() bool {
+					for _, q := range e.s.pendingQuestions() {
+						if q.SessionID == source {
+							ix = q
+							_, up := e.s.pendingIx(q.ID)
+							return up
+						}
+					}
+					return false
+				})
+				to := "conv1"
+				if source == "worker-1" {
+					to = "lead1"
+				}
+				if source == "conv1" {
+					to = "bg1"
+				}
+				waitFor(t, "active internal route", func() bool {
+					return hasRelayFrom(e.s, to, cardAskUser, "interaction_id="+ix.ID)
+				})
+				e.noticeWith(to, "interaction_id="+ix.ID)
+				if !wait {
+					if err := <-done; err != nil {
+						t.Fatal(err)
+					}
+					e.s.askLaters.mu.Lock()
+					kept := e.s.askLaters.list[0].Interaction
+					e.s.askLaters.mu.Unlock()
+					if !kept.Resumable || !strings.Contains(string(kept.ToolInput), `"decision_scope":"internal"`) {
+						t.Fatal("async rights were not persisted")
+					}
+				}
+				args := map[string]any{"machine": "mac", "session_id": source, "interaction_id": ix.ID,
+					"answers": map[string]string{"Which verification shard?": "Affected"}, "reason": "Use the affected shards"}
+				if _, err := runJSON(t, e.s, source, "interaction_answer", args); err == nil {
+					t.Fatal("source answered its own internal question")
+				}
+				if _, err := runJSON(t, e.s, to, "interaction_answer", args); err != nil {
+					t.Fatal(err)
+				}
+				if wait {
+					if err := <-done; err != nil {
+						t.Fatal(err)
+					}
+				}
+				waitFor(t, "question reached terminal state", func() bool { return len(e.s.pendingQuestions()) == 0 })
+				if e.pushesOf(ix.ID) != 0 {
+					t.Fatal("internal source pushed to owner")
+				}
+			})
+		}
+	}
+}
+
+func TestAskUserOwnerDecisionSources(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	for _, tc := range []struct {
+		meta   string
+		source string
+	}{
+		{`"owner_action":"personal_unlock"`, cardSecretForm},
+		{`"owner_action":"login"`, cardSecretForm},
+		{`"owner_action":"spending"`, cardPlanMoney},
+		{`"why_owner":"visible_to_others"`, cardDecisionOutward},
+		{`"why_owner":"irreversible"`, cardDecisionIrreversible},
+		{`"why_owner":"priority"`, cardDecisionDirection},
+		{`"why_owner":"only_owner_knows"`, cardDecisionOwnerKnows},
+	} {
+		args := json.RawMessage(`{` + tc.meta + `,"wait":false,"questions":[{"question":"Owner action required","options":[{"label":"Done"},{"label":"Cancel"}]}]}`)
+		if _, err := e.s.toolAskUser(context.Background(), "server", "lead1", args); err != nil {
+			t.Fatal(err)
+		}
+		qs := e.s.pendingQuestions()
+		if len(qs) != 1 {
+			t.Fatalf("owner card disappeared: %+v", qs)
+		}
+		ix := qs[0]
+		waitFor(t, "real owner decision announced", func() bool { return e.pushesOf(ix.ID) == 1 })
+		if got := e.s.inputCardSource(ix, false); got != tc.source || e.s.internalCard(ix) {
+			t.Fatalf("owner source = %q, want %q", got, tc.source)
+		}
+		if err := e.s.resolve(ix.ID, proto.Resolution{Cancel: true}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "owner cancellation delivered", func() bool { return len(e.s.pendingQuestions()) == 0 })
+	}
+	if _, err := e.s.toolAskUser(context.Background(), "server", "lead1", json.RawMessage(`{"questions":[{"question":"Unclassified"}]}`)); err == nil {
+		t.Fatal("unclassified ask_user reached a card")
+	}
+}
+
+func TestSupervisorMaintenanceHasActiveWakeAndAnswer(t *testing.T) {
+	for _, source := range []string{"", "lead1"} {
+		t.Run(source, func(t *testing.T) {
+			e := newRouteEnv(t, nil, true)
+			ix := askPermission("ix_maintenance", source)
+			ix.MachineID, ix.SessionTitle, ix.ToolName = "server", "Persona", "enkeep_rerun"
+			ix.ToolInput = json.RawMessage(`{"from":"2026-10-20","to":"2026-10-22","force":true}`)
+			done := e.raise(ix)
+			e.noticeWith("conv1", "interaction_id="+ix.ID)
+			if e.pushesOf(ix.ID) != 0 {
+				t.Fatal("internal force rerun pushed to owner")
+			}
+			if _, err := runJSON(t, e.s, "conv1", "interaction_answer", map[string]any{"machine": "server", "session_id": source,
+				"interaction_id": ix.ID, "allow": true, "reason": "Reviewed force and duplicate execution constraints"}); err != nil {
+				t.Fatal(err)
+			}
+			if got := answerOf(t, done); !proto.MaintenanceAllowed(ix, got, time.Now()) {
+				t.Fatalf("maintenance answer lost its authority: %+v", got)
+			}
+		})
+	}
+}
+
+func TestInternalRouteRestoresAndRejectsStaleRelay(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	e.supervisorState(proto.StatusWorking, proto.StatusIdle)
+	ix := askPermission("ix_lead_restore", "lead1")
+	ix.MachineID = "server"
+	ix.ToolInput = json.RawMessage(`{"command":"ls /tmp | head"}`)
+	done := e.raise(ix)
+	waitFor(t, "first active relay queued", func() bool { return len(queuedRelays(e.s, "conv1")) == 1 })
+	old := queuedRelays(e.s, "conv1")[0]
+	e.s.fleet.mu.Lock()
+	e.s.fleet.interactions[ix.ID].route = nil
+	e.s.fleet.mu.Unlock()
+	if !e.s.restoreRoute(context.Background(), ix) {
+		t.Fatal("restored supervisor permission lost its route")
+	}
+	if _, ok := e.s.pendingStandalonePermission("conv1", old, time.Now()); ok {
+		t.Fatal("pre-restart relay can still act on new route")
+	}
+	e.supervisorState(proto.StatusIdle, proto.StatusIdle)
+	e.noticeWith("conv1", "interaction_id="+ix.ID)
+	if err := e.s.resolve(ix.ID, proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}); err != nil {
+		t.Fatal(err)
+	}
+	got := answerOf(t, done)
+	if got.Allow != nil || got.Outcome() != proto.OutcomeExpired || e.pushesOf(ix.ID) != 0 {
+		t.Fatalf("expiry authorized or pushed: %+v", got)
+	}
+}
+
+func TestInternalAsyncTerminalReceiptNeverClaimsOwnerAnswer(t *testing.T) {
+	e := newAskTodoEnv(t, nil)
+	for _, terminal := range []string{"answered", "cancelled", "expired"} {
+		ix, _ := e.askLater(`{"decision_scope":"internal","wait":false,"questions":[{"question":"Which shard?","options":[{"label":"Affected"},{"label":"All"}]}]}`)
+		r := proto.Resolution{AnsweredBy: proto.AnsweredByAssistant, Answers: map[string]string{"Which shard?": "Affected"}}
+		if terminal == "cancelled" {
+			r = proto.Resolution{Cancel: true}
+		}
+		if terminal == "expired" {
+			r = proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
+		}
+		text := e.s.renderAskLater(context.Background(), ix, r)
+		if !strings.Contains(text, "internal receipt") || strings.Contains(text, "用户在卡片上回答") {
+			t.Fatalf("dishonest internal receipt: %s", text)
+		}
+		if terminal != "answered" && !strings.Contains(text, "Nothing was authorized") {
+			t.Fatalf("unanswered question authorized a default: %s", text)
+		}
+		e.mustEnd(ix.ID, `{"cancel":true}`)
+	}
+}
+
+func TestQuietRemindNeverConstructsOwnerNotification(t *testing.T) {
+	for _, nth := range []int{1, 2} {
+		e := newRouteEnv(t, nil, true)
+		ix := askQuestion("ix_quiet_internal", "worker-1")
+		e.s.quietRemind(e.todo.ID, "lead1", ix, nth)
+		e.settle()
+		if len(workEventsOf(e.s, "ask_quiet_reminded")) != 1 {
+			t.Fatal("supervisor reminder audit was lost")
+		}
+		if len(e.f.pushed()) != 0 || cardsToday(t, e.s)[cardAskHeld].N != 0 || cardsToday(t, e.s)[cardAskHeld].Held != 0 {
+			t.Fatal("internal held reminder constructed an owner notification")
+		}
+	}
+}
+
+func TestInternalAsyncQuestionRestoresFromDurableRecord(t *testing.T) {
+	for _, terminal := range []string{"answer", "cancel", "expire"} {
+		t.Run(terminal, func(t *testing.T) {
+			e := newRouteEnv(t, nil, true)
+			if _, err := e.s.toolAskUser(context.Background(), "mac", "worker-1", json.RawMessage(`{"decision_scope":"internal","wait":false,"questions":[{"question":"Which shard after restart?","options":[{"label":"Affected"},{"label":"All"}]}]}`)); err != nil {
+				t.Fatal(err)
+			}
+			qs := e.s.pendingQuestions()
+			if len(qs) != 1 {
+				t.Fatal("async source did not persist a question")
+			}
+			ix := qs[0]
+			next := newRouteEnv(t, e.s.store(), true)
+			next.s.loadAskLater(context.Background())
+			next.s.publish(context.Background())
+			waitFor(t, "durable internal question restored", func() bool {
+				p, ok := next.s.pendingIx(ix.ID)
+				return ok && next.s.internalCard(p) && hasRelayFrom(next.s, "lead1", cardAskUser, "interaction_id="+ix.ID)
+			})
+			r := proto.Resolution{Answers: map[string]string{"Which shard after restart?": "Affected"}, AnsweredBy: proto.AnsweredByAssistant}
+			if terminal == "cancel" {
+				r = proto.Resolution{Cancel: true}
+			}
+			if terminal == "expire" {
+				r = proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
+			}
+			if err := next.s.resolve(ix.ID, r); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "restored terminal result returned", func() bool { return len(next.s.pendingQuestions()) == 0 })
+			next.s.askLaters.mu.Lock()
+			kept := len(next.s.askLaters.list)
+			next.s.askLaters.mu.Unlock()
+			if kept != 0 || next.pushesOf(ix.ID) != 0 {
+				t.Fatal("terminal question retained or pushed to owner")
+			}
+			if err := next.s.resolve(ix.ID, r); err == nil {
+				t.Fatal("terminal question accepted a second answer")
+			}
+		})
+	}
+}

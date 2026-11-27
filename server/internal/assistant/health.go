@@ -158,18 +158,11 @@ func (s *Service) redactedNotice(ctx context.Context, l i18n.Lang, space string)
 // (outboundNotDone).
 func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text, summary string, input json.RawMessage) (allowed bool, outcome string, err error) {
 	space, _ := s.selfSpace(ctx, self)
-	if s.supervises(ctx, self) {
-		// Decision rights (docs/designs/decision-rights-20261123.md): a supervisor (a direction lead or the main
-		// conversation) handing work or words to the owner's own Agents, sessions and to-dos is none of the six kinds
-		// of thing only the owner decides: nothing leaves the owner's computers in their name. The supervisor decides it
-		// itself; no phone card, whatever the track or the words. Speaking for the owner to other people goes through
-		// tools of its own, not this gate.
-		return true, "", nil
-	}
-	if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok {
-		text = "" // the owner just confirmed these very words: only the track decides, as before tagging
-	}
-	if !s.exitPolicy(ctx, text, self, space).ConfirmOutbound {
+ policy := s.exitPolicy(ctx, text, self, space)
+ if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok && !s.selfPolicy(ctx, self).ConfirmOutbound {
+  return true, "", nil // fresh confirmation covers these words, never an isolated track boundary
+ }
+ if !policy.ConfirmOutbound {
 		return true, "", nil
 	}
 	return s.outbound.confirm(ctx, outboundKey(self, tool, text, summary), func() (bool, string, error) {
@@ -181,11 +174,19 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 		if c, ok := s.session(ctx, machine, self); ok {
 			ix.Cwd = c.Cwd
 		}
-		r, err := s.ask(withCard(ctx, cardConfirmOutbound), ix)
+		source := cardSecretForm // a cross-track privacy boundary needs the owner in person
+  if tool == "agent_send" && !s.selfPolicy(ctx, self).ConfirmOutbound {
+   source = cardConfirmOutbound
+   ix.Summary = s.outboundSummary(ctx, l, space, "Internal delegation to an owned Agent; review the existing task authorization before allowing it")
+  } else {
+   ix.OwnerProposal = true
+   ix.Reason = "only_owner_knows: authorize sensitive information across this data boundary"
+  }
+  r, err := s.ask(withCard(ctx, source), ix)
 		if err != nil {
 			return false, "", err
 		}
-		return r.Allow != nil && *r.Allow, r.Outcome(), nil
+		return validInternalAnswer(ix, r), r.Outcome(), nil
 	})
 }
 
