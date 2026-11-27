@@ -148,13 +148,17 @@ func (d *DB) ResolveConversationInputManually(ctx context.Context, machine, sess
 		}
 		// A manual acceptance can confirm the current switch only for its own
 		// first dispatch. Historical settlement cannot consume current handoff.
-		if p.Action == "accepted" && p.Input.DispatchEpoch == epoch {
+		if (p.Action == "accepted" || p.Action == "rejected") && p.Input.DispatchEpoch == epoch {
 			var operation string
 			err := tx.QueryRow(ctx, `SELECT operation_id FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND phase='active' AND expected_epoch+1=$3 AND target_segment=$4`, machine, session, epoch, p.Input.DispatchSegment).Scan(&operation)
 			if err == nil {
-				return resolveConversationSwitchTx(ctx, tx, machine, session, operation, "accepted", "manual input settlement: "+p.Reason)
+				return resolveConversationSwitch(ctx, tx, machine, session, operation, p.Action, "manual input settlement: "+p.Reason, switchSettlement{manual: true})
 			}
 			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if p.Action == "accepted" {
+				_, err = tx.Exec(ctx, `UPDATE conversation_switches SET handoff=NULL WHERE logical_machine=$1 AND logical_session=$2 AND phase='accepted' AND target_segment=$3`, machine, session, p.Input.DispatchSegment)
 				return err
 			}
 		}

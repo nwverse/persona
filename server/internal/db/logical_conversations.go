@@ -854,13 +854,20 @@ func resolveConversationDeliveryTx(ctx context.Context, tx pgx.Tx, machine, sess
 		}
 	}
 	if operation != "" && outcome != "in_doubt" {
+		var owns bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_switches w JOIN conversation_inputs i ON i.logical_machine=w.logical_machine AND i.logical_session=w.logical_session AND i.dispatch_segment=w.target_segment AND i.dispatch_epoch=w.expected_epoch+1 WHERE w.logical_machine=$1 AND w.logical_session=$2 AND w.operation_id=$3 AND i.client_msg_id=$4 AND i.dispatch_epoch=$5)`, machine, session, operation, id, epoch).Scan(&owns); err != nil {
+			return err
+		}
+		if !owns {
+			return ErrConversationEpoch
+		}
 		if err := resolveConversationSwitchTx(ctx, tx, machine, session, operation, outcome, ""); err != nil {
 			return err
 		}
 	}
 	if outcome == "accepted" {
 		// The input carried the handoff an idle acceptance kept (drainLogicalInput attaches it): it is used up.
-		if _, err := tx.Exec(ctx, `UPDATE conversation_switches SET handoff=NULL WHERE logical_machine=$1 AND logical_session=$2 AND phase='accepted' AND handoff IS NOT NULL`, machine, session); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE conversation_switches SET handoff=NULL WHERE logical_machine=$1 AND logical_session=$2 AND phase='accepted' AND handoff IS NOT NULL AND target_segment=(SELECT dispatch_segment FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3)`, machine, session, id); err != nil {
 			return err
 		}
 	}

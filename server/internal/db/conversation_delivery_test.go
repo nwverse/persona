@@ -207,3 +207,92 @@ func TestUnresolvedDeliveryFencesNewSwitchAndClaimRace(t *testing.T) {
 		t.Fatalf("unresolved input crossed activation: %v", err)
 	}
 }
+
+func TestManualReplayFencesLateReceiptAtSameEpochAndPreservesOriginalPayload(t *testing.T) {
+	d, _ := historyDB(t)
+	ctx := t.Context()
+	op := prepareLogicalSwitch(t, d)
+	if err := d.ActivateConversationSegment(ctx, "root-machine", "root-chat", op.OperationID, 1); err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"text":"original input","provenance":{"origin":"operator"}}`)
+	if err := d.EnqueueConversationInput(ctx, "root-machine", "root-chat", "uncertain", 2, payload); err != nil {
+		t.Fatal(err)
+	}
+	first, err := d.ClaimConversationInput(ctx, "root-machine", "root-chat", 2)
+	if err != nil || first == nil {
+		t.Fatalf("first claim: %+v %v", first, err)
+	}
+	p := ConversationInputResolution{RequestID: "explicit-replay", ExpectedEpoch: 2, Input: *first, Action: "replay", Reason: "operator accepts replay risk"}
+	if err := d.ResolveConversationInputManually(ctx, "root-machine", "root-chat", "operator", p); err != nil {
+		t.Fatal(err)
+	}
+	second, err := d.ClaimConversationInput(ctx, "root-machine", "root-chat", 2)
+	if err != nil || second == nil || second.Version <= first.Version || string(second.Payload) != string(payload) || second.Position != first.Position {
+		t.Fatalf("replay replaced original input: %+v %v", second, err)
+	}
+	if err := d.ResolveClaimedConversationDelivery(ctx, "root-machine", "root-chat", 2, *first, op.OperationID, "accepted"); !errors.Is(err, ErrConversationEpoch) {
+		t.Fatalf("late receipt settled a newer attempt: %v", err)
+	}
+	if err := d.ResolveClaimedConversationDelivery(ctx, "root-machine", "root-chat", 2, *second, op.OperationID, "accepted"); err != nil {
+		t.Fatal(err)
+	}
+	var original []byte
+	if err := d.pool.QueryRow(ctx, `SELECT original_payload FROM conversation_input_resolutions WHERE request_id='explicit-replay'`).Scan(&original); err != nil || string(original) != string(payload) {
+		t.Fatalf("terminal cleanup erased audit payload: %q %v", original, err)
+	}
+}
+
+func TestManualCurrentRejectionDoesNotAutomaticallyReplayUncertainInput(t *testing.T) {
+	d, _ := historyDB(t)
+	op := prepareLogicalSwitch(t, d)
+	ctx := t.Context()
+	if err := d.ActivateConversationSegment(ctx, "root-machine", "root-chat", op.OperationID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.EnqueueConversationInput(ctx, "root-machine", "root-chat", "one", 2, json.RawMessage(`{"text":"original"}`)); err != nil {
+		t.Fatal(err)
+	}
+	input, err := d.ClaimConversationInput(ctx, "root-machine", "root-chat", 2)
+	if err != nil || input == nil {
+		t.Fatalf("claim: %+v %v", input, err)
+	}
+	p := ConversationInputResolution{RequestID: "manual-reject", ExpectedEpoch: 2, Input: *input, Action: "rejected", Reason: "operator chooses terminal rejection"}
+	if err := d.ResolveConversationInputManually(ctx, "root-machine", "root-chat", "operator", p); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := d.LogicalConversation(ctx, "root-machine", "root-chat")
+	if c.Epoch != 3 || c.Switch != nil {
+		t.Fatalf("current target not rolled back: %+v", c)
+	}
+	if row, err := d.ClaimConversationInput(ctx, "root-machine", "root-chat", 3); err != nil || row != nil {
+		t.Fatalf("manual terminal rejection replayed: %+v %v", row, err)
+	}
+	if err := d.ResolveConversationInputManually(ctx, "root-machine", "root-chat", "operator", p); err != nil {
+		t.Fatalf("idempotent request after rollback: %v", err)
+	}
+}
+
+func TestActivationRefusesLegacyUnresolvedSourceAndUnknownIdentityStaysBlocked(t *testing.T) {
+	d, _ := historyDB(t)
+	op := prepareLogicalSwitch(t, d)
+	ctx := t.Context()
+	if err := d.EnqueueConversationInput(ctx, "root-machine", "root-chat", "old", 1, json.RawMessage(`{"text":"never discard"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// Simulates an older manager's claim during a rolling upgrade.
+	if _, err := d.pool.Exec(ctx, `UPDATE conversation_inputs SET state='in_doubt',epoch=9 WHERE client_msg_id='old'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ActivateConversationSegment(ctx, "root-machine", "root-chat", op.OperationID, 1); !errors.Is(err, ErrConversationSwitchBusy) {
+		t.Fatalf("activation silently migrated unresolved source: %v", err)
+	}
+	input, err := d.ConversationUnresolvedInput(ctx, "root-machine", "root-chat")
+	if err != nil || input == nil || input.DispatchEpoch != 0 || input.DispatchSegment != "" {
+		t.Fatalf("unknown historical identity guessed from active: %+v %v", input, err)
+	}
+	c, _ := d.LogicalConversation(ctx, "root-machine", "root-chat")
+	if c.Epoch != 1 || c.Switch.Phase != "prepared" {
+		t.Fatalf("blocked activation changed root: %+v", c)
+	}
+}
