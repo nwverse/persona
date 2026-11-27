@@ -232,16 +232,28 @@ func TestDefaultOffGateDoesNotTreatNegationAsEvidence(t *testing.T) {
 	}
 }
 
-func TestDefaultOffGateRequiresLiteralDot(t *testing.T) {
-	if !hasDefaultOffGate("Feature is default.off") {
-		t.Fatal("literal default.off gate was rejected")
+func TestDefaultOffGateSeparatorsAndWordBoundaries(t *testing.T) {
+	cases := []struct {
+		gate string
+		want bool
+	}{
+		{"Feature is default.off", true},
+		{"Feature is default-off", true},
+		{"Feature is default off", true},
+		{"Feature is default_off", true},
+		{"The default office location needs review", false},
+		{"The default.offset needs review", false},
+		{"The nodefault.off value needs review", false},
 	}
-	gate := "The default office location needs review"
-	if hasDefaultOffGate(gate) {
-		t.Fatalf("unrelated text accepted as default-off evidence: %q", gate)
-	}
-	title := verdictText(i18n.ZhHans, &acceptAsk{}, &TodoDelivery{State: deliveryOff, Gate: gate})
-	if strings.Contains(title, "默认关着") {
-		t.Fatalf("unsupported default-off claim in title: %q", title)
+	for _, test := range cases {
+		t.Run(test.gate, func(t *testing.T) {
+			if got := hasDefaultOffGate(test.gate); got != test.want {
+				t.Errorf("hasDefaultOffGate(%q) = %v, want %v", test.gate, got, test.want)
+			}
+			title := verdictText(i18n.ZhHans, &acceptAsk{}, &TodoDelivery{State: deliveryOff, Gate: test.gate})
+			if got := strings.Contains(title, "默认关着"); got != test.want {
+				t.Errorf("default-off claim in title %q = %v, want %v", title, got, test.want)
+			}
+		})
 	}
 }
