@@ -56,6 +56,7 @@ internal object Notebooks {
             i = s.indexOf('\n', i + 1)
             if (i < 0) return s
         }
+        if (i + 1 >= s.length) return s
         val rest = s.substring(i + 1).removeSuffix("\n").split('\n').size
         return s.substring(0, i + 1) + more(rest)
     }
@@ -119,8 +120,8 @@ internal object Notebooks {
     private fun v3Bundle(o: JsonObject) = JsonObject(o.mapNotNull { (k, v) -> (v3Keys[k] ?: k.takeIf { '/' in it })?.let { it to v } }.toMap())
 
     private fun output(o: JsonObject, more: (Int) -> String): Output? = when (str(o["output_type"])) {
-        // v3 names the stream "stream", v4 "name".
-        "stream" -> Output.Stream(str(o["name"] ?: o["stream"]) == "stderr", capLines(stripAnsi(str(o["text"])), more))
+        // v3 names the stream "stream", v4 "name"; ANSI stripping and line capping run after consecutive chunks merge.
+        "stream" -> Output.Stream(str(o["name"] ?: o["stream"]) == "stderr", str(o["text"]))
         "execute_result", "display_data" -> rich(o["data"] as? JsonObject ?: v3Bundle(o), more)
         "pyout" -> rich(v3Bundle(o), more)
         "error", "pyerr" -> Output.Error(str(o["ename"]), str(o["evalue"]),
@@ -129,13 +130,27 @@ internal object Notebooks {
         else -> null
     }
 
-    /** Consecutive stream outputs of the same name, as Jupyter shows them: one block. */
-    private fun mergeStreams(out: List<Output>): List<Output> {
+    /** Consecutive stream outputs of the same name, as Jupyter shows them: one block, capped once merged. */
+    private fun mergeStreams(out: List<Output>, more: (Int) -> String): List<Output> {
         val merged = ArrayList<Output>()
-        for (o in out) {
-            val last = merged.lastOrNull()
-            if (o is Output.Stream && last is Output.Stream && last.stderr == o.stderr) merged[merged.lastIndex] = last.copy(text = last.text + o.text)
-            else merged.add(o)
+        var i = 0
+        while (i < out.size) {
+            val first = out[i]
+            if (first !is Output.Stream) {
+                merged.add(first)
+                i++
+                continue
+            }
+            val text = StringBuilder(first.text)
+            var j = i + 1
+            while (j < out.size) {
+                val next = out[j] as? Output.Stream ?: break
+                if (next.stderr != first.stderr) break
+                text.append(next.text)
+                j++
+            }
+            merged.add(first.copy(text = capLines(stripAnsi(text.toString()), more)))
+            i = j
         }
         return merged
     }
@@ -168,7 +183,7 @@ internal object Notebooks {
             val attachments = (c["attachments"] as? JsonObject).orEmpty().mapNotNull { (name, bundle) ->
                 ((bundle as? JsonObject)?.let { b -> rich(b, more) } as? Output.Image)?.let { name to it.base64 }
             }.toMap()
-            val outputs = if (type == CellType.Code) mergeStreams((c["outputs"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let { o -> output(o, more) } }) else emptyList()
+            val outputs = if (type == CellType.Code) mergeStreams((c["outputs"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let { o -> output(o, more) } }, more) else emptyList()
             val count = ((c["execution_count"] ?: c["prompt_number"]) as? JsonPrimitive)?.intOrNull
             Cell(type, source, count, outputs, attachments)
         }

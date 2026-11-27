@@ -658,7 +658,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const opening = Boolean(assistant) && !tr.items.length && outgoing > 0;
 
   // ── the middle of an agent's page: its conversation, or its terminal in place (lib/session-view.ts) ──
-  const switchable = Boolean(inPage && terminalAvailable !== false && !assistant && canShowTerminal(session));
+  const hasCurrentTerminal = terminalAvailable !== false && !assistant && canShowTerminal(session);
+  const switchable = Boolean(inPage && hasCurrentTerminal);
   const openFiles = () => session && togglePanel({ kind: "files", mid, sid, cwd: session.cwd });
   const [view, setView] = useSessionView(mid, sid, switchable);
   // The terminal connects when first shown and stays connected while the page is on screen (the chat is hidden under it,
@@ -1862,7 +1863,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const placed = useMemo(() => placeFailed(lines, visibleOutbox), [lines, visibleOutbox]);
   const failedBefore = (id: string) => {
     const list = placed.before.get(id);
-    return list ? [<OutboxBubbles key={`failed:${id}`} mid={mid} sid={sid} entries={list} canRetry={!refusedNoRow} />] : [];
+    return list ? [<OutboxBubbles key={`failed:${id}`} mid={mid} sid={sid} entries={list} canRetry={!refusedNoRow} hasCurrentTerminal={hasCurrentTerminal} />] : [];
   };
   const lastTasks = useRef<TaskIndex | undefined>(undefined);
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
@@ -2888,7 +2889,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
               <div key={p.id} className="flex flex-col gap-3">
                 <UserBubble msg={p.msg} mid={mid} sid={sid} pending={Boolean(p.posting)} sendState={p.posting ? "sending" : "sent"} />
               </div>
-            ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> })),
+            ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} hasCurrentTerminal={hasCurrentTerminal} /> })),
               ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: (
                 <PageBoundary key={`undelivered:${m.id}`} page="undelivered">
                   <Suspense fallback={<UserBubble msg={keptBubble(m)} mid={mid} sid={sid} sendState="failed" />}>
