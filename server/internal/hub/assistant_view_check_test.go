@@ -31,7 +31,13 @@ func TestAssistantViewCheckTrustedSession(t *testing.T) {
 		{"bounded", "trip-0002", strings.Repeat("x", 1<<20) + "persona-view", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, _ := json.Marshal(assistantwire.ViewCheckRequest{SessionID: tc.session, Message: tc.message})
+			raw, err := json.Marshal(struct {
+				assistantwire.ViewCheckRequest
+				FutureField bool `json:"future_field"`
+			}{assistantwire.ViewCheckRequest{SessionID: tc.session, Message: tc.message}, true})
+			if err != nil {
+				t.Fatal(err)
+			}
 			out, err := n.m.onRequest(context.Background(), assistantwire.MethodViewCheck, raw)
 			if err != nil {
 				t.Fatal(err)
@@ -44,5 +50,13 @@ func TestAssistantViewCheckTrustedSession(t *testing.T) {
 				t.Fatal("repair feedback did not provide the bounded template instructions")
 			}
 		})
+	}
+}
+
+func TestAssistantViewCheckWrongParamType(t *testing.T) {
+	_, n := conversationsHub(t)
+	out, err := n.m.onRequest(t.Context(), assistantwire.MethodViewCheck, json.RawMessage(`{"session_id":"trip-0002","message":42}`))
+	if _, ok := err.(*json.UnmarshalTypeError); !ok || out != (assistantwire.ViewCheckResponse{}) {
+		t.Fatalf("reply %#v, want the empty view check reply and JSON type error, got %v", out, err)
 	}
 }

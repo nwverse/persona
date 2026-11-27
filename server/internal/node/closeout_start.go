@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/identity"
 )
@@ -65,8 +66,9 @@ func (n *Node) closeoutStart(parent context.Context, req sockRequest, in hookInp
 	if !ok {
 		ctx, cancel := context.WithTimeout(parent, closeoutStartWait)
 		defer cancel()
-		var result assistantwire.CloseoutBriefResponse
-		if err := n.peer.Call(ctx, assistantwire.MethodCloseoutBrief, assistantwire.CloseoutBriefRequest{SessionID: in.SessionID, Cwd: in.Cwd}, &result); err != nil {
+		input := assistantwire.CloseoutBriefRequest{SessionID: in.SessionID, Cwd: in.Cwd}
+		result, err := buswire.Call(ctx, n.peer, assistantwire.CloseoutBriefMethod, input)
+		if err != nil {
 			return nil
 		}
 		text = result.Context

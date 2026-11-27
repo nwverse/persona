@@ -18,7 +18,7 @@ func TestAssistantViewStopRepairsOnlyOnceAndBeforeReportingCompletion(t *testing
 		name                  string
 		owned, active, report bool
 		agent, reason         string
-		fail                  bool
+		fail, badReply        bool
 		checks, stops         int64
 		block                 bool
 	}{
@@ -29,6 +29,7 @@ func TestAssistantViewStopRepairsOnlyOnceAndBeforeReportingCompletion(t *testing
 		{name: "report-only", owned: true, report: true, reason: "修正 fallback"},
 		{name: "accepted", owned: true, checks: 1, stops: 1},
 		{name: "unavailable", owned: true, fail: true, checks: 1, stops: 1},
+		{name: "wrong-reply-type", owned: true, badReply: true, checks: 1, stops: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -54,6 +55,9 @@ func TestAssistantViewStopRepairsOnlyOnceAndBeforeReportingCompletion(t *testing
 				}
 				if tc.fail {
 					return nil, errors.New("check unavailable")
+				}
+				if tc.badReply {
+					return json.RawMessage(`{"reason":42}`), nil
 				}
 				return assistantwire.ViewCheckResponse{Reason: tc.reason}, nil
 			}

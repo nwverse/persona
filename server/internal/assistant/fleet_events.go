@@ -142,6 +142,7 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 	if !s.fleetOn() {
 		return nil, false, nil
 	}
+	decode := func(out any) error { return json.Unmarshal(params, out) }
 	switch method {
 	case "computer.elicit": // LCU asked the person something; the card is the same one as app approval
 		if s.ext == nil {
@@ -177,11 +178,9 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 		r, err := s.nodeInteraction(ctx, p.Interaction)
 		return r, true, err
 	case assistantwire.MethodCloseoutCheck: // a turn that did work ends without a closeout (agents_closeout.go)
-		var p assistantwire.CloseoutCheckRequest
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, true, err
-		}
-		return s.closeoutCheck(ctx, machine, p), true, nil
+		return handleAssistantRequest(ctx, assistantwire.CloseoutCheckMethod, decode, func(ctx context.Context, p assistantwire.CloseoutCheckRequest) (assistantwire.CloseoutCheckResponse, error) {
+			return s.closeoutCheck(ctx, machine, p), nil
+		})
 	case devicewire.MethodAuthorizeTaskTerminal:
 		var p devicewire.TaskTerminalCloseRequest
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -189,11 +188,9 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 		}
 		return map[string]bool{"authorized": s.authorizeTaskTerminal(ctx, machine, p)}, true, nil
 	case assistantwire.MethodCloseoutBrief: // a session starts: the closeout's form, up front (agents_closeout_brief.go)
-		var p assistantwire.CloseoutBriefRequest
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, true, err
-		}
-		return s.closeoutStart(ctx, machine, p), true, nil
+		return handleAssistantRequest(ctx, assistantwire.CloseoutBriefMethod, decode, func(ctx context.Context, p assistantwire.CloseoutBriefRequest) (assistantwire.CloseoutBriefResponse, error) {
+			return s.closeoutStart(ctx, machine, p), nil
+		})
 	case "assistant.lark":
 		out, err := s.assistantLark(ctx, machine)
 		return out, true, err
