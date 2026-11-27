@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // FeedKindBrief is the chat feed item kind for a routine briefing's fixed facts.
@@ -478,12 +479,15 @@ type BriefPRFollowup struct {
 	Note           string     `json:"note,omitempty"`
 }
 
+// BriefSupervisionDecisionID identifies one persisted supervision verdict.
+type BriefSupervisionDecisionID string
+
 // BriefDeferredSupervision is a saved signal the supervisor can review in a briefing.
 type BriefDeferredSupervision struct {
-	ID     string `json:"id"`
-	TodoID string `json:"todo_id"`
-	Title  string `json:"title"`
-	Reason string `json:"reason"`
+	ID     BriefSupervisionDecisionID `json:"id"`
+	TodoID wireids.TodoID             `json:"todo_id"`
+	Title  string                     `json:"title"`
+	Reason string                     `json:"reason"`
 }
 
 // BriefSnapshot is what one run of a routine with facts on says, as it was when the run started.

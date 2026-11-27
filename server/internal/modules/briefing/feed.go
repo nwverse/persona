@@ -152,7 +152,7 @@ func (r *runner) supervisionBriefed(ctx context.Context, f *modapi.BriefSnapshot
 	}
 	ids := make([]string, 0, len(f.DeferredSupervision))
 	for _, row := range f.DeferredSupervision {
-		ids = append(ids, row.ID)
+		ids = append(ids, string(row.ID))
 	}
 	r.todos.SupervisionBriefed(ctx, ids, f.At)
 }

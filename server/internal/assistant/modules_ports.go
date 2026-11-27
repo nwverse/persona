@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // modulePorts wires the narrow core ports (modapi.Ports) this Service serves to loaded modules.
@@ -254,7 +255,7 @@ func (p briefTodoPort) DeferredSupervision(ctx context.Context, at time.Time) []
 	}
 	var out []modapi.BriefDeferredSupervision
 	for _, row := range rows {
-		out = append(out, modapi.BriefDeferredSupervision{ID: row.ID, TodoID: row.TodoID, Title: row.Title, Reason: row.Reason})
+		out = append(out, modapi.BriefDeferredSupervision{ID: modapi.BriefSupervisionDecisionID(row.ID), TodoID: wireids.TodoID(row.TodoID), Title: row.Title, Reason: row.Reason})
 	}
 	return out
 }

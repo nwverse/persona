@@ -215,7 +215,7 @@ func TestAgentTransferQueuedOrdinarySignalOnlyReachesNewSupervisor(t *testing.T)
 	f.known["lead1"] = true
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
 	if _, _, err := s.updateSupervision(t.Context(), tasks[0].ID, func(v *Supervision) bool {
-		v.Supervisor, v.SupervisorSource, v.State = "lead1", "explicit", reviewNeedsUser
+		v.Supervisor, v.SupervisorSource = "lead1", "explicit"
 		return true
 	}); err != nil {
 		t.Fatal(err)

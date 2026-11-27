@@ -138,6 +138,19 @@ func TestSupervisionTriageDeliversWakeAndListsDeferral(t *testing.T) {
 	if len(calls) != 1 || len(calls[0]) != 2 || slices.ContainsFunc(calls[0], func(i supervisionTriageItem) bool { return i.Signal == sigFailed }) {
 		t.Fatalf("expected one cheap-model call without the direct exception: %+v", calls)
 	}
+	if !s.noteOwnerWait(ctx, todo, time.Now(), "Please confirm the release scope.") {
+		t.Fatal("could not record the new owner decision")
+	}
+	s.sendDigest(ctx)
+	if got := strings.Join(f.sentTexts("conv1"), "\n"); !strings.Contains(got, "Please confirm the release scope.") {
+		t.Fatalf("a new owner decision did not reach the supervisor: %q", got)
+	}
+	mu.Lock()
+	nCalls := len(requests)
+	mu.Unlock()
+	if nCalls != 1 {
+		t.Fatalf("the owner decision was submitted to the sorting model, calls = %d", nCalls)
+	}
 	st := s.store().(supervisionDecisionStore)
 	verdicts, err := st.SupervisionTriage(ctx, []string{supervisionTriageID(wake), supervisionTriageID(deferSignal)})
 	if err != nil || verdicts[supervisionTriageID(wake)] != "wake" || verdicts[supervisionTriageID(deferSignal)] != "defer" {
@@ -148,7 +161,7 @@ func TestSupervisionTriageDeliversWakeAndListsDeferral(t *testing.T) {
 	brief, _ := s.briefingRunner()
 	for _, kind := range []string{"morning", "evening"} {
 		facts := brief.FactsAt(ctx, at, kind)
-		if rows := brief.Body(facts, kind).DeferredSupervision; len(rows) != 1 || rows[0].TodoID != todo.ID || rows[0].Reason != "Can wait until the next briefing." {
+		if rows := brief.Body(facts, kind).DeferredSupervision; len(rows) != 1 || rows[0].TodoID.String() != todo.ID || rows[0].Reason != "Can wait until the next briefing." {
 			t.Fatalf("%s briefing rows: %+v", kind, rows)
 		}
 		if text := brief.ModelText(facts); !strings.Contains(text, "Can wait until the next briefing.") {

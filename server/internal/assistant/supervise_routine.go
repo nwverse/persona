@@ -21,6 +21,13 @@ func recentOwnerInput(t Todo, now time.Time) bool {
 	return false
 }
 
+// An owner wait is delivered as an idle-shaped stop. Its work identity is stored
+// with the wait, including for outbox entries written by earlier managers.
+func ownerWaitSignal(t Todo, g superviseSignal) bool {
+	return g.Kind == sigIdle && t.Supervision != nil && t.Supervision.Waits != nil &&
+		g.Key == t.Supervision.Waits.Work.UTC().Format(time.RFC3339Nano)
+}
+
 func routineSupervisionSuppressed(t Todo, g superviseSignal, now time.Time) bool {
 	switch g.Kind {
 	case sigOwnerPresent:
@@ -29,8 +36,8 @@ func routineSupervisionSuppressed(t Todo, g superviseSignal, now time.Time) bool
 		key, _, waiting := ownerPresentTodoWait(t)
 		return waiting && g.Key == key && recentOwnerInput(t, now)
 	case sigIdle:
-		if g.Handoff {
-			return false // the user's decision or rework instruction failed to reach the Agent
+		if g.Handoff || ownerWaitSignal(t, g) {
+			return false // deliver the decision or handoff itself
 		}
 	case sigOrphaned, sigEstimateDue, sigOverdue, sigStalled, sigNoProgress, sigUnjudged, sigInterrupted, sigOutageRecovery:
 	default:

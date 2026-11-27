@@ -14,11 +14,9 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-type supervisionDecision string
-
 const (
-	supervisionWake  supervisionDecision = "wake"
-	supervisionDefer supervisionDecision = "defer"
+	supervisionWake  = "wake"
+	supervisionDefer = "defer"
 )
 
 const supervisionTriageTimeout = 8 * time.Second
@@ -55,9 +53,9 @@ type supervisionTriageItem struct {
 }
 
 type supervisionTriageVerdict struct {
-	Number   int                 `json:"number"`
-	Decision supervisionDecision `json:"decision"`
-	Reason   string              `json:"reason"`
+	Number   int    `json:"number"`
+	Decision string `json:"decision"`
+	Reason   string `json:"reason"`
 }
 
 func triageSupervisionWith(ctx context.Context, m jsonModel, lang i18n.Lang, items []supervisionTriageItem) []supervisionTriageVerdict {
@@ -113,11 +111,15 @@ func (s *Service) screenModelSupervision(ctx context.Context, recipient string, 
 	var ids []string
 	index := make(map[int]string)
 	for i, g := range signals {
-		if supervisionTriageEligible(g) {
-			id := supervisionTriageID(g)
-			index[i] = id
-			ids = append(ids, id)
+		if !supervisionTriageEligible(g) {
+			continue
 		}
+		if t, ok := s.todoNow(g.Todo); ok && ownerWaitSignal(t, g) {
+			continue
+		}
+		id := supervisionTriageID(g)
+		index[i] = id
+		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
 		return entries, signals
@@ -133,9 +135,9 @@ func (s *Service) screenModelSupervision(ctx context.Context, recipient string, 
 		switch {
 		case eligible && s.routineSignalSuppressed(g, time.Now()):
 			obsolete = append(obsolete, g) // the task changed while the verdict was pending
-		case !eligible, verdicts[id] == string(supervisionWake):
+		case !eligible, verdicts[id] == supervisionWake:
 			wakeEntries, wake = append(wakeEntries, entries[i]), append(wake, g)
-		case verdicts[id] == string(supervisionDefer):
+		case verdicts[id] == supervisionDefer:
 			deferred = append(deferred, g)
 		default:
 			retry = append(retry, g)
@@ -199,7 +201,7 @@ func (s *Service) supervisionVerdicts(ctx context.Context, recipient string, ent
 	cancel()
 	at := time.Now().UTC()
 	for i, v := range decisions {
-		rows[i].Decision, rows[i].Reason, rows[i].At = string(v.Decision), v.Reason, at
+		rows[i].Decision, rows[i].Reason, rows[i].At = v.Decision, v.Reason, at
 	}
 	saved, err := st.SaveSupervisionTriage(ctx, rows)
 	if err == nil {
