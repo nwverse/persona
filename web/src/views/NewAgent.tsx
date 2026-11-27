@@ -59,6 +59,7 @@ import { currentHosts, engineName, startHosts } from "../lib/engines";
 import { CODEX_APP_SOURCE, projectsFolder, startsInDesktopApp } from "../lib/desktop-start";
 import { initialLauncher, launcherBlock } from "../lib/launcher-health";
 import { navigate } from "../lib/router";
+import { hasFinePointer } from "../lib/viewport";
 import { providersPath } from "../lib/readiness";
 import { settingsHref } from "./settings/nav";
 import { LauncherBlockedHelp } from "./LauncherBlockedHelp";
@@ -777,6 +778,13 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // knowledge entry's New agent), which a card would replace.
   const cards = useMemo(() => recentCards(recents, machines), [recents, machines]);
   const presetFolder = Boolean(preset?.machineId && preset.cwd !== undefined);
+  // Opened on a place (a project's +, a space's or a board card's New agent, #13523): where it starts is settled, so the
+  // caret goes to the first message, as picking a recent setup puts it. With a fine pointer only: on a touch screen the
+  // keyboard would come up over the sheet before it is read (the Dialog keeps it down for that, ui/overlay.ts).
+  const placed = presetFolder || Boolean(preset?.workspace);
+  useEffect(() => {
+    if (open && placed && hasFinePointer()) firstMessage.current?.focus();
+  }, [open, placed]);
   const settled = launchersOf === mid && !loadingModels;
   const pickedCard = pickedSetup ? cards.find((c) => setupKey(c.setup) === pickedSetup) : undefined;
   const pickedShown = pickedCard && (!settled || formHolds(pickedCard.setup, { machine: mid, cwd, launcher, model, mode, effort })) ? pickedSetup : "";

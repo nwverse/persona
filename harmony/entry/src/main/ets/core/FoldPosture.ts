@@ -10,6 +10,7 @@ export type FoldPostureKind =
   | 'straight'
   | 'cover'
   | 'dual_unfolded'
+  | 'book_half_open'
   | 'trifold_angled'
   | 'trifold_unfolded'
   | 'hover_tabletop';
@@ -19,7 +20,7 @@ export type FoldWidthClass = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 export interface FoldPostureInput {
   readonly widthClass: FoldWidthClass;
   readonly windowWidthVp: number;
-  readonly windowHeightVp: number;
+  readonly windowHeightVp?: number;
   readonly isFoldable: boolean;
   /** HarmonyOS `display.FoldStatus` numeric value (0=unknown, 1=expanded, 2=folded, 3=half, 11=dual-axis expanded, 21/13/23=tri-fold half variants). */
   readonly foldStatus: number;
@@ -105,8 +106,13 @@ export function classifyFoldPosture(input: FoldPostureInput): FoldPostureKind {
   if (input.isFoldable && isTriFoldAngledStatus(input.foldStatus) && width >= 820) {
     return 'trifold_angled';
   }
-  if (input.isFoldable && isHalfFoldedStatus(input.foldStatus) && input.nativeHoverAvailable) {
-    return 'hover_tabletop';
+  if (input.isFoldable && isHalfFoldedStatus(input.foldStatus)) {
+    if (input.nativeHoverAvailable) {
+      return 'hover_tabletop';
+    }
+    if (width >= 560) {
+      return 'book_half_open';
+    }
   }
   const allowsTriFold = width === 0 || width >= 820;
   if (
@@ -186,7 +192,7 @@ export function resolveFoldLayout(input: FoldPostureInput): FoldAdaptiveLayout {
     };
   }
 
-  if (posture === 'dual_unfolded' || (hoverMode && width >= 600)) {
+  if (posture === 'dual_unfolded' || posture === 'book_half_open' || (hoverMode && width >= 600)) {
     // Mate X7 unfolded (~707vp) and Mate XT 2-screen (~680vp):
     // True HarmonyOS dual-pane split (master 268vp + live detail 439vp) with toggleable inspector.
     const masterWidth = width >= 760 ? 296 : Math.max(256, Math.round(width * 0.39));
@@ -297,6 +303,8 @@ export type FoldShortcutAction =
   | 'dismiss'
   | 'none';
 
+export type FoldKeyboardShortcutAction = FoldShortcutAction | 'open_palette';
+
 /**
  * Resolves hardware keyboard shortcuts for foldable, tri-fold, MatePad, and MateBook sessions.
  * - Ctrl/Meta + K -> open search
@@ -328,6 +336,19 @@ export function resolveFoldShortcut(
   if (normalized === ']') return 'next_unread';
   if (normalized === '[') return 'prev_unread';
   return 'none';
+}
+
+/**
+ * Resolves hardware keyboard shortcuts with Quick Command Palette (`Ctrl/Meta+K` -> `open_palette`).
+ */
+export function resolveFoldKeyboardShortcut(
+  key: string,
+  ctrlOrMeta: boolean,
+  supportsInspector: boolean
+): FoldKeyboardShortcutAction {
+  const base = resolveFoldShortcut(key, ctrlOrMeta, supportsInspector);
+  if (base === 'search') return 'open_palette';
+  return base;
 }
 
 /**

@@ -12,6 +12,7 @@ describe("UI 12: map component reading and validation", () => {
   it("asks for UI version 12 or later, draws scenes too (nothing unsupported), and includes map icon", () => {
     expect(UI_VERSION).toBe(13);
     expect(uiContext().ui_version).toBe(13);
+    // scenes render since #13172 (ViewBody11.tsx), so nothing is reported unsupported
     expect(uiContext().unsupported).toBeUndefined();
     expect(UI_ICONS).toContain("map");
     expect(uiIcon("map")).toBe("map");

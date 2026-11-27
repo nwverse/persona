@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ func TestUsableDirs(t *testing.T) {
 		{Dir: "~/new", Project: "local:dir:new", Name: "new"},
 		{Dir: "~/Documents/Trip", Project: "folder:trip", Name: "Trip", Place: "~/Documents/Trip"},
 		{Dir: "~", Project: "home", Place: "~"},
+		{Dir: "/tmp/x", Project: "temp"}, // a temporary folder in no repository made in it (#16827)
 	}
 	bad := []proto.UsageDir{
 		{Dir: "~/a", Project: "git:me:secret@example.com/acme/app", Name: "acme/app", Host: "example.com"},
@@ -40,8 +42,10 @@ func TestUsableDirs(t *testing.T) {
 		{Dir: "~/a", Project: "folder:a/b", Name: "b"},
 		{Dir: "~/a", Project: "folder:", Name: ""},
 		{Dir: "~/a", Project: "local:xyz", Name: "a"},
-		{Dir: "~", Project: "home", Name: "me"}, // home is never named after the account
-		{Dir: "/tmp/x", Project: "temp"},        // temp and assistant are tokens, never resolutions
+		{Dir: "~", Project: "home", Name: "me"},           // home is never named after the account
+		{Dir: "/tmp/x", Project: "temp", Name: "x"},       // a temporary folder is never named after its folder
+		{Dir: "/tmp/x", Project: "temp", Place: "/tmp/x"}, // nor has a place
+		{Dir: proto.UsageDirTemp, Project: "temp"},        // the tokens are never resolved
 		{Dir: proto.UsageDirAssistant, Project: "assistant"},
 		{Dir: "~/a", Project: "folder:a", Name: "a", Place: "relative"},
 	}
@@ -290,7 +294,101 @@ func TestUsageDirsAreStored(t *testing.T) {
 
 	m := &Machine{d: d}
 	out, err := m.onRequest(context.Background(), "usage.features", json.RawMessage(`{}`))
-	if raw, _ := json.Marshal(out); err != nil || string(raw) != `{"dirs":true}` {
+	if raw, _ := json.Marshal(out); err != nil || string(raw) != `{"dirs":true,"temp_dirs":true}` {
 		t.Fatalf("usage.features = %s, %v", raw, err)
 	}
+}
+
+// usageDirsPostgres stands in for Postgres's resolutions and sums (usageProjectStore): what an earlier run stored.
+type usageDirsPostgres struct {
+	*memStore
+	dirs  []db.UsageDirRow
+	spans []db.UsageDirSpan
+}
+
+func (s *usageDirsPostgres) UsageDirs(context.Context) ([]db.UsageDirRow, error) { return s.dirs, nil }
+func (s *usageDirsPostgres) UsageDirSpans(_ context.Context, _ []time.Time, _ bool, dirs []string) ([]db.UsageDirSpan, error) {
+	var out []db.UsageDirSpan
+	for _, sp := range s.spans {
+		if dirs == nil || slices.Contains(dirs, sp.Dir) {
+			out = append(out, sp)
+		}
+	}
+	return out, nil
+}
+
+// A temporary folder is the project of a repository made in it (a worktree in /tmp), and otherwise the one
+// "Temporary folders" with an older node's :temp: never split by its folders' names, never a place. A node's temp
+// for a directory never replaces the repository it was before, so a worktree removed since keeps its project, in
+// memory and over what Postgres kept (#16827).
+func TestUsageProjectsTempFolders(t *testing.T) {
+	loc := time.UTC
+	now := time.Date(2026, 11, 17, 9, 30, 0, 0, loc)
+	minute := now.Unix() / 60 * 60
+	wt := proto.UsageDir{Dir: "/tmp/app-lane-x", Project: appKey, Name: "acme/app", Host: "github.com", Place: "/tmp/app-lane-x", Worktree: true}
+	bucket := func(dir string, out int64) proto.UsageBucket {
+		return proto.UsageBucket{Minute: minute - 60, Model: "opus", Launcher: "claude", Agent: "claude", Dir: dir, Output: out, Requests: 1}
+	}
+	check := func(t *testing.T, d *Devices) {
+		t.Helper()
+		out, err := d.usageProjects(context.Background(), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		today := out.Ranges[0]
+		app, okApp := findProject(today, appKey)
+		temp, okTemp := findProject(today, "temp")
+		if len(today.Projects) != 2 || !okApp || !okTemp || tokensTotal(app.Tokens) != 110 || tokensTotal(temp.Tokens) != 15 ||
+			temp.Kind != devicewire.UsageProjectTemp || temp.Group != devicewire.UsageGroupOther || temp.Name != "" || temp.Machines != 2 {
+			t.Fatalf("projects %+v", today.Projects)
+		}
+		td, err := d.usageProjectDetail(context.Background(), "temp", now)
+		if err != nil || tokensTotal(td.Project.Tokens) != 15 || tokensTotal(td.Ranges[0].Total) != 15 || len(td.Ranges[0].Places) != 0 ||
+			td.Project.Name != "" || len(td.Ranges[0].Machines) != 2 {
+			t.Fatalf("temp detail %+v, %v", td, err)
+		}
+		ad, err := d.usageProjectDetail(context.Background(), appKey, now)
+		if err != nil || tokensTotal(ad.Project.Tokens) != 110 || len(ad.Ranges[0].Places) != 2 {
+			t.Fatalf("app detail %+v, %v", ad, err)
+		}
+		for _, p := range ad.Ranges[0].Places {
+			if p.Worktree != (p.Place == "/tmp/app-lane-x") {
+				t.Errorf("place %+v", p)
+			}
+		}
+	}
+	newer := []proto.UsageBucket{bucket("/tmp/app-lane-x", 100), bucket("/tmp/scratch-1", 7), bucket("/tmp/scratch-2", 3), bucket("~/code/app", 10)}
+	gone := proto.UsageDir{Dir: "/tmp/app-lane-x", Project: "temp"}
+
+	t.Run("memory", func(t *testing.T) {
+		d := New(Options{Hub: &fakeHost{}, Store: newMemStore(), Location: func() *time.Location { return loc }})
+		report := func(machine string, full bool, buckets []proto.UsageBucket, dirs []proto.UsageDir) {
+			b, _ := json.Marshal(map[string]any{"full": full, "launchers": true, "buckets": buckets, "dirs": dirs})
+			d.onUsage(machine, b, now)
+		}
+		report("old", true, []proto.UsageBucket{bucket(proto.UsageDirTemp, 5)}, nil) // an older node
+		report("new", true, newer, []proto.UsageDir{wt, {Dir: "/tmp/scratch-1", Project: "temp"}, {Dir: "/tmp/scratch-2", Project: "temp"},
+			{Dir: "~/code/app", Project: appKey, Name: "acme/app", Host: "github.com", Place: "~/code/app"}})
+		report("new", false, nil, []proto.UsageDir{gone}) // the worktree removed: its node says temp now
+		check(t, d)
+	})
+	t.Run("over Postgres", func(t *testing.T) {
+		st := &usageDirsPostgres{memStore: newMemStore(), dirs: []db.UsageDirRow{
+			{Machine: "new", UsageDir: wt},
+			{Machine: "new", UsageDir: proto.UsageDir{Dir: "/tmp/scratch-1", Project: "temp"}},
+			{Machine: "new", UsageDir: proto.UsageDir{Dir: "/tmp/scratch-2", Project: "temp"}},
+			{Machine: "new", UsageDir: proto.UsageDir{Dir: "~/code/app", Project: appKey, Name: "acme/app", Host: "github.com", Place: "~/code/app"}},
+		}}
+		for _, b := range append(newer, bucket(proto.UsageDirTemp, 5)) {
+			machine := "new"
+			if b.Dir == proto.UsageDirTemp {
+				machine = "old"
+			}
+			st.spans = append(st.spans, db.UsageDirSpan{Span: 6, Machine: machine, Dir: b.Dir, Model: "opus", Agent: "claude", Launcher: "claude", Output: b.Output, Requests: 1})
+		}
+		d := New(Options{Hub: &fakeHost{}, Store: st, Location: func() *time.Location { return loc }})
+		b, _ := json.Marshal(map[string]any{"dirs": []proto.UsageDir{gone}}) // this run's memory: temp
+		d.onUsage("new", b, now)
+		check(t, d)
+	})
 }

@@ -469,7 +469,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			}
 		}
 	}
-	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
+	var reuseSpace *string
+	if scope == nil {
+		callerSpace := s.agentCallerSpace(ctx, machine, sessionID)
+		reuseSpace = &callerSpace
+	}
+	dups := s.planDuplicates(ctx, a.Tasks, reuseSpace) // before the plan's own todos exist
 	// Same-directory active agents the conversation already supervises: surfaced with exact ids even when the titles
 	// are worded too differently for planDuplicates (#13192). A hint, never a refusal.
 	reuse := reuseHintText("task_plan", s.planReuseHints(ctx, sessionID, a.Tasks))

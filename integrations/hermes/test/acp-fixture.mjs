@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto'
-import { closeSync } from 'node:fs'
+import { closeSync, realpathSync } from 'node:fs'
 import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -43,13 +43,14 @@ for await (const line of lines) {
       break
     }
     case 'session/new':
-      if (process.cwd() !== params.cwd) throw new Error('wrong worker directory')
+      // process.cwd() is resolved; a temporary folder can be behind a link (macOS /var -> /private/var).
+      if (process.cwd() !== realpathSync(params.cwd)) throw new Error('wrong worker directory')
       session = { info: { sessionId: randomUUID(), cwd: params.cwd }, updates: [] }
       reply(id, { sessionId: session.info.sessionId })
       break
     case 'session/load':
       session = JSON.parse(await readFile(join(root, params.sessionId + '.json'), 'utf-8'))
-      if (process.cwd() !== session.info.cwd) throw new Error('wrong restored worker directory')
+      if (process.cwd() !== realpathSync(session.info.cwd)) throw new Error('wrong restored worker directory')
       if (session.holdLoad) {
         await writeFile(join(root, 'load-started'), '')
         while (await access(join(root, 'load-hold')).then(() => true, () => false)) await delay(15)

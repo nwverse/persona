@@ -68,6 +68,7 @@ import persona.core.domain.tasks.Interruption
 import persona.core.domain.tasks.notDoneReason
 import persona.core.domain.tasks.orphanedLine
 import persona.core.domain.tasks.planTaskOf
+import persona.core.domain.tasks.reviewState
 import persona.core.domain.tasks.retryLauncher
 import persona.core.domain.tasks.TasksStore
 import persona.core.domain.tasks.assistantEntries
@@ -468,6 +469,8 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                     val gate = todo.hold?.takeIf { it.unblock == HoldUnblock.User }?.gate
                                     when {
                                         todo.ask?.outcome == "decide" -> TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
+                                        todo.reviewState == "user_check" && todo.ask?.askedAt?.isNotBlank() == true ->
+                                            TaskOwnerDecision(todo, host, enabled = enabled, onOpen = { openTask(host, todo) })
                                         entry.status == TriageStatus.Failed || entry.status == TriageStatus.Interrupted ->
                                             TrayOutcomeRow(entry, host, enabled, taskBusy)
                                         else -> {
