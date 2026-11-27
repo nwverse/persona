@@ -226,6 +226,41 @@ func TestRead(t *testing.T) {
 	}
 }
 
+// Orca 1.4.277 lifts the text of an agent's input box out of the screen rows into draft, leaving the prompt row as
+// its bare glyph (seen live with Claude Code 2.1.331, for a typed draft and for Claude's grey suggestion alike). Text
+// puts it back where it is on screen, so the node reads the box as drawn; without a draft the rows stay as sent.
+func TestReadPutsTheDraftBack(t *testing.T) {
+	f := orcarttest.New(t)
+	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "", "x", "claude"))
+	c := client(f, nil)
+	rule := strings.Repeat("─", 20)
+	read := func() *orcart.Screen {
+		t.Helper()
+		s, err := c.Read(context.Background(), orcart.Target{Handle: "term_1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	f.SetBoxScreen("term_1", "● done\n"+rule+"\n❯\n"+rule+"\n  ? for shortcuts", "fix the flaky test")
+	if s := read(); s.Draft != "fix the flaky test" ||
+		s.Text() != "● done\n"+rule+"\n❯ fix the flaky test\n"+rule+"\n  ? for shortcuts\n" {
+		t.Errorf("one line: draft %q text %q", s.Draft, s.Text())
+	}
+	f.SetBoxScreen("term_1", "❯ an old prompt\n"+rule+"\n❯\n"+rule, "line one\nline two")
+	if got := read().Text(); got != "❯ an old prompt\n"+rule+"\n❯ line one\n  line two\n"+rule+"\n" {
+		t.Errorf("two lines: %q", got)
+	}
+	f.SetBoxScreen("term_1", rule+"\n❯\n"+rule, "")
+	if s := read(); s.Draft != "" || s.Text() != rule+"\n❯\n"+rule+"\n" {
+		t.Errorf("empty box: draft %q text %q", s.Draft, s.Text())
+	}
+	f.SetBoxScreen("term_1", rule+"\n❯ drawn in the row\n"+rule, "")
+	if got := read().Text(); got != rule+"\n❯ drawn in the row\n"+rule+"\n" {
+		t.Errorf("older runtime: %q", got)
+	}
+}
+
 // A wedged Orca (accepts, never answers) costs a call its timeout, not more; the failure is logged once per episode.
 func TestTimeoutAndEpisodeLog(t *testing.T) {
 	f := orcarttest.New(t)
