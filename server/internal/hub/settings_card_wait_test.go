@@ -475,7 +475,7 @@ func TestOtherBusCallsKeepTwoMinutes(t *testing.T) {
 			switch call := hubCallOf(method, params); {
 			case call == extwire.HubSettingsList:
 				return map[string]any{"settings": []extwire.Setting{{Key: "inbox.rules", Title: "Inbox rules", Actions: []string{"get", "set"}}}}, nil
-			case call != "" || method == unanswered:
+			case call != "" || method == unanswered || method == assistantwire.MethodStart:
 				<-ctx.Done() // a manager that does not answer
 				return nil, ctx.Err()
 			}
@@ -487,6 +487,10 @@ func TestOtherBusCallsKeepTwoMinutes(t *testing.T) {
 		}{
 			{"a call to the manager", func() error {
 				return h.callBus(context.Background(), assistantwire.AssistantID, unanswered, nil, nil)
+			}},
+			{"starting an assistant conversation", func() error {
+				_, err := h.asst().Start(context.Background(), assistantwire.StartParams{Text: "Start a conversation"})
+				return err
 			}},
 			{"what the hub asks of the manager's extensions", func() error {
 				return h.extCall(context.Background(), extwire.HubGitHubLogin, map[string]any{}, nil)

@@ -718,15 +718,10 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	case assistantwire.MethodTodoLink:
 		return handleBusRequest(ctx, assistantwire.TodoLinkMethod, decode, s.TodoLink)
 	case assistantwire.MethodStart:
-		var p StartParams
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		sess, err := s.Start(ctx, p)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"session": sess}, nil
+		return handleBusRequest(ctx, assistantwire.StartMethod, decode, func(ctx context.Context, p assistantwire.StartParams) (assistantwire.StartResult, error) {
+			sess, err := s.Start(ctx, p)
+			return assistantwire.StartResult{Session: sess}, err
+		})
 	case assistantwire.MethodProjectReviewOwnerInput:
 		return handleBusRequest(ctx, assistantwire.ProjectReviewOwnerInputMethod, decode, func(ctx context.Context, p assistantwire.ProjectReviewOwnerInput) (buswire.None, error) {
 			return buswire.None{}, s.projectReviewOwnerInput(ctx, p)
@@ -768,15 +763,10 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		}
 		return map[string]any{"params": params}, nil
 	case assistantwire.MethodKeepUndelivered:
-		var p assistantwire.KeepUndeliveredParams
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		kept, err := s.KeepUndelivered(ctx, p)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"undelivered": kept}, nil
+		return handleBusRequest(ctx, assistantwire.KeepUndeliveredMethod, decode, func(ctx context.Context, p assistantwire.KeepUndeliveredParams) (assistantwire.KeepUndeliveredResult, error) {
+			kept, err := s.KeepUndelivered(ctx, p)
+			return assistantwire.KeepUndeliveredResult{Undelivered: &kept}, err
+		})
 	case assistantwire.MethodRename:
 		var p RenameParams
 		if err := decode(&p); err != nil {
