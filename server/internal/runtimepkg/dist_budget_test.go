@@ -96,11 +96,12 @@ import (
 // Pausing the Antigravity prompt inactivity watchdog once a matched foreground reply is settled and the only open
 // work is a same-turn live background task (six fail-closed predicates, wake re-arm and T1-T5 tests; #17214) adds
 // 1,424 B of gzipped-package budget (302,838 B -> 304,262 B).
+// Preserving delivered replies across live Antigravity background wakes, in-place RUNNING->DONE updates, and runtime-sdk catch-up/batch delta ordering (#14920) adds 1,015 B over main (304,262 B -> 305,277 B).
 // Antigravity unavailable-auto refusal fallback, capability-based permission_modes advertisement, and runtime-sdk
-// session.modes settled-mode forwarding (#17239) add 696 B (304,262 B -> 304,958 B).
+// session.modes settled-mode forwarding (#17239) add 694 B (305,277 B -> 305,971 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 304_958
+	const budget = 305_971
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

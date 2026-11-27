@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -411,7 +412,7 @@ func TestApprovalMirrorToolNamespacesNormalizeAndRoute(t *testing.T) {
 		{name: "bare"},
 		{name: "Persona", prefix: "mcp__persona__"},
 		{name: "plugin Persona", prefix: "mcp__plugin_persona__"},
-		{name: "legacy Jarvis", prefix: "mcp__jarvis__"},
+		{name: "legacy alias", prefix: "mcp__" + compat.MCPServer + "__"},
 	}
 	tests := make([]testCase, 0, len(namespaces)*3+4)
 	for _, ns := range namespaces {
@@ -424,7 +425,7 @@ func TestApprovalMirrorToolNamespacesNormalizeAndRoute(t *testing.T) {
 	for _, tool := range []string{
 		"mcp__persona_extra__mail_send",
 		"mcp__plugin_persona_extra__mail_send",
-		"mcp__jarvis_extra__mail_send",
+		"mcp__" + compat.MCPServer + "_extra__mail_send",
 		"mcp__other__mcp__persona__mail_send",
 	} {
 		tests = append(tests, testCase{name: "lookalike " + tool, tool: tool, normalized: tool})

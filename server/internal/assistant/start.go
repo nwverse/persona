@@ -437,6 +437,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			purpose = purposeMain
 		}
 	}
+	if purpose == purposeAgent && p.Origin == OriginInbox {
+		ctx = context.WithValue(ctx, inboxAssistantFitKey{}, true)
+	}
 	if p.Launcher != "" && !p.RequireLauncher {
 		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
 		if fit == mainChatRefused {
@@ -574,7 +577,7 @@ func (s *Service) inboxPermissionMode(ctx context.Context, machine, used string)
 	}
 	mode := cmp.Or(record.Binding.PermissionMode, proto.ModeDefault)
 	if mode == proto.ModePlan || !slices.Contains(proto.PermissionModes, mode) ||
-		!s.startPermissionModeSupported(ctx, machine, used, mode) {
+		!s.startPurposePermissionModeSupported(ctx, machine, used, purposeAgent, mode) {
 		mode = proto.ModeDefault
 	}
 	return mode, nil
@@ -604,14 +607,18 @@ func (s *Service) putInboxPermissionMode(ctx context.Context, machine, session s
 // startPermissionModeSupported checks an inherited or saved mode against the launcher the start finally runs on.
 // Unknown launchers keep the existing behavior: the node validates the start rather than the manager guessing a type.
 func (s *Service) startPermissionModeSupported(ctx context.Context, machine, used, mode string) bool {
+	return s.startPurposePermissionModeSupported(ctx, machine, used, "", mode)
+}
+
+func (s *Service) startPurposePermissionModeSupported(ctx context.Context, machine, used, purpose, mode string) bool {
 	if used == "" || used == "claude" {
 		return true
 	}
 	if l, ok := s.targetMachineLauncher(ctx, machine, used); ok {
-		return permissionModeSupported(cmp.Or(l.AgentType, l.Agent), l.PermissionModes, mode)
+		return permissionModeSupportedForPurpose(purpose, cmp.Or(l.AgentType, l.Agent), l.PermissionModes, mode)
 	}
 	if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" {
-		return permissionModeSupported(agent, 0, mode)
+		return permissionModeSupportedForPurpose(purpose, agent, 0, mode)
 	}
 	return true
 }
@@ -1471,6 +1478,9 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	origin, originKnown := s.managerOriginDecision(ctx, p.MachineID, p.SessionID, "", false)
 	if originKnown {
 		params["origin_known"] = true // an empty origin is an explicit ordinary decision, including on assistant.model
+	}
+	if originKnown && origin == OriginInbox {
+		ctx = context.WithValue(ctx, inboxAssistantFitKey{}, true)
 	}
 	if origin != "" {
 		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the

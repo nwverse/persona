@@ -1000,9 +1000,10 @@ tracked follow-up. An owner's explicit drop can be recorded in the to-do's decis
 `Drop investigation finding <id>?`, choice `Drop`, and a reason, then referenced by `owner_drop_decision_id`.
 
 Manual and automatic parking, final acceptance, owner Pass and other completion paths check the current report. A
-new working turn requires a fresh declaration and review, while keeping the disposition history. A follow-up with
-an outstanding finding stays open until the exact action is confirmed complete or its handoff is moved. Ordinary
-tasks keep their existing workflow.
+new working turn can mark a recorded report stale while keeping its disposition history. On an open task, the current
+supervisor can review that exact recorded version with the same disposition checks, or cancel the investigation with
+`task_review` and keep the report as history. A follow-up with an outstanding finding stays open until the exact
+action is confirmed complete or its handoff is moved. Ordinary tasks keep their existing workflow.
 
 ## Parked tasks
 
