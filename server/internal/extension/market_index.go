@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -78,15 +79,8 @@ type MarketRelease struct {
 	L10n     json.RawMessage `json:"l10n,omitempty"`
 }
 
-// MarketPackage is a package of an entry.
-type MarketPackage struct {
-	// Platforms are the GOOS-GOARCH it runs on; none: any (a package for every platform, or one that runs no code).
-	Platforms []string `json:"platforms,omitempty"`
-	// URL: relative to the index, an https URL, or (a GitHub market) release:<tag>/<asset>.
-	URL    string `json:"url"`
-	SHA256 string `json:"sha256"`
-	Size   int64  `json:"size,omitempty"`
-}
+// MarketPackage is the catalog's package reference.
+type MarketPackage = extwire.MarketPackage
 
 // ParseIndex reads an index with the strict manifest validation of build zero.
 func ParseIndex(data []byte) (*MarketIndex, []string, error) {
