@@ -435,6 +435,9 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const title = sessionTitle(s, preferTab);
   const displayTitle = label ?? title;
   const st = activityOf(s);
+  // The mark draws the activity, which tells Unread, Just finished and Awaiting reply apart within `done`; an `error`
+  // phase (a refused start, a usage limit, an interrupted session) has no activity of its own, so it draws the phase.
+  const phase = stateOf(s);
   // Awaiting Reply (#5096): seen, but it asked you something you have not answered
   const awaiting = useStore((x) => awaitsReply(s, x.mutes));
   // Just finished (#9751): done before you looked, less than three hours ago
@@ -554,7 +557,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
     >
       {/* the agent's mark before its state (#6390): what runs there, then how it is doing */}
       {showState && !s.assistant && <SessionMark s={s} size={14} />}
-      <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || unseen || leadActive ? <StatusMark state={leadActive ? "working" : usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
+      <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || unseen || leadActive ? <StatusMark state={leadActive ? "working" : phase === "error" ? "error" : usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
       {prefix && <span className={prefixClass}>{prefix}</span>}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}
