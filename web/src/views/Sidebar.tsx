@@ -56,7 +56,7 @@ import { consumeBoardSidebarTree } from "../features/todos/board-sidebar-tree";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
-import { StatusMark } from "../ui/StatusMark";
+import { StateTally, StatusMark } from "../ui/StatusMark";
 import { NoticeDot } from "../ui/NoticeDot";
 import { Icon } from "../ui/icons";
 import { HubNoticeLine as HubNoticeLineContent } from "./agents/HubNoticeRow";
@@ -89,7 +89,7 @@ import { heldCounts } from "../lib/seen-outbox";
 import { heldSidesOf, useHeldVersion } from "../lib/use-child-sessions";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, HISTORY_ICON, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, pageIconStyle, pageLabel, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
-import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
+import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading, unreadShown } from "./SidebarRows";
 import { GroupBranch, LooseSection, MachineSection, RepoMachineSection, SessionTally, ShellSpaceSection, type SpaceMenuFn, type WorkspaceTreeActions, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
 import type { PageSection } from "../lib/sidebar-pages";
@@ -337,6 +337,12 @@ const MORE_BUTTON = "whitespace-nowrap rounded-[7px] px-2 py-1 text-left text-[1
 
 const NO_CONVERSATIONS: Session[] = [];
 
+/** A folded Persona chats or Recent heading's count of the chats it hides that are Unread (#13425): the Agents list's
+ *  folded tally (StateTally), so the mark and its number read as they do there, spoken as chats. Nothing at 0. */
+function UnreadTally({ n }: { n: number }) {
+  return n > 0 ? <StateTally chats counts={{ needs_you: 0, working: 0, bg_waiting: 0, unread: n }} /> : null;
+}
+
 export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions, active = true }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions; active?: boolean }) {
   const bindings = useBindings();
   const searchHint = jumpHint(bindings);
@@ -408,6 +414,12 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // 最近 folds on its own too (#6228): the choice is kept in this browser, and it opens by itself while it holds the
   // open conversation, so folding never hides where a message lands. The Agents block's Recent uses another key.
   const [recentFolded, toggleRecent] = useFolded("recent-chats", false, { holds: recent.some((c) => activeKey === `j:${c.session_id}`) });
+  // Folded, the Persona chats heading and Recent's still say how many of the chats they hide are Unread (#13425), with
+  // the folded tally the Agents list's groups use (StateTally); open, each row marks its own. The rows are the store's,
+  // which the seen outbox already holds seen (lib/store.ts holdSeen), so a chat just opened is not counted
+  // A pinned direction counts through its conversation; an external one (#12557) has no chat row, so no Unread mark.
+  const unreadPinned = directions.filter((d) => d.conversation !== undefined && unreadShown(d.conversation)).length;
+  const unreadRecent = recent.filter(unreadShown).length;
   const leaderTotal = visibleSectionCounts(counts, directions.map((d) => d.id), recentFolded ? [] : recent.map((c) => c.session_id));
   const { nav, reg, hover, highlight } = useGlide(activeKey);
   const go = useGo(onNavigate);
@@ -495,6 +507,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
                     {userCheckLabel(leaderTotal, t) && <span data-direction-user-check className="truncate">{userCheckLabel(leaderTotal, t)}</span>}
                   </span>
                 )}
+                {personaFolded && <UnreadTally n={unreadPinned + unreadRecent} />}
                 <SectionAdd icon="compose" label={t("sidebar.new_chat")} to={{ name: "persona-new" }} go={go} active={activeKey === "j:new"} />
               </>
             }
@@ -507,7 +520,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
                 </Suspense>
               ) : recent.length > 0 && (
                 <>
-                  <SubHeading label={t("sidebar.recent_chats")} folded={recentFolded} onToggle={toggleRecent} help={t("sidebar.recent_chats_help")} />
+                  <SubHeading label={t("sidebar.recent_chats")} folded={recentFolded} onToggle={toggleRecent} help={t("sidebar.recent_chats_help")} tally={recentFolded && <UnreadTally n={unreadRecent} />} />
                   <Collapse open={!recentFolded} sidebarFold>
                     <div className="sidebar-indent" inert={recentFolded || undefined}>
                       {recent.map(recentRow)}
@@ -1038,9 +1051,12 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
       activeAt={runtimeActiveAt} needsYou={rowNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
       catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed} holdCounts={holdCounts}
       machineOrder={machineOrder} label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
-      renderRow={(s, within) => {
+      renderRow={(s, within, group) => {
         const k = `s:${s.machine_id}/${s.session_id}`;
-        return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} showTodoTag={within !== "todo"} />;
+        // under a group's heading the row leaves out what the heading says: its computer (a space of the catalog's sits
+        // under its computer's heading, or the list has one computer, #13522), its space, its to-do
+        const where = [within === "machine" || (within === "group" && group?.places[0]?.machine) ? "" : machineWithHub(s.machine_id, machines), within === "group" ? "" : s.space_name || baseName(s.cwd)];
+        return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} hint={where.filter(Boolean).join(" · ")} showTodoTag={within !== "todo"} />;
       }} />
     {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTarget} />}
     {renaming && <RenameDialog open session={renaming} onClose={() => setRenaming(null)} />}

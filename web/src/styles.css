@@ -33,7 +33,8 @@
     border-radius: var(--radius-card);
   }
 
-  [data-app-shell] > main {
+  [data-app-shell] > main,
+  [data-app-shell] > aside {
     background: var(--page);
     overflow: clip;
   }

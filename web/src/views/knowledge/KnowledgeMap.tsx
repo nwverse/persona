@@ -448,10 +448,12 @@ export function KnowledgeMap({ onToggleSidebar, focus }: { onToggleSidebar: () =
     setSheet(true);
   });
   // Dragging and the node menu: only by hierarchy (in the tag view a project is drawn once per tag).
-  const drag: DragApi | undefined = view === "tree" && mode === "tree" && tree.list ? {
-    canDrop: (a, b) => (a.project ? canMove(tree.parents, a.project.id, b.kind === "root" ? null : b.project?.id ?? "") : { ok: false }),
-    onDrop: (a, b) => void moveProject(tree, a.project!.id, b.kind === "root" ? null : b.project!.id),
-  } : undefined;
+  const treeLive = useRef(tree);
+  treeLive.current = tree;
+  const canDrop = useCallback((a: MapNode, b: MapNode) => (a.project ? canMove(treeLive.current.parents, a.project.id, b.kind === "root" ? null : b.project?.id ?? "") : { ok: false }), []);
+  const drop = useCallback((a: MapNode, b: MapNode) => void moveProject(treeLive.current, a.project!.id, b.kind === "root" ? null : b.project!.id), []);
+  const drag = useMemo<DragApi>(() => ({ canDrop, onDrop: drop }), [canDrop, drop]);
+  const dragEnabled = view === "tree" && mode === "tree" && tree.list ? drag : undefined;
   const onMenu = view === "tree" && tree.list ? (n: MapNode, at: MenuAt) => { if (n.project) setMenu({ node: n, at }); } : undefined;
   const choose = (n: MapNode) => {
     setSel(n.id);
@@ -503,7 +505,7 @@ export function KnowledgeMap({ onToggleSidebar, focus }: { onToggleSidebar: () =
           <div className="relative min-w-0 flex-1">
             <div ref={host} onKeyDown={zoomKey} className="absolute inset-0 cursor-grab select-none overflow-auto bg-canvas active:cursor-grabbing"
               style={{ backgroundImage: "radial-gradient(var(--line-strong) 1px, transparent 1px)", backgroundSize: "22px 22px", touchAction: "pan-x pan-y", overflowAnchor: "none" }}>
-              {L && <MapCanvas key={view === "tree" ? `tree:${mode}` : view} L={L} shift={shift} title={load.root.title} sel={selected?.id ?? ""} zoom={zoom} onFit={setZoom} onSelect={choose} onToggle={toggle} drag={drag} onMenu={onMenu} />}
+              {L && <MapCanvas key={view === "tree" ? `tree:${mode}` : view} L={L} shift={shift} title={load.root.title} sel={selected?.id ?? ""} zoom={zoom} onFit={setZoom} onSelect={choose} onToggle={toggle} drag={dragEnabled} onMenu={onMenu} />}
             </div>
             {view === "tree" && arrange("absolute top-3 left-3 z-10 inline-flex bg-surface md:hidden")}
             <div className="absolute bottom-3 left-3 z-10 inline-flex items-center gap-0.5 rounded-control bg-surface p-1 text-[12px] shadow-overlay">
@@ -590,14 +592,16 @@ function MapCanvas({ L, shift, title, sel, zoom, onFit, onSelect, onToggle, drag
   const hit = (x: number, y: number, src: MapNode) => {
     const p = L.placed.find((q) => q.node !== src && x >= q.x && x <= q.x + q.box.w && y >= q.y - q.box.h / 2 && y <= q.y + q.box.h / 2);
     if (p) return p.node;
-    return Math.hypot(x - L.cx, y - L.cy) < 62 ? (L.placed.find((p) => p.node.kind === "root")?.node ?? null) : null;
+    return Math.hypot(x - L.cx, y - L.cy) < 62 ? L.placed.find((q) => q.node.kind === "root")?.node ?? null : null;
   };
   const verdicts = useMemo(() => {
     const m = new Map<MapNode, Verdict>();
-    if (dragging && drag) for (const p of L.placed) if (p.node !== dragging.src) m.set(p.node, drag.canDrop(dragging.src, p.node));
+    if (dragging && drag) {
+      for (const p of L.placed) if (p.node !== dragging.src) m.set(p.node, drag.canDrop(dragging.src, p.node));
+    }
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragging?.src, L]);
+  }, [dragging?.src, L, drag]);
   const down = (n: MapNode) => (e: React.PointerEvent) => {
     if (!n.project || e.button !== 0 || (!drag && !onMenu)) return;
     if (e.pointerType !== "touch" && drag) e.preventDefault(); // no text selection (and no scroll with it) while dragging
@@ -630,7 +634,13 @@ function MapCanvas({ L, shift, title, sel, zoom, onFit, onSelect, onToggle, drag
       setDragging(null);
       if (d?.over && drag?.canDrop(d.src, d.over).ok) drag.onDrop(d.src, d.over);
     };
-    const esc = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape" && press.current) { press.current = null; setDragging(null); } };
+    const esc = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape" || (!press.current && !live.current)) return;
+      if (press.current?.timer) clearTimeout(press.current.timer);
+      suppress.current = true;
+      press.current = null;
+      setDragging(null);
+    };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
@@ -663,7 +673,7 @@ function MapCanvas({ L, shift, title, sel, zoom, onFit, onSelect, onToggle, drag
     host.scrollTo({ left: left + L.cx * zoom - host.clientWidth / 2, top: top + L.cy * zoom - host.clientHeight / 2 });
   });
   // The edges and nodes, kept while only the zoom changes: a zoom resizes the drawing, nothing in it.
-  const drawing = useMemo(() => draw(moved(L, shift), sel, onSelect, onToggle, drag, onMenu, dragging, verdicts, down, suppress), [L, shift, sel, onSelect, onToggle, drag, onMenu, dragging, verdicts]);
+  const drawing = useMemo(() => draw(moved(L, shift), sel, onSelect, onToggle, { at: new Map(L.placed.map((p) => [p.node, p])), dragging, verdicts, drag, down, onMenu, suppress }), [L, shift, sel, onSelect, onToggle, dragging, verdicts, drag, onMenu]);
   return (
     // Half a screen of room on every side, so a pinch can keep any point under the fingers even when the map is smaller than the view.
     // Overflow visible: while a closed branch's neighbours slide in, they are not cut at the map's new, smaller edge.
@@ -672,7 +682,7 @@ function MapCanvas({ L, shift, title, sel, zoom, onFit, onSelect, onToggle, drag
         width={L.width * zoom} height={L.height * zoom} viewBox={`${shift.x} ${shift.y} ${L.width} ${L.height}`} overflow="visible" className="block">
         {drawing}
         {dragging && (
-          <g style={{ pointerEvents: "none" }} transform={`translate(${dragging.x + 12},${dragging.y - 14})`} data-drag-ghost="">
+          <g style={{ pointerEvents: "none" }} transform={`translate(${dragging.x - shift.x + 12},${dragging.y - shift.y - 14})`} data-drag-ghost="">
             <rect width={tw(dragging.src.title, 12.5, 600) + 24} height={28} rx={14} fill="var(--surface)" stroke="var(--accent)" strokeWidth={1.5} style={{ filter: "drop-shadow(0 4px 10px rgb(0 0 0 / 30%))" }} />
             <text x={12} y={18.5} fontSize={12.5} fontWeight={600} fill="var(--ink)">{dragging.src.title}</text>
           </g>
@@ -687,8 +697,19 @@ function MapCanvas({ L, shift, title, sel, zoom, onFit, onSelect, onToggle, drag
   );
 }
 
-function draw(L: Layout, sel: string, onSelect: (n: MapNode) => void, onToggle: (n: MapNode) => void, drag: DragApi | undefined, onMenu: ((n: MapNode, at: MenuAt) => void) | undefined, dragging: { src: MapNode; x: number; y: number; over: MapNode | null } | null, verdicts: Map<MapNode, Verdict>, down: (n: MapNode) => (e: React.PointerEvent) => void, suppress: RefObject<boolean>): ReactNode {
-  const at = new Map<MapNode, Placed>(L.placed.map((p) => [p.node, p]));
+/** The draw's project-tree interaction state; none for the topics and projects maps. */
+type DrawInteractions = {
+  at: Map<MapNode, Placed>;
+  dragging: { src: MapNode; x: number; y: number; over: MapNode | null } | null;
+  verdicts: Map<MapNode, Verdict>;
+  drag?: DragApi;
+  down: (n: MapNode) => (e: React.PointerEvent) => void;
+  onMenu?: (n: MapNode, at: MenuAt) => void;
+  suppress: RefObject<boolean>;
+};
+
+function draw(L: Layout, sel: string, onSelect: (n: MapNode) => void, onToggle: (n: MapNode) => void, interactions: DrawInteractions): ReactNode {
+  const { at, dragging, verdicts, drag, down, onMenu, suppress } = interactions;
   const key = (n: MapNode) => (e: KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();

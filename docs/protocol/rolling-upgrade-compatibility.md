@@ -336,7 +336,7 @@ shell helpers could send the Chinese placeholder `默认` instead. Every client 
 empty model: the launcher's own default applies, its existing localized Default presentation is used, and no placeholder
 is sent as a model pick. Explicit model IDs are unchanged in both directions.
 
-### New omp sessions in herdr (#11964)
+### New omp sessions in herdr and Orca (#11964)
 
 Both old and new nodes can return an empty model list for `omp`. New clients request the launcher models for the
 selected host. They offer typed model IDs for native `omp` only when that response includes

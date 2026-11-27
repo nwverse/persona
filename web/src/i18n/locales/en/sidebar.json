@@ -138,6 +138,7 @@
   "pane_count_one": "{count} shell",
   "pane_count_other": "{count} shells",
   "folded_states": "Folded agents: {list}",
+  "folded_chats": "Folded chats: {list}",
   "unread_messages_count_one": "{count} unread message",
   "unread_messages_count_other": "{count} unread messages",
   "inbox_badge_title_one": "Inbox: {count} unread item; agents waiting on you are under Overview",
