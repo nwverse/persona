@@ -60,7 +60,9 @@ import {
   shownStatus,
   strikesThrough,
   todoRestLook,
+  todoAgentState,
   todoStatus,
+  todoSupervisorLabel,
   unlinkAgentFromTodo,
   unlinkSpaceFromTodo,
   unseeTodo,
@@ -2989,6 +2991,7 @@ export type TodoRowView = {
   section?: TriageSection;
   /** What it waits on while its status is Waiting (#11090, lib/todo-wait-reason.ts waitOf): its label says so. */
   wait?: WaitReason;
+  supervisorLabel?: string;
   /** Why the sidebar's To-dos badge counts it (#11838, lib/todo-owner-needs.ts), unset when it does not: its mark. */
   owner?: OwnerNeed;
   /** Under todos_v2 (#14642), the resolved project name when assigned; undefined when unset or todos_v2 is off. */
@@ -3045,7 +3048,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   const status = todoStatus(todo, lookup);
   const urgent = mostUrgentAgent(todo, lookup);
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
-  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup), wait: waitOf(todo, status, lookup) };
+  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup), wait: waitOf(todo, status, lookup), supervisorLabel: todoSupervisorLabel(todo, status, lookup) };
   if (todo.wait != null || todo.done_at || !urgent?.session) return view;
   const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
   if (limit) {
@@ -3055,7 +3058,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   }
   const urgentNow = taskNow(urgent.session, foldedState(urgent.session) === "working");
   // its own card, else one of its child sessions' (#5120: their cards wait on its page)
-  const urgentIx = sessionCard(interactions, urgent.agent.machine_id, urgent.agent.session_id);
+  const urgentIx = urgent.status === "needs_you" ? ownerCard(interactions, urgent.agent, lookup) : undefined;
   // what it waits on, from its card (#4111): the question, the command; not its last words
   const urgentAsk = urgent.status === "needs_you" ? askText(urgentIx) : "";
   if (!urgentAsk && !urgentNow) return view;
@@ -3064,6 +3067,12 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   if (urgent.status === "needs_you") view.urgentLead = t("todos.urgent_line", { name: urgent.agent.title || urgent.session.title || "Agent", kicker });
   view.urgentText = urgentAsk || (urgentNow ? (urgentNow.kind === "words" ? plainMarkdown(urgentNow.text) : urgentNow.text) : "");
   return view;
+}
+
+function ownerCard(interactions: Interaction[], agent: TodoAgent, lookup: SessionLookup): Interaction | undefined {
+  const { machine_id: mid, session_id: sid } = agent;
+  const pending = lookup.pendingCards ? lookup.pendingCards(mid, sid) ?? [] : interactions;
+  return sessionCard(pending.filter((ix) => !ix.delegating && !ix.mirror_of), mid, sid);
 }
 
 /** Every todo's row view by id, with its status section and why the sidebar's badge counts it (`needs`, its own set). */
@@ -3715,7 +3724,7 @@ const TodoListItem = memo(function TodoListItem({
         {!parkedRow && (
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]" data-testid="todo-status-line">
             {open && <StatusMark state={dotState} size="sm" />}
-            <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? look.label}</span>
+            <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? view.supervisorLabel ?? look.label}</span>
             {!todo.done_at && activeCount > 0 && (
               <>
                 <span className="text-ink-3">·</span>
@@ -4694,6 +4703,7 @@ function TodoDetail({
   const status = todoStatus(todo, lookup);
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
   const look = todoLook(todo, status, waitOf(todo, status, lookup));
+  const statusLabel = todoSupervisorLabel(todo, status, lookup) ?? look.label;
   // its steps as the hub counts them (#11858), as its row says them
   const steps = stepsWords(todo, status);
   const responsible = responsibleOf(todo);
@@ -4882,7 +4892,7 @@ function TodoDetail({
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <StatusMark state={dotState} size="sm" />
               <span data-testid="todo-detail-summary-status" className="font-semibold text-ink">
-                {steps?.label ?? look.label}
+                {steps?.label ?? statusLabel}
               </span>
               {activeAgents.length > 0 && (
                 <>
@@ -5030,7 +5040,7 @@ function TodoDetail({
       <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[12.5px] text-ink-2">
         <span className={cx("inline-flex h-5.5 items-center gap-1.5 rounded-md px-2 text-[12px] font-semibold", toneClass)}>
           <StatusMark state={dotState} size="sm" />
-          <span data-testid="todo-detail-status">{steps?.label ?? look.label}</span>
+          <span data-testid="todo-detail-status">{steps?.label ?? statusLabel}</span>
         </span>
         {steps?.tail && (
           <>
@@ -5270,7 +5280,7 @@ function TodoDetail({
                 data-testid="todo-detail-subtask-status"
                 className={cx("shrink-0 text-submeta whitespace-nowrap", TONE_CLASS[childLook.tone])}
               >
-                {childLook.label}
+                {todoSupervisorLabel(child, childStatus, lookup) ?? childLook.label}
               </span>
               <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
             </button>
@@ -5384,7 +5394,7 @@ function TodoDetail({
           <div className="flex flex-col gap-2">
             {activeAgents.map((agent) => {
               const session = lookup(agent.machine_id, agent.session_id);
-              const st = session ? foldedState(session) : "offline";
+              const st = todoAgentState(agent, session, lookup);
               const now = taskNow(session, st === "working");
               const isExpired = !session && !agent.start_error;
               const displayTitle = session?.title || agent.title || t("lib-format.untitled_session");
@@ -5396,7 +5406,7 @@ function TodoDetail({
                 ? `${mName} · ${spaceTab}`
                 : `${mName} · ${shortPath(session?.cwd || agent.cwd)}`;
 
-              const ix = sessionCard(interactions, agent.machine_id, agent.session_id);
+              const ix = st === "needs_you" ? ownerCard(interactions, agent, lookup) : undefined;
               const kicker = ix?.kind === "plan" ? t("todos.kicker_plan") : ix?.kind === "permission" ? t("todos.kicker_permission") : ix?.kind === "screen" ? t("todos.kicker_screen") : ix?.kind === "elicitation" ? t("todos.kicker_elicitation") : t("todos.kicker_question");
               const sourceLabel = formatAgentSource(agent, todo.spaces, lookup);
 
