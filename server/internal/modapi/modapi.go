@@ -1,9 +1,10 @@
 // Package modapi is the module contract of Persona Core (docs/architecture/core-and-modules.md): what a built-in
 // feature module declares about itself (Info, the manifest of schema/module.schema.json), what it is (Module), and the
-// one way it reaches the core (Host). It holds types, constants and the list of client-only module ids, imports nothing but the standard library and other
-// contract packages (internal/wireids and internal/assistantwire),
-// and is a contract package (internal/archguard/testdata/contracts.txt): the core (internal/assistant/kernel serves
-// Host) and the modules (internal/modules/<id>) both import it, never each other.
+// one way it reaches the core (Host). It holds types, constants, the list of client-only module ids and the list of
+// modules installed extensions may supply, imports nothing but the standard library and other contract packages
+// (internal/wireids and internal/assistantwire), and is a contract package
+// (internal/archguard/testdata/contracts.txt): the core (internal/assistant/kernel serves Host) and the modules
+// (internal/modules/<id>) both import it, never each other.
 package modapi
 
 import (
@@ -165,4 +166,23 @@ type WaitRules interface {
 // (internal/modules/all checks that no built-in module is listed).
 func ClientModules() []string {
 	return []string{"glasses"}
+}
+
+// ExtensionModule is a module an approved installed extension may supply (docs/architecture/core-and-modules.md
+// "Modules from extensions"): the extension of the same id, installed from the official market and signed by an
+// official key, announces module.<ID> while it is enabled, every one of Contributions ("<point>/<id>") is on and the
+// modules setting has not switched ID off. Where the built-in module of that id is loaded too, the installed one
+// decides the flag.
+type ExtensionModule struct {
+	ID            ModuleID
+	Contributions []string
+}
+
+// ModuleID is a module's id (Info.ID's form) where a contract names a module by it.
+type ModuleID string
+
+// ExtensionModules is the host-owned list of the modules installed extensions may supply (#16254). Only the host adds
+// to it: a package never names the module it claims, and one whose id is not here announces no module flag.
+func ExtensionModules() []ExtensionModule {
+	return []ExtensionModule{{ID: "volc", Contributions: []string{"transcription/volc", "speech/volc"}}}
 }

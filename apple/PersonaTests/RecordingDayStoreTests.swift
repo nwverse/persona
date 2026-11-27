@@ -1181,7 +1181,12 @@ struct RecordingDayStoreTests {
         defaults.set(RecordingDayConsent.version + 1, forKey: RecordingDayConsent.versionKey)
         #expect(RecordingDayConsent(defaults: defaults).agreed)
         defaults.set(RecordingDayConsent.version - 1, forKey: RecordingDayConsent.versionKey)
-        #expect(!RecordingDayConsent(defaults: defaults).agreed)
+        let upgraded = RecordingDayConsent(defaults: defaults)
+        #expect(!upgraded.agreed)
+        // A version bump asks again, but the phone still tells the watch it takes day recordings: 0, never nothing.
+        // A recording that started under the older sheet then goes on under it (`WatchPhoneCapabilities.takesDays`).
+        let afterUpgrade = RecordingDayPhoneCapabilities(consent: upgraded, store: store, hub: false, audioDays: nil, send: { _ in })
+        #expect(afterUpgrade.current.context[RecordingDayContract.phoneKey] as? Int == 0)
     }
 }
 

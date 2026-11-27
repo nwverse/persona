@@ -179,12 +179,23 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if supportsPolicy && id != "" && known && st.SupervisionInstructions != policy && n.runtimeStatus(h, id) == proto.StatusWorking {
 		return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
 	}
+	var agyChannel *agyChannelSpec
+	if h.agent() == agyAgent {
+		var err error
+		agyChannel, err = n.agyChannelFor(ctx, launcher)
+		if err != nil {
+			return "", err
+		}
+	}
 	n.assistantRuntimeSkillsForSend(cwd)
 	memDir := n.memoryForUse(cwd)
 	environment, releaseEnv, bindEnv := n.assistantEnvForRuntimeLease(h, cwd, id)
 	turn := map[string]any{"assistant": true, "memory_dir": memDir}
 	if environment != nil {
 		turn["env"] = environment
+	}
+	if agyChannel != nil {
+		turn["channel"] = agyChannel
 	}
 	if pickedModel != "" {
 		turn["model"] = pickedModel
@@ -197,6 +208,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		startParams := map[string]any{"cwd": cwd, "assistant": true}
 		if environment != nil {
 			startParams["env"] = environment
+		}
+		if agyChannel != nil {
+			startParams["channel"] = agyChannel
 		}
 		if pickedModel != "" {
 			startParams["model"] = pickedModel
@@ -269,7 +283,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	live, commit := "", func() {}
 	if !command {
 		if !public {
-			live, commit = n.turnContext(id, n.assistantContext(id))
+			live, commit = n.turnContext(id, n.assistantContextFor(id, text))
 		}
 		// Antigravity loads .agents/rules on every turn. Other generic runtimes have no verified native
 		// rule-directory contract, so carry the exact split remainder alongside their bounded AGENTS.md.
