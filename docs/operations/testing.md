@@ -833,11 +833,12 @@ deletes only that simulator at the end.
 For each edition the app receives a real single-use `jp_…` code from `POST /api/v1/auth/pair-codes` and pairs through
 `-openPairLink`, without `-pairURL` (whose presence would skip the credential exchange). The driver reads the fresh sessions,
 Inbox and To-dos API responses before pairing, then drives the actual app through the DEBUG Runtime CLI: active pairing, the
-real hello's module registry, the empty Agents / Inbox / To-dos pages, the drawer, Settings home and Advanced, Connectors,
+real hello's module registry, Agents with its synthetic offline computer, the empty Inbox / To-dos pages, the drawer, Settings home and Advanced, Connectors,
 Channels, Extensions, Devices and the main-chat composer. The current device must be marked in Devices, a second exchange of
 the pair code must answer 401, and the app must still answer at the end. Health, Screen Share, Voice, recording-write,
 Mail and Lark entry assertions are checked against the full-hub positive control. The recording archive's read entry remains
-available in both editions. After those fresh-empty checks, the driver inserts a clearly marked synthetic idle main-session
+available in both editions. Each hub declares only a synthetic offline computer named `Fixture Computer`. After the initial
+core-page checks, the driver inserts a clearly marked synthetic idle main-session
 record into the real manager's Postgres store and opens it through the app's real assistant route for the composer comparison;
 this does not claim model or Agent execution.
 

@@ -390,10 +390,10 @@ def exercise_app(ctl, base, code, edition, shots, container, master):
     capture_both(ctl, shots, edition, "assistant", proof)
 
     navigate(ctl, "agents")
-    require(ctl, label="No computers yet")
+    require(ctl, label="Fixture Computer")
     require(ctl, element_id="agents-new")
     no_errors(ctl, "Agents")
-    proof["pages"]["agents"] = "loaded empty"
+    proof["pages"]["agents"] = "loaded with synthetic offline computer"
     capture_both(ctl, shots, edition, "agents", proof)
 
     navigate(ctl, "inbox")
@@ -524,7 +524,7 @@ def validate_proof(proof, edition, run_id, shots):
     check("modules" in flags, f"{edition}: the proof lacks the real modules marker")
     for module in smoke.module_ids():
         check((f"module.{module}" in flags) == full, f"{edition}: module.{module} has the wrong live flag")
-    check(proof.get("pages", {}).get("agents") == "loaded empty" and
+    check(proof.get("pages", {}).get("agents") == "loaded with synthetic offline computer" and
           proof["pages"].get("inbox") == "loaded empty" and proof["pages"].get("todos") == "loaded empty",
           f"{edition}: a core page was not exercised")
     check(proof.get("app_alive_at_end") is True, f"{edition}: the app did not answer at the end")
@@ -552,6 +552,11 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
         database = smoke.postgres(container)
         port, master = smoke.free_port(), secrets.token_hex(24)
         smoke.write_hub_json(home, port, master, database)
+        config_path = home / ".persona/hub.json"
+        config = json.loads(config_path.read_text())
+        config["machines"] = [{"id": "assistant", "name": "Fixture Computer", "kind": "local", "icon": "server"}]
+        config_path.write_text(json.dumps(config))
+        config_path.chmod(0o600)
         base = f"http://127.0.0.1:{port}"
         print(f"{edition}: PERSONA_HOME={home / '.persona'}; sandbox hub will listen on {base}", flush=True)
         hub = start_hub(bindir, home, work, log)
