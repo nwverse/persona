@@ -290,7 +290,7 @@ func TestLinkAttentionOfTheFleetsInputs(t *testing.T) {
 	s.markTold(card)
 	a := summary()
 	if a.NeedsYou != 1 || a.Items[0] != (link.AttentionItem{MachineID: "mac", SessionID: "s-1", Title: "Fix the login redirect",
-		Place: "Mac", Kind: proto.IxPermission, OutwardWrite: true, Detail: "npm test", Notify: true, InteractionID: "ix-1", Since: a.Items[0].Since,
+		Place: "Mac", Kind: proto.IxPermission, Detail: "npm test", Notify: true, InteractionID: "ix-1", Since: a.Items[0].Since,
 		Route: "/s/mac/s-1"}) ||
 		a.Items[0].Since == "" {
 		t.Fatalf("after a card %+v", a)
