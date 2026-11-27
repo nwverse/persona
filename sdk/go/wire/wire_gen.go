@@ -257,6 +257,9 @@ type Permissions struct {
 	// Its program is an agent runtime that connects to this machine's node; in a sandbox it gets a socket in its run
 	// directory (PERSONA_RUNTIME_SOCKET) that leads to the node's runtime.sock only. Needs runtime.
 	AgentRuntimes bool `json:"agent_runtimes,omitempty"`
+	// The routine sends its local date and language to this extension and may include its facts and report sections in
+	// the briefing.
+	RoutineFacts bool `json:"routine_facts,omitempty"`
 	// It receives the error and crash reports of the hub and the user's devices, scrubbed (no message text, tokens, user
 	// names, machine names or IP addresses). Needed by contributes.error_reports.
 	ErrorReports bool               `json:"error_reports,omitempty"`
@@ -306,6 +309,7 @@ type Contributes struct {
 	TriageTemplates     []TriageTemplateItem     `json:"triage_templates,omitempty"`
 	AgentFilters        []AgentFilterItem        `json:"agent_filters,omitempty"`
 	Tunnels             []TunnelItem             `json:"tunnels,omitempty"`
+	RoutineFacts        []RoutineFactsItem       `json:"routine_facts,omitempty"`
 	ErrorReports        []ErrorReportsItem       `json:"error_reports,omitempty"`
 	AuthRelay           []AuthRelayItem          `json:"auth_relay,omitempty"`
 	SecretProviders     []SecretProviderItem     `json:"secret_providers,omitempty"`
@@ -323,7 +327,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -355,7 +359,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -674,6 +678,19 @@ const (
 
 // RepositoryLinkKinds are the values of RepositoryLinkKind, in order.
 var RepositoryLinkKinds = []string{"issue", "pull_request"}
+
+// RoutineContributionID: identifies one routine facts source within its extension.
+type RoutineContributionID string
+
+// String returns the ID as it is on the wire.
+func (v RoutineContributionID) String() string { return string(v) }
+
+// RoutineFactsItem: A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
+// permissions.routine_facts.
+type RoutineFactsItem struct {
+	ID    RoutineContributionID `json:"id"`
+	Title string                `json:"title"`
+}
 
 // ErrorReportsItem: it is given the error and crash reports of the hub and the user's devices
 // (error_reports.deliver): needs the program to speak the protocol, on_startup and permissions.error_reports.
@@ -7567,6 +7584,25 @@ type OffloadError struct {
 	Items  []OffloadRunItem `json:"items,omitempty"`
 }
 
+type RoutineFactsParams struct {
+	Contribution RoutineContributionID `json:"contribution"`
+	// Calendar date in the routine's time zone.
+	Date     string `json:"date"`
+	Language string `json:"language"`
+}
+
+type RoutineReportSection struct {
+	Title string `json:"title"`
+	// Plain text. The host owns report layout.
+	Body string `json:"body"`
+}
+
+// RoutineFactsResult: A read-only snapshot. Return an empty object when the contribution has nothing for this date.
+type RoutineFactsResult struct {
+	Facts    []string               `json:"facts,omitempty"`
+	Sections []RoutineReportSection `json:"sections,omitempty"`
+}
+
 // requiredJSONComponent preserves required fields only inside stream payloads.
 type requiredJSONComponent Component
 
@@ -8191,6 +8227,7 @@ var newDef = map[string]func() any{
 	"DiskOffloadItem":               func() any { return new(DiskOffloadItem) },
 	"MemorySourceItem":              func() any { return new(MemorySourceItem) },
 	"RepositoryLinkLabel":           func() any { return new(RepositoryLinkLabel) },
+	"RoutineFactsItem":              func() any { return new(RoutineFactsItem) },
 	"ErrorReportsItem":              func() any { return new(ErrorReportsItem) },
 	"TunnelItem":                    func() any { return new(TunnelItem) },
 	"AgentFilterItem":               func() any { return new(AgentFilterItem) },
@@ -8690,6 +8727,9 @@ var newDef = map[string]func() any{
 	"OffloadRunRequest":             func() any { return new(OffloadRunRequest) },
 	"OffloadStarted":                func() any { return new(OffloadStarted) },
 	"OffloadError":                  func() any { return new(OffloadError) },
+	"RoutineFactsParams":            func() any { return new(RoutineFactsParams) },
+	"RoutineReportSection":          func() any { return new(RoutineReportSection) },
+	"RoutineFactsResult":            func() any { return new(RoutineFactsResult) },
 }
 
 // Call is one call or event of an extension point's protocol (the schemas' x-methods and x-events): who
@@ -8810,4 +8850,5 @@ var Calls = map[string]Call{
 	"offload.run":                     {Name: "offload.run", From: "hub", Params: "OffloadRunParams", Result: "OffloadRunResult"},
 	"offload.job":                     {Name: "offload.job", From: "hub", Params: "OffloadJobParams", Result: "OffloadJob"},
 	"offload.cancel":                  {Name: "offload.cancel", From: "hub", Params: "OffloadJobParams", Result: "Empty"},
+	"routine_facts.collect":           {Name: "routine_facts.collect", From: "hub", Params: "RoutineFactsParams", Result: "RoutineFactsResult"},
 }

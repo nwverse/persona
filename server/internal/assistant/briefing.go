@@ -30,13 +30,14 @@ type (
 
 func briefTaskInfo(t Task) modapi.BriefTaskInfo {
 	return modapi.BriefTaskInfo{
-		ID:           t.ID,
-		Label:        t.label(),
-		Facts:        t.Facts,
-		Report:       t.Report,
-		SessionID:    t.SessionID,
-		RunSessionID: t.RunSessionID,
-		MachineID:    t.MachineID,
+		ID:            t.ID,
+		Label:         t.label(),
+		Contributions: t.routineContributions,
+		Facts:         t.Facts,
+		Report:        t.Report,
+		SessionID:     t.SessionID,
+		RunSessionID:  t.RunSessionID,
+		MachineID:     t.MachineID,
 	}
 }
 
@@ -76,9 +77,9 @@ func (s *Service) briefReportStart(ctx context.Context, t Task, now time.Time) s
 	return r.StartReport(ctx, briefTaskInfo(t), now)
 }
 
-func (s *Service) briefSent(id, session string, retried bool) {
+func (s *Service) briefSent(run ScheduleRun) {
 	if r, ok := s.briefingRunner(); ok {
-		r.Sent(id, session, retried)
+		r.Sent(briefScheduleRun(run))
 	}
 }
 
