@@ -81,6 +81,15 @@ const NewFolderNaming = lazyPage(() => import("./NewAgentDesktop").then((m) => m
 /** A forwarded picture (lib/drafts.ts DraftImage, base64) as a file for the first message's tray. */
 const draftImageFile = (img: DraftImage) => base64File(img.name, img.mime, img.data);
 
+/** Classifies a launcher's permission-mode controls so preset picks and rendering share one rule (#8261, #17239). */
+function launcherPermissionKinds(agent: string, entry: Launcher | undefined, nativeOmp = false) {
+  const listed = listedModes(entry);
+  const agyModes = agent === "agy" ? listed : undefined;
+  const claudeModes = effortRule(agent) === "any" && (Boolean(agyModes) || !listed);
+  const providerModes = claudeModes || nativeOmp ? undefined : listed;
+  return { agyModes, claudeModes, providerModes };
+}
+
 interface Dirs {
   path: string;
   parent?: string;
@@ -591,17 +600,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const base = presetModeRestore.current ?? { mode, providerMode };
     pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
     const targetLauncher = launchers.find((l) => l.name === x.launcher);
-    const targetListed = listedModes(targetLauncher);
     const targetAgent = launcherAgent(x.launcher, launchers, undefined);
-    const targetClaudeModes = effortRule(targetAgent) === "any" && !targetListed;
-    if (targetListed) {
+    const { agyModes: targetAgyModes, claudeModes: targetClaudeModes, providerModes: targetProviderModes } = launcherPermissionKinds(targetAgent, targetLauncher);
+    if (targetProviderModes) {
       setMode(base.mode);
-      setProviderMode(x.permission_mode && targetListed.includes(x.permission_mode) ? x.permission_mode : "");
+      setProviderMode(x.permission_mode && targetProviderModes.includes(x.permission_mode) ? x.permission_mode : "");
       presetModeRestore.current = base;
     } else if (targetClaudeModes) {
       setProviderMode(base.providerMode);
       if (x.permission_mode) {
-        setMode(x.permission_mode);
+        setMode(!targetAgyModes || targetAgyModes.includes(x.permission_mode) ? x.permission_mode : "");
         presetModeRestore.current = base;
       } else {
         setMode(base.mode);
@@ -632,10 +640,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setTier(null);
     }
   }, [open, opensIn, nativeOmp, listLauncher, agent]);
-  // what a start on it takes besides the model (#8261): Claude Code's modes and efforts, or the permission modes a
-  // launcher lists (Paseo's other providers) and the efforts its model lists, or Codex's reported efforts alone
-  const claudeModes = effortRule(agent) === "any" && !listedModes(listEntry);
-  const providerModes = claudeModes || nativeOmp ? undefined : listedModes(listEntry);
+  // what a start on it takes besides the model (#8261): Claude Code's modes and efforts (or Antigravity's subset when
+  // its runtime narrows permission_modes), or the permission modes a launcher lists (Paseo's other providers) and the
+  // efforts its model lists, or Codex's reported efforts alone
+  const { agyModes, claudeModes, providerModes } = launcherPermissionKinds(agent, listEntry, nativeOmp);
+  const claudeModeOptions = agyModes ? PERMISSION_MODES.filter((m) => agyModes.includes(m.id)) : PERMISSION_MODES;
+  const effectiveClaudeMode = agyModes && mode && !agyModes.includes(mode) ? "" : mode;
   // Codex CLI can omit the first message when prompt_optional is advertised. The App needs one to expose its new chat.
   const codex = agent === "codex";
   const needsFirst = codex && (desktopStart || listEntry?.prompt_optional !== true);
@@ -842,10 +852,11 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     if (launcher && !unified) localStorage.setItem(`new.launcher.${mid}`, launcher);
     // a Codex keeps its own modes; the choice stays for this computer's next Claude Code. A launcher that lists its own
     // takes one of those alone, never the remembered one (its own goes as no mode).
-    const permissionMode = claudeModes ? mode
+    const permissionMode = claudeModes ? effectiveClaudeMode
       : providerModes ? (providerMode && providerModes.includes(providerMode) ? providerMode : "")
       : tier && listLauncher === tier.launcher && tier.permission_mode ? tier.permission_mode : "";
-    if (claudeModes) {
+    const presetFilteredMode = Boolean(agyModes && tier && listLauncher === tier.launcher && tier.permission_mode && !agyModes.includes(tier.permission_mode) && presetModeRestore.current);
+    if (claudeModes && !presetFilteredMode && (!agyModes || !mode || agyModes.includes(mode))) {
       if (mode) localStorage.setItem(`new.mode.${mid}`, mode);
       else localStorage.removeItem(`new.mode.${mid}`);
     }
@@ -1251,15 +1262,15 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           {claudeModes && (
             <Field label={t("newagent.permission_mode")}>
               <div role="radiogroup" aria-label={t("newagent.permission_mode")} className="flex flex-wrap gap-1.5">
-                <Choice radio selected={mode === ""} onClick={() => chooseMode("")}>{t("newagent.follow_launcher")}</Choice>
-                {PERMISSION_MODES.map((m) => (
-                  <Choice key={m.id} radio selected={mode === m.id} onClick={() => chooseMode(m.id)} title={m.detail}>
+                <Choice radio selected={effectiveClaudeMode === ""} onClick={() => chooseMode("")}>{t("newagent.follow_launcher")}</Choice>
+                {claudeModeOptions.map((m) => (
+                  <Choice key={m.id} radio selected={effectiveClaudeMode === m.id} onClick={() => chooseMode(m.id)} title={m.detail}>
                     {m.title}
                   </Choice>
                 ))}
               </div>
-              <p className={cx("mt-1.5 text-[11.5px]", mode === BYPASS_MODE ? "text-red" : "text-ink-3")}>
-                {mode === BYPASS_MODE ? BYPASS_WARNING : PERMISSION_MODES.find((m) => m.id === mode)?.detail ?? t("newagent.permission_mode_hint")}
+              <p className={cx("mt-1.5 text-[11.5px]", effectiveClaudeMode === BYPASS_MODE ? "text-red" : "text-ink-3")}>
+                {effectiveClaudeMode === BYPASS_MODE ? BYPASS_WARNING : claudeModeOptions.find((m) => m.id === effectiveClaudeMode)?.detail ?? t("newagent.permission_mode_hint")}
               </p>
             </Field>
           )}
