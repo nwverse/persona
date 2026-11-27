@@ -62,3 +62,65 @@ func TestRelayToSocket(t *testing.T) {
 		t.Error("no socket: no error")
 	}
 }
+
+func TestRelayToSocketRejectsInvalidPathsAndPreservesSafeEncoding(t *testing.T) {
+	dir, err := os.MkdirTemp("", "gr-path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "x.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type seen struct{ path, query string }
+	got := make(chan seen, 32)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- seen{r.URL.Path, r.URL.RawQuery}
+		w.WriteHeader(http.StatusOK)
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+
+	auth := &proto.GateAuth{Header: "Authorization", Value: "Bearer ${T}"}
+	badPaths := []string{
+		"",
+		"relative",
+		"//accounts",
+		"/accounts//list",
+		"/./accounts",
+		"/public/../admin",
+		"/accounts?injected=1",
+		"/accounts#/safe",
+		`/accounts\admin`,
+		"/accounts\x00",
+		"/public/%2e%2e/admin",
+		"/accounts%2fadmin",
+		"/accounts%3finjected=1",
+		"/accounts%23/safe",
+		"/accounts%5cadmin",
+	}
+	for _, bp := range badPaths {
+		if _, err := relayToSocket(context.Background(), sock, "quota-x", auth, map[string]string{"T": "tok"},
+			proto.GateRelayParams{Command: "quota-x", Method: "GET", Path: bp}); err == nil {
+			t.Errorf("relayToSocket accepted invalid path %q", bp)
+		}
+	}
+	select {
+	case s := <-got:
+		t.Fatalf("invalid path reached extension socket: %+v", s)
+	default:
+	}
+
+	// Legitimate path containing spaces must be properly URL-encoded rather than failing or splitting.
+	ans, err := relayToSocket(context.Background(), sock, "quota-x", auth, map[string]string{"T": "tok"},
+		proto.GateRelayParams{Command: "quota-x", Method: "GET", Path: "/items/a b", Query: "fresh=1"})
+	if err != nil || ans.Status != http.StatusOK {
+		t.Fatalf("valid path with space failed: status=%d err=%v", ans.Status, err)
+	}
+	s := <-got
+	if s != (seen{"/items/a b", "fresh=1"}) {
+		t.Fatalf("extension saw %+v, want {Path:/items/a b Query:fresh=1}", s)
+	}
+}
