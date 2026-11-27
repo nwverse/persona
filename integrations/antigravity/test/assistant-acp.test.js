@@ -5,7 +5,7 @@ import { delimiter, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { toAgyId } from '../lib/map.js'
 import { createAgyRuntime } from '../lib/runtime.js'
@@ -33,7 +33,7 @@ async function fixture(t, options = {}) {
   const start = async (params) => (await node.peer.call('session.start', { cwd: home, ...params })).session.session_id
   const call = (method, session_id, params = {}) => node.peer.call(`session.${method}`, { session_id, ...params })
   const request = (method, session) => calls().findLast((entry) => entry.method === method && entry.params?.sessionId === toAgyId(session))
-  return { node, runtime, assistantDir, calls, pids, start, call, request }
+  return { node, home, runtime, assistantDir, calls, pids, start, call, request }
 }
 
 test('Assistant context is embedded data, never a slash command appended to the first or next request', async (t) => {
@@ -360,4 +360,72 @@ test('shared Agent worker exit withdraws a pending ask even after the session is
   await until('shared worker permission card withdrawn after Assistant promotion', () =>
     node.all('interaction.cancel').some((ev) => ev.id === card.id))
   await until('runtime returns to idle after dead shared worker ask is withdrawn', () => runtime.idle())
+})
+
+test('assistant sessions advertise capabilities.rewind = false while ordinary sessions keep rewind enabled', async (t) => {
+  const { node, home, assistantDir, call } = await fixture(t)
+  const startFull = (params = {}) => node.peer.call('session.start', { cwd: home, ...params })
+  const rowOf = (sid) => node.last('runtime.sessions')?.sessions.find((row) => row.session_id === sid)
+
+  const assistantByDir = (await startFull({ cwd: assistantDir })).session
+  const assistantByFlag = (await startFull({ assistant: true })).session
+  const ordinary = (await startFull()).session
+
+  assert.equal(assistantByDir.capabilities?.rewind, false, 'assistant dir start must advertise rewind = false')
+  assert.equal(assistantByFlag.capabilities?.rewind, false, 'explicit assistant start must advertise rewind = false')
+  assert.notEqual(ordinary.capabilities?.rewind, false, 'ordinary session start must not disable rewind')
+
+  await until('all three sessions listed', () =>
+    rowOf(assistantByDir.session_id) && rowOf(assistantByFlag.session_id) && rowOf(ordinary.session_id))
+  assert.equal(rowOf(assistantByDir.session_id).capabilities?.rewind, false)
+  assert.equal(rowOf(assistantByFlag.session_id).capabilities?.rewind, false)
+  assert.notEqual(rowOf(ordinary.session_id).capabilities?.rewind, false)
+
+  // Assistant rewind still fails closed with rewind_unsupported.
+  await assert.rejects(
+    call('rewind', assistantByDir.session_id, { prompt: 'hello', occurrence: 1, restore: 'conversation' }),
+    (err) => err.code === 'rewind_unsupported',
+  )
+
+  // Promoting an ordinary session to Assistant updates its listed row to rewind = false.
+  await call('modes', ordinary.session_id, { assistant: true, model: 'test-model' })
+  await until('promoted assistant row advertises rewind = false', () => rowOf(ordinary.session_id)?.capabilities?.rewind === false)
+})
+
+test('assistant sessions discovered from disk advertise capabilities.rewind = false while ordinary sessions do not', async (t) => {
+  const agyDir = mkdtempSync(join(tmpdir(), 'agy-disk-rewind-'))
+  t.after(() => rmSync(agyDir, { recursive: true, force: true }))
+  const home = mkdtempSync(join(tmpdir(), 'agy-disk-home-'))
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+  const assistantDir = join(home, '.persona', 'assistant')
+  const projectDir = join(home, 'workspace')
+  mkdirSync(assistantDir, { recursive: true })
+  mkdirSync(projectDir, { recursive: true })
+  const asstId = '11111111-2222-4333-8444-555555555551'
+  const agentId = '11111111-2222-4333-8444-555555555552'
+  for (const rawId of [asstId, agentId]) {
+    const logs = join(agyDir, 'brain', rawId, '.system_generated', 'logs')
+    mkdirSync(logs, { recursive: true })
+    writeFileSync(join(logs, 'transcript_full.jsonl'), JSON.stringify({
+      step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: '2026-01-01T00:00:00Z', content: 'hi',
+    }) + '\n')
+  }
+  const db = new DatabaseSync(join(agyDir, 'conversation_summaries.db'))
+  try {
+    db.exec('CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, status TEXT, not_fully_idle INTEGER, killed INTEGER, step_count INTEGER, title TEXT, workspace_uris TEXT, last_modified_time TEXT)')
+    const now = new Date().toISOString()
+    db.prepare('INSERT INTO conversation_summaries VALUES (?, ?, 0, 0, 1, ?, ?, ?)').run(asstId, 'CASCADE_RUN_STATUS_IDLE', 'Assistant', JSON.stringify([pathToFileURL(assistantDir).href]), now)
+    db.prepare('INSERT INTO conversation_summaries VALUES (?, ?, 0, 0, 1, ?, ?, ?)').run(agentId, 'CASCADE_RUN_STATUS_IDLE', 'Agent', JSON.stringify([pathToFileURL(projectDir).href]), now)
+  } finally {
+    db.close()
+  }
+  const node = await startFakeNode(t)
+  const runtime = createAgyRuntime({ home, agyDir, agyBin: '/missing', personadBin: '/missing', socketPath: node.path, log: () => {} })
+  t.after(() => runtime.stop())
+  runtime.start()
+  await node.ready
+  const rowOf = (rawId) => node.last('runtime.sessions')?.sessions.find((row) => row.session_id === `agy-${rawId}`)
+  await until('both disk sessions listed', () => rowOf(asstId) && rowOf(agentId))
+  assert.equal(rowOf(asstId).capabilities?.rewind, false)
+  assert.notEqual(rowOf(agentId).capabilities?.rewind, false)
 })
