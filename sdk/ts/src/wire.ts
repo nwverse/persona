@@ -4670,8 +4670,18 @@ export interface ConnectorInboxReply {
   item_id?: string;
   last?: string;
   text?: string;
+  mentions?: ConnectorInboxMention[];
   client_id?: string;
   changes?: ConnectorStatusChange[];
+}
+
+/**
+ * Binds an exact @name in the reply's text to a verified external user id, for connectors that support real @
+ * mentions.
+ */
+export interface ConnectorInboxMention {
+  id: string;
+  name: string;
 }
 
 export interface ConnectorStatusChange {
