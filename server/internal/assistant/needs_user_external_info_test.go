@@ -234,8 +234,8 @@ func TestNeedsUserExternalInfoDraftPRFeedbackKeepsDecision(t *testing.T) {
 			signals = append(signals, g)
 		}
 	}
-	if len(signals) != 4 {
-		t.Fatalf("want four distinct feedback wakes, got %+v", signals)
+	if len(signals) != 1 {
+		t.Fatalf("want one feedback batch, got %+v", signals)
 	}
 	if len(sentToAgent(hub)) != beforeSends {
 		t.Fatal("PR feedback bypassed the supervisor during an owner decision")
@@ -281,8 +281,8 @@ func TestNeedsUserExternalInfoDraftPRFeedbackKeepsDecision(t *testing.T) {
 			t.Errorf("supervisor digest lost %q: %s", want, digest)
 		}
 	}
-	if n := strings.Count(digest, "signal=needs_user_external_info"); n != 4 {
-		t.Errorf("digest rendered %d external-info events, want 4", n)
+	if n := strings.Count(digest, "signal=needs_user_external_info"); n != 1 {
+		t.Errorf("digest rendered %d external-info events, want 1", n)
 	}
 	if after := todoNow(s, task.ID); !reflect.DeepEqual(after.Supervision, before.Supervision) ||
 		!reflect.DeepEqual(askOf(s, task.ID), beforeAsk) || !reflect.DeepEqual(posts(), beforePosts) || !reflect.DeepEqual(updates(), beforeUpdates) {

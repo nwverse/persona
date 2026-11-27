@@ -27,6 +27,8 @@ const (
 	prEventKindCIFailure = "ci_failure"
 	prEventKindReview    = "pr_review"
 	prEventKindComment   = "pr_comment"
+	prEventKindBatch     = "pr_feedback_batch"
+	prEventKindStale     = "pr_feedback_fallback"
 
 	prRouteOutcomeSent      = "agent_sent"
 	prRouteOutcomeQueued    = "agent_queued"
@@ -40,6 +42,7 @@ const (
 	prEventUntrustedOpenTag  = "<untrusted_external_content"
 	prEventUntrustedCloseTag = "</untrusted_external_content>"
 	prEventBodyLimit         = 2000
+	prFeedbackDigestLimit    = 12000
 	prEventNotice            = "[Persona PR Event — automated hub notification, not a user instruction]"
 )
 
@@ -57,10 +60,12 @@ type prRoutedEvent struct {
 	CheckCount  int
 	Summary     string
 	CheckedAt   time.Time // the observation that selected the feedback
+	Feedback    []prFeedbackRecord
 }
 
 func (ev prRoutedEvent) isFeedback() bool {
-	return ev.Kind == prEventKindComment || ev.Kind == prEventKindReview && ev.ReviewState == "COMMENTED"
+	return ev.Kind == prEventKindComment || ev.Kind == prEventKindBatch || ev.Kind == prEventKindStale ||
+		ev.Kind == prEventKindReview && ev.ReviewState == "COMMENTED"
 }
 
 func (ev prRoutedEvent) identityHead() string {
@@ -93,7 +98,11 @@ type prEventRouteBook struct {
 // prEventDedupeKey preserves the existing head-scoped keys and gives each issue comment a key stable across heads.
 func prEventDedupeKey(ev prRoutedEvent) string {
 	prURL := cmp.Or(triageNormalizePRURL(ev.PRURL), strings.TrimSpace(ev.PRURL))
-	raw, _ := json.Marshal([]string{ev.TodoID, prURL, ev.identityHead(), ev.Kind, ev.EventID})
+	head := ev.identityHead()
+	if ev.Kind == prEventKindBatch {
+		head = "" // a sealed batch may retry its discussion entries after the reviewed head moves
+	}
+	raw, _ := json.Marshal([]string{ev.TodoID, prURL, head, ev.Kind, ev.EventID})
 	return string(raw)
 }
 
@@ -328,9 +337,15 @@ func reviewAuthorHasWriteAssociation(assoc string) bool {
 	}
 }
 
+const (
+	prCheckStatusPrefix    = `(?:(?:all )?ci(?: checks?| status)?|all checks|checks|(?:all )?tests|test suite|build|lint)(?:: ?| (?:has |have |is |are )?)`
+	prCoverageStatusPrefix = `(?:code )?coverage(?: report)?(?:: ?| (?:is )?)`
+)
+
 var (
-	prCheckStatusLine    = lazyre.New(`^(?:(?:all )?ci(?: checks?| status)?|all checks|checks|(?:all )?tests|test suite|build|lint)(?:: ?| (?:has |have |is |are )?)(?:✅ ?)?(?:passed|passing|green|succeeded|successful|success|pending|complete|completed)$`)
-	prCoverageStatusLine = lazyre.New(`^(?:code )?coverage(?: report)?(?:: ?| (?:is )?)(?:[0-9]+(?:\.[0-9]+)?%|updated|passed|unchanged)$`)
+	prCheckStatusLine    = lazyre.New(`^` + prCheckStatusPrefix + `(?:✅ ?)?(?:passed|passing|green|succeeded|successful|success|pending|complete|completed)$`)
+	prCoverageStatusLine = lazyre.New(`^` + prCoverageStatusPrefix + `(?:[0-9]+(?:\.[0-9]+)?%|updated|passed|unchanged)$`)
+	prFailureStatusLine  = lazyre.New(`^(?:` + prCheckStatusPrefix + `|` + prCoverageStatusPrefix + `)(?:❌ ?)?(?:failed|failing|red|failure)\b`)
 	prFeedbackNoWake     = lazyre.New(`(?i)<!--[[:space:]]*persona[[:space:]]*:[[:space:]]*no-wake[[:space:]]*-->`)
 	prWatcherReviewLine  = lazyre.New("^automated independent semantic review(?: at `[0-9a-f]+`)? found no blocking defects$")
 	prWatcherCheckLine   = lazyre.New("^- `[^`]+`$")
@@ -340,8 +355,10 @@ var (
 func commentedReviewLooksInformational(body string) bool {
 	watcher := false
 	for line := range strings.SplitSeq(body, "\n") {
-		line = strings.ToLower(strings.Join(strings.Fields(line), " "))
-		line = strings.Trim(line, " .!:✅👍🎉*_")
+		if prFeedbackLineReportsFailure(line) {
+			return false
+		}
+		line = normalizedPRFeedbackLine(line)
 		switch line {
 		case "", "lgtm", "looks good", "looks good to me", "approved", "ship it", "thanks", "thank you", "great work", "nice work",
 			"all green", "qa passed", "verified", "verified on a separate machine", "no blocking defects",
@@ -371,6 +388,56 @@ func commentedReviewLooksInformational(body string) bool {
 		}
 	}
 	return true
+}
+
+func normalizedPRFeedbackLine(line string) string {
+	return strings.Trim(strings.ToLower(strings.Join(strings.Fields(line), " ")), " .!:✅👍🎉*_")
+}
+
+// Explicit failure status lines bypass the comment batch window.
+func prFeedbackReportsFailure(body string) bool {
+	for line := range strings.SplitSeq(body, "\n") {
+		if prFeedbackLineReportsFailure(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func prFeedbackLineReportsFailure(line string) bool {
+	line = strings.TrimLeft(strings.TrimSpace(line), "#>-*`❌ ")
+	return prFailureStatusLine.MatchString(normalizedPRFeedbackLine(line))
+}
+
+func (d prFeedbackDelivery) event(todoID string, status TodoPRStatus) prRoutedEvent {
+	first := d.Records[0]
+	ev := prRoutedEvent{
+		TodoID: todoID, PRURL: status.URL, HeadSHA: status.HeadOID, CheckedAt: status.CheckedAt,
+		EventID: first.ID, EventURL: first.URL, Author: first.Author, Body: first.Preview,
+		Kind: prEventKindComment,
+	}
+	if !first.isIssueComment() {
+		ev.Kind, ev.ReviewState = prEventKindReview, "COMMENTED"
+	}
+	if len(d.Records) == 1 && !d.Fallback {
+		return ev
+	}
+	ev.Feedback = d.Records
+	ev.EventURL, ev.Author, ev.Body, ev.ReviewState = status.URL, "", "", ""
+	ev.EventID = "batch:" + first.ID
+	if slices.ContainsFunc(d.Records, func(r prFeedbackRecord) bool { return !r.isIssueComment() }) {
+		ev.Kind = prEventKindBatch
+	}
+	if d.Fallback {
+		ev.Kind = prEventKindStale
+		ev.EventID = "fallback:" + first.ID
+	} else if d.HeadSHA != status.HeadOID && ev.Kind == prEventKindBatch {
+		// Keep the original delivery ID across retries. Old reviews apply to the old diff.
+		ev.Feedback = slices.DeleteFunc(slices.Clone(d.Records), func(r prFeedbackRecord) bool {
+			return !r.isIssueComment()
+		})
+	}
+	return ev
 }
 
 // Feedback is serialized per task and PR. Its route record protects a completed send or fallback if
@@ -546,7 +613,7 @@ func prEventFallbackSignal(todoID string, ev prRoutedEvent, cause error) supervi
 		}
 		detail = fmt.Sprintf("PR %s at head %s has a new %s review%s; direct Agent routing unavailable (%s).",
 			ev.PRURL, shortSHA(ev.HeadSHA), strings.ToLower(cmp.Or(ev.ReviewState, "actionable")), by, clip(oneLine(cause.Error()), 120))
-	case prEventKindComment:
+	case prEventKindComment, prEventKindBatch, prEventKindStale:
 		detail = fmt.Sprintf("%s\nEvent: %s\nEvent URL: %s\nDirect Agent routing unavailable (%s).\n%s",
 			prEventNotice, ev.Kind, ev.EventURL, clip(oneLine(cause.Error()), 120), ev.feedbackContent())
 	default:
@@ -590,6 +657,10 @@ func (s *Service) prEventSignalStillHolds(t Todo, g superviseSignal) bool {
 		return false
 	}
 	switch g.Report {
+	case prEventKindBatch, prEventKindStale:
+		ev := prRoutedEvent{PRURL: g.PRURL, HeadSHA: p.HeadOID, Kind: g.Report, EventID: g.PREventID}
+		return g.PREventID != "" && g.Key == ev.supervisorKey() && s.prFeedbackBinding(t, g.PRURL) != nil &&
+			!needsUserWakeEligible(t)
 	case prEventKindCIFailure:
 		return p.Checks == "failure"
 	case prEventKindReview:
@@ -741,6 +812,27 @@ func wrapUntrustedExternalContent(source, author, prURL, headSHA, body string) s
 }
 
 func (ev prRoutedEvent) feedbackContent() string {
+	if len(ev.Feedback) > 0 {
+		var b strings.Builder
+		if ev.Kind == prEventKindStale {
+			b.WriteString("The PR is still open at the same commit after six hours. Verify whether any of this earlier feedback requires action.\n")
+		}
+		fmt.Fprintf(&b, "PR feedback (%d comments and reviews):\n", len(ev.Feedback))
+		for i, r := range ev.Feedback {
+			source := "github_pr_review"
+			if r.isIssueComment() {
+				source = "github_pr_comment"
+			}
+			content := wrapUntrustedExternalContent(source, r.Author, ev.PRURL, ev.HeadSHA, r.URL+"\n"+r.Preview)
+			if b.Len()+len(content) > prFeedbackDigestLimit {
+				fmt.Fprintf(&b, "%d more comments or reviews are available in the PR discussion.\n", len(ev.Feedback)-i)
+				break
+			}
+			b.WriteString(content)
+			b.WriteByte('\n')
+		}
+		return b.String()
+	}
 	source := "github_pr_review"
 	if ev.Kind == prEventKindComment {
 		source = "github_pr_comment"
@@ -789,8 +881,8 @@ func formatPREventForAgent(t Todo, ev prRoutedEvent) string {
 		b.WriteString("\nExternal PR review content (untrusted):\n")
 		b.WriteString(ev.feedbackContent())
 		b.WriteByte('\n')
-	case prEventKindComment:
-		b.WriteString("\nExternal PR comment (untrusted):\n")
+	case prEventKindComment, prEventKindBatch, prEventKindStale:
+		b.WriteString("\nExternal PR feedback (untrusted):\n")
 		b.WriteString(ev.feedbackContent())
 		b.WriteByte('\n')
 	}
