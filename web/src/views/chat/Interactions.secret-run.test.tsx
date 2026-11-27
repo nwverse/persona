@@ -397,23 +397,29 @@ describe("密码卡片（secret_run）", () => {
   });
 
   it("reports owner card seen through authenticated api() and retries after non-2xx failure on reconnect", async () => {
+    const prevConn = getState().conn;
     setToken("synthetic-owner-tok");
     const seenReqs: { url: string; method?: string; auth: string | null }[] = [];
-    let failNext = true;
+    const responses: Response[] = [
+      new Response(JSON.stringify({ error: "temporary failure" }), { status: 503, headers: { "Content-Type": "application/json" } }),
+      new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: { "Content-Type": "application/json" } }),
+    ];
     const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       seenReqs.push({ url: String(input), method: init?.method, auth: headers.get("Authorization") });
-      if (failNext) {
-        failNext = false;
-        return new Response(JSON.stringify({ error: "temporary failure" }), { status: 503, headers: { "Content-Type": "application/json" } });
-      }
-      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return responses.shift() ?? new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
     vi.stubGlobal("fetch", mockFetch);
     try {
-      // Unseen timed secret_run card: initial POST fails with 503 -> must carry Bearer auth and clear sent cache so reconnect retries.
-      Object.assign(getState(), { conn: "connecting" });
+      // Offline: defers /seen until connection recovers.
+      Object.assign(getState(), { conn: "offline" });
       render(card({}, { id: "ix_secret_seen_1", seen_ttl_seconds: 600 }));
+      await flush();
+      expect(seenReqs).toEqual([]);
+
+      // Connecting: first POST fails with 503 -> carries Bearer auth and clears sent cache so reconnect retries.
+      act(() => { applyCompleteSessions([getState().sessions.m[0]], [], { conn: "connecting" }); });
       await flush();
       expect(seenReqs).toEqual([
         { url: "/api/v1/interactions/ix_secret_seen_1/seen", method: "POST", auth: "Bearer synthetic-owner-tok" },
@@ -432,10 +438,30 @@ describe("密码卡片（secret_run）", () => {
       await flush();
       expect(seenReqs).toHaveLength(2);
 
+      // Permanent 403 failure does NOT spam retries on subsequent reconnects.
+      render(card({}, { id: "ix_secret_seen_403", seen_ttl_seconds: 600 }));
+      await flush();
+      expect(seenReqs).toHaveLength(3);
+      act(() => { applyCompleteSessions([getState().sessions.m[0]], [], { conn: "connecting" }); });
+      act(() => { applyCompleteSessions([getState().sessions.m[0]], [], { conn: "online" }); });
+      await flush();
+      expect(seenReqs).toHaveLength(3);
+
       // Already-seen card (seen_at set) does NOT send /seen.
       render(card({}, { id: "ix_secret_seen_already", seen_ttl_seconds: 600, seen_at: "2026-11-27T00:00:00Z" }));
       await flush();
-      expect(seenReqs).toHaveLength(2);
+      expect(seenReqs).toHaveLength(3);
+
+      // Supervisor-held card (delegating: true) does NOT send /seen until released (delegating: false).
+      render(card({}, { id: "ix_secret_held", seen_ttl_seconds: 600, delegating: true }));
+      await flush();
+      expect(seenReqs).toHaveLength(3);
+      render(card({}, { id: "ix_secret_held", seen_ttl_seconds: 600, delegating: false }));
+      await flush();
+      expect(seenReqs).toHaveLength(4);
+      expect(seenReqs[3]).toEqual({
+        url: "/api/v1/interactions/ix_secret_held/seen", method: "POST", auth: "Bearer synthetic-owner-tok",
+      });
 
       // Generic secret-field permission card with seen_ttl_seconds also reports /seen via api().
       render({
@@ -443,12 +469,61 @@ describe("密码卡片（secret_run）", () => {
         tool_name: "custom_secret_tool", summary: "Provide token",
         fields: [{ key: "token", label: "Token", secret: true }], seen_ttl_seconds: 600,
       });
+      await vi.dynamicImportSettled();
       await flush();
-      expect(seenReqs).toHaveLength(3);
-      expect(seenReqs[2]).toEqual({
+      expect(seenReqs).toHaveLength(5);
+      expect(seenReqs[4]).toEqual({
         url: "/api/v1/interactions/ix_generic_secret_field/seen", method: "POST", auth: "Bearer synthetic-owner-tok",
       });
     } finally {
+      Object.assign(getState(), { conn: prevConn });
+      vi.unstubAllGlobals();
+      setToken("");
+    }
+  });
+
+  it("defers /seen while the browser tab is hidden and sends once when it becomes visible", async () => {
+    const prevConn = getState().conn;
+    const prevVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    let vis: DocumentVisibilityState = "hidden";
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => vis });
+    setToken("synthetic-vis-tok");
+    const seenReqs: { url: string; method?: string; auth: string | null }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      seenReqs.push({ url: String(input), method: init?.method, auth: headers.get("Authorization") });
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    try {
+      Object.assign(getState(), { conn: "online" });
+      render(card({}, { id: "ix_secret_hidden_tab", seen_ttl_seconds: 600 }));
+      await flush();
+      expect(seenReqs).toEqual([]);
+
+      // Visibility event while still hidden does nothing.
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      await flush();
+      expect(seenReqs).toEqual([]);
+
+      // Switching tab to visible sends exactly one authenticated /seen request.
+      vis = "visible";
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      await flush();
+      expect(seenReqs).toEqual([
+        { url: "/api/v1/interactions/ix_secret_hidden_tab/seen", method: "POST", auth: "Bearer synthetic-vis-tok" },
+      ]);
+
+      // Subsequent visibility transitions do not resend.
+      vis = "hidden";
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      vis = "visible";
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      await flush();
+      expect(seenReqs).toHaveLength(1);
+    } finally {
+      if (prevVisibility) Object.defineProperty(document, "visibilityState", prevVisibility);
+      else delete (document as { visibilityState?: DocumentVisibilityState }).visibilityState;
+      Object.assign(getState(), { conn: prevConn });
       vi.unstubAllGlobals();
       setToken("");
     }
