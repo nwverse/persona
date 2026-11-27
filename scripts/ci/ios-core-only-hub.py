@@ -533,7 +533,7 @@ def exercise_app(ctl, base, code, edition, shots, container, master, start_node)
                  "-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
     ctl.online(timeout=30)
     require(ctl, element_id="shell-composer-add")
-    ctl.tap(id="shell-composer-add")
+    ctl.tap(id="shell-composer-add", hid=True)
     require(ctl, element_id="composer-menu-mention")
     meeting = find_on_page(ctl, element_id="composer-menu-meeting")
     proof["entries"]["composer-menu-meeting"] = meeting
