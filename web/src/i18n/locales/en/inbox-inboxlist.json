@@ -4,6 +4,8 @@
   "search_label": "Search Inbox",
   "clear": "Clear",
   "filters": "Filters",
+  "expand_filters": "Expand filters",
+  "collapse_filters": "Collapse filters",
   "sections": "Sections",
   "bar_count": "{name}, {count}",
   "bar_all": "All",

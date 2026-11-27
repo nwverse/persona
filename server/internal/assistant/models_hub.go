@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +11,8 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -31,16 +32,23 @@ func (s *Service) modelsRequest(ctx context.Context, method string, params json.
 	}
 	switch method {
 	case assistantwire.MethodExtensionIdentity:
-		return map[string]bool{"supported": true}, true, nil
+		return handleAssistantRequest(ctx, assistantwire.ExtensionIdentityMethod, nil, func(context.Context, buswire.None) (assistantwire.ExtensionIdentityResult, error) {
+			return assistantwire.ExtensionIdentityResult{Supported: true}, nil
+		})
 	case assistantwire.MethodModelsUsable, assistantwire.MethodModelsLauncherHTTP:
 	case assistantwire.MethodModelsLaunchers:
 		return map[string]any{"launchers": s.gatewayLaunchers(ctx)}, true, nil
 	case assistantwire.MethodModelsExtensionComplete: // an extension's model.complete (model_rpc.go)
-		out, err := s.extensionComplete(ctx, params)
-		return out, true, err
+		return handleAssistantRequest(ctx, assistantwire.ModelsExtensionCompleteMethod, func(out any) error {
+			if err := json.Unmarshal(params, out); err != nil {
+				return invalidModelParams("no extension")
+			}
+			return nil
+		}, s.extensionComplete)
 	case assistantwire.MethodModelsPurposeComplete: // the manager's own call on a built-in purpose (model_rpc.go)
-		out, err := s.purposeComplete(ctx, params)
-		return out, true, err
+		return handleAssistantRequest(ctx, assistantwire.ModelsPurposeCompleteMethod, func(out any) error {
+			return strictModelParams(params, out)
+		}, s.purposeComplete)
 	default:
 		return nil, false, nil
 	}
@@ -65,6 +73,22 @@ func (s *Service) modelsRequest(ctx context.Context, method string, params json.
 	}
 	out, err := s.launcherHTTP(ctx, p.Name, p.Machine, p.HTTP)
 	return out, true, err
+}
+
+// handleAssistantRequest binds a handler to its wire descriptor while leaving parameter validation to the caller.
+// A nil decoder keeps the identity probe's behavior of ignoring its input.
+func handleAssistantRequest[P, R any](ctx context.Context, _ buswire.Method[P, R], decode func(any) error, run func(context.Context, P) (R, error)) (any, bool, error) {
+	var p P
+	if decode != nil {
+		if err := decode(&p); err != nil {
+			return nil, true, err
+		}
+	}
+	out, err := run(ctx, p)
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
 }
 
 // gatewayLaunchers is models.launchers: every launcher with a gateway address, names and addresses only (no key).

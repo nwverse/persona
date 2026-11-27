@@ -48,6 +48,8 @@ type Host interface {
 	// Unreachable: the call did not reach the hub or did not come back; Offline: the hub is not connected.
 	Unreachable(err error) bool
 	Offline(err error) bool
+	// Answered reports a definitive hub refusal, so a status failure does not consume a push retry.
+	Answered(err error) bool
 	StepParts(l i18n.Lang, it proto.Item) (verb, detail string)
 	// RunProgress is what run r's progress card shows besides its steps (the channels' live state of it).
 	RunProgress(r *channel.Run) assistantwire.RunProgress
@@ -78,7 +80,6 @@ type Host interface {
 	WorkbenchInbox() []assistantwire.WorkbenchItem
 	WorkbenchItem(id string) (assistantwire.WorkbenchItem, bool)
 	WorkbenchBoard(ctx context.Context, l i18n.Lang, web string, now time.Time) []assistantwire.WorkbenchBoardRow
-	SessionNames(ctx context.Context, sess proto.Session) (primary, secondary string)
 	NextMeeting(ctx context.Context, now time.Time) *assistantwire.WorkbenchMeeting
 	TodayBody(ctx context.Context) json.RawMessage
 	TasksOverview(ctx context.Context) (cards []*botcard.Card, fallbacks []string)
@@ -124,6 +125,10 @@ type Host interface {
 	ConclusionQuestion(ctx context.Context, ev *botcard.MessageEvent, content *botcard.Content, f assistantwire.FeishuFeatures) bool
 	AcceptReply(ctx context.Context, messageID, text string, media bool, parent, root string) bool
 	ApproveOwnerAction(ctx context.Context, ev botcard.MessageEvent, text, action string) bool
+	// ProjectReviewOwnerInput queues the owner's paired-chat message ref ("feishu:<message id>"), sent to the
+	// conversation machine/session, for a configured project review that takes owner inputs; nil when none takes it.
+	// An error means it could not be committed, and the message is not taken.
+	ProjectReviewOwnerInput(ctx context.Context, ref, machine, session string) error
 
 	// The commands (commands.go, models.go): stopping a conversation's turn (kind is the toast's), the lists to pick
 	// a conversation or an agent from, what a /status card shows, the standing board, and the main conversation's
@@ -251,17 +256,15 @@ func (l *Layer) Reply(ctx context.Context, to assistantwire.ChannelTarget, reply
 
 // AnswerCards lays out an answer as the bot's cards, each with the text it goes as when the card is refused.
 func (l *Layer) AnswerCards(lang i18n.Lang, name func(*url.URL) string, answer string, quiet bool, steps []string, foot string) ([]*botcard.Card, []string) {
-	acs := answerCards(lang, name, answer, quiet, steps, foot)
+	return answerCardParts(answerCards(lang, name, answer, quiet, steps, foot))
+}
+
+func answerCardParts(acs []botAnswerCard) ([]*botcard.Card, []string) {
 	cards, fallbacks := make([]*botcard.Card, len(acs)), make([]string, len(acs))
 	for i, ac := range acs {
 		cards[i], fallbacks[i] = ac.card, ac.fallback
 	}
 	return cards, fallbacks
-}
-
-// MissingPiecesNote says which pieces of an answer did not get to Feishu (1-based) and where the whole is.
-func (l *Layer) MissingPiecesNote(lang i18n.Lang, missing []int) string {
-	return missingPiecesNote(lang, missing)
 }
 
 // UpdateCard edits a card the bot sent.

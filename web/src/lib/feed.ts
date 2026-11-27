@@ -190,6 +190,14 @@ export function todayFailedRow(body: TodayBody): { title: string; detail: string
   return { title: t("assistant-tasks.today_failed_n", { count }), detail: more > 0 ? `${titles} · ${t("assistant-tasks.more_asks", { count: more })}` : titles, first };
 }
 
+export interface BriefContribution {
+  extension_id: string;
+  contribution_id: string;
+  title: string;
+  facts: string[];
+  sections: { title: string; body: string }[];
+}
+
 export interface BriefBody {
   title: string;
   at: string;
@@ -210,6 +218,7 @@ export interface BriefBody {
    *  that is off would have removed how many of the last 7 days' asks or background rounds. The hub counted and worded
    *  each line; nothing is turned on from here. A hub that does not know it leaves the list out. */
   setup: BriefSetup[];
+  contributions: BriefContribution[];
 }
 
 /** One mechanism of a `brief` item's `setup`: `text` is the whole line (count, cost, where it is turned on). */
@@ -430,11 +439,10 @@ export function mergeInto(list: FeedItem[], items: FeedItem[]): FeedItem[] {
   return [...kept, ...fresh].sort((a, b) => (a.at === b.at ? a.id.localeCompare(b.id) : Date.parse(a.at) - Date.parse(b.at)));
 }
 
-/** A message card whose reply went out — from this card or from the inbox, on any device (the hub records it on the
- *  card): when, and what it said (a card sent before the hub recorded it: its draft). */
+/** When Persona sent a reply, and the actual text if the hub recorded it. */
 export function cardSent(it: FeedItem): { at: string; text: string } | undefined {
   const at = field(it, "sent_at");
-  return at ? { at, text: field(it, "sent") || field(it, "draft") || "" } : undefined;
+  return at ? { at, text: field(it, "sent") ?? "" } : undefined;
 }
 
 /** Handled elsewhere, not from this card (#4797): the hub's filed_at; a sent card is never filed. */

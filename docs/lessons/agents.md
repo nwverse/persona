@@ -7,6 +7,14 @@
 - The hook must print `{}` and exit fast on every path (no node, unknown pane, bad input), or agy waits on it. Subagent conversations inherit the pane's environment and report too, so the node still has to prove the conversation is not a subagent's (#13336) before it reads or resumes.
 - herdr's own report and Persona's can disagree for a moment after a new conversation; the node treats a disagreement as unknown instead of picking one.
 
+## What the node starts is told the node's program, never left to find it by name (#14582)
+
+- The node's program has more than one name: `personad`, `persona-node` in a Persona Link install, either with `.exe` on
+  Windows. The Antigravity companion looked only for `<state>/bin/personad`, found nothing on a Link install and attached
+  no MCP server, so its chats had no Persona tools and nothing said why. Hand a process the node starts the node's own
+  spelling of its program (`selfProgram`'s `bin`, as the generated hooks and MCP configs have it), keep a lookup by name
+  only for a process started some other way, and log when it finds nothing.
+
 ## Visibility-only `TurnErrorCode` values must not trip `readinessBlocks` or `CutOff` on node `TurnError` (#13372)
 
 - `readinessBlocks` (`server/internal/assistant/readiness.go`) defaults every `StepProblem` code to `mode: "setup"` unless explicitly excluded. Any non-user-fix `TurnErrorCode` (such as `upstream_unavailable`, alongside `rate_limited`, `model_fallback_unavailable`, and `tool_search_unsupported`) must be excluded in `readinessBlocks` and paired with `test_assistant` and plain-language readiness strings, or an upstream outage locks every client's composer with "Connect a model first".
@@ -35,6 +43,9 @@
 
 ## A one-start speed must not become a resume default (#11141)
 
+- A terminal Codex speed switch uses `/model --speed=standard` to reset the speed on Codex 0.172. The native setting
+  records `default`. Confirm the switch from a new `thread_settings_applied` record because an already-running turn
+  can still write its previous speed.
 - Codex's per-start `service_tier` belongs only in the initial argv; validate it against the selected model's catalog rather than trusting Codex to refuse an unadvertised tier.
 - Claude Code fast mode needs `"fastMode": true` in the effective single `--settings` file. Give the initial command a merged copy and keep the base `claudeLaunch` spec for herdr's `resume_argv`, or an automatic resume silently inherits the billable choice. A shell function that supplies its own `--settings` cannot be merged: refuse fast mode rather than appending a fast-only file that would discard the function's credentials and model.
 - A new `session.start` field needs its own node capability: older nodes otherwise accept it and start at the launcher's speed. Faster speed on a resume or another runtime is a coded refusal before approval or launch.
@@ -381,6 +392,8 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   Drop the reported id only when the index knows that thread under a different name, and never under a name it gave the thread before (a rename leaves the earlier line in the index, and the node keeps only the latest); a remembered pane binding is still dropped.
   Check the name of the thread herdr reported, not of the main chat a sub-Agent id was replaced with: that name says nothing about the reported thread.
   Claude panes likewise: pane bindings for Persona-started sessions live in hub's database and reload after node restart, but can be stale; `sessions/<pid>.json` takes priority.
+  Pane ids are reused too: herdr numbers its workspaces again after its server restarts, so a new tab can get the id (`wD:p1`) of a tab that closed days
+  ago, and the binding of the session that ran there comes back on every hub connection. A tab Persona opens forgets every binding of its id first (#14682).
   After changing pane identification logic, rerun verification after deployment (restart); pre- and post-restart results may differ.
 - herdr `agent.prompt` pastes, then waits about 300 ms before Enter: serialize sends to the same session, or the second screen read mistakes the first message for an input draft. Sending deduplication lives in hub Postgres (`sent_messages`):
   node's in-memory deduplication disappears on reconnect / hub restart, exactly when the App auto-retries. Full session-reading and sending verification, with per-hop timings: `docs/archive/integrations/session-verify.md`.
@@ -788,6 +801,11 @@ an input box but herdr doesn't know claude is present (`agent_not_found` or empt
 then explain process-name / `HERDR_AGENT=claude` recognition and cases where the prefix doesn't reach claude. Foreground process name comes from herdr `pane.process_info`. With no input box, retain the shell-not-started error;
 other engines' panes (Orca) keep their original error.
 
+`pane.process_info` in herdr 0.9.5 names each foreground process by `name`, `argv` and `cmdline`, with no `argv0`, and Claude Code's `name` is its version
+(`2.1.330`). Its list starts with the foreground group's leader: a launcher's wrapper when claude runs under one. Code that takes the first process for
+claude itself must pick Claude Code out first (`herdr.Client.PaneProcesses`): matching `argv0` found nothing, and the port scan reported Claude Code's own
+loopback listener as a server the Agent runs, which kept every idle Agent behind a wrapper from Close (#14681).
+
 - A Claude Code turn ending with a model API error ("API Error: Connection lost mid-response…", overload, rate limit, expired login) is done in herdr just like normal completion, so hub counts it unread:
   task_plan tasks once showed green "Done" cards with the raw error as summary and "finished" in snapshots (#1516). Only the last text distinguishes this: when a session is stopped and `last_text` begins with these errors, hub sets `turn_error` (prefix only;
   mentioning "API Error" in an answer doesn't count), marks the task interrupted, doesn't auto-close it, and writes an `interrupted` receipt. Ordinary Agent pushes also stop using a success marker.
@@ -812,6 +830,15 @@ other engines' panes (Orca) keep their original error.
   Manually adding `enableArtifact: false` to `launcher-settings/<name>-env-settings.json` seems ineffective: node rewrites that file at every launch, losing the edit before the next Agent starts.
   Both `enableArtifact: false` in `--settings` and environment `CLAUDE_CODE_DISABLE_ARTIFACT=1` worked in tests (interactive claude in tmux, three configs compared);
   Persona-managed launchers now carry both (`docs/integrations/launchers.md` ("Running Persona-managed launchers")).
+
+## A launchd node has no `$SHELL`, and macOS's `/etc/passwd` has no users (2026-11-26, #16217)
+
+The model list failed on a Mac with `claude did not provide a model list: unexpected EOF (zsh:1: command not found: claude)` while sessions started fine.
+- A launchd agent's environment has no `SHELL` and `PATH=/usr/bin:/bin:/usr/sbin:/sbin`. The `/etc/passwd` fallback that works under systemd finds nothing on macOS, which keeps accounts in Directory Services: the node guessed zsh for a bash user.
+- Even bash would not have helped: `bash -ic` reads `~/.bashrc`, but Terminal opens login shells, so Mac setups (nvm's installer, `brew shellenv`) live in `~/.bash_profile` / `~/.zprofile`. The session worked only because herdr's tab is a login shell.
+- On macOS read the shell with `dscl . -read /Users/<user> UserShell` (the node builds with `CGO_ENABLED=0`, so no `getpwuid`; `os/user` has no shell field) and run it as `-lic`; a bash with no `~/.bash_profile`, `~/.bash_login` or `~/.profile` stays `-ic`, since a login bash would read none of the user's files.
+- `zsh -l` runs `/etc/zprofile`'s `path_helper`, which moves the system directories ahead of the inherited PATH: a test that checks an exact PATH through the login shell expects `path_helper -s`'s order. Check with the node's own environment, not your terminal's: `env -i HOME=$HOME PATH=/usr/bin:/bin:/usr/sbin:/sbin bash -lic 'command -v claude'`.
+- A test that the node "runs the user's shell" must unset `SHELL`; a developer's terminal always has it, which hid this. The other way round, the node package's `TestMain` pins `SHELL` to zsh on macOS (`pinTestLoginShell`), so a developer whose login shell is bash runs the `~/.zshrc` fixtures in zsh.
 
 ## "the tab's shell had not run it yet (is the machine busy?)" when the launcher isn't there at all (#1642)
 
@@ -950,6 +977,19 @@ grouping looks fine and the bug shows only in the other one. Hosts set it (herdr
 need the node to set one: the Codex App's always had one, the Claude desktop app's had none until #8521. A new source of
 sessions outside the engines should set a space too. On the list path, take the repository from the list's Git places
 (`fillGitPlace`, read in the background) rather than running git per row: it runs every second.
+
+## One folder was a project for each way its Agents ran (2026-11-23, #13533)
+
+Every way an Agent runs names its space its own way: herdr by its workspace id (`w1`), the desktop apps by
+`codex-project:<root>`, a runtime without workspaces by its directory. A folder worked in more than one way was a project
+for each in every client's **Project** list, all with the folder's name, and one CLI split too: Claude Code in herdr
+against the Claude desktop app, an agy pane in herdr against an agy runtime conversation. Pins, mutes and to-do space
+links go by `machine/space name`, so nothing there showed it. The node's last pass now gives every session whose space
+only stands for a folder that folder's space (`server/internal/node/folderspace.go`); a new source that names its space by
+a folder needs nothing more, and should not invent another path-keyed id. Compare folders by their physical paths: the
+same folder reaches the list as written by a runtime and resolved by herdr or a desktop app, and a home directory on
+Linux is often a link to another volume. A joined space holds several `space_kind`s, and a client may name its host by
+any of its sessions' kinds, so a space action takes a kind that is no host's to mean the workspace's host.
 
 ## The session list runs every second: per-row lookups add up (2026-11-09, #2538)
 
@@ -1423,8 +1463,10 @@ workspace sharing the probe prefix while it still exists.
 ## AGY ACP can ignore the configured initial model (#3817)
 
 Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
-IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. Preserve
-explicit caller choices and the native state of resumed conversations. Announce a model only after ACP accepts it.
+IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. ACP can
+also discard the selected model when a process restarts (#15537). Before the first prompt on the new connection, apply
+the configured default to an idle conversation unless the caller chose a model or the connection already applied one.
+Leave history reads passive and announce a model only after ACP accepts it.
 
 ## A long-running agy acp keeps the account it saw (#10368)
 
@@ -1445,6 +1487,9 @@ node RPC so an older node cannot silently ignore a billable setting in `session.
 
 Persona-owned Codex conversations use a separate stdio connection. Share catalog parsing across both transports and
 include the owned connection in session projection, setting routing and native notifications.
+
+The web composer keeps the tier ID through live updates and the new-conversation draft. A Fast boolean drops
+Ultrafast from the pill and loses the tier needed by the first request.
 
 ## Runtime assistant identity comes from persisted state (#4202)
 
@@ -1550,6 +1595,38 @@ Nanosecond stat fields can repeat across same-size writes within one filesystem 
 cache for recently modified exports, and cache settled histories after a quiet window. Run rewrite regressions on
 the deployment filesystem as well as the development machine, including a settled cache hit and atomic replacement.
 
+## Task closure is not user inactivity
+
+Closing a task must not interrupt its conversation (#6819). A quiet transcript does not prove the owner is away:
+a connected app may still be reading it, or a user message may be ahead of the next inventory update. Check live app
+subscriptions and durable owner activity before automatic closure/retirement; re-check task ownership after asynchronous
+lookups. Cancellation must use the same idle-only retirement as completion, not a forced stop or terminal-close fallback.
+Keep historical ownership and an explicit stop reason so the remaining transcript explains what happened.
+Input and view-exit activity are not read receipts: writing them as seen can suppress the reply the owner is waiting
+for (`TestQuietPatrolAbsorbedUserQuestionPushes`). Persist them separately and keep notification regressions in the check.
+The manager sees the owner's message on an Agent's own page only as a new turn. "Any turn of a planned task's Agent
+reopens its accepted task" therefore undid every review-accepted plan task the moment the owner kept chatting, and its
+Agent was never retired (#6819). Attribute such a turn with the owner's presence (`ownerOnSession`: viewing, or active
+within the idle window) and keep an explicit task send (`noteAgentSend`) as the only override; test the direct-chat
+turn, not just `agent_send`.
+
+An owner-activity hold must leave the completion turn unjudged and retryable, including unsupervised tasks and saved
+judgments replayed after a later start. Do not spend failed-judgment retries while waiting for the owner to leave.
+A terminal review can encounter activity after the judge already published `pending_review`. Both conversation and
+leader reviews must retract that turn's judgment, review state and queued review signal, including a refusal at the
+final write boundary. Clear the saved signal too, or the sweep can replay it while the owner is still present. Keep
+the turn and rework history so inactivity alone restores review without another Agent turn.
+Recheck task ownership, its closure timestamp and owner activity after a stop RPC too: a check before that call
+cannot protect a session linked or reopened while it is in flight. Ended terminal relays must remove their clients'
+terminal viewer entries and publish the departure without clearing independent chat subscriptions.
+
+The retirement inventory row predates the stop. Read the node's saved stop cause before native archival can remove its
+live row, then retain that observed evidence in the archive. Never copy the requested cause or retain a stale positive
+cause after a failed read. Recheck ownership and activity after this additional RPC too, and test the native
+stop/archive/resume chain with no live inventory row; an isolated snapshot-copy test misses this handoff.
+For a still-listed row, preserve its current stop provenance and terminal viewability when stripping live controls;
+do not fill a missing, unknown or user cause from the archive's older positive cause.
+
 ## Stopped-session ownership is not recovery permission (#8214)
 
 A `codex_history` source can be node-resumable while still rejecting ordinary messages. Keep the generic source-owned read-only guard; admit only the node-qualified terminal row to the explicit supervised Resume path. Persist user stops and fail closed on missing provenance instead of interpreting an old start time or a localized reason string as permission. A cached eligible row also needs a node-side recheck serialized with closes, and a new running observation must clear old eligibility. Keep this metadata in capabilities rather than enlarging the frequently copied Session row past its allocation size class.
@@ -1638,6 +1715,39 @@ pin while the final catalog bytes equal the earlier unpinned snapshot.
 
 - **Separate assignment data from framework policy (#10200).** Let the manager supply matching project background once; callers add only facts it cannot resolve. Preserve attachment suffixes when a launcher falls back to first-message rules. A dedicated instruction channel must survive resume and must suppress duplicate SessionStart closeout guidance. Never replace a configured Codex developer policy to obtain a cleaner transcript: fall back conservatively. Herdr refuses apostrophes even inside quoted restore arguments; encode them as TOML Unicode escapes, and use a persistent file for Claude's multiline policy. One new closeout can carry delivery, gate and responsible party while both historical formats remain readable.
 
+## Check owner activity at the closure commit boundary (#6819)
+
+Checking before a write lock does not protect a slow write: messages and viewers update independently of task writes.
+Automatic closure needs the same transaction-final activity guard as a reviewed closure, and an activity hold must
+leave the turn unjudged so the sweep can retry. A memory-only review checks under the todo lock immediately before
+changing either the closure or its review ledger, not only before assembling the replacement row.
+
+Delivery of `fleet.clients` belongs to each manager connection, not to a shared success bit. Retain only successful
+recipients, retry failed ones even when the global viewer snapshot is unchanged, and send again after reconnection.
+Serialize ownership-refresh invalidation with sends so an in-flight report cannot hide the refresh.
+
+The post-stop archive guard cannot undo an interrupt. Register an in-flight retirement before its final activity read,
+cancel it on input, viewing or a read receipt, and propagate that cancellation across every RPC hop. Use the separate
+`session.stop_if_idle` route: an older peer must refuse, never fall back to an unconditional stop. Refresh the node's
+runtime and check cancellation and pending/recent input under its typing lock before each Ctrl+C.
+Input recorded between keys prevents the second interrupt. A cancelled or refused stop grants no recovery.
+Reload the stop observation for the current task completion after a manager restart. A live row from a resumed
+Agent then keeps the ordinary idle window, even though its first-seen clock starts over.
+Match the completion at Postgres microsecond precision. A manual edit and older JSON stop records can carry
+the original nanoseconds.
+Keep the new preflight on that guarded RPC: applying it to legacy stop/retire can rediscover a different engine and
+erase a retained session row before its established stop/recovery path runs. Verify those full-package regressions too.
+Install a test transport gate before linking or closing a task: both start background token/outcome work, so replacing
+the service's hub afterwards races that work even if the stop itself is synchronized.
+
+A deferred unsupervised judgment can outlive its inventory row or its manager. Retry its durable session/turn identity,
+but verify the same closed transcript again before applying a judgment. A new/open turn, a released/relinked Agent,
+reopening, an unreachable node or another working Agent is not completion evidence. Absence alone proves nothing.
+
+Polling-only native terminal pages still need a read-only hub subscription, including when the first hello has no
+`terminal_stream`. Keep page presence separate from the stream's success: retain it on unsupported, release it on page
+exit, and restore it after reconnect or page return. Never request a grid or takeover for polling presence.
+
 ## A transcript directory is not the selected launcher's sign-in
 
 When restoring an assistant conversation, finding its newest transcript does not establish that a newly selected launcher can authenticate in that profile. Check private-profile ownership before stopping the old process or writing input; a later CLI sign-in error has already accepted the wrong launch and may forward a provider-only model. A refusal should preserve the original process and session state and explain how to continue. Regression coverage needs cold resumes and live idle processes, with both an omitted model and the old provider's explicit model (#10453).
@@ -1707,7 +1817,9 @@ terminal never saw it, and the companion's turn overwrote the stored steps from 
 probe it by taking even a shared `flock` (`LOCK_SH|LOCK_NB`), because a starting `agy` tries `LOCK_EX|LOCK_NB` once and
 runs its whole session without a lock if that fails (#14561). On Linux, read `/proc/locks` for the file's device and
 inode; where no lock table can be read, fall back to the presence file plus recent transcript writes by another process.
-Calls that drive the conversation go to the pane, or are refused (`agy_in_terminal`) while held.
+Calls that drive the conversation go to the pane, or are refused (`agy_in_terminal`) while held. So every engine that can
+run agy must list it as a pane and learn the pane's conversation: Orca did neither, and every message to an agy open in
+an Orca terminal was refused (#16531).
 
 ## First tool discovery can precede the session list (#14855)
 

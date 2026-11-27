@@ -94,6 +94,30 @@ export function preloadScript(files: PreloadFiles): string {
 })();`;
 }
 
+/** Font registration and the Hub read are deferred until after the app commits and the browser has painted it. */
+export function fontStartupScript(module: string): string {
+  return `(function () {
+  var root = document.getElementById("root");
+  if (/^screen\\/[^/]/.test(location.pathname.slice(new URL(document.baseURI).pathname.length))) return;
+  function start() {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        import(new URL(${JSON.stringify(`./${module}`)}, document.baseURI).href).then(function () { dispatchEvent(new Event("persona-font-startup")); }).catch(function () {});
+      });
+    });
+  }
+  if (root.childElementCount) start();
+  else {
+    var observer = new MutationObserver(function () {
+      if (!root.childElementCount) return;
+      observer.disconnect();
+      start();
+    });
+    observer.observe(root, { childList: true });
+  }
+})();`;
+}
+
 /** The smallest file worth a brotli copy: server/internal/webasset MinSize, below which the hub compresses nothing. */
 export const BROTLI_MIN_SIZE = 1024;
 
@@ -600,7 +624,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #15511: an explicitly promoted main relay keeps its incoming source collapsed until opened, including its deferred
 // placeholder. This change on base 4bab19c283 measures en 483,782 B, ja 486,399 B, zh-Hans 484,384 B. Raise the budget
 // to the measured ja size plus 10 B of room.
-export const FIRST_SCREEN_BUDGET = 486_409;
+// #16992: Hub Admin shares the main app's titlebar inset under the desktop's macOS titlebar (the expanded sidebar's rule
+// in styles.css also names the admin sidebar; lib/mac-chrome.ts is now shared with the admin page, and macChromeMode
+// gives both shells their data-mac-chrome). 77 B in every language, measured in one environment on base 4a81814ec7
+// (ja 485,962 B to 486,039 B; en 483,466 B to 483,543 B, zh-Hans 484,115 B to 484,192 B). The budget moves by the
+// same 77 B, keeping the room main had.
+export const FIRST_SCREEN_BUDGET = 486_486;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

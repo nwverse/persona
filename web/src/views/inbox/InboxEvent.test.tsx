@@ -2,6 +2,7 @@
 // Inbox events on the page (docs/web/web.md "Inbox"): the "In progress" section and the rows' marks, the detail's summary → suggestion
 // card → recap → handling chain, "Edit" / "Say something", "Original"; and an older hub's items (none of the fields) exactly as before.
 // Driven by the fake hub's fixture (scripts/mock/inbox_events.json).
+import { installedMailbox, preloadMailbox } from "../../test/installed-mailbox";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { act } from "react";
@@ -642,7 +643,8 @@ describe("收件箱事件：详情", () => {
     expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull(); // the page stays expanded
     expect(around().at(-1)).toContain("around=100");
   });
-  it("a mail item starts collapsed; Original reads and marks its body, then a chain entry opens that UID (#5471)", async () => {
+  it.skipIf(!installedMailbox)("a mail item starts collapsed; Original reads and marks its body, then a chain entry opens that UID (#5471)", async () => {
+    await preloadMailbox("Body");
     const item: InboxItem = { ...agentSuggestion, mail: { ...agentSuggestion.mail!, uids: [88, 89] } };
     const reads = () => calls.list.map((c) => c.path).filter((p) => p.startsWith("/mail/messages/") && !p.endsWith("/flags"));
     const flags = () => calls.list.map((c) => c.path).filter((p) => p.endsWith("/flags"));

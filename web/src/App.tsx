@@ -32,6 +32,7 @@ import type { Session } from "./lib/types";
 import { useTabLookup } from "./lib/tab-lookup";
 import { ConnectionPill } from "./views/ConnectionPill";
 import { NARROW, useKeyboardFrame, useMedia } from "./lib/viewport";
+import { usePhoneNavMode } from "./lib/phone-nav";
 import { connect, disconnect, getState, reset, subscribe, type State, useHubUnreachable, useStore } from "./lib/store";
 import { watchRoster } from "./lib/managers";
 import { t } from "./i18n";
@@ -55,6 +56,8 @@ import { onOpenNewAgent, type NewAgentPreset } from "./lib/new-agent";
 import { closeHelp, useHelpOpen } from "./lib/shortcut-help";
 import { closePalette, openPalette, usePalette } from "./lib/palette";
 import { sidebarRail, sidebarShown, useLayout } from "./lib/layout";
+import { macChromeMode, useMacChrome } from "./lib/mac-chrome";
+import { MacBayTools, MacMainContour } from "./views/MacChrome";
 import { SIDEBAR_LABEL, useShortcuts } from "./lib/use-shortcuts";
 import { Sidebar, SidebarRail } from "./views/Sidebar";
 import { SidebarResize } from "./views/SidebarResize";
@@ -121,6 +124,8 @@ const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette),
 // wide screen loads too; Shell loads it once the screen is narrow. A load that fails leaves the toasts at the bottom of
 // the page until the next toast tries again.
 const ToastLift = lazyPage(() => import("./ui/toast-lift").then((m) => m.ToastLift));
+// the phone tab bar (lib/phone-nav.ts) loads only where it is drawn: a narrow screen that chose it
+const PhoneTabBar = lazyPage(() => import("./views/PhoneTabBar").then((m) => m.PhoneTabBar));
 function PhoneToasts(props: ToastLiftProps) {
   return (
     <OverlayBoundary open onClose={() => {}}>
@@ -448,6 +453,7 @@ function Shell() {
 
   // ── the sidebar: a column on a wide screen, a drawer over the page on a narrow one (#1996) ──
   const narrow = useMedia(NARROW);
+  const phoneNav = usePhoneNavMode();
   // the toasts' placement, in before the first toast in practice
   useEffect(() => {
     if (narrow) void ToastLift.preload().catch(() => {});
@@ -461,10 +467,18 @@ function Shell() {
   const drawerBox = useRef<HTMLDivElement>(null);
   const sidebarId = useId();
   const scrim = useRef<HTMLDivElement>(null);
-  const mainBox = useRef<HTMLElement>(null);
+  const mainBox = useRef<HTMLElement | null>(null);
+  const [mainEl, setMainEl] = useState<HTMLElement | null>(null);
+  const setMainRef = useCallback((el: HTMLElement | null) => {
+    mainBox.current = el;
+    setMainEl(el);
+  }, []);
   const a11y = drawerA11y(narrow, drawer);
   // folded to its icons on a wide screen (⌘⌥B, kept in this browser); a narrow screen keeps the full drawer
   const rail = !narrow && sidebarRail(layout);
+  const macChrome = useMacChrome();
+  const macWindowed = macChrome.unifiedTitlebar && !macChrome.fullScreen && !narrow;
+  const macBay: "rail" | "hidden" | null = macWindowed ? (rail ? "rail" : !sidebarShown(layout) ? "hidden" : null) : null;
   useEffect(() => {
     if (!narrow) setDrawer(false);
   }, [narrow]);
@@ -660,7 +674,14 @@ function Shell() {
 
   return (
     // #root is 100dvh (index.html); with a soft keyboard up (iOS) the shell is only the part above it (lib/viewport.ts)
-    <div ref={shell} data-app-shell data-sidebar-hidden={!sidebarShown(layout) || undefined} className="flex h-full overflow-hidden bg-page">
+    <div
+      ref={shell}
+      data-app-shell
+      data-sidebar-hidden={!sidebarShown(layout) || undefined}
+      data-mac-chrome={macChromeMode(macChrome)}
+      data-mac-bay={macBay ?? (macWindowed ? "expanded" : undefined)}
+      className="flex h-full overflow-hidden bg-page"
+    >
       {/* wide: a fixed column; narrow: a drawer over the page, clear of a landscape notch and the home indicator */}
       <div
         ref={drawerBox}
@@ -689,7 +710,8 @@ function Shell() {
         className={cx("fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 lg:hidden", drawer ? "opacity-100 starting:opacity-0" : "pointer-events-none opacity-0", !scrimShown && "hidden")}
         onClick={close}
       />
-      <main ref={mainBox} inert={a11y.modal || undefined} className="relative flex min-w-0 flex-1 flex-col">
+      <main ref={setMainRef} inert={a11y.modal || undefined} className="relative flex min-w-0 flex-1 flex-col">
+        {macChrome.unifiedTitlebar && <MacMainContour mainEl={mainEl} bay={macBay} />}
         {/* dropped after loading: which phase, and a click explains with "Retry now" (views/ConnectionPill.tsx). A strip
             over the page that pushes it down while it shows, never a layer over its header, its fields or its title
             (web usability audit item 87); its details open over the page. */}
@@ -701,7 +723,10 @@ function Shell() {
         <div className="relative min-h-0 flex-1">
           <PageBoundary page={href(route)}><Suspense fallback={<PageLoading />}><PerAssistant route={route}>{main}</PerAssistant></Suspense></PageBoundary>
         </div>
+        {/* Settings › Advanced › Appearance › Phone navigation: Tab bar puts the four main places along the bottom (#16761) */}
+        {narrow && phoneNav === "tabs" && <Suspense fallback={null}><PhoneTabBar route={route} /></Suspense>}
       </main>
+      {macBay && <MacBayTools bay={macBay} onSearch={() => openPalette("jump")} />}
       <SidebarRowHoverHost />
       <SidePanelHost />
       {paletteOpened && (

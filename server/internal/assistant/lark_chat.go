@@ -238,6 +238,10 @@ func (h larkHost) ApproveOwnerAction(ctx context.Context, ev botcard.MessageEven
 	return h.s.botApproveOwnerAction(ctx, ev, text, action)
 }
 
+func (h larkHost) ProjectReviewOwnerInput(ctx context.Context, ref, machine, session string) error {
+	return h.s.projectReviewFeishuInput(ctx, ref, SessionRef{MachineID: machine, SessionID: session})
+}
+
 // ---- the commands ----
 
 func (h larkHost) InterruptConversation(ctx context.Context, rt assistantwire.ChatResolved) (string, string) {
@@ -386,7 +390,7 @@ func (h larkHost) AcceptAction(ctx context.Context, a *botcard.CardAction) (stri
 			ask.Chosen = "" // the recommended one: taken as OK takes it
 		}
 	} else if at := a.Str("asked_at"); at != "" { // a button of a briefing card: it accepts the round it was asked in (briefing.go)
-		result, err = s.acceptTryFromBrief(ctx, a.Str("id"), at)
+		result, err = s.acceptReviewRound(ctx, a.Str("id"), at)
 	} else {
 		result, err = s.acceptTry(ctx, a.Str("id"), a.Context.MessageID)
 	}

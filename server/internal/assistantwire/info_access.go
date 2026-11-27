@@ -1,6 +1,10 @@
 package assistantwire
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/nwverse/persona/server/internal/buswire"
+)
 
 // infoAccessRoutes are who may read the assistant's sensitive information and which categories a conversation
 // carries (#13246, docs/assistant/health.md "Using information by scene"). Only a full-access client (the user in the
@@ -31,6 +35,8 @@ type AssistantExtensionRead struct {
 // goes with it (installed again, under the same id or not, it starts as a third party's with no grant). An older
 // assistant answers "unknown method".
 const MethodExtensionTrustForget = "assistant.extension_trust_forget"
+
+var ExtensionTrustForgetMethod = buswire.Method[ExtensionTrustForget, buswire.None]{Name: MethodExtensionTrustForget}
 
 // ExtensionTrustForget is assistant.extension_trust_forget's params.
 type ExtensionTrustForget struct {

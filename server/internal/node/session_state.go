@@ -47,6 +47,7 @@ type sessionState struct {
 	Model                   string          `json:"model,omitempty"`
 	ModelFingerprint        string          `json:"model_fingerprint,omitempty"`
 	ModelEffort             string          `json:"model_effort,omitempty"`
+	CodexStartTier          string          `json:"codex_start_tier,omitempty"`
 	ModelFromRecovery       bool            `json:"model_from_recovery,omitempty"` // Model came from automatic recovery, not an explicit pick (#15622)
 	TaskExecution           bool            `json:"task_execution,omitempty"`      // the last Assistant input used strict scheduled execution
 	Origin                  string          `json:"origin,omitempty"`              // manager-recorded conversation source, for model-call authorization
@@ -67,14 +68,16 @@ type sessionState struct {
 	// AwaitingFirstMessage: an empty start reserved this conversation without sending
 	// a model input. Runtime instructions and the idle state wait for actual delivery.
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
-	// MainCompactWindow: the window the main conversation last ran with (modelExecution.MainCompactWindow), kept like
-	// IsMain (the hub's copy keeps neither, so until the node restarts) for a start that carries no execution: a manual
-	// compaction with no process running (assistant_compact.go).
+	// MainCompactWindow: the window the main conversation or a leader conversation last ran with
+	// (modelExecution.MainCompactWindow), kept like IsMain (the hub's copy keeps neither, so until the node restarts) for
+	// a start that carries no execution: a manual compaction with no process running (assistant_compact.go).
 	MainCompactWindow int `json:"main_compact_window,omitempty"`
-	// AppMode / AppEffort: the permission mode and effort on an assistant conversation (modes.go). AppMode
-	// also retains a terminal Codex start constraint for later resumes. AppModeExplicit distinguishes a deliberate
-	// per-conversation mode from a legacy/default value; on Claude Code only an explicit one outranks the manager's
-	// current default, while other agents always retain their legacy AppMode precedence.
+	// AppMode / AppEffort: the permission mode and effort set on an assistant conversation (modes.go). AppMode
+	// also retains a terminal Codex start constraint and an agy start's permission mode for later resumes and restarts.
+	// They win over what its transcript recorded and outlive the node: an old "default" there no longer locks it in.
+	// AppModeExplicit distinguishes a deliberate per-conversation mode from a legacy/default value; on Claude Code only
+	// an explicit one outranks the manager's current default, while other agents always retain their legacy AppMode
+	// precedence.
 	// PlanThen: the mode this session, started in plan mode, goes on in once its plan is approved (planthen.go).
 	PlanThen        string `json:"plan_then,omitempty"`
 	AppMode         string `json:"app_mode,omitempty"`
@@ -473,6 +476,27 @@ func (s *stateFile) setPane(id, pane string) {
 	})
 }
 
+// forgetPane takes pane off every record that names it (Node.forgetPane).
+func (s *stateFile) forgetPane(pane string) {
+	s.mu.Lock()
+	var ids []string
+	for id, v := range s.Sessions {
+		if v.Pane == pane {
+			ids = append(ids, id)
+		}
+	}
+	s.mu.Unlock()
+	for _, id := range ids {
+		s.update(id, func(v *sessionState) bool {
+			if v.Pane != pane {
+				return false // bound to another pane since
+			}
+			v.Pane = ""
+			return true
+		})
+	}
+}
+
 // put reports only whether its persistence callback was invoked, not whether the
 // one-way notification reached durable storage.
 func (s *stateFile) put(id string, v sessionState) bool {
@@ -495,8 +519,9 @@ func (s *stateFile) put(id string, v sessionState) bool {
 		if old.CreationID != "" {
 			v.CreationID, v.Incarnation = old.CreationID, old.Incarnation
 		}
-		if v.StopCauseAt == 0 && old.StopCauseAt != 0 {
-			v.StopCauseAt = max(time.Now().UnixNano(), old.StopCauseAt+1)
+		// A send can save its metadata after an interrupt recorded a newer Stop.
+		if v.StopCauseAt < old.StopCauseAt {
+			v.StopCause, v.StopCauseAt = old.StopCause, old.StopCauseAt
 		}
 		if v.RanAt == 0 {
 			v.RanAt = old.RanAt // owned by recordRunning

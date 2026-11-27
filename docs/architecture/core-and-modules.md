@@ -215,7 +215,7 @@ What switched off means, by seam (each port follows `Set.On`; a build without th
 | `server/internal/builtinext` (`ProvideVolc`, `ProvideVoice`) | `volc`, `voice` | The built-in extension is not registered or started; no meeting transcribes with it |
 | `server/internal/builtinext` (`AddProgram`) | `volc`, `voice` | The extension host starts no `personad volc` / `personad voice`, a `hub.json` entry's included (`ProgramOff`: it fails as the unknown subcommand would). The subcommand stays in the binary |
 | `server/internal/botport` | `lark` | No bot client is made: the bot cannot be bound, registered or started |
-| `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
+| `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start), the extension host's lark-cli integration is off and the knowledge base's Lark import (`kb.lark_minutes`) logs that and skips its runs |
 | `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module; the core's pushes to the chat return `nil` without a log or a retry, and `notify_user`'s copy report records the Feishu copy as `skipped` (told nowhere in its answer) |
 | `server/internal/knowledgeuihost` | `knowledge-ui` | No layer: no `kb_history_*` tool or import, the selection page's chat list answers as a source without history, days carry no sent marks |
 | `server/internal/healthhost` | `health` | No layer: the intake and items routes answer 404, no `health_intake` tool, no `health_intake` or `health_items` capability, no water reminders |
@@ -259,6 +259,10 @@ Persona Core is a product on its own: a hub built without any module starts, ser
 - **Run**: the core-only `persona-hub run` (or `personad hub run`) with a `hub.json` as for any hub (docs/operations/config.md);
   keep `persona-manager` beside `persona-hub` and the hub starts it. The manager's log says `modules: loaded none`
   (a default build: `modules: loaded briefing, voice, volc`, …).
+- **Install**: a release has the core alone as install packages beside the full ones (the core edition:
+  `core-latest.json`, `core-personad-<os>-<arch>.gz`, …), `install.sh --core` installs them, and an install keeps its
+  edition through every update. [core-install.md](../operations/core-install.md) is the document;
+  `python3 scripts/ci/core-install.py` follows it in a clean container, from the packages alone.
 - **Smoke test**: `python3 scripts/ci/core-only-smoke.py` builds the three programs with `persona_core_only`, starts a
   disposable `postgres:18-alpine` container on a private port, writes a `hub.json` in a temporary home and runs
   `persona-hub run` with a clean environment (no `PERSONA_HOME` of the machine's own hub). It checks health, an
@@ -278,7 +282,7 @@ Persona Core is a product on its own: a hub built without any module starts, ser
   --database-file <file with database_url>` runs a shard's every package without modules; a test of a module's own
   behaviour skips without it (`needsBriefingModule`, `needsVoiceModule`, `needsVolcModule`). Locally the `other` shard
   needs Bun 1.4.2 on `PATH`, as in CI.
-- **CI** (`scripts/ci/server.sh`): the `build` lane runs 'Core-only hub smoke' and 'Builds without each module' (each
+- **CI** (`scripts/ci/server.sh`): the `core-other` lane runs 'Core-only install from packages'; the `build` lane runs 'Core-only hub smoke' and 'Builds without each module' (each
   `server/internal/modules/<id>/module.json`: `go build -tags persona_without_<id> ./...` and the module list and guard
   tests, so a module that moves is covered with no edit); the `core-node`, `core-managers` and `core-other` lanes (and
   `all`) run 'Server <shard> tests with Postgres, core only'. Measured on the hub machine (64 cores, shared): node
@@ -377,8 +381,9 @@ leaf library the core's cards are built with), and `server/internal/modules/all/
 `server/internal/modules/lark/connector/larkcli`) are reached the same way through `server/internal/cliport`, with their
 values in the contract `server/internal/cliwire`; the connector builds on the connector SPI (`connectorwire`). Without the
 module `botport.Available()` and `cliport.Available()` are false: the bot cannot be bound, registered or started (the
-setting answers that it is not part of this build), `lark.cli` is not read (a warning at start), and the extension
-host's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
+setting answers that it is not part of this build), `lark.cli` is not read (a warning at start), the knowledge base's
+Lark import (`server/internal/assistant/kblark`, through the same runner) skips its runs, and the extension host's and
+the import's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
 `persona_without_lark`. The assistant's own Feishu layer reaches the module through `server/internal/larkhost` ("Lark" below).
 
 ### The node's modules
@@ -479,23 +484,23 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
 
 ### The briefing pilot
 
-The daily briefing (`internal/assistant/briefing*.go`) is a module (#13430, decision 3; #13845). Fact gathering, the
-evening all-day recording summary, the `brief` chat feed item, the model-failure fallback, the wait-row setting and the
-wait rules live in `server/internal/modules/briefing` behind narrow `modapi.Host` ports; the Lark card renderer
-(`briefing_card.go`) and HTTP routes (`briefRoutes` in `briefing_feed.go`) stay in package assistant until a neutral
-`Card` model and the `hub_routes` slot land.
+The daily briefing is a built-in module (#13430, decision 3; #13845). The scheduler calls its runner through
+`modapi`. The runner prepares the facts, feed item and paginated message cards for delivery.
 
 - **The module owns** (`server/internal/modules/briefing`): the `assistant.briefing_waits` setting (its type, defaults,
   validation and card text), the wait rules of the briefing's per-direction rows, routine fact gathering (`FactsAt`,
   Inbox follow-up filtering, in-progress sorting, per-run retention and schedule lifecycle hooks), the evening day
-  recording summary (`Day`, `BoundDay`), the `brief` feed item body and writer, and the model-failure fallback lifecycle.
+  recording summary (`Day`, `BoundDay`), the `brief` feed item body and writer, the model-failure fallback lifecycle,
+  card rendering and pagination, and the `POST /api/v1/later/{id}/handled` feed action registered through `AddHubRoute`.
 - **The core keeps** the stored value (the `briefing_waits` field of the assistant's settings, byte for byte as before),
   the setting's description in `persona_settings`, the ledgers behind the narrow `modapi.Ports` adapters
-  (`server/internal/assistant/modules_ports.go`), the Lark card renderer (`briefing_card.go`) and `briefRoutes`.
+  (`server/internal/assistant/modules_ports.go`), transport retries and the shared `POST /api/v1/todos/{id}/accept`
+  action used by ordinary to-do reviews and decisions.
 - **With the module absent** a routine with facts on opens with no facts and keeps no briefing run, so its answer goes
   out as a routine with facts off does (no brief item, no briefing rows on the Lark card); a daily report gets the north
   star's lines alone; the acceptance reminders wait for no briefing; `assistant.briefing_waits` is hidden from
-  `persona_settings` but stays stored. `server/internal/assistant/modules_test.go` covers each of these.
+  `persona_settings` but stays stored. The later-item action returns 404. Conversation history still serves stored
+  brief items and the shared to-do acceptance action stays available. `server/internal/assistant/modules_test.go` covers each of these.
 
 ### Volcengine speech
 
@@ -811,6 +816,16 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   `BoardChanged` may hold its own lock (`channels_handler.go`, `todos.go`): the call takes only the chat's lock and the
   board's `mu`, as `boardChanged` did, and never waits for `run`. The acceptance rounds cross as data
   (`Host.WorkbenchBoard`'s rows).
+- **The user sync is the module's** (`server/internal/modules/lark/larksync/service.go` and `service_*.go`):
+  settings and sealed-token management, OAuth v3 user authorization and refresh, sync-only bot device-code
+  registration, HTTP routes (`/api/v1/bots/feishu/sync*`), scheduler loop, and the `larksync` outbox connector
+  (`Changes`, `Items`, `Status`). Core (`server/internal/extmgr/larksync_host.go`) holds only the minimal adapter
+  implementing `botport.SyncHost` (`server/internal/botport/botport.go`) and delegates the five external call sites
+  through `botport.SyncService`, while `server/internal/larksyncwire/types.go` holds the shared settings keys, sealed
+  field lists, outbox row structs, and `larksyncwire.Store` contract implemented by `internal/db`. With the `lark`
+  module off or built out, the routes answer 404, the `larksync` connector is absent, the loop is a no-op, primary
+  registration falls back to `docs_standard`, and stored `bots.feishu.sync*` settings remain untouched
+  (`server/internal/extmgr/larksync_module_test.go`).
 - **Tests**: the turns' own tests run in the module on a fake core (`server/internal/modules/lark/service_test.go`:
   the channels' runs, their finishing, folding and dropping, and the hub's transport; `chat_fake_test.go`: the chat's
   host methods as the core answers the plain case); the assistant's tests of the turns through the channels' pipeline

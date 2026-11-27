@@ -592,15 +592,21 @@
           "type": "string",
           "enum": [
             "STRING",
-            "CONCEALED"
+            "CONCEALED",
+            "OTP"
           ]
+        },
+        "delete": {
+          "type": "boolean"
+        },
+        "keep_value": {
+          "type": "boolean"
         }
       },
       "required": [
-        "name",
-        "type"
+        "name"
       ],
-      "description": "A public field name/type; never a value or source path."
+      "description": "A public field name/type or edit action (delete, keep_value); never a value or source path."
     },
     "SecretStoreTarget": {
       "type": "object",

@@ -24,16 +24,45 @@ type orcaLaunch struct {
 // Orca owns the project's worktrees: opening a space means opening a new terminal in the registered directory,
 // without making another git worktree or changing an existing terminal.
 func (h *orcaHost) CreateSpace(ctx context.Context, cwd, label string) (*host.Created, error) {
-	return h.createTerminal(ctx, "", cwd, label)
+	return h.createTerminal(ctx, "", cwd, label, orcaOpen{})
 }
 
 func (h *orcaHost) CreateSlot(ctx context.Context, space, cwd, label string) (*host.Created, error) {
-	return h.createTerminal(ctx, space, cwd, label)
+	return h.createTerminal(ctx, space, cwd, label, orcaOpen{})
 }
 
-func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string) (*host.Created, error) {
+// CreateSpaceEnv is CreateSpace whose shell starts with env added (host.EnvLauncher: terminal.create's env; an Orca
+// that refuses the field opens the terminal without it, orcart.WithEnv).
+func (h *orcaHost) CreateSpaceEnv(ctx context.Context, cwd, label string, env []string) (*host.Created, error) {
+	return h.createTerminal(ctx, "", cwd, label, orcaOpen{env: env})
+}
+
+// CreateSlotEnv is CreateSlot whose shell starts with env added (host.EnvLauncher), as CreateSpaceEnv.
+func (h *orcaHost) CreateSlotEnv(ctx context.Context, space, cwd, label string, env []string) (*host.Created, error) {
+	return h.createTerminal(ctx, space, cwd, label, orcaOpen{env: env})
+}
+
+// OpenShell opens a terminal for the user's own shell (New Terminal, Open Terminal Here: shellOpener) in space, or in
+// the worktree that holds cwd when space is "", with the shell in cwd. terminal.create does not take the directory
+// for a create like this one (its cwd is not honoured, Orca 1.4.277), so a folder deeper than the worktree's, or
+// outside every worktree, is reached with terminal.create's command (`cd <folder>`, which Orca types into that new
+// shell once it is ready): it is part of the request that makes the terminal, so it never reaches any other shell.
+// The terminal gets no launch grant: Run never types into the user's shell.
+func (h *orcaHost) OpenShell(ctx context.Context, space, cwd, label string) (*host.Created, error) {
+	return h.createTerminal(ctx, space, cwd, label, orcaOpen{shell: true})
+}
+
+// orcaOpen is how createTerminal opens a terminal: a start's with env added to its shell's environment and a launch
+// grant for its one start line (Run); the user's own shell (OpenShell) put in its folder, with no grant.
+type orcaOpen struct {
+	env   []string
+	shell bool
+}
+
+func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string, how orcaOpen) (*host.Created, error) {
 	// Run types `cd -- <cwd>` into the shell's line editor, which acts on a control character even inside the quotes
-	// (a tab completes and closes the quoted word, a line break runs the line): such a directory gets no terminal.
+	// (a tab completes and closes the quoted word, a line break runs the line), and OpenShell has Orca type
+	// `cd <cwd>`: such a directory gets no terminal.
 	if strings.ContainsFunc(cwd, unicode.IsControl) {
 		return nil, host.Mark(refusal(proto.CodeDirectoryUntypable, i18n.T(i18n.Default, "rpc-errors.directory_untypable"), nil), host.ErrNotDelivered)
 	}
@@ -48,16 +77,25 @@ func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string)
 	}
 
 	shell, typed := h.launchShell(ctx)
-	t, err := h.c.CreateTerminal(ctx, "id:"+wt.WorktreeID, label, newUUID(), shell)
+	var opts []orcart.CreateOption
+	if env := orcaEnv(how.env); env != nil {
+		opts = append(opts, orcart.WithEnv(env))
+	}
+	if line := orcaCdLine(cwd, wt.Path); how.shell && line != "" {
+		opts = append(opts, orcart.WithCommand(line))
+	}
+	t, err := h.c.CreateTerminal(ctx, "id:"+wt.WorktreeID, label, newUUID(), shell, opts...)
 	if err != nil {
 		return nil, orcaErr(err)
 	}
 
 	h.mu.Lock()
-	if h.launches == nil {
-		h.launches = map[string]orcaLaunch{}
+	if !how.shell {
+		if h.launches == nil {
+			h.launches = map[string]orcaLaunch{}
+		}
+		h.launches[t.PaneKey()] = orcaLaunch{terminal: *t, cwd: cwd}
 	}
-	h.launches[t.PaneKey()] = orcaLaunch{terminal: *t, cwd: cwd}
 	h.track(*t)
 	h.mu.Unlock()
 
@@ -67,6 +105,30 @@ func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string)
 		Pane:    host.PaneRef{Kind: host.Orca, ID: t.PaneKey()},
 		Shell:   typed,
 	}, nil
+}
+
+// orcaEnv is env ("KEY=VALUE") as terminal.create's env object; nil for none.
+func orcaEnv(env []string) map[string]string {
+	var out map[string]string
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// orcaCdLine is the line that puts a new shell of the worktree at root in cwd: "" when cwd is the worktree's own
+// directory (where Orca starts the shell) or not an absolute path. An absolute path needs no `--`, so the line is one
+// every shell Orca may run reads (the sh family, fish, PowerShell).
+func orcaCdLine(cwd, root string) string {
+	if !filepath.IsAbs(cwd) || orcaLaunchPath(cwd) == orcaLaunchPath(root) {
+		return ""
+	}
+	return "cd " + shellQuote(cwd)
 }
 
 // orcaOnWindows: the node and its Orca run on Windows. A var for tests.

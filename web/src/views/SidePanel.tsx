@@ -299,7 +299,7 @@ export function SidePanelView({
         label={t("sidepanel.resize_label")}
         title={t("sidepanel.resize_title")}
         controls={asideId}
-        className="hidden lg:block"
+        className="hidden lg:flex"
       />
       <div className="flex min-h-0 flex-1 flex-col">
         {/* a chunk gone after a hub redeploy reloads once, else shows a retry; never a blank panel */}
@@ -669,11 +669,11 @@ function body(p: Panel, onClose: () => void) {
     case "git":
       return <GitPanel key={directoryPanelKey(p)} mid={p.mid} sid={p.sid} cwd={p.cwd} at={p.at} onClose={onClose} />;
     case "review":
-      return <ReviewPanel key={directoryPanelKey(p)} mid={p.mid} sid={p.sid} cwd={p.cwd} scope={p.scope} at={p.at} opened={p} onClose={onClose} />;
+      return <ReviewPanel key={directoryPanelKey(p)} mid={p.mid} sid={p.sid} cwd={p.cwd} scope={p.scope} base={p.base} target={p.target} live={p.live} at={p.at} opened={p} onClose={onClose} />;
     case "changes":
       return <ChangesPanel key={`${p.mid}/${p.sid}`} mid={p.mid} sid={p.sid} opened={p} onClose={onClose} />;
     case "file":
-      return <FileViewerPanel key={`${p.mid}:${p.path}:${p.line ?? ""}-${p.to ?? ""}${p.readOnly ? ":ro" : ""}`} mid={p.mid} sid={p.sid} path={p.path} cwd={p.cwd} line={p.line} to={p.to} readOnly={p.readOnly} onClose={onClose} />;
+      return <FileViewerPanel key={`${p.mid}:${p.path}:${p.line ?? ""}-${p.to ?? ""}${p.readOnly ? ":ro" : ""}:${p.navigationId ?? ""}`} mid={p.mid} sid={p.sid} path={p.path} cwd={p.cwd} line={p.line} to={p.to} readOnly={p.readOnly} onClose={onClose} />;
     case "link":
       return <LinkPanel key={`${p.manager ?? ""} ${p.url}`} url={p.url} title={p.title} manager={p.manager} onClose={onClose} />;
     case "conversation-tasks":

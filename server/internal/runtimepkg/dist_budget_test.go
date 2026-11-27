@@ -25,12 +25,14 @@ import (
 // Antigravity multi-instance companion flags and --agy-dir env propagation (#14483) add 373 B (260,942 B).
 // An Antigravity CLI without session/set_mode: checks skip the switch and starts say to update agy (#14533), 149 B (261,091 B).
 // Antigravity Gemini API-key gateway model discovery routes through HTTP(S)_PROXY and honors NO_PROXY (#14552), 1,497 B (262,588 B).
+// Keeping agy's live text ahead of later thoughts (#14745) measured 262,673 B on main, 85 B over the ceiling.
 // Keeping Antigravity steps at a reused lower index when the export goes on past them, dropping them again once the run re-covers them (#14626), adds 230 B (262,818 B).
 // Antigravity native error backfill at every unexported index, loading conversations another agy process created, with read failures in the history token (#14627), 427 B (263,245 B).
 // Antigravity subagent reports and background task results as task notices, invoke_subagent Role / Prompt (#14625), 749 B (263,994 B).
 // Untitled Antigravity conversations take a short title from their first prompt line (#14629), 218 B (264,212 B).
 // An API error agy streams as message text becomes the turn's error, kept in history and settled idle (#14628), 231 B (264,443 B).
 // Antigravity GENERIC timestamp header stripping (#13662) adds 176 B (264,619 B).
+// An agy main chat on Windows finding personad.exe and a cmd.exe media-guard hook that also checks Node.js (#14511) add 182 B (264,801 B).
 // Subsequent runtime fixes on main (#15269, #15275, #13312, #12952, #15475) bring the total to 265,362 B.
 // Antigravity shared ACP exit cleanup (#15756) and always-allow permission choices (#15785) bring the total to 265,686 B.
 // Antigravity permission mode persistence across companion restarts and resume re-application (#15807) add 273 B (265,959 B).
@@ -38,6 +40,7 @@ import (
 // Antigravity launchers.check honoring explicit params.model (#15905) adds 1 B (266,213 B).
 // Antigravity withoutStaleWorking coverage for send policy, fork, rewind, modes, and native error reads (#15924) adds 48 B (266,261 B).
 // Runtime package lifecycle support for preserving tools across upgrades (#16016) adds 4,368 B (270,629 B).
+// An agy main chat on Windows finding personad.exe and a cmd.exe media-guard hook that also checks Node.js (#14511) add 163 B (270,792 B).
 // ACP instruction fitting to the mounted device tools and supervision role (#16052) adds 244 B (270,873 B).
 // Antigravity settled-turn recovery across delayed shifted-index exports and structured agy_turn_end turn_duration items (#15619) add 1,169 B (272,042 B).
 // Antigravity non-rewind negative cache for summary_behind GetCascadeTrajectory checks + summarizeTranscript prefix summary reuse (#13086) add 872 B (272,914 B).
@@ -45,9 +48,42 @@ import (
 // Antigravity Assistant run_command command-gate routing, unclipped command & per-call Cwd forwarding, fail-closed reconnect, tracks Assistant detection, and Assistant allow_always bypass guard (#16202) add 511 B (278,347 B).
 // After preserving Antigravity modes (#16300), the packages measured 278,334 B. Filtering botmux marker
 // lines before shortening runtime previews adds 549 B (#16310).
+// Antigravity detached pending approval turn cancellation (including sibling-ask withdrawal and stale-turn/racing-ask/refusal guards) and explicit deny-with-note refusal follow-up add 436 B (279,319 B).
+// Antigravity native usage account name and subscription plan enrichment via GetUserStatus (#16277) adds 286 B (279,605 B).
+// Main then measured 280,046 B (#16595): #16490 (+21 B), #15678 (+406 B) and #16027 (+22 B) grew the packages without raising
+// the budget, and #16285 adds 278 B on main (its 286 B was measured on its own branch).
+// Later runtime changes on main (#16591, #16122) bring the total to 280,892 B.
+// Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
+// its matching visible step (#14297) add 304 B (281,196 B).
+// Applying the configured Antigravity model before the first prompt after ACP resume (#15537) adds 67 B (281,263 B).
+// Claude Code plugin 0.3.1 reports classic hook pass-over and disables permission bridging under managed settings
+// (#15546), adding 1,397 B (282,660 B).
+// Antigravity form elicitation (#16645) and background task and schedule tracking (#13594) bring the total to 286,998 B,
+// including the 182 B Windows media-guard change above.
+// The Antigravity companion running the node's program from --personad-bin, else persona-node beside personad (#14582), 204 B (287,202 B).
+// Antigravity incremental transcript append (tail anchor + rolling SHA-256 + deferred/periodic verification),
+// sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights (with decoupled
+// raw-byte and object-weight transcriptCache caps) add 1,969 B (289,171 B).
+// Merging #16001 onto that main keeps its settled list-summary / .persona-turn-completion keying and static
+// summary_behind readListedTranscript cache, restores dev/ino/ctime wake-receipt detection, and adds a fixed
+// 4 KiB head-sample integrity check inside the racy window alongside the tail anchor. The union measures
+// 290,316 B exactly. The merge also restores one missing ASI semicolon in main's runtime.js.
+// With the compat.js declaration fix (#16771), main measured 290,321 B.
+// Keeping legacy effort-only requests in the selected model family adds 694 B (291,015 B).
+// Antigravity keep_always declaration, Assistant allow_once-absent fail-closed guard, and MultiEdit/NotebookEdit tool mapping add 101 B (291,116 B).
+// Treating epoch-zero resetTime on untouched Antigravity quota buckets as unset and emitting a SHA-256 account_key for
+// signed-in Antigravity accounts add 180 B (291_296 B).
+// Antigravity unknown-status jitter fixes (CANCELING/BUSY native working, empty 0-step idle, fresh empty-transcript
+// start, settled-turn recovery across transient empty/UNSPECIFIED summary_not_idle and tool-only turns with
+// autonomous-wake cleanup, cached GetCascadeTrajectory idle verification for summary_behind, last_modified_time
+// listed cache invalidation, and sanitized unrecognized-status logging) add 1,066 B (292,362 B).
+// Antigravity Run-prefixed Persona MCP permission normalization (with shell/file/a2a guards), fork mode/model/effort preservation with RPC-gated implicit-option recovery, and assistant capabilities.rewind=false advertisement add 1,976 B (294,338 B).
+// Antigravity idle auto-compaction `/compact` divider mapping and empty-prompt exemption (#16604) add 174 B (294,512 B).
+// OpenCode unconditional interruptVersion queued-turn cancellation and status refresh add 71 B (294,583 B).
+// Keeping Antigravity media-guard fail-closed when the optional partial JPEG copy fails, races, or receives a non-string state adds 55 B (294,638 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 278_883
+	const budget = 294_638
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
