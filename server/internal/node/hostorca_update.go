@@ -83,8 +83,9 @@ func (n *Node) orcaUpdateRead() bool {
 	return false
 }
 
-// orcaHasChat: a worktree on this machine has one of Orca's chats (an agent row under a session pane key, any agent;
-// the bridge lists only Claude's so far). A worktree on an SSH target is that machine's.
+// orcaHasChat: a worktree on this machine has one of Orca's chats with a turn (an agent row under a session pane key,
+// any agent: what orcaOpenChats lists from worktree.ps). A chat only the tabs list has had no turn yet, so nothing of it
+// runs; one the bridge lists closed (its book) is not open in Orca. A worktree on an SSH target is that machine's.
 func orcaHasChat(trees []orcart.Worktree) bool {
 	for _, w := range trees {
 		if w.HostID != "" && w.HostID != "local" {

@@ -711,8 +711,10 @@ layouts, a full `worktree.ps` outside the listing's snapshot series and a new
 process scan, none from the listing's caches; either list cut short at Orca's limit,
 a failed `worktree.ps` or an unreadable process table fails it, and Orca not running
 is an empty source. It also stands for the built-in Orca bridge, whose sessions are
-Orca's chats: any chat on this machine refuses the read (a chat's row is Orca's
-display state, with no background or child inventory), and only while Orca's read
+Orca's chats: any chat open on this machine that has had a turn refuses the read
+(a chat's row is Orca's display state, with no background or child inventory; a
+chat with no turn yet runs nothing, and one listed closed is not open in Orca),
+and only while Orca's read
 stands for it is the bridge's connection, told by its hello instance, not counted
 as a runtime of its own.
 
