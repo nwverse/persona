@@ -433,9 +433,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 							info["swarm_workers"] = workers
 						}
 					}
-					if s.ContextTokens > 0 || s.OutputTokens > 0 {
+					if s.ContextTokens > 0 || s.OutputTokensValue() > 0 {
 						info["context_tokens"] = int(s.ContextTokens)
-						info["output_tokens"] = s.OutputTokens
+						info["output_tokens"] = int(s.OutputTokensValue())
 						delete(info, "usage_unknown")
 					}
 					n.resolveAgyContextWindow(&s)
