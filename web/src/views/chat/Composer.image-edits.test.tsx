@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // An edited picture keeps its source, edits and history beside it in the composer (#4991, iOS
-// ImageEditsTests.anEditedPhotoKeepsItsEditsUntilItGoes): its tile opens the editor where it stopped, on the picture as
-// it came; removing or sending it frees the source with it. The editor itself is a stub here (it draws on a canvas).
+// ImageEditsTests.anEditedPhotoKeepsItsEditsUntilItGoes): clicking its tile expands it above the live composer,
+// Annotate opens the editor where it stopped on the picture as it came, finishing or cancelling returns cleanly to
+// the expanded preview, and removing or sending it frees the source with it.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,7 +44,7 @@ afterEach(() => {
   host.remove();
 });
 
-/** Waits inside act until `check` passes: the editor is a lazy chunk. */
+/** Waits inside act until `check` passes: the stage and editor are lazy chunks. */
 const until = async (check: () => void) => {
   for (let i = 0; i < 200; i++) {
     await act(async () => {
@@ -59,9 +60,17 @@ const until = async (check: () => void) => {
 };
 
 const tile = (name: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("ui-attachmenttray.edit", { name })}"]`)!;
+const previewImg = () => host.querySelector<HTMLImageElement>('[data-testid="composer-image-preview"]');
+const annotateBtn = () => host.querySelector<HTMLButtonElement>('[data-testid="composer-image-annotate"]');
+const expand = async (name: string) => {
+  act(() => tile(name).click());
+  await until(() => expect(annotateBtn()).not.toBeNull());
+};
 const open = async (name: string) => {
   editor.props = null;
-  act(() => tile(name).click());
+  if (!annotateBtn()) await expand(name);
+  else act(() => tile(name).click());
+  act(() => annotateBtn()!.click());
   await until(() => expect(editor.props).not.toBeNull());
   return editor.props!;
 };
@@ -72,41 +81,46 @@ const turned = (turns: number, before: EditState = { edits: noEdits(), history: 
 const result = (data: string): DraftImage => ({ name: "image.png", mime: "image/png", data: btoa(data) });
 
 describe("an edited picture in the composer", () => {
-  it("opens again where the editor stopped, on the picture as it came, until it is removed", async () => {
+  it("opens again where the editor stopped, updates the expanded preview, and frees URLs on remove", async () => {
     act(() => root.render(<Composer draftKey="k" placeholder="" onSend={async () => true} />));
     act(() => void sendDraft("k", { type: "image", image: { name: "a.png", mime: "image/png", data: btoa("source") } }));
     expect(tile("a.png").querySelector("img")!.getAttribute("src")).toBe("blob:test/1");
 
-    // first edit: from the picture itself, nothing to carry on
+    // click tile -> expand preview -> click Annotate -> first edit from the original source
     let e = await open("a.png");
     expect(e.src).toBe("blob:test/1");
     expect(e.start).toBeUndefined();
     const first = turned(1);
     act(() => e.onDone(result("turned once"), first));
+    // returns to the expanded preview showing the updated image
+    expect(previewImg()?.getAttribute("src")).toBe("blob:test/2");
     expect(tile("image.png").querySelector("img")!.getAttribute("src")).toBe("blob:test/2");
     expect(revoke).not.toHaveBeenCalled(); // the source stays: the edit is drawn from it
 
-    // again: the same source, the edits and their history as they were left
+    // annotate again straight from the expanded preview: same source, preserved edits and history
     e = await open("image.png");
     expect(e.src).toBe("blob:test/1");
     expect(e.start).toMatchObject(first);
     act(() => e.onDone(result("turned twice"), turned(2, first)));
+    expect(previewImg()?.getAttribute("src")).toBe("blob:test/3");
     expect(revoke.mock.calls.map(([u]) => u)).toEqual(["blob:test/2"]); // the earlier result goes, the source stays
     e = await open("image.png");
     expect(e.start?.edits.turns).toBe(2);
     expect(e.start?.history.past).toHaveLength(2);
 
-    // cancelled: nothing changes
+    // cancelled: returns cleanly to the expanded preview without changing anything
     act(() => e.onCancel());
+    expect(previewImg()?.getAttribute("src")).toBe("blob:test/3");
     expect(tile("image.png").querySelector("img")!.getAttribute("src")).toBe("blob:test/3");
 
-    // removed: the picture and its source both go
+    // removed: the picture and its source both go, and the expanded preview collapses
     revoke.mockClear();
     act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("ui-attachmenttray.remove", { name: "image.png" })}"]`)!.click());
     expect(revoke.mock.calls.map(([u]) => u).sort()).toEqual(["blob:test/1", "blob:test/3"]);
+    expect(host.querySelector("[data-composer-image-stage]")).toBeNull();
   });
 
-  it("drops the edits with the picture once it is sent", async () => {
+  it("drops the edits with the picture once it is sent and collapses the expanded view", async () => {
     const sent: Outgoing[] = [];
     act(() =>
       root.render(
@@ -123,11 +137,13 @@ describe("an edited picture in the composer", () => {
     act(() => void sendDraft("s", { type: "image", image: { name: "a.png", mime: "image/png", data: btoa("source") } }));
     const e = await open("a.png");
     act(() => e.onDone(result("edited"), turned(3)));
+    expect(previewImg()?.getAttribute("src")).toBe("blob:test/2");
     revoke.mockClear();
     await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.send")}"]`)!.click());
     expect(sent).toHaveLength(1);
     expect(sent[0].images).toEqual([{ mime: "image/png", data: btoa("edited") }]); // the result goes, not the source
     expect(revoke.mock.calls.map(([u]) => u).sort()).toEqual(["blob:test/1", "blob:test/2"]);
+    expect(host.querySelector("[data-composer-image-stage]")).toBeNull();
   });
 
   it("carries on from the viewer's edit, and leaves the chat's own picture alone", async () => {
@@ -139,7 +155,9 @@ describe("an edited picture in the composer", () => {
     expect(e.src).toBe(fromChat);
     expect(e.start).toMatchObject(state);
     act(() => e.onCancel());
+    expect(previewImg()?.getAttribute("src")).toBe("blob:test/1");
     act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("ui-attachmenttray.remove", { name: "image.png" })}"]`)!.click());
     expect(revoke.mock.calls.map(([u]) => u)).toEqual(["blob:test/1"]);
+    expect(host.querySelector("[data-composer-image-stage]")).toBeNull();
   });
 });
