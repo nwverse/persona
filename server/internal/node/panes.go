@@ -146,7 +146,7 @@ func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
 			item := proto.PaneItem{Pane: p.PaneID, Terminal: panePrefix + p.PaneID, TabID: p.TabID,
 				WorkspaceID: p.WorkspaceID, Agent: p.Agent, Status: p.AgentStatus, Title: p.Title, Cwd: p.Cwd,
 				SessionID: sessionOf[p.PaneID]}
-			if id := p.Tokens[personaTabToken]; validID(id) && p.Agent == "" && item.SessionID == "" {
+			if id := n.personaTabLocked(p); validID(id) && p.Agent == "" && item.SessionID == "" {
 				item.AgentSession = id // the terminal a stopped agent left (stopped.go)
 			}
 			ph.Panes = append(ph.Panes, item)
@@ -165,7 +165,8 @@ func (n *Node) hasLayout() bool {
 // newShell opens a plain shell: a new tab in workspace ws of the host kind (herdr tab create --no-focus, so the
 // computer's own view does not jump). It starts in the workspace's directory as the host reported it, or in dir when the
 // file page asks for its folder (#5832: a folder the read guard lets the page see, given to the host as the tab's
-// starting directory, never typed into the shell), and is named shell, shell-2…. With dir and no ws, the first workspace
+// starting directory, never typed into the shell; Orca, whose terminals take none, gets it with the request that makes
+// the terminal: openShell), and is named shell, shell-2…. With dir and no ws, the first workspace
 // of a host that opens tabs; when that host has none yet, a new workspace in dir (newShellSpace). Only a user's explicit
 // action calls this.
 func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShellResult, error) {
@@ -188,10 +189,12 @@ func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShe
 			return n.newShellSpace(ctx, "", start)
 		}
 	}
+	picked := false // ws is not the user's choice but the first workspace (firstLaunchSpace)
 	if ws == "" && start != "" {
 		if ws = n.firstLaunchSpace(kind); ws == "" {
 			return n.newShellSpace(ctx, kind, start)
 		}
+		picked = true
 	}
 	if ws == "" {
 		return proto.NewShellResult{}, errors.New("no workspace")
@@ -213,18 +216,40 @@ func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShe
 	if cwd == "" { // a workspace the host reports no directory for: the home directory, like a new terminal window
 		cwd, _ = os.UserHomeDir()
 	}
-	created, err := launch.CreateSlot(ctx, ws, cwd, tabLabel("shell", n.tabLabels(ctx, launch, ws)))
+	target := ws
+	if _, places := launch.(shellOpener); places && picked {
+		target = "" // a host that places the user's shell itself (Orca) takes the workspace holding the folder
+	}
+	created, err := openShell(ctx, launch, target, cwd, tabLabel("shell", n.tabLabels(ctx, launch, ws)))
 	if err != nil {
 		return proto.NewShellResult{}, fmt.Errorf("创建终端标签页失败：%w", err)
 	}
 	return n.shellCreated(ctx, launch, created)
 }
 
+// shellOpener is a host that opens the user's own shell (New Terminal, Open Terminal Here) differently from a tab it
+// types a command into: Orca, whose terminals do not take a starting directory, has the new shell put in its folder
+// and gives it no launch grant (orcaHost.OpenShell). space "" is a new space for cwd, as CreateSpace.
+type shellOpener interface {
+	OpenShell(ctx context.Context, space, cwd, label string) (*host.Created, error)
+}
+
+// openShell opens the user's shell in cwd: in space, else in a new space (CreateSpace), on launch.
+func openShell(ctx context.Context, launch host.Launcher, space, cwd, label string) (*host.Created, error) {
+	if o, ok := launch.(shellOpener); ok {
+		return o.OpenShell(ctx, space, cwd, label)
+	}
+	if space == "" {
+		return launch.CreateSpace(ctx, cwd, label)
+	}
+	return launch.CreateSlot(ctx, space, cwd, label)
+}
+
 // newShellSpace opens the shell as the first tab of a new workspace in dir, named after it, on the first host (of kind,
 // when given) that opens tabs: a computer whose engine is running with no workspace yet still gets a terminal, the way
 // an Agent start does (newTab).
 func (n *Node) newShellSpace(ctx context.Context, kind, dir string) (proto.NewShellResult, error) {
-	launch, created, err := n.launchSpace(ctx, kind, dir, "shell")
+	launch, created, err := n.openSpace(ctx, kind, dir, "shell", true)
 	if errors.Is(err, errNoLauncher) {
 		return proto.NewShellResult{}, errors.New("no workspace")
 	}
@@ -240,12 +265,23 @@ var errNoLauncher = errors.New("no host that opens tabs")
 // launchSpace makes a new workspace in dir, named after it, on the first host (of kind, when given) that opens tabs,
 // its first tab named after label (label, label-2… as the workspace's tabs leave free).
 func (n *Node) launchSpace(ctx context.Context, kind, dir, label string) (host.Launcher, *host.Created, error) {
+	return n.openSpace(ctx, kind, dir, label, false)
+}
+
+// openSpace is launchSpace; userShell: its tab is the user's own shell (openShell), not one a command is typed into.
+func (n *Node) openSpace(ctx context.Context, kind, dir, label string, userShell bool) (host.Launcher, *host.Created, error) {
 	for _, h := range n.hosts.All() {
 		launch, ok := h.(host.Launcher)
 		if !ok || (kind != "" && h.Kind() != kind) {
 			continue
 		}
-		created, err := launch.CreateSpace(ctx, dir, filepath.Base(dir))
+		var created *host.Created
+		var err error
+		if userShell {
+			created, err = openShell(ctx, launch, "", dir, filepath.Base(dir))
+		} else {
+			created, err = launch.CreateSpace(ctx, dir, filepath.Base(dir))
+		}
 		if err != nil {
 			return launch, nil, err
 		}

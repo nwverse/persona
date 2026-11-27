@@ -10,6 +10,7 @@ export interface QueuedComposerItem {
   readonly text: string;
   readonly relayed: boolean;
   readonly sender: string;
+  readonly noWake: boolean;
 }
 
 export interface ComposerQueueState {
@@ -25,6 +26,92 @@ interface ParsedQueueEntry {
   readonly text: string;
   readonly explicitRelayed: boolean | undefined;
   readonly sender: string;
+  readonly noWake: boolean;
+}
+
+const RELAY_PREFIX_PATTERN = /^来自「([^\n]*?)」(（不唤醒）)?：([\s\S]*)$/;
+
+function parseRelayMetadata(
+  rawText: string,
+  relayed: boolean,
+  explicitSender: string,
+  explicitNoWake: boolean
+): { text: string; sender: string; noWake: boolean } {
+  if (!relayed) {
+    return { text: rawText, sender: explicitSender, noWake: false };
+  }
+  const match = RELAY_PREFIX_PATTERN.exec(rawText);
+  if (match) {
+    const parsedSender = match[1].trim();
+    const parsedNoWake = !!match[2];
+    const body = match[3].trim();
+    if (parsedSender) {
+      return {
+        text: body || rawText,
+        sender: explicitSender || parsedSender,
+        noWake: explicitNoWake || parsedNoWake
+      };
+    }
+  }
+  return { text: rawText, sender: explicitSender, noWake: explicitNoWake };
+}
+
+/**
+ * Returns true only when `index` refers to a mutable user-owned queued item (`0 <= index < ownCount`).
+ * Relayed messages (`index >= ownCount`) are strictly read-only and must never hit `/queue`.
+ */
+export function canMutateQueueIndex(ownCount: number, index: number): boolean {
+  return Number.isInteger(ownCount) && Number.isInteger(index) && ownCount > 0 && index >= 0 && index < ownCount;
+}
+
+/**
+ * Builds the `keep` index array for `POST /api/v1/sessions/{m}/{s}/queue` that removes `removeIndex`.
+ * Matches iOS `ComposerTopSlot.swift`: excludes relayed indices (`>= ownCount`) and `removeIndex`.
+ */
+export function queueKeepWithout(ownCount: number, removeIndex: number): number[] {
+  if (!Number.isInteger(ownCount) || ownCount <= 0) return [];
+  const keep: number[] = [];
+  for (let i = 0; i < ownCount; i++) {
+    if (i !== removeIndex) keep.push(i);
+  }
+  return keep;
+}
+
+/**
+ * Builds the `keep` index array for moving own queued item `index` by `delta` (`-1` up, `1` down).
+ * Returns `[]` when the move is out of bounds or targets a relayed index, matching `QueueSteerTests.swift`.
+ */
+export function queueKeepSwapped(ownCount: number, index: number, delta: -1 | 1): number[] {
+  const to = index + delta;
+  if (
+    !Number.isInteger(ownCount) ||
+    !Number.isInteger(index) ||
+    (delta !== -1 && delta !== 1) ||
+    ownCount < 2 ||
+    index < 0 ||
+    index >= ownCount ||
+    to < 0 ||
+    to >= ownCount
+  ) {
+    return [];
+  }
+  const order: number[] = [];
+  for (let i = 0; i < ownCount; i++) {
+    order.push(i);
+  }
+  order.splice(index, 1);
+  order.splice(to, 0, index);
+  return order;
+}
+
+/**
+ * Appends a taken-back queued message below any existing composer draft without overwriting it.
+ */
+export function mergeQueuedTakeBackDraft(existingDraft: string, pulledText: string): string {
+  const pulled = (pulledText || '').trim();
+  if (!pulled) return existingDraft;
+  if (!existingDraft || !existingDraft.trim()) return pulled;
+  return existingDraft + '\n' + pulled;
 }
 
 function asRecord(value: Object | undefined | null): Record<string, Object> {
@@ -60,7 +147,8 @@ export function extractComposerQueue(sessionData: Record<string, Object> | undef
           id: '',
           text: text,
           explicitRelayed: undefined,
-          sender: ''
+          sender: '',
+          noWake: false
         });
       } else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
         const record = entry as Record<string, Object>;
@@ -74,11 +162,13 @@ export function extractComposerQueue(sessionData: Record<string, Object> | undef
         const rawId = typeof record['id'] === 'string' ? (record['id'] as string).trim() : '';
         const sender = typeof record['sender'] === 'string' ? (record['sender'] as string).trim() : '';
         const explicitRelayed = typeof record['relayed'] === 'boolean' ? record['relayed'] as boolean : undefined;
+        const noWake = record['no_wake'] === true || record['noWake'] === true;
         parsed.push({
           id: rawId,
           text: text,
           explicitRelayed: explicitRelayed,
-          sender: sender
+          sender: sender,
+          noWake: noWake
         });
       }
     }
@@ -118,11 +208,14 @@ export function extractComposerQueue(sessionData: Record<string, Object> | undef
     relayedCount = clampedRelayed;
     for (let i = 0; i < parsed.length; i++) {
       const entry = parsed[i];
+      const relayed = i >= ownCount;
+      const meta = parseRelayMetadata(entry.text, relayed, entry.sender, entry.noWake);
       items.push({
         id: resolveId(entry.id, i),
-        text: entry.text,
-        relayed: i >= ownCount,
-        sender: entry.sender
+        text: meta.text,
+        relayed: relayed,
+        sender: meta.sender,
+        noWake: meta.noWake
       });
     }
   } else if (hasOwnQueuedCount) {
@@ -131,11 +224,14 @@ export function extractComposerQueue(sessionData: Record<string, Object> | undef
     relayedCount = parsed.length - ownCount;
     for (let i = 0; i < parsed.length; i++) {
       const entry = parsed[i];
+      const relayed = i >= ownCount;
+      const meta = parseRelayMetadata(entry.text, relayed, entry.sender, entry.noWake);
       items.push({
         id: resolveId(entry.id, i),
-        text: entry.text,
-        relayed: i >= ownCount,
-        sender: entry.sender
+        text: meta.text,
+        relayed: relayed,
+        sender: meta.sender,
+        noWake: meta.noWake
       });
     }
   } else {
@@ -144,11 +240,13 @@ export function extractComposerQueue(sessionData: Record<string, Object> | undef
       const relayed = entry.explicitRelayed !== undefined ? entry.explicitRelayed : !!entry.sender;
       if (relayed) relayedCount++;
       else ownCount++;
+      const meta = parseRelayMetadata(entry.text, relayed, entry.sender, entry.noWake);
       items.push({
         id: resolveId(entry.id, i),
-        text: entry.text,
+        text: meta.text,
         relayed: relayed,
-        sender: entry.sender
+        sender: meta.sender,
+        noWake: meta.noWake
       });
     }
   }

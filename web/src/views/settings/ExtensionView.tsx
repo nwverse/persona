@@ -32,6 +32,7 @@ import { lazyPage } from "../../lib/lazy-page";
 import { PageBoundary } from "../PageBoundary";
 import { sendDraft } from "../../lib/drafts";
 import { conversationPage } from "../../lib/conversation-page";
+import { mainConversationMachine } from "../../lib/feed-cache";
 import { chosenManager, defaultKnown, defaultManager, otherManager, useKnownDefault, useLinkManager } from "../../lib/manager-choice";
 import { keepView, NATIVE_UI_VERSION, readKeptView } from "../../lib/extension-view-cache";
 import type { UIRowControl } from "../../lib/extension-ui-v6";
@@ -1057,12 +1058,14 @@ export function askAssistant(text: string) {
 }
 
 /** Puts one of an extension's quick prompts in the assistant's main composer, without sending it: the main
- *  conversation opens (or the new-conversation page when there is none yet), and the owner sends when ready. */
+ *  conversation opens on the computer it really runs on (main_machine_id, lib/feed-cache.ts), or the
+ *  new-conversation page when there is none yet, and the owner sends when ready. */
 export function composeAssistant(text: string) {
   const a = getState().assistant;
-  if (a?.main && a.machine_id) {
-    sendDraft(`${a.machine_id}/${a.main}`, { type: "replace", text });
-    navigate(conversationPage(a.main, a.machine_id, chosenManager() ?? undefined));
+  const machine = mainConversationMachine(a);
+  if (a?.main && machine) {
+    sendDraft(`${machine}/${a.main}`, { type: "replace", text });
+    navigate(conversationPage(a.main, machine, chosenManager() ?? undefined));
     return;
   }
   sendDraft("persona-new", { type: "replace", text });
