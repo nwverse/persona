@@ -357,12 +357,13 @@ function MarkAllSeen({ count, onClick }: { count: number; onClick: () => void })
 }
 
 // `grid`: its rows go two, then three to a line as the page gets wider; "cards" (rows with buttons, read before
-// answering) only once each still has room for its question and buttons.
+// answering) only once each still has room for its question and buttons. A section's only card fills a two-column
+// row, but stops at two columns' width when the row has three.
 const GRID = {
-  rows: "grid grid-cols-1 items-start gap-1.5 @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3",
+  rows: "grid grid-cols-1 items-start gap-1.5 [&>:only-child]:col-span-full @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3 @min-[100rem]:[&>:only-child]:col-span-2",
   // task cards differ in height (a stage bar or not): a row stretches them to one height, the agent line at the bottom
-  tasks: "grid grid-cols-1 items-stretch gap-1.5 @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3",
-  cards: "grid grid-cols-1 items-start gap-1.5 @min-[84rem]:grid-cols-2 @min-[120rem]:grid-cols-3",
+  tasks: "grid grid-cols-1 items-stretch gap-1.5 [&>:only-child]:col-span-full @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3 @min-[100rem]:[&>:only-child]:col-span-2",
+  cards: "grid grid-cols-1 items-start gap-1.5 [&>:only-child]:col-span-full @min-[84rem]:grid-cols-2 @min-[120rem]:grid-cols-3 @min-[120rem]:[&>:only-child]:col-span-2",
 };
 
 function Group({ title, count, children, right, hint, grid }: { title: string; count: number; children: React.ReactNode; right?: React.ReactNode; hint?: string; grid?: true | "cards" | "tasks" }) {

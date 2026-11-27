@@ -10,9 +10,9 @@ and it can also be started from the phone ("Starting from the phone"). Supported
 
 A takeover succeeds only after the same thread is loaded and joined on the shared app-server. A transient input box during TUI startup is not sufficient: folder-trust and update dialogs can appear later. The takeover keeps applying the existing start-readiness checks until shared ownership is confirmed, or returns an explicit not-ready error.
 
-Eligible sessions advertise `capabilities.takeover: {running, can_resume, reason?}`, where `reason` is `encrypted_context` or `unavailable`. A signed-in user on a full device can use the manager's `GET` then `POST /api/v1/machines/{mid}/codex/{sid}/takeover` flow; generic device-call APIs and assistant tools cannot invoke it. GET returns `{token, cwd, transcript_path, continuation_prompt}`; the single-use token expires after two minutes. POST requires `confirm_stop: true` only while the original writer is running; when it has exited, `false` is accepted.
+Eligible sessions advertise `capabilities.takeover: {running, can_resume, reason?, app_owned?}`, where `reason` is `encrypted_context`, `app_running`, or `unavailable`. A signed-in user on a full device can use the manager's `GET` then `POST /api/v1/machines/{mid}/codex/{sid}/takeover` flow; generic device-call APIs and assistant tools cannot invoke it. GET returns `{token, cwd, transcript_path, continuation_prompt}`; the single-use token expires after two minutes. POST requires `confirm_stop: true` while a CLI writer is running or when taking over an idle, unowned Codex App thread (`app_owned: true`, confirming that the Codex App will no longer own the chat); when a CLI writer has exited, `false` is accepted.
 
-The manager sends one Ctrl+D through the selected session's terminal writer only after confirming the composer is empty, with no modal or queued input, and rechecking both process identity and terminal instance. Remote terminal-writer bridges are supported. It waits for the process to exit, the transcript to end on a complete stable line, and a fresh scan to find no writer. Any failed check or timeout refuses takeover; no signal or forced termination is used. Takeover resumes the same thread and session ID in a new terminal tab. The separate continue option starts an independent session with context and the attached to-do preserved. `encrypted_context` is continuation-only.
+The manager sends one Ctrl+D through the selected CLI session's terminal writer only after confirming the composer is empty, with no modal or queued input, and rechecking both process identity and terminal instance. Remote terminal-writer bridges are supported. It waits for the process to exit, the transcript to end on a complete stable line, and a fresh scan to find no writer. For an idle, unowned Codex App thread (no live App bus, no connected app-server owner, no live rollout holder, no running turn), it rechecks that the Codex App is not running and could not load the thread before launching `codex resume <thread>` under the same `CODEX_HOME`. Any failed check or timeout refuses takeover; no signal or forced termination is used. Takeover resumes the same thread and session ID in a new terminal tab. The separate continue option starts an independent session with context and the attached to-do preserved. `encrypted_context` and `app_running` are continuation-only.
 
 ## Recognition
 
@@ -208,8 +208,8 @@ mid-turn too; `config.toml` stays as it is (`node/codex_terminal_modes.go`).
 
 - **Row**: `capabilities.model: true`, plus the current model, effort and speed. Before the rollout records its settings, the node uses the launch
   selections, launcher arguments and Codex configuration from the home that owns the rollout. The model catalog supplies defaults when available.
-  That home's `models_cache.json` gives the model's effort levels and speed choices. The row uses Codex's whole effort list for an unlisted model
-  and an empty list for a model with no effort choices. Speed choices require tiers in the catalog.
+  That home's `models_cache.json` gives the model's effort levels (`supported_reasoning_levels`) and speed choices. The row uses Codex's whole
+  effort list for an unlisted model and an empty list for a model with no effort choices. Speed choices require tiers in the catalog.
 - **Version check** uses the running Codex (#13290). The node requires a rollout and reads the pane process's executable version
   (`<exe> --version`, cached by executable path and modification time). If that version is unavailable, it uses the rollout's first
   `session_meta.cli_version`. The effective version must be 0.169 or later for the row to offer controls and for settings requests to type
@@ -331,7 +331,7 @@ The node checks whether the legacy bus accepts connections, rather than relying 
 
 On macOS, when the legacy follower socket is absent or unserved for the default Codex home (`~/.codex`), Persona also supports the native thread queue in the bundled App CLI (`server/internal/node/codex_desktop_native_queue.go`). It probes the bundled CLI once per installed App build (`queue --help`), checks `thread/queue/list` for an already-persisted `clientUserMessageId`, opens `codex://threads/<id>` in the same App bundle only when that bundle does not already hold the thread's writer lock, and enqueues the original thread ID, client message ID, text, and images with `thread/queue/add`. The owning desktop process drains the persisted submission (including after a running turn finishes). Persona reports a queued receipt only after Codex acknowledges the message ID; a server rejection returns `codex_read_only` (`delivered: none`), while a broken transport or missing receipt leaves delivery unknown (`delivered: unknown`). Interrupting a running turn and changing model/effort still require the legacy follower bus and are not advertised in queue-only mode; user-created desktop chats may also be identified by `source: vscode` and `thread_source: user` on builds that migrated sidebar membership out of the legacy lists.
 
-Without a bus listener or native queue route, App chats retain their history, App identity, project grouping and observed turn status, but advertise no send, interrupt or model / effort controls. The App launcher is unavailable too. A clear view-only reason directs the user to continue in the Codex App on the computer. Requests from an older session list receive `codex_read_only` with `delivered: none`, without a raw socket path or dial error. Sends are refused before saving attachments or accepting a held message, including while the App is working. App chats are not offered a terminal resume / takeover as a substitute. A listener appearing again restores controls on the next list. A failure after a turn request was sent retains the existing uncertain-delivery behavior; it is never retried as a new send.
+Without a bus listener or native queue route, App chats retain their history, App identity, project grouping and observed turn status, but advertise no send, interrupt or model / effort controls. The App launcher is unavailable too. Requests from an older session list receive `codex_read_only` with `delivered: none`, without a raw socket path or dial error. Sends are refused before saving attachments or accepting a held message, including while the App is working. While the Codex App is running (or a turn/rollout is active), terminal resume / takeover stays refused (`app_running` when idle with no live writer, offering **Continue in a new session** when a terminal launcher is available, or pure view-only when no launcher is available or a writer is active). Once the Codex App is not running and no live writer or running turn holds the thread (#13772), the row offers **Continue in a new session** and guarded **Resume / Take over** (under the same `CODEX_HOME`, behind confirmation that the App will no longer own the chat, falling back to continuation on `encrypted_context`), updates its view-only reason to name the phone actions, and makes the idle unowned history eligible for `agent_send` with `resume: true`. A listener or native queue route appearing again restores the corresponding App controls on the next list. A failure after a turn request was sent retains the existing uncertain-delivery behavior; it is never retried as a new send.
 
 In builds that expose the legacy bus, the desktop App's own app-server uses stdio, so external clients cannot join it. Starting another app-server to resume the same session is rejected (active writer already exists).
 But the App's main process exposes a local message bus at `<CODEX_HOME>/ipc/ipc.sock` (on Windows the named pipe `\\.\pipe\codex-ipc`, see "Windows" below); App windows use it to request "run a turn in the session you own."
@@ -433,7 +433,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   On Unix, the native `codex` command honors a same-name shell function, including its environment and flags (#4876).
   With an available Bash/Zsh, the function or executable can be supplied by its rc file; it need not exist on the outer process's PATH.
 - **First message arrives unchanged**: Codex creates a thread only after receiving its first message. A start that includes it answers with that thread (below); one without it answers with a waiting row
-  ("Starting without a first message"). Background startup (`async`) is still refused with `codex_needs_prompt`: older Apps get that and retry with the message. Older nodes refuse a start without a message the same way,
+  ("Starting without a first message"). Current nodes handle `async:true` synchronously for terminal Codex: they wait for the first thread and return its real ID. An older node may refuse the async request with `codex_needs_prompt`; an older App retries with the message. Older nodes refuse a start without a message the same way,
   so Apps make the message optional only for launchers marked `prompt_optional`. Launcher words and message are written together to a private temporary file under the node directory (0600). The pane receives only
   `personad codex-start <file>`: it claims the file (renames it away, so a node that gave up on the start and withdrew the file the same way leaves it nothing, and the other way round), reads and deletes it, then runs the launcher words (preceding `VAR=…` enters the environment), adding `--` and the message only when one is supplied.
   On Unix, native `codex` runs through the user's interactive shell to preserve a same-name function. The shell executes only `"$@"`: launcher words and the message are positional arguments, never interpolated as shell code.
@@ -569,14 +569,15 @@ Code: `node/codex_resume.go`, `node/retire.go` (`resumeOther`, `resumeCodex`); #
   the launcher the start gave (or the hub's "New Agent" one for a message) when it runs Codex, otherwise plain `codex`. From then on it is Persona's:
   what it was resumed with is kept, and it is retired and resumed like one Persona started.
 - **Only when nothing has it open**, else the row stays view only (`codex_read_only`): no app-server owns it (sends go there), no process holds its rollout
-  (a Codex CLI still running, the desktop App's own app-server: a second writer would fork the thread), not the Codex App's chat, not a subagent or a program's run (`codex exec`, SDKs),
+  (a Codex CLI still running, the desktop App's own app-server: a second writer would fork the thread), not a subagent or a program's run (`codex exec`, SDKs),
   and the engine can open tabs (not a runtime engine, not Orca). Only the default `~/.codex` home: a thread of another home is listed under an opaque key, not its thread id.
+  An explicit Codex App origin is additionally eligible only once the App and its bus / native queue are no longer available; an ambiguous shared app-server origin corroborated by the App sidebar remains App-owned.
 - The history row of such a thread is sendable (`capabilities.send`), so the apps show the input box; no client change is needed to resume by sending.
 - **Switching an Agent between the engines** (#5054, [claude-integration.md](claude-integration.md) "Switching a running Agent to another engine"): a Codex Agent Persona started (or resumed) in a terminal can move to Claude Code like a Claude Code Agent moves to Codex.
   It is quit with Ctrl+C in its pane; once only a shell is in front and no Codex CLI holds its rollout (an app-server that keeps the thread loaded does not count: nothing of the other engine writes it), Claude Code starts in that shell.
   When the conversation comes back to Codex, the thread it ran in is resumed in the same pane with `codex resume <id> -- <handoff and message>` through the launcher picked, when that launcher runs Codex in the thread's home and nothing has the thread open (the rules above: an app-server that still has it loaded keeps it from being resumed); otherwise a fresh thread takes the conversation with the whole handoff.
   The resume runs in the thread's directory with the switch's mode (plan as read-only flags, bypassPermissions as the bypass flags), the model picked (`--model`) and the effort picked (`-c model_reasoning_effort`, left out when Codex's config already runs it); the record then names that launcher, model and effort. A switch that fails brings the Codex back on its own launcher with `codex resume <id>` in the same pane, its record's model, effort and mode kept.
-- **Tests**: `node/codex_resume_test.go` (history row sendable / view only while held, resume on a message and on a start, Codex App thread refused), `node/codex_resume_model_test.go` (model and effort recorded at the start and run again on a resume), `node/retire_test.go`.
+- **Tests**: `node/codex_resume_test.go` (history row sendable / view only while held, resume on a message and on a start, guarded Codex App recovery after the App exits, shared-origin refusal), `node/codex_resume_model_test.go` (model and effort recorded at the start and run again on a resume), `node/retire_test.go`.
 
 ## Archive
 
@@ -685,7 +686,7 @@ Two things Claude Code sessions have are missing here. Persona installs no Codex
 
 ## Not supported yet
 
-- Resuming from the phone covers a thread nothing has open in the default home ("Resuming from the phone"). Offline / archived history on external app-server instances is read-only; never silently start another app-server to continue it. Codex App threads continue only through the App.
+- Resuming from the phone covers a thread nothing has open in the default home ("Resuming from the phone"). Offline / archived history on external app-server instances is read-only; never silently start another app-server to continue it. Codex App threads continue through the App while it owns them; once the App has exited, the guarded same-home resume / takeover described above is available.
 - Threads archived only in Codex (the Codex App's Archive) are not listed in Persona's archive; only Persona's own archives are mirrored to Codex ("Archive").
 - Custom launcher functions can supply their own provider, home, or profile. Persona preserves their launch behavior and shows a task-card notice when an effort override requires the terminal route.
 - Permission mode cannot be changed on the phone. Thinking effort and model change on app-server sessions ("Thinking effort") and, from Codex 0.169, on the terminal route ("On the terminal route"); TRAE CLI changes neither.
@@ -700,6 +701,8 @@ Two things Claude Code sessions have are missing here. Persona installs no Codex
 In Agents you can see live state, send messages, open the terminal, and close sessions. Existing sessions keep their stored agent identifier.
 The node integration (`server/internal/node/traex.go`) shares rollout parsing with Codex in `transcript/codex.go`.
 
+- **Model selection**: New Agent lists the models with selectable configuration names from the computer's `traex models --json`.
+  An explicit choice is passed as `--model` on a fresh start; Default leaves the CLI's own model preference in effect.
 - **herdr does not recognize it**: TRAE CLI panes are ordinary herdr panes (`agent_status: unknown`, absent from `agent list`); herdr has no custom-Agent configuration either.
   The node finds them itself: `~/.trae/cli/thread-writer-locks/<session id>.owner.json` records the pid writing the session. That pid's environment contains herdr's
   `HERDR_PANE_ID` (Linux reads `/proc/<pid>/environ`, macOS uses `ps -E`), giving an exact pane → pid → session mapping without directory guessing. Pane information comes from
@@ -803,16 +806,20 @@ A new local Codex launched inside Orca must keep that terminal’s hook environm
 
 ## Speed
 
-The web composer's effort menu includes a Speed submenu for Persona conversations running Codex and writable external app-server threads whose current model advertises
-`serviceTiers` through `model/list`. Standard sends `default`; Fast uses the advertised tier ID, currently `priority`.
-The submenu explains increased usage or cost before selection. It is independent of reasoning effort and takes effect
-on subsequent turns. Settings > Agents > Codex also exposes the native `service_tier` default for new sessions.
+The web model panel lists the running model's advertised speeds. It offers Standard, Fast, Ultrafast and any other
+tiers the runtime advertises, such as Flex. The control is independent of reasoning effort and takes effect on
+subsequent turns. Settings > Agents > Codex also exposes the native speed default for new sessions.
 
-An explicit choice uses `thread/settings/update` and waits for acknowledgment. Refusals, unsupported methods and lost
-connections return errors without retaining a next-turn speed override. `thread/resume` and `thread/settings/updated`
-provide the current speed. A native null means Standard. Missing speed stays unknown because `thread/read` does not
-currently report it. Refreshes preserve acknowledged state, and reconnects start with unknown state until native
-settings arrive. Terminal-only panes, subagents and models without advertised tiers have no speed control.
+An app-server thread uses `thread/settings/update` with the advertised native ID. The default ID is `default` and
+the common Fast ID is `priority`. `thread/resume` and `thread/settings/updated` report the acknowledged speed.
+Native null means Standard. Missing speed stays unknown because `thread/read` does not report it.
+
+A live terminal-route Codex 0.169 or later uses the current model's tiers in its Codex home catalog. Startup settings
+and the running-version check follow "On the terminal route". The node checks the terminal for a draft or dialog,
+then types `/model --speed=<tier>`. The terminal takes `standard` for Standard and `fast` for Fast, with other tier IDs
+passed through. The command changes speed independently of model and effort. A new `thread_settings_applied` event
+confirms the selection before the next turn. A timeout reports an uncertain change. Panes without a verified rollout
+or advertised tiers, screenless hosts and subagents do not offer this control.
 
 The iOS main Assistant conversation reads the same session fields in its existing composer menu. A Speed section appears
 only when the session advertises `default` or `priority`; it uses localized Standard / Fast labels, explains Fast's extra

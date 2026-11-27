@@ -77,8 +77,9 @@ type askRoute struct {
 	held     time.Time // when it reached this rung: askBusyMax counts from here
 	// maybeTold: a question card restored after a restart. Whether the user was told of it is not kept, so should it
 	// reach the user (an escalation) without a supervisor's context, it only goes back on the apps (ringAsks).
-	maybeTold bool
-	delivered bool // this rung has actually received the card, rather than merely queued its signal
+	maybeTold       bool
+	delivered       bool      // this rung has actually received the card, rather than merely queued its signal
+	standaloneUntil time.Time // when a permission with no open to-do becomes answerable in the app
 	// A card that runs past its last rung goes back to its task's supervisor (reminded) and stays there (parked) until
 	// someone answers or escalates it, reminding the supervisor each askHoldFor, reminders times so far, at most
 	// askRemindMax. None of it is kept over a restart: a restored route starts again from the supervisor.
@@ -125,17 +126,21 @@ func terminalQuestion(ix proto.Interaction) bool {
 // on its own screen (a safety check its hooks never see, "Dangerous rmdir operation…") among them. Unparsed screens,
 // typed values, secrets and forms are not: the supervisor could not read them, so they stay with the user.
 func supervisedScreen(ix proto.Interaction) bool {
-	d := ix.Dialog
-	if ix.Kind != proto.IxScreen || ix.Private || ix.Secret || len(ix.Fields) > 0 || d == nil || strings.TrimSpace(d.Question) == "" {
+	if !safeScreenDialog(ix) {
 		return false
 	}
-	return slices.ContainsFunc(d.Options, func(o screen.Option) bool { return o.Kind == "" && o.Label != "" })
+	return slices.ContainsFunc(ix.Dialog.Options, func(o screen.Option) bool { return o.Kind == "" && o.Label != "" })
+}
+
+func safeScreenDialog(ix proto.Interaction) bool {
+	return ix.Kind == proto.IxScreen && !ix.Private && !ix.Secret && len(ix.Fields) == 0 &&
+		ix.Dialog != nil && strings.TrimSpace(ix.Dialog.Question) != ""
 }
 
 // userScreen says why supervised terminal dialog ix is the user's to decide, not its supervisor's ("" when the
-// supervisor may pick its option): Claude's startup trust and Bypass Permissions confirmations, which have ordinary
-// option rows though they authorize access, and a command that would send, reply or comment in the user's name,
-// spend money or delete (userApprovalWords). The supervisor hands those to the user with ask_escalate.
+// supervisor may pick its option): Claude's startup trust, external imports and Bypass Permissions confirmations,
+// and a command that would send, reply or comment in the user's name, spend money or delete (userApprovalWords).
+// The supervisor hands those to the user with ask_escalate.
 func userScreen(ix proto.Interaction) string {
 	d := ix.Dialog
 	if d == nil {
@@ -143,7 +148,9 @@ func userScreen(ix proto.Interaction) string {
 	}
 	for _, o := range d.Options {
 		label := strings.ToLower(strings.TrimSpace(o.Label))
-		if label == "yes, i trust this folder" || label == "yes, i accept" && strings.Contains(d.Detail+" "+d.Question, "Bypass Permissions mode") {
+		trust := label == "yes, i trust this folder" || label == "yes, allow external imports"
+		bypass := label == "yes, i accept" && strings.Contains(d.Detail+" "+d.Question, "Bypass Permissions mode")
+		if trust || bypass {
 			return "authorizes the agent's access, which only the user grants"
 		}
 	}
@@ -420,9 +427,10 @@ func (s *Service) routedTo(id, self string, main bool) (string, bool) {
 // or plan moves up at once when the conversation holding it itself needs the user (needsYouLocked) and there is a rung
 // above it.
 //
-// No card reaches the user here: past its last rung a card goes back to its task's supervisor (quietRemind) and stays
-// there, parked, reminding it each askHoldFor up to askRemindMax times; only ask_escalate hands it to the user. A route
-// with no rung at all (none askLadder makes) has no supervisor to hold it, and its card is the user's as an unrouted one.
+// A task's card goes back to its supervisor past the last rung. It stays there, parked, reminding the supervisor
+// each askHoldFor up to askRemindMax times; only ask_escalate hands it to the user. A route with no rung at all
+// has no supervisor to hold it. A standalone permission has no task to escalate and becomes answerable in the app
+// if the main conversation has not handled it within askHoldFor.
 func (s *Service) askTick(now time.Time) {
 	type up struct {
 		todo, to string
@@ -431,12 +439,21 @@ func (s *Service) askTick(now time.Time) {
 		reason   string
 	}
 	var ups, reminds []up
+	var standalone []proto.Interaction
 	toUser := map[string][]string{}
 	s.fleet.mu.Lock()
 	for id, p := range s.fleet.interactions {
 		r := p.route
 		if r == nil || p.claimed || p.ix.Kind == proto.IxScreen {
 			continue // A terminal question stays with its supervisor until an explicit escalation.
+		}
+		if !r.standaloneUntil.IsZero() {
+			if !now.Before(r.standaloneUntil) && now.Before(p.ix.ExpiresAt) {
+				p.route = nil
+				p.ix.Delegating = false
+				standalone = append(standalone, p.ix)
+			}
+			continue
 		}
 		if len(r.ladder) == 0 {
 			toUser[r.todo] = append(toUser[r.todo], id)
@@ -486,6 +503,9 @@ func (s *Service) askTick(now time.Time) {
 	for todo, ids := range toUser {
 		s.logf("asks %v of task %s: no supervisor holds them, to the user", ids, todo)
 		s.ringAsks(todo, ids, nil, escalation{})
+	}
+	for _, ix := range standalone {
+		s.show(ix) // Restore the app controls without sending an alert to another surface.
 	}
 }
 

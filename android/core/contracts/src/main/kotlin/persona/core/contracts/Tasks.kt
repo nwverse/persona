@@ -231,10 +231,10 @@ data class Todo(
     /** Nobody is working on it (#3618): every agent of this open to-do is gone and nothing brings one back; null otherwise
      *  and from an older hub. */
     val orphaned: TodoOrphaned? = null,
+    /** The hub-computed reason this task waits (#16168): render it directly; null when it is not waiting or from an older hub. */
+    @SerialName("wait") val wait: TodoWait? = null,
     /** Empty for an ordinary to-do or task; "concern" for one of the owner's concerns. Unknown values stay ordinary. */
     val kind: String = "",
-    /** Hub-projected wait summary (PR merge blockers, parked wait, etc.); null on older hubs or non-waiting items. */
-    val wait: TodoWait? = null,
 ) {
     val isDone: Boolean get() = doneAt != null
     /** Closed by cancellation, including the legacy supervision-only representation; never counted as completed (#5732). */

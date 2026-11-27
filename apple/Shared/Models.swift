@@ -670,12 +670,14 @@ extension Machine {
     }
 
     /// An explicit workspace host wins over the machine default, provided the machine enables it.
-    nonisolated func startsInHerdr(host: String?) -> Bool {
+    nonisolated func supportsOmpStartModel(host: String?) -> Bool {
         let herdr = MachineEngine.herdr.rawValue
-        let legacyHerdr = engine == .herdr || engine == .herdrBoth
-        guard engineHosts?.contains(herdr) ?? legacyHerdr else { return false }
-        if let host, !host.isEmpty { return host == herdr }
-        return defaultStartHost == herdr
+        let orca = MachineEngine.orca.rawValue
+        let target: String? = if let host, !host.isEmpty { host } else { defaultStartHost }
+        guard let target, target == herdr || target == orca else { return false }
+        if let engineHosts { return engineHosts.contains(target) }
+        if target == herdr { return engine == .herdr || engine == .herdrBoth }
+        return engine == .orca
     }
 }
 
@@ -3701,7 +3703,7 @@ nonisolated enum DeleteSessionText {
 /// Where an agent was opened (`Session.source`, #2526).
 nonisolated enum SessionSource: String, Sendable {
     case feishu, terminal
-    var label: String { self == .feishu ? String(localized: "Lark Group [Models e86099]") : String(localized: "Terminal") }
+    var label: String { self == .feishu ? String(localized: "Lark Group [Models e86099]") : String(localized: "In a Tab") }
 }
 
 nonisolated extension Int64 {

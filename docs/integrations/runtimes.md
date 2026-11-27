@@ -610,12 +610,29 @@ input clears the previous reply preview, including input with no visible text. T
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
 
+A row may report a long `title` or `last_text` (a whole opening prompt, a whole reply): the node lists the row with the
+title cut to 256 characters and `last_text` to 200, as it cuts its own rows, after reading the question a long reply
+ends with into `asks` (#16343). The conversation items keep the whole text.
+
 agy leaves print-mode (`agy -p`) conversations untitled. Before falling back to the folder name, the session title uses
 the first non-empty line of the cached metadata `summary.Preview`, with agy's request wrapper and Persona's context
 removed, cut to 60 characters (#14629). Several one-shot runs in one folder then show their own prompts. Such a title
 carries `title_source: "prompt"`, so the node keeps that provenance for the agy pane and Persona's naming may replace it.
 A preview whose first line is Persona's context (`Content of persona-context:…`, `<persona-context …>`) gives no title:
 agy keeps only that line, so the block cannot be removed whole.
+
+Antigravity CLI sessions show background work in Agents for both herdr panes and the ACP companion (#13594). Each
+running command, scheduled task, workflow or subagent counts once. Scheduled tasks use the Monitor row, including
+the cron description when available. Persona's `/loop` control applies to Claude Code's scheduler.
+
+The readers match a task's ID across the native start, finish, cancellation and kill records. A tool result that
+changes from running to done or error also ends its task. Up to 20 outcomes from the last day stay in Completed.
+Running background tasks keep their loaded ACP worker alive through the idle timeout.
+When a pane stops or the ACP session is no longer loaded, its running tasks disappear. Losing the session does
+not record an outcome. A joined live pane uses the companion's inventory after the native rewind cut. When ACP
+does not have that session loaded, its companion row carries projected running tasks in `agy_pane_background`
+for the live pane only. Without a companion row, the pane reads its local export. The node links a task log when
+the local export names the corresponding file in that conversation's task directory.
 
 A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
 `integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its
@@ -659,9 +676,12 @@ included. The CLI companion writes an agy plugin, `<agy config>/../config/plugin
 file that is no picture, gets no opinion (`ask`: agy's own permissions decide). A cut or damaged one is refused (`deny`,
 which wins over another hook's `allow`) with a reason the model passes on, and the file is left as it is. A truncated
 JPEG whose image data began also gets a terminated copy under `<agy config>/persona-media-guard/`, named in the reason,
-so the model can still look at the part that arrived. The companion atomically copies its `media-guard.mjs` into the plugin
-directory and the hook executes that installed copy, so later upgrades, another companion's exit or a changed `current`
-cannot strand it in a deleted generation. The installed `package.json` gives the copied `.js` decision helper an explicit ES-module scope even under a CommonJS parent. The hook answers `ask` when that copy is gone, so a stale plugin never blocks agy; `--no-media-guard` keeps the companion from writing it. Pictures attached to a
+so the model can still look at the part that arrived. The companion atomically copies its `media-guard.mjs` and decision helper into the plugin
+directory and the hook executes those installed copies, so later upgrades, another companion's exit or a changed `current`
+cannot strand it in a deleted generation. The installed `package.json` gives the copied `.js` decision helper an explicit ES-module scope even under a CommonJS parent. The hook answers `ask` when an installed copy is gone, so a stale plugin never blocks agy; `--no-media-guard` keeps the companion from writing it. agy runs a hook through
+`/bin/sh` on macOS and Linux and through `cmd.exe` on Windows, so the Windows hook is a `cmd` command with every path
+quoted that checks Node.js and the installed scripts with `if exist` and answers `ask` when any is gone (a cmd that cannot find
+the program prints no JSON at all). Pictures attached to a
 message from Persona get the same check: a broken one is left out of the prompt with a line saying so.
 
 Native model errors can be omitted from the JSONL export even when ACP reports a completed prompt. When an idle
@@ -713,7 +733,8 @@ In this mode:
 The CLI companion runs the **Antigravity CLI (`agy`)**. When `personad node`
 runs (`--attach` or `--stdio`), `agy` is installed, Node.js 22.5+ (`node:sqlite`) is available, and no external `agy`
 runtime is connected on `runtime.sock`, the node automatically writes out the embedded `persona-antigravity-runtime`
-package and supervises `antigravity/companion.mjs` (passing `--no-update --parent-stdin`), yielding whenever an external
+package and supervises `antigravity/companion.mjs` (passing `--no-update --parent-stdin`, and its own program as
+`--personad-bin`), yielding whenever an external
 `agy` runtime connects (`server/internal/node/agybridge.go`). The built-in package is unpacked under the separate
 `runtime-packages/persona-antigravity-runtime-builtin/<hash>/` store, so its cleanup never scans external companions'
 generations or changes their `current`. The sibling layout also keeps built-in files out of legacy external-store pruning. Go writes and pruning use the same `.install.lock` and process-start identity format as JavaScript registration, so a reused PID cannot strand a lock or inherit a lease. The node reserves the generation with its own process lease before launching the companion; a cached launch refreshes that reservation and retries cleanup. Once the companion registers its own lease, it releases the node's reservation for that generation. Reserving a newly launched generation also removes this node's reservations from other generations, which is necessary after a Unix `exec` upgrade retains both PID and start identity. This closes the window before the companion can register its own lease, while idle generations and dead-process leases remain reclaimable. The node resolves `agy` when it starts the companion and
@@ -729,8 +750,8 @@ availability probes, rewinds and phone permission cards to finish, then stops `a
 it on the new code; direct launches outside the store leave self-update off. The companion connects to the node's runtime
 socket, lists CLI transcripts, and uses `agy acp` for terminal-less session creation, sending and interruption. It can also
 serve as an assistant backend through the optional assistant contract above. It requires an installed, authenticated `agy`
-with ACP support; `--agy-bin`, `--agy-dir`, `--socket`, `--no-update` and `--parent-stdin` override the executable, CLI data
-directory, node socket, automatic updates and parent-pipe shutdown. When `--agy-dir` is passed explicitly, the companion also sets `ANTIGRAVITY_CLI_CONFIG_DIR` for its spawned `agy` child processes (`acp` and `models`) so discovery, ACP sessions, and transcript reads share the same directory.
+with ACP support; `--agy-bin`, `--agy-dir`, `--personad-bin`, `--socket`, `--no-update` and `--parent-stdin` override the
+executable, CLI data directory, node program, node socket, automatic updates and parent-pipe shutdown. When `--agy-dir` is passed explicitly, the companion also sets `ANTIGRAVITY_CLI_CONFIG_DIR` for its spawned `agy` child processes (`acp` and `models`) so discovery, ACP sessions, and transcript reads share the same directory.
 To run an additional companion instance alongside the default `agy` companion (for example, a wrapped `agy` executable or separate configuration directory), pass a distinct `--runtime <id>` (default `agy`), and optionally `--launcher <name>` (default `<runtime>`), `--display-name <label>` (default `Antigravity`), `--prefix <prefix>` (default `<runtime>-`), and `--assistant-for <launcher>` to point a non-assistant Agent launcher at this companion in the main-chat picker. Custom runtime IDs keep `agent: "agy"` and do not cause the node's built-in `agy` companion to yield.
 Models come from authenticated `agy models` discovery and ACP session metadata. The companion discovers the catalog at
 startup and again every five minutes in the background, with backoff on sign-in timeouts (#15481). It reuses a fresh
@@ -738,8 +759,10 @@ catalog on `models({launcher})` and refreshes on demand once the five-minute TTL
 `models({launcher, refresh: true})` (`caps.models`, `launchers.models`; #15253).
 Discovery never sends a prompt. The native settings file determines the advertised
 default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
-settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
-their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
+settings file when choosing its initial model. An idle conversation resumed on a fresh ACP connection also applies
+the configured model before its first prompt. An explicit caller model takes precedence, and an acknowledged model
+choice stays in effect on that connection. Reading history does not change the model or resume the session. An
+unavailable catalog returns the native error instead of advertising a built-in model list.
 A CLI whose stored sign-in expired long ago does not fail `agy models`: it hangs. The companion kills it after 25 seconds
 and reports that the sign-in may have expired and that running `agy` once on the computer signs in again; each
 discovery in a row that times out doubles the backoff for unforced lookups (from five minutes up to an hour), while an
@@ -777,7 +800,10 @@ The runtime bounds native calls to a 75-second budget, followed by bounded sessi
 node's shell check. Shell and managed launchers keep their own execution context.
 
 A chat gets Persona's MCP server, named `persona`, through ACP `mcpServers`. Regular Agent chats can also get
-`persona_a2a` with a session-scoped ticket. `agy` defers the tools over its
+`persona_a2a` with a session-scoped ticket. Both run the node's own program as `<program> mcp`: the node names it with
+`--personad-bin`, and a companion started some other way takes `personad` from a state directory's `bin`, or
+`persona-node` beside it, the name a Persona Link install has (#14582). With neither, its chats get no Persona tools,
+which the companion logs once as it starts (`no Persona node program`). `agy` defers the tools over its
 declaration budget, largest first, and has no `call_mcp_tool` for servers passed through ACP, so `persona` runs behind
 `integrations/antigravity/mcp-proxy.mjs`, which adds a small `persona_call` tool that calls any Persona tool by name
 (#7333). The proxy declares only the tools larger than `persona_call`, so it is always the smallest declared and never
@@ -838,7 +864,9 @@ end, and following user-input count are checked against `GetCascadeTrajectory`. 
 identifies its loopback native service. `RevertToCascadeStep` receives `conversationOnly: true` and the preceding step
 index, including `-1` for an empty conversation. Native refusal propagates to the caller. The bridge uses the current
 native summary and replacement step indices to discard the abandoned export tail, then publishes a changed history
-token. This survives companion restarts without modifying native transcript files.
+token. This survives companion restarts without modifying native transcript files. When the export instead numbers
+later steps after the abandoned tail, they show behind the kept steps once `GetCascadeTrajectory` confirms them, and a
+later rewind cuts at the matching visible step (#14297).
 A reused lower index is not proof of a rewind: when the export goes past the replaced steps before the replacement run
 reaches their last index, another process wrote the same conversation. The bridge then keeps both runs, ordered by
 step index (old steps first), and changes the content revision (#14626). If the replacement run later exports an index

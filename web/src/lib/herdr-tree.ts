@@ -264,6 +264,8 @@ export interface MachineTreeOptions {
   pins?: AgentPins;
   /** Leave out machines with nothing under them (a quick filter is on). */
   hideEmpty?: boolean;
+  /** Keep a machine even when it has no agent sessions (e.g. it has active shell tabs). */
+  keepMachine?: (machineId: string) => boolean;
 }
 
 /** The live agents (`sessions` may hold any: assistants, offline ones and those of machines that are away are left
@@ -275,7 +277,7 @@ export function buildMachineTree(machines: Machine[], sessions: Session[], opts:
   const out: HerdrMachine[] = [];
   for (const m of machines) {
     const mine = byMachine.get(m.id) ?? [];
-    if (opts.hideEmpty && !mine.length) continue;
+    if (opts.hideEmpty && !mine.length && !opts.keepMachine?.(m.id)) continue;
     const spaces = groupBy(mine.filter((s) => s.space_id), (s) => `${m.id}/${s.space_kind ?? ""}:${s.space_id}`);
     const built = [...spaces].map(([key, list]) => buildSpace(key, m.id, list, opts.pins));
     const index = (sp: HerdrSpace) => sp.sessions[0]!.space_index ?? Number.MAX_SAFE_INTEGER;

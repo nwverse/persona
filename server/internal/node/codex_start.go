@@ -878,7 +878,7 @@ func codexStartExec(path string, argv, env, explicit []string) (string, []string
 		// A different shell's rc file must not override the user's native launcher function.
 		if shell, err := exec.LookPath(codexStartShellProgram()); err == nil {
 			// Resolve a same-name function after its rc file, without expanding aliases twice or parsing data as code.
-			run = []string{shell, "-ic", codexNativeStartScript, "persona-codex-start", cwd}
+			run = []string{shell, shellFlag(shell), codexNativeStartScript, "persona-codex-start", cwd}
 			prefix := "__PERSONA_CODEX_START_" + rand.Text() + "_"
 			for i, assignment := range explicit {
 				name := prefix + strconv.Itoa(i)

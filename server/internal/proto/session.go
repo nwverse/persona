@@ -134,6 +134,12 @@ const (
 // be clipped shorter: the hub's sentence for the code (StartErrorCode) is bounded, and its remedy comes last (#1642).
 const CodedStartErrorMax = 600
 
+// TitleMax is the most runes a session's title has in a list of sessions or a session frame (#16343): the node, the
+// manager and the hub cut a longer one (transcript.ListTitle), and the list answers' rows were already cut to it. A
+// title that long is an opening prompt an agent stored as its title (a Codex thread name, a runtime's own title),
+// which no row shows; the transcript keeps the prompt whole.
+const TitleMax = 256
+
 // ToolLoop is a node-detected repetition. It contains no tool input or output.
 // Since identifies the start of this repetition within the current turn.
 type ToolLoop struct {
@@ -245,9 +251,11 @@ type Session struct {
 	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
 	// padding: a Session stays in its allocation size class.
 	OffLauncher bool `json:"off_launcher,omitempty"`
+	// NativeTurnVerified says the AGY terminal's working or done status is backed by its current transcript and lifecycle hook.
+	NativeTurnVerified bool `json:"native_turn_verified,omitempty"`
 	// LogicalPlaceholder is manager-internal provenance: this row stands in for a logical conversation whose active
 	// physical segment is not listed. Its Assistant identity comes from the logical root, not from a physical Cwd.
-	// It occupies the last byte of padding before BackgroundStalledSince, keeping Session in its allocation size class.
+	// Kept with NativeTurnVerified beside BackgroundStalledSince so Session stays in its allocation size class.
 	LogicalPlaceholder bool `json:"-"`
 	// BackgroundStalledSince (#13744, #16418): the time since which this session's background commands have used no CPU
 	// and written no output, set while the turn is over once that lasted the node's grace (ten minutes for a known
@@ -704,8 +712,9 @@ const (
 
 // TodoRef names a session's associated todo; Session.Todo is active, CompletedTodo() is display-only history.
 type TodoRef struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Cancelled bool   `json:"cancelled,omitempty"`
 }
 
 // SourceRuntime is the source_kind of a session an agent runtime lists (docs/integrations/runtimes.md): source_instance_id names
@@ -785,7 +794,7 @@ type QueueEdit struct {
 	Images [][]Image `json:"images,omitempty"`
 }
 
-// ServiceTier is a speed advertised by the native Codex model catalog.
+// ServiceTier is an advertised running-session speed or a native Codex catalog tier.
 type ServiceTier struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`

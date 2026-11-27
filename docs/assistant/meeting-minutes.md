@@ -23,6 +23,12 @@ The knowledge base currently holds no recordings at all, so nothing is being cap
 6. Action items are **suggested to-dos**. Nothing is created until the user confirms.
 7. The web Knowledge › Recordings detail shows the minutes; the iOS (#2694) and Android (#2738) details do the same, and all three offer Add to to-dos, Add all and Regenerate (iOS since #4062). Asking the assistant "what were the minutes of the meeting just now" resolves through `kb_get` / `kb_search`.
 
+## Review a transcript on the web
+
+Open the recording in Knowledge, then open the review controls in the transcript section. Search for a phrase and move to the previous or next matching passage, or show just the bookmarked moments. The recording detail scrolls to the selected passage, including when several segments have the same timestamp.
+
+Download the transcript as a timestamped text file to read it locally. The download includes the full retained transcript and its bookmarks, regardless of the active search. After speech has expired, only retained bookmarks are available. With no retained lines, there is nothing to download.
+
 ## Who does what
 
 | | iOS / watch (#2694) | Hub (the assistant) |
@@ -93,6 +99,7 @@ The minutes themselves are `detail.minutes`, present once minutes have been writ
     {"text": "Whether the cap should be per entry or per recording.", "at": 2408.0}
   ],
   "overview": { … },                 // optional (#6563): the minutes as one summary card, "Summary card (#6563)" below
+  "debates": [ … ],                  // optional (#16728): real disagreements and each side's stance, "Disagreements (#16728)" below
   "partial": false,                  // true when the transcript was too long and its end was not read; omitted when false
   "language": "en",                  // what they are written in, the Markdown's headings too: zh-Hans, en or ja (#5906)
   "markdown": "# Design review\n…"    // the same minutes as Markdown with clock times: what Copy / Share send, and minutes.md on disk
@@ -108,6 +115,7 @@ The minutes themselves are `detail.minutes`, present once minutes have been writ
 - `points`, `decisions`, `actions` and `open` keep the transcript's order.
 - `language` is an i18n code (`zh-Hans`, `en`, `ja`): the language every text field and the Markdown are in ("How the hub generates them" below). Minutes written by an older hub have none and are Chinese.
 - `overview` is written only when the hub could put every point and decision under a topic. Minutes from before it, and minutes from an older hub, have none. Its presence is the only thing that switches a client to the summary card; `version` is still only a count of rewrites ("Summary card (#6563)").
+- `debates` is written only when the meeting had at least one real disagreement with two or more cited positions. It is omitted otherwise ("Disagreements (#16728)").
 
 Reading it back:
 
@@ -471,6 +479,164 @@ Both clients follow these rules:
 | This one | Older (any platform, the watch) | `overview` is ignored. The client gets the same `points`, `decisions`, `actions` and `open`, now short card-style lines. Copy on the web and on Android sends the new Markdown. |
 | This one | This one | The summary card when `overview` is present. Minutes from before it, and those the hub wrote without one, look as before. |
 | Rolled back to an older one | This one | The first rewrite by the older hub drops `overview`, and the page falls back. A to-do confirmed there leaves the summary-card Markdown in place until the minutes are next rendered. Photo deletes and the trim work as today, since every cited photo is also cited by an item. |
+
+## Disagreements (#16728)
+
+Minutes of a meeting with a real disagreement list it; all other minutes look exactly as before. A **Disagreements** section is written by the same minutes call, with no new setting. For each real disagreement it gives the question in dispute, two to four positions citing the transcript line where each side's holder says it, and whether the meeting settled it. It needs no speaker separation: a position names a person only when the transcript or the calendar supports it, exactly as `who` does today (decision 6, "No speaker attribution", is unchanged).
+
+Unchanged: the "minutes ready" push text (still counts decisions and to-dos), the meeting summary card's counts, the material later meetings read (still copies only points, decisions, actions and open questions), and minutes written by extensions (`KBRecordingMinutes`, `schema/extension/kb.schema.json`).
+
+### The `debates` field
+
+`detail.minutes.debates` (also in `minutes.json`) is an optional top-level array beside `overview` (`omitempty`), never written when there is no disagreement.
+
+```jsonc
+"debates": [
+  {
+    "question": "Should the export cap count items or recordings?",
+    "topic": "Export",                    // optional: summary card topic placement hint only
+    "status": "settled",                  // "open" or "settled"
+    "at": 312.0,                          // earliest position's time; debates are ordered by at
+    "positions": [
+      {"stance": "Per item: one large file should not fail the whole export", "at": 312.0, "who": "Ada"},
+      {"stance": "Per recording: easier to explain", "at": 340.5}
+    ],
+    "outcome": {"text": "Per item for this release", "at": 1504.5, "decision": 0} // only when settled
+  }
+]
+```
+
+- `question`: the point in dispute, one sentence, on one line.
+- `topic` (optional): the summary card topic it belongs to, a placement hint only.
+- `status`: a named closed type in `server/internal/recordingwire` (not a bare `string`) with two values and no new count:
+  - `open` (**still disagreed**): people put opposing claims and the meeting ended without deciding between them.
+  - `settled` (**settled**): people put opposing claims and the meeting later decided between them.
+  A client that reads a value it does not know shows the disagreement with no status word.
+- `at`: the earliest position's time; disagreements are kept in the order of `at`.
+- `positions`: 2 to 4 positions (a disagreement with fewer than 2 is never written). Each position has:
+  - `stance`: a short sentence with no names in it, on one line;
+  - `at`: the start of the cited transcript line, the same clock as `segments[].start` (clients jump to that line with it, as they do for decisions; photos cannot be cited);
+  - `who` (optional): the person who holds that stance, only when the transcript or the calendar supports it, following the existing `who` rule.
+- `outcome` (present only when `status` is `settled`): `text` (one line), `at` (the cited transcript line where it was decided), and `decision` (optional, non-negative integer): the 0-based index in `decisions` of the kept decision that cites the same line. The hub works this link out on every write; clients never match times themselves.
+- **Extensibility**: clients ignore keys they do not know at every level of `debates` (each debate, position and `outcome`), so fields such as end time, estimated timing or further supporting citations can be added later when something reads them.
+
+Limits, in characters (Unicode code points; a text cut to its limit ends in "…", which counts towards it):
+
+| Field | Limit |
+| --- | --- |
+| `debates` | At most 6 per meeting. |
+| `question` | One line, at most 200. |
+| `topic` | One line, at most 40. |
+| `positions` | 2 to 4 per disagreement. |
+| `stance` | One line, at most 400. |
+| `outcome.text` | One line, at most 400. |
+
+### How the hub makes it
+
+- **What the model writes.** In the same minutes call (`server/internal/prompts/kb/minutes.md`, `server/internal/prompts/kb/minutes_card.md`, `server/internal/prompts/kb/minutes_merge.md`, `server/internal/prompts/kb/minutes_merge_input.md`), the model's JSON answer gains `debates: [{question, topic, status, positions: [{stance, line, who}], outcome: {text, line}}]`. The prompts instruct the model:
+  - record only real disagreements, where people put different claims; ordinary discussion is not one; when in doubt, leave it out;
+  - each position cites the line where its holder says it, not a line where someone else restates it;
+  - stances carry no names; a name the transcript or calendar supports goes in `who`;
+  - when it was settled later, set `status` to `settled` and give `outcome` citing the same line as the matching decision; a disagreement still open is not repeated under open questions.
+- **Checking it** (`server/internal/modules/recording/writers/minutes.go`):
+  - `debates` is read leniently, as `conclusions` is (`modelList` / `modelText` in `server/internal/modules/recording/writers/minutes_overview.go`): a malformed `debates` value or entry is dropped and never makes the answer unusable (whereas a JSON type error in the core answer fields counts as unusable and towards `failed`).
+  - A position is kept only when its `line` is a transcript line the model actually read; photos cannot be cited on positions or outcomes.
+  - Any `**` markers are stripped, and `question`, `topic`, `stance` and `outcome.text` are put on one line within their limits.
+  - A disagreement with an empty `question` or fewer than 2 valid positions is dropped. At most 6 disagreements and at most 4 positions per disagreement are kept.
+  - A `settled` disagreement without a valid `outcome` (missing, empty `text`, or citing a line not read) becomes `open` with no `outcome`. An `open` disagreement carries no `outcome`.
+  - `who` is checked with the existing `named()` rule (an unsupported name is cleared without dropping the position).
+  - For each `settled` disagreement, the hub sets `outcome.decision` to the index in kept `decisions` of the decision that cites the same transcript line (ignoring photo-only citations), or omits it when none matches.
+  - Each debate's `at` is set to the earliest `at` among its kept positions, and disagreements are sorted by `at`.
+  - Disagreements do not count as the citation that makes an answer usable (as for `conclusions`): the minutes still need at least one kept point, decision, action or open question citing what the model read.
+  - Calls stay within the existing 6000-token output cap (`JSONMax(…, 6000, …)`; a truncated answer is unusable), unless raised intentionally after checking the longest case.
+- **Lenient read of `minutes.json`.** `Minutes.UnmarshalJSON` (`server/internal/recordingwire/minutes_overview.go`) decodes `debates` on its own, as it does `overview`: a `debates` block it cannot read is treated as absent so the rest of `minutes.json` still reads.
+- **Long meetings.** Meetings written in parts and merged make four changes:
+  1. Each part gives its own disagreements, and the part's notes for the merging call carry them with their line numbers (`notesForMerge`, `server/internal/prompts/kb/minutes_merge_input.md`; `KBMinutesPart` gains a dedicated field while `KBMinutesNote` keeps its shape because the day recap shares it).
+  2. `notedLines` (the lines the merged answer may cite) also collects the lines cited by each part's positions and outcomes, so positions of a long meeting survive verification.
+  3. The merge prompt's rule "cite the earliest line when the same thing appears more than once" (`server/internal/prompts/kb/minutes_merge.md`) has an explicit exception for disagreements: a position cites its holder's own line, and an outcome cites the line where it was finally decided.
+  4. The merging call may form a disagreement from the parts' notes when its sides fall in different parts. Disagreements carry their own per-part quota in the notes, separate from the existing per-section cap (`max(2, 60/parts)`).
+- **Photos.** Positions and outcomes cite transcript lines only, never photos. Deleting a photo (`photoUncite`) leaves `debates` and the Disagreements section intact when the minutes are re-rendered.
+- **Older minutes and rewrites.** Older minutes are never rewritten just to add disagreements. Any rewrite writes them: Regenerate (`POST /api/v1/recordings/{id}/minutes`), a new revision, a photo added or deleted, or a hub-mode meeting's final transcript stored. A recording whose transcript is kept (by default since #16445 the hub keeps the text forever) can be regenerated and confirmed to-dos carry over as on any rewrite; a trimmed recording still answers `409 transcript_expired`.
+
+### Markdown
+
+The section follows the existing line format (`- [HH:MM:SS] text`, a speaker formatted with `who` as ` (Ada)` in English or `（Ada）` in Chinese and Japanese) using new keys in `kb-minutes.json` (`en`, `zh-Hans`, `ja`):
+
+```
+## Disagreements
+
+### Should the export cap count items or recordings? (settled)
+- [10:05:12] Per item: one large file should not fail the whole export (Ada)
+- [10:05:40] Per recording: easier to explain
+- [10:25:04] Outcome: Per item for this release
+```
+
+- **Summary card layout:** after Core conclusions (or after the headline and metadata when there are no core conclusions) and before the first group or topic. A literal `*` is escaped as `\*`, as in the rest of the summary-card Markdown.
+- **Legacy layout:** before Open questions — that is, between Action items and Open questions (splitting the hub's `tail`).
+- **Headings and status words:** the section heading and status words match the web's `web/src/i18n/locales/*/recording.json` (checked by `TestMinutesHeadingsAreTheWebsSections`), and the status words never reuse the wording of "Open questions" (one label, one definition):
+
+| Language | Heading | `open` | `settled` | Outcome prefix |
+| --- | --- | --- | --- | --- |
+| `en` | Disagreements | still disagreed | settled | `Outcome: ` |
+| `zh-Hans` | 分歧 | 仍有分歧 | 已谈拢 | `结果：` |
+| `ja` | 意見の相違 | 未合意 | 合意済み | `結果：` |
+
+  A disagreement with an unknown `status` renders its `###` heading with no status word.
+- **No disagreement:** at rendering time, both layouts render byte for byte as before (regenerating is a new model call, not a re-render).
+- Search, `kb_get` and the follow-up conversation read `minutes.md`, so they include the section with no other change.
+
+### Clients
+
+A client decodes `debates` on its own, apart from the rest of the minutes, and shows the Disagreements section only when at least one valid disagreement remains after cleaning. A malformed `debates` block never prevents the rest of the minutes from decoding or displaying. The hub, mock hub, web and iPhone verify the same cleaning cases against a shared fixture.
+
+**Cleaning rules:**
+
+- A missing, `null` or non-array `debates` means no disagreements.
+- Members of `debates` that are not objects are dropped.
+- A disagreement without a non-blank string `question` or without an array `positions` is dropped.
+- In `positions`, members that are not objects or lack a non-blank string `stance` are dropped. A missing, non-string or blank `who` counts as absent. An `at` that is not a non-negative finite number shows no time.
+- A disagreement left with fewer than 2 valid positions after cleaning is dropped.
+- `status` is `"open"` or `"settled"`; any missing, wrong-typed or unknown value is kept as unknown and shown with no status word.
+- A missing, non-string or blank `topic` counts as absent.
+- A debate's `at` that is not a non-negative finite number counts as absent (it does not drop the disagreement).
+- `outcome` is kept only when `status` is `"settled"` and `outcome` is an object with a non-blank string `text`. Its `at` follows the same rule (non-negative finite number, else no time). Its `decision` is kept only when it is a non-negative integer within the bounds of `decisions` (otherwise no decision link). A missing or invalid `outcome` on a `settled` disagreement omits the outcome row without dropping the disagreement.
+- Unknown keys at every level (`debates[]`, `positions[]`, `outcome`) are ignored.
+- When no disagreement remains after cleaning, no section is shown and the minutes look identical to minutes without `debates`.
+
+**Web** (`web/src/modules/recording/minutes-overview.ts`, types in `web/src/lib/kb.ts`):
+
+- **Summary card layout:** a Disagreements group after Core conclusions and before the topic cards, one small card per disagreement: the question as its title, the status as a text label (never color alone; omitted when unknown), one row per position (name when present, stance, and time jumping to the transcript line), and for a settled disagreement a last row with the outcome that leads to its linked decision when `outcome.decision` is valid.
+- **Legacy layout:** the same section after Action items and before Open questions.
+- **Heading levels and reading order:**
+  - Summary card layout: "Minutes" (`h2`) → headline or title (`h3`) → Core conclusions (`h4`, when present) → **Disagreements** (`section` labelled by an `h4` heading, each disagreement an `article` with an `h5` heading for its question) → topic groups (`h4` group / `h5` topic, or untitled `h4` topic) → Action items (`h4`) → Open questions (`h4`).
+  - Legacy layout: "Minutes" (`h2`) → title (`h3`) → Key points (`h4`) → Decisions (`h4`) → Action items (`h4`) → **Disagreements** (`section` labelled by an `h4` heading, each disagreement an `article` with an `h5` heading for its question) → Open questions (`h4`).
+  - Reading order runs in visual order (top to bottom, row by row across cards).
+
+**iPhone** (`apple/Shared/Recording/RecordingMinutes.swift`, compiled for the watch too):
+
+- Every new field is optional and the block is decoded with `try?` so a malformed block reads as none and the rest of the detail still decodes.
+- **Summary card layout** (`RecordingMinutesOverview.swift`): after the summary card (headline and Core Conclusions) and before the first topic group or card.
+- **Legacy layout** (`RecordingMinutesSummary.swift`): before Open Questions (the iPhone's legacy card order is Key Points, Decisions, Open Questions, Action Items, so Disagreements sits after Decisions and before Open Questions).
+- **Boxed mode:** the meeting page's after mode reuses these cards in boxed mode (`minutesBoxed`), so the new disagreement card supports boxed mode.
+- **Copy and Share:** in the summary card layout Copy and Share already send `markdown`. In the legacy layout `text(title:)` gains the Disagreements section (after Action Items, before Open Questions) only when there are disagreements; without them, `text(title:)` is unchanged.
+- **VoiceOver heading order:**
+  - Summary card layout: headline → Core Conclusions (when present) → **Disagreements** (section heading, then each disagreement's question heading in order) → each group → each topic → Action Items → Open Questions.
+  - Legacy layout: Key Points → Decisions → **Disagreements** (section heading, then each disagreement's question heading in order) → Open Questions → Action Items.
+  - Decorative icons and marks are hidden from VoiceOver; status is read as text, never color alone.
+
+**Other platforms:**
+
+- **Android and HarmonyOS:** no screen change; Android's Copy and Share and HarmonyOS's rendering use `minutes.markdown`, which includes the section.
+- **Not shown:** Apple Watch (it gets a short relay from the phone) and visionOS (it shows the legacy sections only).
+
+### Compatibility
+
+| Hub | Client | Result |
+| --- | --- | --- |
+| Older | Any | No `debates`; the minutes look as before. |
+| This one | Older (any platform, the watch) | `debates` is ignored on screen. Copy on the web (always), on the iPhone in the summary card layout and on Android sends the hub's Markdown, which has the section the screen does not show; HarmonyOS renders that Markdown. |
+| This one | This one | The section when there is a disagreement; otherwise the minutes look as before. |
+| Rolled back to an older one | This one | The older hub's first rewrite drops `debates`. Confirming a to-do there leaves the section in `markdown` and `minutes.md` until the minutes are next rendered (a photo deleted, new minutes), so screens show no section while Copy, `kb_get`, search, Android and HarmonyOS still have it. |
 
 ## Privacy
 

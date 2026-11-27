@@ -290,9 +290,10 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 	}
 	text, isText := p["text"].(string)
 	clientMsgID, _ := p["client_msg_id"].(string)
-	if isText {
+	if isText && strings.TrimSpace(text) != "" || p["images"] != nil {
 		r = h.captureHumanSubmission(r, text)
 	}
+	indirect := viaMarked(p["via"]) // Siri or the share sheet: delivered, but not the owner's own input for project review
 	for _, reserved := range []string{"creation_id", "incarnation", "caller", "submission", "share_authority", "skill_owner"} {
 		delete(p, reserved)
 	}
@@ -344,12 +345,19 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			SessionRef: assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid},
 			At:         time.Now().UTC(),
 		}
-		if (terminal || !m.isAssistant(spokeSession)) && isText && personSent(r.Context()) {
+		// A person's own app supplies the text for every conversation, including a supervisor / direction
+		// conversation: its needs_user decision cards are answered there too, and this event reaches the manager
+		// before the message is persisted, so the text cannot be recovered from transcript history at this point.
+		// The text carries the send's client_msg_id, the same id its session.assistant_sent names: a choice that
+		// must not settle before delivery waits for it (#13041).
+		if isText && personSent(r.Context()) {
 			spoke.Text = text
 			spoke.ClientMsgID = wireids.ClientMsgID(clientMsgID)
-			spoke.Source = assistantwire.OwnerInputApp
+			// Owner provenance (#15641) marks owner input to an Agent only, never the assistant's own conversations.
 			if terminal {
 				spoke.Source = assistantwire.OwnerInputTerminal
+			} else if !m.isAssistant(spokeSession) {
+				spoke.Source = assistantwire.OwnerInputApp
 			}
 		}
 		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).userSpoke(r.Context(), spoke)
@@ -372,6 +380,7 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			// Older owner messages to it are kept undelivered: this one is kept behind them, never sent first.
 			if id, _ := asSent["client_msg_id"].(string); id != "" && rpcCodeOf(err) == assistantwire.CodeUndeliveredAhead {
 				if status, body, ok := h.keepUndelivered(r.Context(), m, sid, asSent, assistantwire.CodeUndeliveredAhead, ""); ok {
+					h.recordAcceptedProjectReviewInput(r.Context(), r, m.cfg.ID, sid, id, nil, indirect)
 					writeRaw(w, status, body)
 					return
 				}
@@ -505,7 +514,17 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			}
 		}
 		if h.store != nil {
-			if err := h.store.SettleSend(context.WithoutCancel(ctx), id, outcome); err != nil {
+			commit := context.WithoutCancel(ctx)
+			recorded, err := h.settleProjectReviewOwner(commit, r, m.cfg.ID, sid, id, outcome, indirect)
+			if recorded && err != nil {
+				// The receipt outranks the review notice: left in "sending", a retry of this id would be answered
+				// "unknown" and a later drain could type the text again. Settle it alone; the notice is lost.
+				h.logf("send %s: project review owner input not queued: %v", id, err)
+			}
+			if !recorded || err != nil {
+				err = h.store.SettleSend(commit, id, outcome)
+			}
+			if err != nil {
 				h.logf("send %s: %v", id, err)
 			}
 		}

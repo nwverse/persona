@@ -44,4 +44,22 @@
     <string name="shortcuts_new_todo_label">新しいToDo</string>
     <string name="shortcuts_new_todo_title">PersonaでToDoを作成</string>
     <string name="shortcuts_open_session">%1$sを開く</string>
+    <string name="shortcuts_main_chat_widget_label">Persona チャット</string>
+    <string name="shortcuts_main_chat_widget_description">メインチャットの状況、要対応事項、クイック質問</string>
+    <string name="shortcuts_main_chat_status_needs_you">要対応 · %1$d</string>
+    <string name="shortcuts_main_chat_status_thinking">考え中</string>
+    <string name="shortcuts_main_chat_unpaired_hint">Personaを開いてハブに接続</string>
+    <string name="shortcuts_main_chat_idle_greeting">いつでも話しかけてください。</string>
+    <string name="shortcuts_main_chat_working_fallback">リクエストを処理しています…</string>
+    <string name="shortcuts_main_chat_ask_hint">Personaに質問…</string>
+    <string name="shortcuts_main_chat_pending_plan">プランの承認待ち</string>
+    <string name="shortcuts_main_chat_pending_permission">承認を待っています</string>
+    <string name="shortcuts_main_chat_pending_question">質問があります</string>
+    <string name="shortcuts_main_chat_pending_screen">ターミナルで対応が必要です</string>
+    <string name="shortcuts_main_chat_pending_default">要対応</string>
+    <string name="shortcuts_main_chat_todo_needs_you">要対応</string>
+    <string name="shortcuts_main_chat_todo_review">確認待ち</string>
+    <string name="shortcuts_main_chat_todo_stuck">停止中</string>
+    <string name="shortcuts_main_chat_todo_working">進行中</string>
+    <string name="shortcuts_main_chat_todo_planned">未開始</string>
 </resources>

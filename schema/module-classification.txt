@@ -88,6 +88,7 @@ go server/internal/assistant/fleetcount core
 go server/internal/assistant/fleetcount/fleetcountadapt core
 go server/internal/assistant/fleetcount/fleetcounttest core
 go server/internal/assistant/fleetview core
+go server/internal/assistant/kblark core
 go server/internal/assistant/kernel core
 go server/internal/assistant/kernel/seam core
 go server/internal/assistant/repository core

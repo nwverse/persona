@@ -106,6 +106,8 @@ type Service struct {
 	history          conversationHistoryBook
 	// agentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go); nil: none.
 	agentDirs AgentDirs
+	// projectReview relays owner input and task events to the configured review session (project_review.go); nil: off.
+	projectReview *projectReview
 	// herdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go); nil: none.
 	herdrSessions HerdrSessions
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
@@ -263,6 +265,8 @@ type Service struct {
 	extEvents        extEventBook           // extension_event.go
 	phoneKept        keptPhoneTools         // fleet_tools.go: the phone's tools as the hub last listed them
 	agentNames       agentNamingBook        // agent_naming.go
+	taskActivity     taskActivityBook       // task_close_activity.go: owner input/view activity, not read receipts
+	taskCloseStops   taskCloseStopBook      // tasks_close_stops.go: stopped Agents of completed tasks
 	prefs            settingsBook           // profile.go
 	guard            dispatchGuardBook      // dispatch_guard.go
 	main             mainBook               // start.go
@@ -333,9 +337,10 @@ type Service struct {
 	prEventRoute   prEventRouteBook       // pr_status_route.go: opt-in direct PR-event routing dedupe
 	parkReplies    parkReplyBook          // park_reply.go: bounded source reads for explicitly bound person replies
 
-	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
-	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
-	repoMirrors      repoMirrorSyncState     // repo_mirrors.go: opt-in low-frequency periodic mirror sync
+	reviewDismissals  taskReviewDismissalBook // task_review_dismissals.go
+	supervisorSettles supervisorSettleBook    // decision_supervisor_reply.go: exact choices waiting for their send (#13041)
+	repoRootsMu       sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
+	repoMirrors       repoMirrorSyncState     // repo_mirrors.go: opt-in low-frequency periodic mirror sync
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll         bool
 	later                    laterBook    // later.go: questions that can wait for a briefing
@@ -413,6 +418,12 @@ type Service struct {
 	editWriteHook func(id string)
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
+	// deadlineDefaultHook, when set, runs in the deadline sweep after it found no owner choice on its way for decision
+	// id and before it takes the default or marks the reminder (tests: the choice arrives in between).
+	deadlineDefaultHook func(id string)
+	// supervisorSettleHook, when set, runs as a delivered owner choice of decision id is about to be settled: it is
+	// claimed in the book, and the card's action lock is not taken yet (tests: the deadline sweep runs in between).
+	supervisorSettleHook func(id string)
 	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
 	// taken up (tests).
 	sendsSettleHook func()
@@ -475,6 +486,7 @@ func New(o Options) *Service {
 	s.healthTellRoutes()
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
+	s.outboundMessageRoutes()
 	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
 	s.urgentCallRoutes() // urgent_call.go
@@ -525,6 +537,7 @@ func New(o Options) *Service {
 	s.sessionReviewRoutes()
 	s.workspaceBoardRoutes()
 	s.navigationRoutes() // navigation.go: the page the apps open on
+	s.webFontRoutes()
 	s.channelRoutes()
 	s.kbInit(o.KB)
 	// The recording module's layer, before its routes (kbRoutes) and its hello capabilities (recording.go).
@@ -1185,11 +1198,28 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 }
 
 func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
+	s.rememberTaskCloseExcerpt(r, text)
+	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
+	s.userSpokeMessage(ctx, r, text, "")
+}
+
+// userSpokeMessage is session.user_spoke as the hub tells it: the owner's text when a person's own app sent it, and
+// the send's client_msg_id ("" from an older hub or a client that names none), which its session.assistant_sent
+// carries too.
+func (s *Service) userSpokeMessage(ctx context.Context, r SessionRef, text, clientMsgID string) {
+	s.rememberTaskCloseExcerpt(r, text)
+	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
 	if exitText(text) {
 		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake
 	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
+	// A supervisor / direction conversation is never a task's active worker session, so the
+	// Agent-chat path above finds nothing for it. Settle the needs_user cards it supervises by
+	// reverse lookup instead (decision_supervisor_reply.go). Provenance-marked input is ignored.
+	if s.activeTodoOf(r.MachineID, r.SessionID) == "" {
+		s.supervisorDecisionSpoke(ctx, r, time.Now(), text, clientMsgID)
+	}
 	s.ownerHeard(r.SessionID)
 	go s.ownerAppeared(context.WithoutCancel(ctx), "user_spoke", r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)

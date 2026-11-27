@@ -144,8 +144,9 @@ var storedTerminalTexts = []string{
 
 // startConversationOnce relays a new conversation's start (its first message) with an operation receipt (#1349): an app
 // whose answer was lost asks again with the same X-Persona-Op-Id and gets the first answer instead of a second
-// conversation. An accepted start finishes even if the caller went away. Offline nothing reached the assistant, so no
-// receipt is kept (the same op id tries again once it is back); cut off on the way it may have started
+// conversation. An accepted start finishes even if the caller went away. Offline nothing reached the assistant, and
+// answered that its node got nothing (node_unreachable, delivered "none") nothing started, so no receipt is kept (the
+// same op id tries again once they are back, clientOpRetry); cut off on the way it may have started
 // (assistant_in_doubt, kept as unknown).
 func (h *Hub) startConversationOnce() http.HandlerFunc {
 	receipt := h.withClientOp("assistant_start", func(w http.ResponseWriter, r *http.Request) {
@@ -453,18 +454,23 @@ func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantw
 // ---- on the bus: what the assistant calls ----
 
 func init() {
-	handleBus(assistantwire.MethodDevice, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p assistantwire.DeviceCall
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodDevice + ": " + err.Error()}
-		}
-		// A manager acts only on its own machines (ownership.go deviceCallAllowed); the list of them is its own too.
-		if err := h.deviceCallAllowed(c.managerID(), p); err != nil {
-			return nil, err
-		}
-		out, err := assistantLink{h}.deviceCallFrom(ctx, c.managerID(), p)
-		return out, busCodedError(err)
-	})
+	for _, method := range []string{assistantwire.MethodDevice, assistantwire.MethodDeviceRetire} {
+		handleBus(method, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
+			var p assistantwire.DeviceCall
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": " + err.Error()}
+			}
+			if method == assistantwire.MethodDeviceRetire && p.Method != nodeproto.StopIfIdle {
+				return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "device.retire requires session.stop_if_idle"}
+			}
+			// A manager acts only on its own machines (ownership.go deviceCallAllowed); the list of them is its own too.
+			if err := h.deviceCallAllowed(c.managerID(), p); err != nil {
+				return nil, err
+			}
+			out, err := assistantLink{h}.deviceCallFrom(ctx, c.managerID(), p)
+			return out, busCodedError(err)
+		})
+	}
 	handleBus(assistantwire.MethodApp, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
 		var p assistantwire.AppCall
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -692,8 +698,8 @@ func (h *Hub) assistantConnected() {
 	var res struct {
 		Tools []proto.Tool `json:"tools"`
 	}
-	h.managerConnected() // agents_link.go
-	h.fleetConnected()   // what of the apps it needs (fleet_link.go)
+	h.managerConnected()    // agents_link.go
+	h.fleetClientsRefresh() // what of the apps it needs (fleet_link.go)
 	if err := h.callBus(ctx, assistantwire.AssistantID, assistantwire.MethodTools, nil, &res); err != nil {
 		h.logf("assistant: tools: %v", err)
 		return

@@ -20,6 +20,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
@@ -31,6 +32,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/sessionlist"
@@ -721,6 +723,9 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
 		return
 	}
+	if !strict {
+		h.noteInlineViewPage(m.cfg.ID, r.PathValue("sid"), res.Items)
+	}
 	res.Items = clientItemsCompat(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), h.requestWants(r, proto.FeatureToolViews), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
 	// Allow binding a pending live Hub TTFT on latest-page / incremental reads while keeping historical pages read-only.
 	allowBind := atoi(q.Get("before_seq")) == 0 && atoi(q.Get("through_seq")) == 0 && principalOf(r.Context()).Role != roleReadOnly
@@ -729,6 +734,26 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
 	writeItemsJSON(w, res)
+}
+
+// Pass only potential cards from the trusted node response, before compatibility rewrites for the client.
+func (h *Hub) noteInlineViewPage(machine, sid string, items []proto.Item) {
+	var cards []proto.Item
+	for _, it := range items {
+		if it.ID == "" || it.Role != "assistant" || it.Kind != proto.KindText || (it.FullSize == 0 && !wire.HasAssistantView(it.Text)) {
+			continue
+		}
+		text := it.Text
+		if it.FullSize > 0 {
+			text = "" // the manager must read and validate the complete item
+		}
+		cards = append(cards, proto.Item{ID: it.ID, Role: it.Role, Kind: it.Kind, Text: text, TS: it.TS, FullSize: it.FullSize})
+	}
+	if len(cards) > 0 {
+		h.asstOf(h.sessionOwner(machine, sid)).notify(assistantwire.EventInlineViewPage, assistantwire.SessionItems{
+			MachineID: machine, SessionID: sid, Items: cards,
+		})
+	}
 }
 
 // sessionItemFull serves one item whole: pages cut long text (the item says full_size), the app fetches the rest when
@@ -957,6 +982,7 @@ type sessionStartRequest struct {
 	// LauncherDefaultEffort keeps an explicit launcher's effort at its native default.
 	LauncherDefaultEffort bool   `json:"launcher_default_effort,omitempty"`
 	Speed                 string `json:"speed,omitempty"`
+	ServiceTier           string `json:"service_tier,omitempty"`
 	Ultracode             *bool  `json:"ultracode,omitempty"`
 	// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
 	// start it cannot take there answers 409 start_goal_unsupported before anything starts.
@@ -982,10 +1008,18 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		writeBodyErr(w, err, err)
 		return
 	}
-	h.startSessionWith(w, r, p, false)
+	// Read here, where the body is: "via" stays out of p, so the node never gets it. A marked start is delivered as
+	// usual but never counts as the owner's input (project_review.go).
+	var mark struct {
+		Via any `json:"via"`
+	}
+	_ = json.Unmarshal(body, &mark)
+	h.startSessionWith(w, r, p, false, viaMarked(mark.Via))
 }
 
-func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff bool) {
+// handoff: p carries generated context (context_handoff.go), not words someone typed; indirect: the request was
+// marked "via" (viaMarked). Neither counts as the owner's input.
+func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff, indirect bool) {
 	orig := p
 	replay := heldStartReplayOf(r.Context())
 	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) {
@@ -1003,6 +1037,8 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if !handoff && replay == nil {
 		r = h.captureHumanSubmission(r, p.Prompt)
 	}
+	// Taken before the to-do handoff adds its own words and images: only the owner's own input counts.
+	firstInput := p.ResumeSessionID == "" && (strings.TrimSpace(p.Prompt) != "" || len(p.Images) > 0)
 	if p.TodoID != "" && principalOf(r.Context()).Role != roleFull {
 		writeErr(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
 		return
@@ -1048,6 +1084,10 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	}
 	if p.AgentType != "" && !agentTypeRe.MatchString(p.AgentType) {
 		writeErr(w, http.StatusBadRequest, errors.New("unsupported agent type"))
+		return
+	}
+	if p.ServiceTier != "" && !m.announces(nodeproto.SessionStartServiceTier) {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("hub-machine.node_no_session_start_speed"))
 		return
 	}
 	opID := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Persona-Op-Id")))
@@ -1230,6 +1270,17 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if !async {
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, nil)
 	}
+	recordFirstInput := func() {
+		// Before the machine lists it, the returned session says where it runs.
+		started := res.Session
+		started.Cwd = cmp.Or(started.Cwd, startCwd(m, p.Cwd))
+		h.recordAcceptedProjectReviewInput(ctx, r, m.cfg.ID, started.SessionID, "first-agent:"+started.SessionID, &started, indirect)
+	}
+	if firstInput && p.TodoID == "" {
+		// Recorded as soon as the node has the session, before the listing wait: a restart in between would lose it
+		// (project_review.go).
+		recordFirstInput()
+	}
 	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) &&
 		(res.Instead == nil || res.Instead.Model == "") { // a model the launcher that ran does not offer did not run
 		launcher, _ := params["launcher"].(string) // the one it ran with: the manager filled it in
@@ -1261,6 +1312,10 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 			h.logf("startSession: link todo %s for %s/%s failed: %v", p.TodoID, m.cfg.ID, res.Session.SessionID, err)
 		} else {
 			res.Session.Todo = &proto.TodoRef{ID: p.TodoID, Title: linked.Title}
+		}
+		if firstInput {
+			// After the link, so the manager finds the task when the relay delivers it.
+			recordFirstInput()
 		}
 	}
 	m.mu.Lock()
@@ -1321,7 +1376,20 @@ func startEngine(info proto.NodeInfo) string {
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
 // is ready (only Claude can, and not a resume).
 func startsAsync(asked bool, resume, launcher, agentType string) bool {
-	return asked && resume == "" && (agentType == "claude" || (agentType == "" && launcher != "agy"))
+	if !asked || resume != "" {
+		return false
+	}
+	if agentType != "" {
+		return agentType == "claude"
+	}
+	// An untyped launcher is inferred as Claude unless its name identifies an agent that owns its session ID.
+	// Keep the Hub's acknowledgement and deadline aligned with the Node's launcherAgentType/workAgentKind rules.
+	switch launcher {
+	case "codex", "traex", "omp", "agy", "pi", "cursor":
+		return false
+	default:
+		return true
+	}
 }
 
 // startBudget is how long a start may take: one acknowledged before the session is ready a moment, one answered only
@@ -1359,6 +1427,7 @@ type client struct {
 	mu             sync.Mutex
 	traffic        trafficAttribution // inferred once from the upgrade; hello may refine platform
 	subs           map[[2]string]bool
+	termSubs       map[[3]string]bool       // canonical machine, session, requested machine; independent of stream retries
 	fsw            map[[3]string]fsWatchReq // {machine id, cwd, asked id} -> the folders this browser has open there (fswatch.go)
 	phone          bool
 	phoneID        string
@@ -1899,6 +1968,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		c.mu.Unlock()
 		if !already {
 			m.watcherJoined(msg.SessionID)
+			h.fleetClientsChanged()
 		}
 		m.replayLiveTools(c, msg.SessionID)
 		// Not in the read loop: the node may take up to watchCallTimeout to answer the watch (watcherJoined). The
@@ -1921,6 +1991,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		c.mu.Unlock()
 		if had {
 			m.watcherLeft(msg.SessionID)
+			h.fleetClientsChanged()
 			go m.syncUnwatch(msg.SessionID)
 		}
 	case "register_phone":
