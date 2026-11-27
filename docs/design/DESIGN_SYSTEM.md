@@ -1814,7 +1814,11 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   over its rows; its right end holds the fold, a text button in the same size and colour ("Earlier versions · N" with
   an 11 px chevron, "Hide earlier" with the chevron turned up), a `--hover-2` fill and `ink` on hover, one line, its
   accessible name naming the family. The newest row says "Latest" after its name in `text-submeta` `ink-3`, no chip.
-  Rows outside any family (the Default entry, unknown models) have no header. Why: one family's versions read as one
+  Unversioned peer families (`Orchestrator`, `GPT-OSS`) share the same family header without folding when family
+  grouping is active and never trigger family headers on their own. Leading entries outside any family (`Default` and
+  the running row pinned at the top of Recommended) have no header; trailing rows outside any family (unrecognized
+  models and custom typed IDs) sit under a localized **Other** header in the same `text-submeta` `ink-3` style (no fold)
+  so they never visually fall under the preceding family. Why: one family's versions read as one
   choice and the newest is the one most people want, while older ones stay one tap (or a search) away (2026-11-17).
 - Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
   the header or the model-pill container. The composer, Session Insights and enabled sidebar details use the same
