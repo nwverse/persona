@@ -59,9 +59,9 @@
   "sidebar_usage": "Launcher quota in the sidebar",
   "sidebar_usage_hint": "Show the usage card under the sidebar with each launcher's remaining quota. Saved in this browser only.",
   "surface_style": "Window style",
-  "surface_style_hint": "Default keeps the classic opaque look. Liquid Glass adds translucent frosted surfaces and desktop refraction on macOS. Saved in this browser only.",
+  "surface_style_hint": "Default keeps the classic opaque look. Frosted Glass adds translucent frosted surfaces and desktop refraction on macOS. Saved in this browser only.",
   "surface_default": "Default",
-  "surface_liquid_glass": "Liquid Glass",
+  "surface_liquid_glass": "Frosted Glass",
   "glass_translucency": "Glass translucency",
-  "glass_translucency_hint": "Adjusts surface opacity and backdrop blur depth for Liquid Glass. Saved in this browser only."
+  "glass_translucency_hint": "Adjusts surface opacity and backdrop blur depth for Frosted Glass. Saved in this browser only."
 }
