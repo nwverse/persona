@@ -167,6 +167,9 @@ func TestOrphanBuiltinRowAdoptedByOfficialPackage(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("install %d %+v", code, installed)
 	}
+	// The install settles in the background (it reads the manager's extensions): let it finish before a restart.
+	opID, _ := installed["operation_id"].(string)
+	waitOp(t, h, opID, opSucceeded, opFailed)
 	check := func(step string, reg *extension.Registry) {
 		t.Helper()
 		p := reg.SnapshotExact("volc")
