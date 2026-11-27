@@ -5,7 +5,7 @@ import test from 'node:test';
 
 registerHooks({
   resolve(spec, ctx, next) {
-    if (spec === '../core/PhoneSearchExcerpt' && ctx.parentURL?.endsWith('.ets'))
+    if ((spec === '../core/PhoneSearchExcerpt' || spec === '../core/SessionNaming') && ctx.parentURL?.endsWith('.ets'))
       return {url:new URL(spec+'.ts',ctx.parentURL).href,shortCircuit:true};
     if (spec.startsWith('.') && ctx.parentURL?.endsWith('.ets'))
       return {url:new URL(spec+'.ets',ctx.parentURL).href,shortCircuit:true};
@@ -668,8 +668,8 @@ test('the assistant popover rechecks roster membership and opens an installation
 
 test('closing the compact drawer with a row under the finger keeps the current page', () => {
   const methods = ['drawerAcceptsTap', 'endPhonePan'].map(name => formMethods.get(name));
-  const Drawer = new Function('finishesPhonePan', 'return ' + stripTypeScriptTypes(
-    'class NativeDrawer {\n' + methods.join('\n') + '\n}'))(finishesPhonePan);
+  const Drawer = new Function('finishesPhonePan', 'Haptics', 'return ' + stripTypeScriptTypes(
+    'class NativeDrawer {\n' + methods.join('\n') + '\n}'))(finishesPhonePan, {selection() {}});
   const drawer = new Drawer();
   Object.assign(drawer, {wide: () => false, spacesShown: true, gestureKind: 'close',
     gestureScope: 'paired', gesturePlace: 4, phoneWidth: 360, drawerWidth: () => 295, drawerTapBlockedUntil: 0,
@@ -687,8 +687,11 @@ test('closing the compact drawer with a row under the finger keeps the current p
 
 test('Reduce Motion switches a compact drawer directly and retires an older completion', () => {
   const methods = ['settlePhoneDrawer', 'movePhonePan'].map(name => formMethods.get(name));
-  const Drawer = new Function('Curve', 'return ' + stripTypeScriptTypes(
-    'class NativeDrawer {\n' + methods.join('\n') + '\n}'))({EaseOut: 'ease-out'});
+  const motionStub = {
+    drawer: (reduce, _velocity, _width, onFinish) => reduce ? {duration: 0, onFinish} : {duration: 220, curve: 'ease-out', onFinish}
+  };
+  const Drawer = new Function('Curve', 'Motion', 'return ' + stripTypeScriptTypes(
+    'class NativeDrawer {\n' + methods.join('\n') + '\n}'))({EaseOut: 'ease-out'}, motionStub);
   const drawer = new Drawer();
   let completion;
   Object.assign(drawer, {

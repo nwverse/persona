@@ -179,6 +179,12 @@ func TestBusForwardsTheAssistantRoutes(t *testing.T) {
 		t.Fatalf("the assistant's error: %d %s", resp.StatusCode, body)
 	}
 	<-got
+	if resp, body := do("GET", "/api/v1/task-plans?conversation=c1", ""); resp.StatusCode != 201 {
+		t.Fatalf("pending task plans: %d %s", resp.StatusCode, body)
+	}
+	if req := <-got; req.Method != "GET" || req.Path != "/api/v1/task-plans" || req.Query != "conversation=c1" {
+		t.Fatalf("pending task plans request reached the assistant as %+v", req)
+	}
 	for _, c := range [][2]string{{"POST", "/api/v1/task-plans/p1/start"}, {"GET", "/api/v1/task-trust"},
 		{"DELETE", "/api/v1/task-trust"}, {"POST", "/api/v1/todos/t1/done-check"}, {"GET", "/api/v1/todos"},
 		{"POST", "/api/v1/todos/reorganize"},

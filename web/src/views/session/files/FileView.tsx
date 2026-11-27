@@ -547,6 +547,7 @@ function CodeView({ doc, file, text, line, lineTo, note, where, source }: { doc:
       {key && pick.range && (
         <LineBox
           where={`${relativeTo(where.cwd, file.path)}:${rangeLabel(pick.range.from, pick.range.to)}`}
+          anchor={pick.anchor}
           onCancel={pick.clear}
           onAdd={(body) => {
             const r = pick.range!;
@@ -560,7 +561,7 @@ function CodeView({ doc, file, text, line, lineTo, note, where, source }: { doc:
   );
 }
 
-const NO_PICK: LinePick = { range: null, sweeping: null, down: () => {}, enter: () => {}, clear: () => {} };
+const NO_PICK: LinePick = { range: null, anchor: null, sweeping: null, down: () => {}, enter: () => {}, clear: () => {} };
 
 function CodeRow({ n, digits, text, tokens, cut, mark, picked, gutter }: { n: number; digits: number; text: string; tokens: Token[]; cut: boolean; mark: boolean; picked: boolean; gutter?: { pick: LinePick; marked?: number } }) {
   const parts: React.ReactNode[] = [];

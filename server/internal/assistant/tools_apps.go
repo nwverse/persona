@@ -135,6 +135,11 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 			review.Reset()
 		}
 		fmt.Fprintf(&b, "Path: %s\n\nmeta.json:\n%s%s\n", d.Path, meta, folded)
+		if a.Kind == kb.KindProject {
+			if t, ok := e.ProjectTreeOf(d.ID); ok {
+				b.WriteString(projectTreeText(t))
+			}
+		}
 		if d.Summary != "" {
 			fmt.Fprintf(&b, "\nsummary.md:\n%s\n", d.Summary)
 		}
@@ -181,10 +186,10 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		switch {
 		case a.Kind != kb.KindRecording || json.Unmarshal(d.Meta, &trimmed) != nil || trimmed.At == nil:
 		case trimmed.Kind == kb.RecordingDay:
-			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the recap above is kept, until "+
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_text_days); only the recap above is kept, until "+
 				"assistant.minutes_days after the day (0 means forever, the default), and it can't be written again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
 		default:
-			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the minutes above are kept, until "+
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_text_days); only the minutes above are kept, until "+
 				"assistant.minutes_days after the meeting (0 means forever, the default), and they can't be made again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
 		}
 		switch {
@@ -217,6 +222,10 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 			}
 		}
 		ignored := kb.UserUnsupported(a.Kind, a.UserUpdate)
+		var undo *kb.UserUpdate
+		if a.Kind == kb.KindProject {
+			undo = e.TreeUndo(a.ID, a.UserUpdate)
+		}
 		id, err := e.ApplyUser(a.Kind, a.ID, a.UserUpdate)
 		if err != nil {
 			return "", err
@@ -227,6 +236,9 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		out := "Saved " + a.Kind + "/" + id + "."
 		for _, f := range ignored { // said, so the model does not take a dropped field for written
 			out += "\nNot saved: " + f.Field + " (" + f.Reason + ")."
+		}
+		if a.Kind == kb.KindProject && (a.Parent != nil || a.Milestones != nil || a.Milestone != nil) {
+			out += projectTreeSaved(e, id, undo)
 		}
 		return out, nil
 	}
@@ -407,6 +419,9 @@ func (s *Service) answerApprovalCard(ctx context.Context, self string, ix proto.
 		verb = "Rejected the plan"
 	case !*allow:
 		verb = "Denied"
+	}
+	if todo == "" {
+		return fmt.Sprintf("%s for the agent. The agent sees that the assistant answered.", verb), nil
 	}
 	return fmt.Sprintf("%s for the agent, as its supervisor: kept as task %s's decision (yours, not the user's), and the agent sees it was not the user's answer.", verb, todo), nil
 }

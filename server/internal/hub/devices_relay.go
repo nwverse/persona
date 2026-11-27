@@ -567,7 +567,7 @@ func (h *Hub) stopLinks() []*relayLink {
 // bar shows both, docs/operations/link.md); the manager tells Persona Link.
 func (h *Hub) linkEndpoints() link.Message {
 	msg := link.Message{Type: "endpoints", HubName: h.hubName(), MeshHubs: h.meshHubCount()}
-	for _, e := range h.endpointList() {
+	for _, e := range h.linkEndpointList() {
 		if e.Scheme == "https" {
 			msg.Endpoints = append(msg.Endpoints, link.Endpoint{URL: e.URL, Kind: e.Kind})
 		}

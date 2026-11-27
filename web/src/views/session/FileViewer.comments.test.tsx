@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { parseCommentBlock } from "../../lib/comments";
 import { sendDraft, splitQuotes, setQuotes } from "../../lib/drafts";
 import { closePanel, getPanel } from "../../lib/panel";
+import { preloadCommentBar } from "../chat/CommentBarOverlay";
 import { Composer, type Outgoing } from "../chat/Composer";
 import { QuoteStack } from "../chat/Quote";
 import { SidePanel } from "../SidePanel";
@@ -13,7 +14,7 @@ import { FileViewerPanel } from "./FileViewer";
 
 vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({
-    matches: false, media: query, addEventListener() {}, removeEventListener() {},
+    matches: query === "(any-pointer: fine)", media: query, addEventListener() {}, removeEventListener() {},
   })) as typeof window.matchMedia;
 });
 
@@ -55,9 +56,13 @@ vi.mock("../../lib/api", async (original) => ({
 let root: Root;
 let host: HTMLDivElement;
 const sent = vi.fn(async (_message: Outgoing) => true);
-const pill = () => document.querySelector<HTMLButtonElement>("[data-comment-pill]");
+const bar = () => document.querySelector<HTMLElement>("[data-comment-bar]");
 const frame = () => host.querySelector<HTMLIFrameElement>("iframe");
 const rect = { left: 50, top: 80, right: 150, bottom: 100, width: 100, height: 20 } as DOMRect;
+
+beforeAll(async () => {
+  await preloadCommentBar();
+});
 
 beforeEach(() => {
   sent.mockClear();
@@ -119,8 +124,8 @@ function textAt(el: Element, offset: number) {
 const sourceText = (line: number) => host.querySelector(`[data-line="${line}"] [data-file-code-text]`)!;
 const buttonNamed = (name: string) => [...host.querySelectorAll("button")].find((button) => button.textContent === name)!;
 
-async function waitForPill() {
-  for (let i = 0; i < 8 && !pill(); i++) await act(async () => { await new Promise((done) => setTimeout(done, 5)); });
+async function waitForBar() {
+  for (let i = 0; i < 8 && !bar(); i++) await act(async () => { await new Promise((done) => setTimeout(done, 5)); });
 }
 
 async function pick(kind: Kind) {
@@ -139,20 +144,20 @@ async function pick(kind: Kind) {
     const heading = host.querySelector("[data-testid=file-markdown] h1")!.firstChild!;
     select(heading, 0, heading, (heading as Text).length);
   }
-  await waitForPill();
-  expect(pill(), `Comment action for ${kind}`).not.toBeNull();
+  await waitForBar();
+  expect(bar(), `Comment bar for ${kind}`).not.toBeNull();
 }
 
-async function writeNote(n: number, note: string) {
-  await vi.waitFor(() => expect(host.querySelector<HTMLTextAreaElement>(`[data-comment-card="${n}"] textarea`)).not.toBeNull());
-  const input = host.querySelector<HTMLTextAreaElement>(`[data-comment-card="${n}"] textarea`)!;
-  expect(input).toBe(document.activeElement);
+async function writeNote(note: string) {
+  await vi.waitFor(() => expect(document.querySelector<HTMLTextAreaElement>("[data-comment-bar] textarea")).not.toBeNull());
+  const input = document.querySelector<HTMLTextAreaElement>("[data-comment-bar] textarea")!;
   act(() => {
+    input.focus();
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, note);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   act(() => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-  expect(input.isConnected).toBe(false);
+  expect(bar()).toBeNull();
 }
 
 async function send() {
@@ -175,8 +180,7 @@ function expected(kind: Kind, n: number, note: string) {
 describe("selection comments from the Agent's file panel", () => {
   it("reopens the selected HTML source line from a sent comment, even after switching back to Preview", async () => {
     await pick("html");
-    await act(async () => pill()!.click());
-    await writeNote(1, "Check this heading.");
+    await writeNote("Check this heading.");
     const text = await send();
     await act(async () => root.render(<><QuoteStack blocks={splitQuotes(text)!.quotes} mid={MID} sid={SID} /><SidePanel /></>));
     const jump = host.querySelector<HTMLButtonElement>('[data-comment-block="1"] button')!;
@@ -194,29 +198,36 @@ describe("selection comments from the Agent's file panel", () => {
 
   it("restores a sent file comment's line range in the edit composer", async () => {
     await pick("source");
-    await act(async () => pill()!.click());
-    await writeNote(1, "Review these lines.");
+    await writeNote("Review these lines.");
     const text = await send();
     await act(async () => { sendDraft(KEY, { type: "replace", text }); });
-    await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>('[data-comment-card="1"] button')).not.toBeNull());
-    act(() => host.querySelector<HTMLButtonElement>('[data-comment-card="1"] button')!.click());
+    await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>("[data-comment-chip]")).not.toBeNull());
+    act(() => host.querySelector<HTMLButtonElement>("[data-comment-chip]")!.click());
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-comment-jump="1"]')).not.toBeNull());
+    act(() => document.querySelector<HTMLButtonElement>('[data-comment-jump="1"]')!.click());
     expect(getPanel()).toMatchObject({ kind: "file", path: "/work/example.ts", mid: MID, sid: SID, line: 2, to: 3 });
   });
 
   it.each(["markdown", "source", "html"] as const)("sends the selection and location from the %s preview", async (kind) => {
     await pick(kind);
-    await act(async () => pill()!.click());
-    expect(pill()).toBeNull();
-    await writeNote(1, "Clarify this passage.");
+    await writeNote("Clarify this passage.");
+    expect(bar()).toBeNull();
     expect(await send()).toBe(expected(kind, 1, "Clarify this passage."));
+  });
+
+  it("focuses the floating comment bar on pressing C", async () => {
+    await pick("markdown");
+    const input = document.querySelector<HTMLTextAreaElement>("[data-comment-bar] textarea")!;
+    expect(document.activeElement).not.toBe(input);
+    act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true })); });
+    expect(document.activeElement).toBe(input);
   });
 
   it("numbers comments across files in one message and restores their locations on readback", async () => {
     const kinds = ["markdown", "source", "html"] as const;
     for (const [i, kind] of kinds.entries()) {
       await pick(kind);
-      await act(async () => pill()!.click());
-      await writeNote(i + 1, `Note ${i + 1}`);
+      await writeNote(`Note ${i + 1}`);
     }
     const text = await send();
     expect(text).toBe(kinds.map((kind, i) => expected(kind, i + 1, `Note ${i + 1}`)).join("\n\n"));
@@ -238,10 +249,10 @@ describe("selection comments from the Agent's file panel", () => {
     const heading = doc.body.appendChild(doc.createTextNode("Rendered chart"));
     act(() => before.dispatchEvent(new Event("load")));
     select(heading, 0, heading, heading.length);
-    await waitForPill();
-    expect(pill()).toBeNull();
+    await waitForBar();
+    expect(bar()).toBeNull();
     act(() => buttonNamed(t("session-files-htmlpreview.scripts")).click());
-    expect(pill()).toBeNull();
+    expect(bar()).toBeNull();
     expect(frame()).not.toBe(before);
     expect(frame()!.getAttribute("sandbox")).toContain("allow-scripts");
     expect(frame()!.getAttribute("sandbox")).not.toContain("allow-same-origin");
@@ -254,8 +265,8 @@ describe("selection comments from the Agent's file panel", () => {
     const rowsAndControls = load.parentElement!.parentElement!;
     const end = boundary === "load button" ? textAt(load, 2) : { node: rowsAndControls, offset: rowsAndControls.childNodes.length };
     select(start.node, start.offset, end.node, end.offset);
-    await waitForPill();
-    expect(pill()).toBeNull();
+    await waitForBar();
+    expect(bar()).toBeNull();
     expect(sourceText(2)).toBeNull();
     expect(sent).not.toHaveBeenCalled();
 
@@ -263,10 +274,9 @@ describe("selection comments from the Agent's file panel", () => {
     const first = textAt(sourceText(1), 0);
     const last = textAt(sourceText(2), NEXT_PAGE.length);
     select(first.node, first.offset, last.node, last.offset);
-    await waitForPill();
-    expect(pill()).not.toBeNull();
-    await act(async () => pill()!.click());
-    await writeNote(1, "Check both lines.");
+    await waitForBar();
+    expect(bar()).not.toBeNull();
+    await writeNote("Check both lines.");
     expect(splitQuotes(await send())!.quotes.map(parseCommentBlock)).toMatchObject([
       { text: FILES.paged.text + NEXT_PAGE, comment: { file: { location: "/work/paged.ts:1-2" } } },
     ]);
@@ -285,10 +295,9 @@ describe("selection comments from the Agent's file panel", () => {
     const end = endpoint === "marker" ? marker : endpoint === "row" ? text.parentElement! : text;
     const endOffset = endpoint === "marker" ? 6 : end.childNodes.length;
     select(start.node, start.offset, end, endOffset);
-    await waitForPill();
-    expect(pill()).not.toBeNull();
-    await act(async () => pill()!.click());
-    await writeNote(1, "Check this range.");
+    await waitForBar();
+    expect(bar()).not.toBeNull();
+    await writeNote("Check this range.");
     const selected = first === 4 ? [VISIBLE_TAIL] : ["const second = 7;", DISPLAYED_LINE];
     const location = first === 4 ? "4" : "3-4";
     expect(await send()).toBe([
@@ -301,8 +310,8 @@ describe("selection comments from the Agent's file panel", () => {
     await show("source");
     const marker = sourceText(4).lastElementChild!.firstChild!;
     select(marker, 2, marker, 6);
-    await waitForPill();
-    expect(pill()).toBeNull();
+    await waitForBar();
+    expect(bar()).toBeNull();
   });
 
   it.each(["start", "end"] as const)("rejects a source selection with its %s inside the gutter", async (edge) => {
@@ -311,8 +320,8 @@ describe("selection comments from the Agent's file panel", () => {
     const code = textAt(sourceText(2), 7);
     if (edge === "start") select(gutter, 0, code.node, code.offset);
     else select(code.node, code.offset, gutter, 1);
-    await waitForPill();
-    expect(pill()).toBeNull();
+    await waitForBar();
+    expect(bar()).toBeNull();
   });
 
   it.each(["row", "text"] as const)("omits the first row when selection starts after its code (%s boundary)", async (boundary) => {
@@ -321,10 +330,9 @@ describe("selection comments from the Agent's file panel", () => {
     const first = boundary === "row" ? { node: row, offset: row.childNodes.length } : textAt(sourceText(1), "const before = 0;".length);
     const last = textAt(sourceText(2), "  const first = 42;".length);
     select(first.node, first.offset, last.node, last.offset);
-    await waitForPill();
-    expect(pill()).not.toBeNull();
-    await act(async () => pill()!.click());
-    await writeNote(1, "Check this line.");
+    await waitForBar();
+    expect(bar()).not.toBeNull();
+    await writeNote("Check this line.");
     expect(splitQuotes(await send())!.quotes.map(parseCommentBlock)).toMatchObject([
       { text: "  const first = 42;", comment: { file: { location: "/work/example.ts:2" } } },
     ]);
