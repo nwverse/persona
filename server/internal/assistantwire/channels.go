@@ -241,6 +241,9 @@ type FeishuHandoffID string
 // FeishuChatID is a Lark open-platform chat id (oc_…).
 type FeishuChatID string
 
+// FeishuThreadID is a Lark open-platform thread id (omt_…) or root message id (om_…).
+type FeishuThreadID string
+
 // FeishuHandoffState is the state of a handoff the hub answers with; it only ever answers once one is accepted.
 type FeishuHandoffState string
 
@@ -358,6 +361,12 @@ type FeishuFeatures struct {
 	AnswerNewCard bool `json:"answer_new_card"`
 	// TopicCot: a topic run also shows its thinking and tools in a native agent message beside the progress card.
 	TopicCot bool `json:"topic_cot"`
+	// DMCot: a private-chat run also shows its thinking and tools in a native agent message beside the progress card
+	// (#16847). Off by default.
+	DMCot bool `json:"dm_cot"`
+	// CotAnswer: a run whose agent message is allowed (dm_cot, topic_cot) gets its answer inside that message and no
+	// progress or answer card; cards take over when the message cannot carry it (#16847). Off by default.
+	CotAnswer bool `json:"cot_answer"`
 	// ReadGroup: "@bot /read <task>" from the owner in a group reads the group before the task (#11803,
 	// FeishuFromRead).
 	ReadGroup bool `json:"read_group"`
@@ -387,6 +396,8 @@ type FeishuStatus struct {
 	HomeChat string `json:"home_chat,omitempty"`
 	// TopicTodoModes holds the non-default to-do policies of opted-in groups, keyed by chat ID.
 	TopicTodoModes map[string]TopicTodoMode `json:"topic_todo_modes,omitempty"`
+	// TopicSpaces maps opted-in topic group chat IDs to their bound domain space slug.
+	TopicSpaces map[string]string `json:"topic_spaces,omitempty"`
 	// NudgeAfter is the bot's setting nudge_after (#6084): minutes a card waits unanswered before the one nudge under it,
 	// 0 off. nil (a status from before the setting) is NudgeAfterDefault.
 	NudgeAfter *int `json:"nudge_after,omitempty"`

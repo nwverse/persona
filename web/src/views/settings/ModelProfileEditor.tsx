@@ -97,6 +97,7 @@ export function ModelProfileEditor({
   conflict,
   onSave,
   onCapture,
+  onDelete,
   onReload,
   onCancel,
 }: {
@@ -113,6 +114,7 @@ export function ModelProfileEditor({
   conflict: boolean;
   onSave: (input: ModelProfileSaveInput) => Promise<void>;
   onCapture?: () => Promise<void>;
+  onDelete?: () => void;
   onReload: () => Promise<void>;
   onCancel: () => void;
 }) {
@@ -540,18 +542,33 @@ export function ModelProfileEditor({
             )}
           </div>
         )}
-        <div className="flex items-center justify-end gap-2">
-          <Button tone="quiet" disabled={busy} onClick={onCancel}>
-            {t("common.cancel")}
-          </Button>
-          <Button
-            tone="primary"
-            busy={saving ?? busy}
-            disabled={!canSave || (!dirty && !conflict)}
-            onClick={handleSave}
-          >
-            {t("settings-modelprofiles.save")}
-          </Button>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            {onDelete && (
+              <Button
+                tone="quiet"
+                className="text-red enabled:hover:text-red"
+                testId="profile-editor-delete-button"
+                disabled={busy}
+                onClick={onDelete}
+              >
+                {t("settings-modelprofiles.delete")}
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button tone="quiet" disabled={busy} onClick={onCancel}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              tone="primary"
+              busy={saving ?? busy}
+              disabled={!canSave || (!dirty && !conflict)}
+              onClick={handleSave}
+            >
+              {t("settings-modelprofiles.save")}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

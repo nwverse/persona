@@ -160,7 +160,7 @@ func (s *Service) awaitPrepared(ctx context.Context, p *pending, auxiliary bool)
 		s.fleet.mu.Lock()
 		r := p.prepared.result
 		s.fleet.mu.Unlock()
-		s.finishInteraction(p.ix.ID)
+		s.finishPending(p)
 		return r, nil
 	}
 	// Prefer an already published terminal result over a clarification release
@@ -339,7 +339,7 @@ func (s *Service) detachPreparedGen(p *pending, gen uint64, expireOnError bool) 
 			if err != nil {
 				// approvalJournalStarted succeeded, so balance its new entry before
 				// this card expires. A failed start already removed that entry.
-				s.approvalJournalAborted(context.Background(), ix.ID)
+				s.approvalJournalAborted(context.Background(), ix)
 			}
 		}
 		s.fleet.mu.Lock()
@@ -361,7 +361,7 @@ func (s *Service) detachPreparedGen(p *pending, gen uint64, expireOnError bool) 
 			// waiting resolvePreparedAnswer cannot race approvalJournalApplying with
 			// approvalJournalAborted.
 			s.fleet.mu.Unlock()
-			s.approvalJournalAborted(context.Background(), ix.ID)
+			s.approvalJournalAborted(context.Background(), ix)
 			s.fleet.mu.Lock()
 			a.attempt = nil
 			close(attempt.done)
@@ -386,6 +386,13 @@ func (s *Service) detachPreparedGen(p *pending, gen uint64, expireOnError bool) 
 		close(a.release)
 		return true
 	}
+}
+
+// detachedApprovalWaitingLocked reports whether the original terminal call has
+// already received its non-final waiting result. Its later tool result and a
+// late node dismissal are not new decisions on the retained card. fleet.mu is held.
+func detachedApprovalWaitingLocked(p *pending) bool {
+	return p != nil && p.ix.Detachable && p.prepared != nil && p.prepared.waiting && !p.prepared.terminal
 }
 
 type clarifyingCardKey struct{}
@@ -632,6 +639,10 @@ func validateClarifyQuestion(text string) error {
 // state. Different questions submitted concurrently are processed in order;
 // only a replay of the same delivery is deduplicated.
 func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, origin *clarificationOrigin) error {
+	return s.clarifyAt(ctx, id, text, clientMsgID, origin, nil)
+}
+
+func (s *Service) clarifyAt(ctx context.Context, id, text, clientMsgID string, origin *clarificationOrigin, expected *time.Time) error {
 	if err := validateClarifyQuestion(text); err != nil {
 		return err
 	}
@@ -642,6 +653,10 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[id]
+	if p != nil && expected != nil && !p.ix.CreatedAt.Equal(*expected) {
+		s.fleet.mu.Unlock()
+		return errClarifyUnavailable
+	}
 	if p == nil || p.prepared == nil || !p.ix.CanClarify {
 		s.fleet.mu.Unlock()
 		return errClarifyUnavailable
@@ -667,7 +682,7 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 			}
 			return running.err
 		}
-		return s.clarify(ctx, id, text, clientMsgID, origin)
+		return s.clarifyAt(ctx, id, text, clientMsgID, origin, expected)
 	}
 	attempt := &clarifyAttempt{done: make(chan struct{}), first: !a.clarified,
 		clientMsgID: clientMsgID, text: text, originKey: originKey}
@@ -780,7 +795,7 @@ func (s *Service) finishClarifyAttempt(p *pending, attempt *clarifyAttempt, run 
 		s.show(tell)
 	}
 	if finalErr != nil && attempt.first {
-		s.approvalJournalAborted(context.Background(), p.ix.ID)
+		s.approvalJournalAborted(context.Background(), p.ix)
 	}
 	if run != nil && finalErr == nil {
 		s.startChannelRun(run)
@@ -829,12 +844,16 @@ func (s *Service) approvalAnswerTurnEnded(r SessionRef) {
 // approvalBook is defined here; its durable journal implementation is in
 // approval_journal.go.
 type approvalBook struct {
-	mu         sync.Mutex
-	loaded     bool
-	list       []approvalJournalEntry
-	handled    map[string]bool
-	delivering bool
-	again      bool
-	retry      bool
-	retryDelay time.Duration // 0: approvalResultRetryDelay; tests shorten it
+	mu            sync.Mutex
+	loaded        bool
+	list          []approvalJournalEntry
+	handled       map[string]bool
+	delivering    bool
+	again         bool
+	retry         bool
+	retryDelay    time.Duration // 0: approvalResultRetryDelay; tests shorten it
+	recovering    bool
+	recoveryDone  bool
+	recoveryRetry bool
+	recoverySeq   uint64
 }

@@ -111,7 +111,7 @@ describe("主题色's options", () => {
     const radios = await draw();
     expect(radios).toHaveLength(7);
     expect(radios[1]!.getAttribute("aria-checked")).toBe("true");
-    expect(radios[1]!.getAttribute("aria-label")).toBe("跟随形象，这个形象没带");
+    expect(radios[1]!.getAttribute("aria-label")).toBe("跟随形象，该形象未设置");
   });
 
   it("offers and applies 跟随形象 for an uploaded avatar with colors", async () => {

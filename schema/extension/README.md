@@ -418,6 +418,9 @@ is meaningful use `x-go-pointer`. A client on UI version 12 that omits another c
 `UIContext.unsupported` so older renderers keep selective downgrades without losing `map`. The hub's `downgrade12`
 (`server/internal/extension/ui_v12.go`) draws an older app or unsupported client summary text plus route, marker and
 link rows. Its example is `examples/View.v12-map-route.json`.
+UI version 13 adds one field, a `code`'s `navigate` (an `Action`): go to definition, find usages and back, called with
+`{path, line, column, word, intent}`. The hub's `downgrade13` (`server/internal/extension/ui_v13.go`) leaves it out for an
+older app and a native stream, whose `UIStreamItem` does not list it. Its example is `examples/View.v13-code-navigate.json`.
 
 ## Adding a call
 

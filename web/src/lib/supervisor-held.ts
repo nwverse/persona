@@ -28,7 +28,7 @@ export function userCards<T extends Pick<Interaction, "kind" | "delegating">>(in
 export function supervisorHeldOnly(interactions: readonly Interaction[]): Set<string> {
   const held = new Set<string>();
   const other = new Set<string>();
-  for (const ix of interactions) (supervisorHeld(ix) ? held : other).add(homeKey(ix));
+  for (const ix of interactions) if (!ix.mirror_of) (supervisorHeld(ix) ? held : other).add(homeKey(ix));
   for (const key of other) held.delete(key);
   return held;
 }

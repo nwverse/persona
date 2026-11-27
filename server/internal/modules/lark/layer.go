@@ -161,8 +161,10 @@ type Host interface {
 	EndedText(l i18n.Lang, status, fallback string) string
 	ResolutionText(l i18n.Lang, ix proto.Interaction, r proto.Resolution) string
 	ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error)
+	ResolveInteractionAt(ctx context.Context, id string, r proto.Resolution, action string, expected *time.Time) (bool, error)
 	ValidateClarifyQuestion(text string) error
 	ClarifyInteraction(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string) (bool, error)
+	ClarifyInteractionAt(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string, expected *time.Time) (bool, error)
 	AcceptAction(ctx context.Context, a *botcard.CardAction) (kind, text string)
 	LaterHandled(ctx context.Context, id string) (bool, error)
 	TabName(ctx context.Context, prompt string) string
@@ -180,7 +182,11 @@ type Host interface {
 	AskView(ctx context.Context, ix proto.Interaction) assistantwire.AskView
 	AskRoute(ctx context.Context, ix proto.Interaction) assistantwire.AskRoute
 	AskSensitive(ctx context.Context, ix proto.Interaction) bool
+	// AskDirect admits an eligible owner-decision Assistant write approval independently of all_cards.
+	AskDirect(ctx context.Context, ix proto.Interaction) bool
 	AskState(id string) (ended, pending bool)
+	// AskStateFor binds the terminal marker and announcement to ix's exact occurrence.
+	AskStateFor(ix proto.Interaction) (ended, pending bool)
 	AskPending(id string) (proto.Interaction, bool)
 
 	// The nudges (nudge.go): a card's agent gone, a prepared card's deadline, the standing board told a card was
@@ -384,6 +390,11 @@ func (l *Layer) RememberThread(messageID string, t assistantwire.ChatTarget, tit
 	l.chat().rememberBotThread(messageID, t, title)
 }
 
+// RememberTopicSession binds a group chat topic to a conversation target so follow-up replies route back to it.
+func (l *Layer) RememberTopicSession(ctx context.Context, chatID, threadID string, t assistantwire.ChatTarget, title string) {
+	l.chat().rememberTopicSession(ctx, chatID, threadID, t, title)
+}
+
 // Send passes a message of the chat on to its target and starts the run that answers it.
 func (l *Layer) Send(ctx context.Context, ev *botcard.MessageEvent, content botcard.Content, t assistantwire.ChatTarget) error {
 	return l.chat().botSend(ctx, ev, content, t)
@@ -445,7 +456,7 @@ func (l *Layer) AskBack(ix proto.Interaction, grace time.Duration) {
 }
 
 // AsksCatchUp closes the cards whose interaction is over for good; pending are the interactions up now.
-func (l *Layer) AsksCatchUp(ctx context.Context, pending map[string]bool) {
+func (l *Layer) AsksCatchUp(ctx context.Context, pending map[string]proto.Interaction) {
 	l.chat().closeEndedBotCards(ctx, pending, true)
 }
 

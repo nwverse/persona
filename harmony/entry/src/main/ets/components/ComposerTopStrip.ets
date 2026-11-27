@@ -1,5 +1,6 @@
+import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
-import { ComposerQueueState, QueuedComposerItem } from '../core/ComposerQueue';
+import { canMutateQueueIndex, ComposerQueueState, QueuedComposerItem } from '../core/ComposerQueue';
 import { Colors } from '../design/Colors';
 import { IconActions } from '../design/IconActions';
 import { Motion } from '../design/Motion';
@@ -20,6 +21,9 @@ export struct ComposerTopStrip {
   @Require @Param queue: ComposerQueueState;
   @Param busy: boolean = false;
   @Event onSendNow: () => void = () => {};
+  @Event onEditQueued: (index: number) => void = () => {};
+  @Event onDeleteQueued: (index: number) => void = () => {};
+  @Event onMoveQueued: (index: number, delta: -1 | 1) => void = () => {};
   @Local private env: NativeEnvironment = nativeEnvironment;
   @Local private expanded: boolean = false;
   @Local private copiedItemId: string = '';
@@ -62,25 +66,85 @@ export struct ComposerTopStrip {
     return tr('composer_queued_count').replace('{count}', String(this.queue.items.length));
   }
 
+  @Builder ownItemMenu(item: QueuedComposerItem, index: number) {
+    Menu() {
+      MenuItem({
+        content: tr('composer_queue_edit'),
+        symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.square_and_pencil'))
+      })
+        .enabled(!this.busy)
+        .onClick(() => {
+          Haptics.tap();
+          this.onEditQueued(index);
+        })
+        .id('composer.queue.edit.' + item.id)
+
+      if (this.queue.steersQueue && this.queue.ownCount > 1) {
+        MenuItem({
+          content: tr('composer_queue_move_up'),
+          symbolStartIcon: new SymbolGlyphModifier(Symbols.up)
+        })
+          .enabled(index > 0 && !this.busy)
+          .onClick(() => {
+            Haptics.tap();
+            this.onMoveQueued(index, -1);
+          })
+          .id('composer.queue.move_up.' + item.id)
+
+        MenuItem({
+          content: tr('composer_queue_move_down'),
+          symbolStartIcon: new SymbolGlyphModifier(Symbols.down)
+        })
+          .enabled(index < this.queue.ownCount - 1 && !this.busy)
+          .onClick(() => {
+            Haptics.tap();
+            this.onMoveQueued(index, 1);
+          })
+          .id('composer.queue.move_down.' + item.id)
+      }
+
+      MenuItem({
+        content: tr('copy'),
+        symbolStartIcon: new SymbolGlyphModifier(IconActions.symbol('copy'))
+      })
+        .onClick(() => this.copyItem(item))
+        .id('composer.queue.copy.' + item.id)
+
+      MenuItem({
+        content: tr('delete'),
+        symbolStartIcon: new SymbolGlyphModifier(IconActions.symbol('delete'))
+      })
+        .contentFontColor(Colors.danger)
+        .enabled(!this.busy)
+        .onClick(() => {
+          Haptics.tap();
+          this.onDeleteQueued(index);
+        })
+        .id('composer.queue.delete.' + item.id)
+    }
+  }
+
   build() {
     Column({ space: 0 }) {
-      Row({ space: 8 }) {
+      Row({ space: Tokens.spaceS }) {
         Button({ type: ButtonType.Normal }) {
-          Row({ space: 6 }) {
+          Row({ space: Tokens.spaceSm }) {
             SymbolGlyph($r('sys.symbol.clock'))
               .fontSize('12.5vp')
               .fontColor([Colors.secondary])
             Text(this.countBadgeLabel())
-              .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+              .fontSize(Tokens.typeLabel)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
               .fontWeight(FontWeight.Medium)
-              .fontColor(Colors.link)
+              .fontColor(Colors.needs)
               .maxLines(1)
               .padding({ left: 7, right: 7, top: 2, bottom: 2 })
-              .backgroundColor(Colors.accentWell)
-              .borderRadius(10)
+              .backgroundColor(Colors.needsWash)
+              .borderRadius(Tokens.radiusCapsule)
             if (!this.expanded && this.queue.preview) {
               Text(this.queue.preview)
-                .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+                .fontSize(Tokens.typeCaption)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
                 .fontColor(Colors.secondary)
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -98,7 +162,7 @@ export struct ComposerTopStrip {
           .alignItems(VerticalAlign.Center)
         }
         .layoutWeight(1)
-        .padding({ left: 4, right: 4, top: 4, bottom: 4 })
+        .padding({ left: Tokens.spaceXs, right: Tokens.spaceXs, top: Tokens.spaceXs, bottom: Tokens.spaceXs })
         .backgroundColor(Color.Transparent)
         .accessibilityText(this.countBadgeLabel())
         .onClick(() => this.toggleExpanded())
@@ -106,7 +170,7 @@ export struct ComposerTopStrip {
 
         if (this.queue.steersQueue && this.queue.ownCount > 0) {
           Button({ type: ButtonType.Capsule }) {
-            Row({ space: 4 }) {
+            Row({ space: Tokens.spaceXs }) {
               if (this.busy) {
                 LoadingProgress()
                   .width(12)
@@ -118,7 +182,8 @@ export struct ComposerTopStrip {
                   .fontColor([Colors.link])
               }
               Text(tr('composer_queue_send_now'))
-                .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+                .fontSize(Tokens.typeLabel)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                 .fontWeight(FontWeight.Medium)
                 .fontColor(Colors.link)
                 .maxLines(1)
@@ -126,11 +191,12 @@ export struct ComposerTopStrip {
           }
           .height(26)
           .padding({ left: 10, right: 10 })
-          .backgroundColor(Colors.selection)
+          .responseRegion({ x: 0, y: -9, width: '100%', height: Tokens.controlBar })
+          .backgroundColor(Colors.needsWash)
           .border({
             width: PhoneStyle.surfaceEdgeWidth(0.5),
-            color: PhoneStyle.cardBorder(this.env.dark),
-            radius: 13
+            color: Colors.hairlineGlass,
+            radius: Tokens.radiusCapsule
           })
           .enabled(!this.busy)
           .onClick(() => {
@@ -141,86 +207,116 @@ export struct ComposerTopStrip {
         }
       }
       .width('100%')
-      .padding({ left: 4, right: 4, top: 2, bottom: 4 })
+      .padding({ left: Tokens.spaceXs, right: Tokens.spaceXs, top: Tokens.spaceXxs, bottom: Tokens.spaceXs })
       .alignItems(VerticalAlign.Center)
       .id('composer.queue.strip')
 
       if (this.expanded) {
         Scroll() {
-          Column({ space: 6 }) {
+          Column({ space: Tokens.spaceSm }) {
             ForEach(this.queue.items, (item: QueuedComposerItem, index: number) => {
-              Row({ space: 8 }) {
+              Row({ space: Tokens.spaceS }) {
                 Text(String(index + 1))
-                  .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+                  .fontSize(Tokens.typeLabel)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                   .fontWeight(FontWeight.Bold)
-                  .fontColor(Colors.link)
+                  .fontColor(Colors.needs)
                   .textAlign(TextAlign.Center)
                   .width(20)
                   .height(20)
-                  .borderRadius(10)
-                  .backgroundColor(Colors.accentWell)
+                  .borderRadius(Tokens.radiusControl)
+                  .backgroundColor(Colors.needsWash)
 
-                Column({ space: 2 }) {
+                Column({ space: Tokens.spaceXxs }) {
                   Text(item.text)
-                    .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+                    .fontSize(Tokens.typeCaption)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
                     .fontColor(Colors.ink)
-                    .lineHeight(18)
+                    .lineHeight(Tokens.lineHeightCaption)
                     .maxLines(3)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                     .width('100%')
                   if (item.relayed || item.sender) {
-                    Row({ space: 6 }) {
+                    Row({ space: Tokens.spaceSm }) {
                       if (item.relayed) {
                         Text(tr('composer_queue_relayed'))
-                          .fontSize(Tokens.interfaceFontVp(10.5, this.env.fontScale))
+                          .fontSize(Tokens.typeLabel)
+                          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                           .fontWeight(FontWeight.Medium)
                           .fontColor(Colors.secondary)
-                          .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+                          .padding({ left: Tokens.spaceSm, right: Tokens.spaceSm, top: 1, bottom: 1 })
                           .backgroundColor(Colors.control)
-                          .borderRadius(6)
+                          .borderRadius(Tokens.radiusBadge)
                       }
                       if (item.sender) {
                         Text(item.sender)
-                          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+                          .fontSize(Tokens.typeLabel)
+                          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                           .fontColor(Colors.secondary)
                           .maxLines(1)
                           .textOverflow({ overflow: TextOverflow.Ellipsis })
                       }
                     }
                   }
+                  if (item.relayed || index >= this.queue.ownCount) {
+                    Text(tr(item.noWake ? 'composer_queue_arrives_next' : 'composer_queue_arrives_turn_end'))
+                      .fontSize(Tokens.typeLabel)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                      .fontColor(Colors.secondary)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  }
                 }
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)
 
-                Button({ type: ButtonType.Circle }) {
-                  SymbolGlyph(this.copiedItemId === item.id ? Symbols.check : IconActions.symbol('copy'))
-                    .fontSize('13vp')
-                    .fontColor([this.copiedItemId === item.id ? Colors.positive : Colors.secondary])
+                if (canMutateQueueIndex(this.queue.ownCount, index) && !item.relayed) {
+                  Button({ type: ButtonType.Circle }) {
+                    SymbolGlyph($r('sys.symbol.more'))
+                      .fontSize('14vp')
+                      .fontColor([Colors.secondary])
+                  }
+                  .width(28)
+                  .height(28)
+                  .padding(0)
+                  .backgroundColor(Color.Transparent)
+                  .responseRegion({ x: -8, y: -8, width: Tokens.controlBar, height: Tokens.controlBar })
+                  .accessibilityText(tr('more'))
+                  .bindTips(tr('more'))
+                  .enabled(!this.busy)
+                  .bindMenu(this.ownItemMenu(item, index))
+                  .id('composer.queue.more.' + item.id)
+                } else {
+                  Button({ type: ButtonType.Circle }) {
+                    SymbolGlyph(this.copiedItemId === item.id ? Symbols.check : IconActions.symbol('copy'))
+                      .fontSize('13vp')
+                      .fontColor([this.copiedItemId === item.id ? Colors.positive : Colors.secondary])
+                  }
+                  .width(28)
+                  .height(28)
+                  .padding(0)
+                  .backgroundColor(Color.Transparent)
+                  .responseRegion({ x: -8, y: -8, width: Tokens.controlBar, height: Tokens.controlBar })
+                  .accessibilityText(tr('copy'))
+                  .bindTips(tr('copy'))
+                  .onClick(() => this.copyItem(item))
+                  .id('composer.queue.copy.' + item.id)
                 }
-                .width(28)
-                .height(28)
-                .padding(0)
-                .backgroundColor(Color.Transparent)
-                .responseRegion({ x: -8, y: -8, width: 44, height: 44 })
-                .accessibilityText(tr('copy'))
-                .bindTips(tr('copy'))
-                .onClick(() => this.copyItem(item))
-                .id('composer.queue.copy.' + item.id)
               }
               .width('100%')
-              .padding({ left: 10, right: 8, top: 7, bottom: 7 })
+              .padding({ left: 10, right: Tokens.spaceS, top: 7, bottom: 7 })
               .alignItems(VerticalAlign.Top)
-              .backgroundColor(this.env.dark ? '#18FFFFFF' : '#08000000')
-              .borderRadius(12)
+              .backgroundColor(Colors.pressOverlay)
+              .borderRadius(Tokens.radiusCard)
               .border({
                 width: PhoneStyle.surfaceEdgeWidth(0.5),
-                color: PhoneStyle.cardBorder(this.env.dark),
-                radius: 12
+                color: Colors.hairlineGlass,
+                radius: Tokens.radiusCard
               })
             }, (item: QueuedComposerItem, index: number) => item.id + ':' + String(index) + ':' + item.text)
           }
           .width('100%')
-          .padding({ left: 4, right: 4, bottom: 6 })
+          .padding({ left: Tokens.spaceXs, right: Tokens.spaceXs, bottom: Tokens.spaceSm })
         }
         .scrollable(ScrollDirection.Vertical)
         .scrollBar(BarState.Auto)
@@ -232,10 +328,10 @@ export struct ComposerTopStrip {
       }
 
       Divider()
-        .strokeWidth(0.5)
+        .strokeWidth(Tokens.divider)
         .color(Colors.divider)
         .width('100%')
-        .margin({ top: 2, bottom: 2 })
+        .margin({ top: Tokens.spaceXxs, bottom: Tokens.spaceXxs })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

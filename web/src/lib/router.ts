@@ -21,7 +21,7 @@ export type Route =
   | { name: "persona-new" }
   // `view` is the page's `?view=chat|term`; without it the page shows what it showed last (lib/session-view.ts)
   // `at`: the message to land on (?at=<item id>, the hub's links to one message, docs/protocol/deep-links.md)
-  // `standalone`: explicit full-page open for a subagent ("Open as page", prevents redirecting back to parent panel)
+  // `standalone`: explicit full-page open for a subagent or a blocked terminal, even when the chat normally redirects
   | { name: "session"; mid: string; sid: string; view?: SessionView; work?: true; at?: string; standalone?: true }
   // one herdr tab (a slot) of a workspace; `sid` picks its pane (lib/herdr-tree.ts resolveTab)
   | { name: "tab"; mid: string; space: string; slot: string; sid?: string; view?: SessionView; work?: true; at?: string }

@@ -66,7 +66,11 @@ var (
 	larkCLINamed = lazyre.New(`(^|[^A-Za-z0-9_.-])lark-cli([^A-Za-z0-9_.-]|$)`)
 )
 
-func isLarkCLI(name string) bool { return name == "lark-cli" || filepath.Base(name) == "lark-cli" }
+// isLarkCLI sees through zsh's `=cmd` expansion (`=lark-cli …` runs the resolved path): the word still names lark-cli.
+func isLarkCLI(name string) bool {
+	name = strings.TrimPrefix(name, "=")
+	return name == "lark-cli" || filepath.Base(name) == "lark-cli"
+}
 
 // larkProfileEnvName is the variable lark-cli takes its profile from when no --profile is given (lark-cli 1.0.98): the
 // node sets it to lark.cli.profile in the assistant's environment (assistantLarkEnvNamed, #9123).

@@ -822,6 +822,30 @@ var Points = map[string]Point{
 		}
 		return p.ID, checkRepositoryProvider(p)
 	}},
+	// text_lookup: a dictionary the apps ask for the meaning of a word the user taps (text_lookup.state / lookup / save /
+	// remove, docs/extensions/extensions.md "Looking up a word"). Only English for now.
+	"text_lookup": {Name: "text_lookup", Namespace: "text_lookup", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var a TextLookupItem
+		if err := strict(raw, &a); err != nil {
+			return "", err
+		}
+		id := a.ID.String()
+		if !textLookupID.MatchString(id) {
+			return id, fmt.Errorf("text_lookup id %q: a-z0-9_- up to 64", id)
+		}
+		if a.Name != "" && (strings.TrimSpace(a.Name) == "" || utf8.RuneCountInString(a.Name) > 80) {
+			return id, fmt.Errorf("text_lookup %s: a name of 1 to 80 characters", id)
+		}
+		// Omitted means ["en"]. An explicit list must be exactly ["en"].
+		langs := a.Languages
+		if langs == nil {
+			langs = []string{"en"}
+		}
+		if len(langs) != 1 || langs[0] != "en" {
+			return id, fmt.Errorf("text_lookup %s: languages only \"en\" for now", id)
+		}
+		return id, nil
+	}},
 	"voice": {Name: "voice", Namespace: "voice", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
 		var v VoiceItem
 		if err := strict(raw, &v); err != nil {

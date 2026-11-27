@@ -200,6 +200,8 @@ type runLive struct {
 	// kit is the progress card as a CardKit entity, streamed into (stream.go); nil before it is sent, or for a card
 	// sent as a message.
 	kit *cardKit
+	// readNoted: a held /read's owner was told it is being worked on (readWorking), once per run.
+	readNoted bool
 }
 
 // Abort stops the run's agent-message worker (the core dropped the run). Never called under the channels' lock.

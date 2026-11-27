@@ -970,10 +970,15 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 		}
 		replyAsk = a
 	case sigPRConflict:
-		p := t.PRStatus
-		if p == nil || p.URL != t.PRURL || p.State != "open" || !p.Conflicts || p.HeadOID == "" ||
-			g.Key != p.URL+"@"+p.HeadOID || s.stagePR(t.ID) != p.URL || parkWaitsOnPR(v.parking(), p.URL) {
-			return prompts.SuperviseEntry{}, false // resolved, replaced, or parked for this PR while the signal waited
+		prURL := g.prConflictURL()
+		if prURL == "" || t.PRURL != prURL && !slices.Contains(t.PRs, prURL) {
+			return prompts.SuperviseEntry{}, false
+		}
+		p := prFacts(t, prURL)
+		if p == nil || p.URL != prURL || p.State != "open" || !p.Conflicts || p.HeadOID == "" ||
+			g.Key != p.URL+"@"+p.HeadOID || !s.stageFollows(t.ID, p.URL) || s.isReferencePRLink(ctx, t.ID, p.URL) ||
+			v.externalPRConflictWoke(p.URL, p.HeadOID) {
+			return prompts.SuperviseEntry{}, false // resolved, closed, unfollowed, reference-only, or already woken by external PR park
 		}
 	case sigPREvent:
 		if !s.prEventSignalStillHolds(t, g) {
@@ -992,7 +997,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			if r == nil || g.Key != reviewKey(v) {
 				return prompts.SuperviseEntry{}, false
 			}
-			g.Detail = strings.TrimSpace(g.Detail + " " + r.ExternalPR.detail())
+			g.Detail = strings.TrimSpace(g.Detail + " " + r.ExternalPR.detail(r))
 		}
 	case sigReviewNudge:
 		if !s.settings(ctx).todosV2On() || st != reviewPending || v.handoffResult() != nil {

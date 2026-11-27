@@ -94,6 +94,7 @@ type agyTranscriptUsage struct {
 	first         string // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
 	turn          agyTurnEvidence
 	modTime       time.Time // transcript file mtime in UTC, used as fallback UpdatedAt for herdr agy panes
+	size          int64     // transcript file size in bytes: a herdr agy pane row's Rev (proto.Session.Rev)
 }
 
 type agyHistory struct {

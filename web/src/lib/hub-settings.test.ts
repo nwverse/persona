@@ -63,15 +63,15 @@ describe("feishu bot", () => {
 
   it("says the state", () => {
     expect(botStateText(null, true)).toBe("正在检查…");
-    expect(botStateText(null)).toBe("读不到状态");
-    expect(botStateText(bot({ enabled: false }))).toBe("未打开");
-    expect(botStateText(bot({ has_secret: false }))).toBe("还没填应用凭证");
-    expect(botStateText(bot({ connected: false, error: "x" }))).toBe("连不上：x");
+    expect(botStateText(null)).toBe("无法读取状态");
+    expect(botStateText(bot({ enabled: false }))).toBe("未开启");
+    expect(botStateText(bot({ has_secret: false }))).toBe("尚未填写应用凭证");
+    expect(botStateText(bot({ connected: false, error: "x" }))).toBe("连接失败：x");
     expect(botStateText(bot({ connected: false }))).toBe("正在连接…");
-    expect(botStateText(bot({ owner: null }))).toBe("已连接，等你配对");
+    expect(botStateText(bot({ owner: null }))).toBe("已连接，等待配对");
     expect(botStateText(bot())).toBe("已连接");
     expect([botTone(bot({ enabled: false })), botTone(bot({ connected: false })), botTone(bot({ owner: null })), botTone(bot())]).toEqual([undefined, "red", "orange", "green"]);
-    expect([botSummary(null), botSummary(bot({ enabled: false })), botSummary(bot({ connected: false })), botSummary(bot({ owner: null })), botSummary(bot())]).toEqual(["", "未打开", "连不上", "待配对", "已连接"]);
+    expect([botSummary(null), botSummary(bot({ enabled: false })), botSummary(bot({ connected: false })), botSummary(bot({ owner: null })), botSummary(bot())]).toEqual(["", "未开启", "无法连接", "待配对", "已连接"]);
   });
 
   it("keeps only a pairing code that is still valid", () => {
@@ -90,10 +90,10 @@ const hub = (o: Partial<HubUpdateStatus> = {}): HubUpdateStatus => ({
 describe("hub update", () => {
   it("names the channel, the state and the history", () => {
     expect([channelTitle("release"), channelTitle("docker"), channelTitle("")]).toEqual(["发布版", "Docker", "开发版"]);
-    expect(updateStateTitle(hub({ state: "waiting_idle" }))).toBe("等助手和 Agent 空闲");
-    expect(updateStateTitle(hub({ state: "waiting_idle", busy: [{ machine_id: "m", machine: "M", title: "t" }] }))).toBe("等 1 个在忙的结束");
+    expect(updateStateTitle(hub({ state: "waiting_idle" }))).toBe("等待助手和 Agent 进入空闲状态");
+    expect(updateStateTitle(hub({ state: "waiting_idle", busy: [{ machine_id: "m", machine: "M", title: "t" }] }))).toBe("等待 1 个进行中的任务完成");
     expect(updateStateTitle(hub())).toBe("已是最新");
-    expect([recordTitle("updated"), recordTitle("held"), recordTitle("failed")]).toEqual(["已更新", "没有自动装", "没更新成功"]);
+    expect([recordTitle("updated"), recordTitle("held"), recordTitle("failed")]).toEqual(["已更新", "未自动安装", "更新失败"]);
     expect([recordTone("updated"), recordTone("rolled_back"), recordTone("held"), recordTone("failed")]).toEqual(["green", "orange", "orange", "red"]);
   });
 
@@ -108,7 +108,7 @@ describe("hub update", () => {
   it("picks what the 更新 group shows", () => {
     const latest = { version: "v2", build: 2, newer: true, bad: false };
     expect(updateView(hub({ channel: "docker", can_update: false }))).toEqual({ kind: "docker" });
-    expect(updateView(hub({ can_update: false, why_not: "开发版" }))).toEqual({ kind: "cannot", why: "这个 hub 不会自己更新：开发版。" });
+    expect(updateView(hub({ can_update: false, why_not: "开发版" }))).toEqual({ kind: "cannot", why: "此 hub 不支持自动更新：开发版。" });
     expect(updateView(hub({ latest }))).toEqual({ kind: "newer", working: false });
     expect(updateView(hub({ latest, state: "waiting_idle" }))).toEqual({ kind: "newer", working: true });
     expect(updateView(hub({ state: "confirming" }))).toEqual({ kind: "working" });
@@ -133,8 +133,8 @@ describe("hub update", () => {
   it("warns about a release that went back or is held", () => {
     const latest = { version: "v2", build: 2, newer: true, bad: false, held: "旧代码" };
     expect(latestWarning(hub({ latest }))).toBeNull(); // held only matters with auto-update on
-    expect(latestWarning(hub({ latest, auto: true }))).toBe("自动更新不会装这一版：旧代码。确认没问题可以手动更新。");
-    expect(latestWarning(hub({ latest: { ...latest, bad: true } }))).toContain("已经回滚过");
+    expect(latestWarning(hub({ latest, auto: true }))).toBe("自动更新不会安装此版本：旧代码。若确认无误，你可以手动更新。");
+    expect(latestWarning(hub({ latest: { ...latest, bad: true } }))).toContain("已自动回滚");
     expect(latestWarning(hub({ latest: { ...latest, newer: false }, auto: true }))).toBeNull();
   });
 
@@ -142,7 +142,7 @@ describe("hub update", () => {
     const latest = { version: "v0.1.17-177-g563f7fde5b-202611071005", build: 202611071005, newer: false, bad: false };
     const site = { latest, update_url: "https://personaside.example/dl", update_url_from: "build" };
     expect(sourceBehindWarning(hub({ ...site, source_behind: true }))).toBe(
-      "更新源 https://personaside.example/dl（编译时写入）最新只有 v0.1.17-177-g563f7fde5b-202611071005，比这个 hub 还旧，看起来已经不再发布了。在 hub.json 的 update.url 里换一个更新源。",
+      "更新源 https://personaside.example/dl（编译时写入）的最新版本仅为 v0.1.17-177-g563f7fde5b-202611071005，低于当前 hub 版本，可能已停止更新。请在 hub.json 中修改 update.url 以更换更新源。",
     );
     expect(sourceBehindWarning(hub({ ...site, update_url_from: "hub.json", source_behind: true }))).toContain("（hub.json 的 update.url）");
     expect(sourceBehindWarning(hub(site))).toBeNull(); // a current source: "Up to date" as before

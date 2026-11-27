@@ -278,20 +278,29 @@ func (s *Service) investigationWorkerGone(ctx context.Context, t Todo) ([]TodoAg
 	return active, true
 }
 
-func (s *Service) canBypassStaleInvestigationCancel(ctx context.Context, t Todo) ([]TodoAgent, bool) {
+func (t Todo) hasStaleInvestigationReport() bool {
+	if t.DoneAt != nil || t.Supervision == nil {
+		return false
+	}
+	r := t.Supervision.Investigation
+	return r != nil && r.Version > 0 && r.Stale
+}
+
+func (s *Service) checkStaleInvestigationCancelWorkers(ctx context.Context, t Todo) ([]TodoAgent, bool) {
 	if t.DoneAt != nil || t.Supervision == nil || t.Supervision.Investigation == nil {
 		return nil, false
 	}
-	if t.Supervision.Investigation.current(t, t.Supervision) {
+	if t.hasStaleInvestigationReport() || t.Supervision.Investigation.current(t, t.Supervision) {
 		return nil, false
 	}
 	return s.investigationWorkerGone(ctx, t)
 }
 
-func staleInvestigationCancelAllowed(cur Todo, checked []TodoAgent) bool {
-	return cur.Supervision != nil && cur.Supervision.Investigation != nil &&
-		!cur.Supervision.Investigation.current(cur, cur.Supervision) &&
-		sameActiveAgents(activeInvestigationAgents(cur), checked)
+func staleInvestigationCancelAllowed(cur Todo, checked []TodoAgent, workersGone bool) bool {
+	return cur.hasStaleInvestigationReport() ||
+		(workersGone && cur.Supervision != nil && cur.Supervision.Investigation != nil &&
+			!cur.Supervision.Investigation.current(cur, cur.Supervision) &&
+			sameActiveAgents(activeInvestigationAgents(cur), checked))
 }
 
 func (s *Service) investigationActionCovered(parent Todo, f recordedFinding) bool {
@@ -410,7 +419,7 @@ const reviewFindings = "findings"
 func (s *Service) reviewInvestigationFindings(ctx context.Context, t Todo, in *findingReview, checks []ReviewCheck, reviewer string, allowed func(Todo) bool) (string, error) {
 	var checkedAgents []TodoAgent
 	allowStale := false
-	if in != nil && t.Supervision != nil && t.Supervision.Investigation != nil &&
+	if in != nil && !t.hasStaleInvestigationReport() && t.Supervision != nil && t.Supervision.Investigation != nil &&
 		t.Supervision.Investigation.Version > 0 && !t.Supervision.Investigation.current(t, t.Supervision) {
 		checkedAgents, allowStale = s.investigationWorkerGone(ctx, t)
 	}
@@ -429,7 +438,8 @@ func (s *Service) reviewInvestigationFindings(ctx context.Context, t Todo, in *f
 			report = v.Investigation
 			return false
 		}
-		canReviewStale := allowStale && sameActiveAgents(activeInvestigationAgents(current), checkedAgents)
+		canReviewStale := current.hasStaleInvestigationReport() ||
+			(allowStale && sameActiveAgents(activeInvestigationAgents(current), checkedAgents))
 		if problem = v.Investigation.review(current, v, *in, canReviewStale); problem != nil {
 			return false
 		}
