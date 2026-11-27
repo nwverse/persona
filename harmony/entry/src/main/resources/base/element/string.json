@@ -9199,6 +9199,182 @@
     {
       "name": "machine_cpu_load",
       "value": "CPU & Load"
+    },
+    {
+      "name": "composer_queue_edit",
+      "value": "Take Back to Edit"
+    },
+    {
+      "name": "composer_queue_move_up",
+      "value": "Move Up"
+    },
+    {
+      "name": "composer_queue_move_down",
+      "value": "Move Down"
+    },
+    {
+      "name": "composer_queue_taken_back",
+      "value": "Moved back to the input box"
+    },
+    {
+      "name": "composer_queue_deleted",
+      "value": "Removed from the queue"
+    },
+    {
+      "name": "composer_queue_arrives_turn_end",
+      "value": "Arrives when this turn ends"
+    },
+    {
+      "name": "composer_queue_arrives_next",
+      "value": "Arrives with next message"
+    },
+    {
+      "name": "starred_messages",
+      "value": "Starred Messages"
+    },
+    {
+      "name": "star_message",
+      "value": "Star"
+    },
+    {
+      "name": "unstar_message",
+      "value": "Unstar"
+    },
+    {
+      "name": "starred_badge",
+      "value": "Starred"
+    },
+    {
+      "name": "starred_saved_toast",
+      "value": "Message starred"
+    },
+    {
+      "name": "starred_removed_toast",
+      "value": "Message unstarred"
+    },
+    {
+      "name": "starred_search_placeholder",
+      "value": "Search Starred Messages"
+    },
+    {
+      "name": "starred_empty_title",
+      "value": "No Starred Messages"
+    },
+    {
+      "name": "starred_empty_message",
+      "value": "Touch and hold a message to star it."
+    },
+    {
+      "name": "starred_unavailable_title",
+      "value": "Starred Messages Are Unavailable"
+    },
+    {
+      "name": "starred_unavailable_message",
+      "value": "Update the hub to use starred messages with this assistant."
+    },
+    {
+      "name": "starred_load_failed",
+      "value": "Couldn't Load Starred Messages"
+    },
+    {
+      "name": "starred_search_empty",
+      "value": "No matching starred messages"
+    },
+    {
+      "name": "starred_open_original",
+      "value": "Open Original"
+    },
+    {
+      "name": "starred_original_unavailable",
+      "value": "The original message is unavailable."
+    },
+    {
+      "name": "starred_original_check_failed",
+      "value": "Couldn't check the original message. Try again."
+    },
+    {
+      "name": "starred_omitted_chars",
+      "value": "{count} additional characters"
+    },
+    {
+      "name": "export_chat",
+      "value": "Export Chat"
+    },
+    {
+      "name": "export_include_timestamps",
+      "value": "Include Timestamps"
+    },
+    {
+      "name": "export_include_work_steps",
+      "value": "Include Work Steps"
+    },
+    {
+      "name": "export_preview_count",
+      "value": "{count} messages"
+    },
+    {
+      "name": "export_truncated_badge",
+      "value": "{count} truncated"
+    },
+    {
+      "name": "export_truncated_notice",
+      "value": "{omitted} characters truncated"
+    },
+    {
+      "name": "export_copy_markdown",
+      "value": "Copy Markdown"
+    },
+    {
+      "name": "export_save_share",
+      "value": "Save / Share"
+    },
+    {
+      "name": "export_copied_toast",
+      "value": "Markdown copied"
+    },
+    {
+      "name": "archived_chats",
+      "value": "Archived"
+    },
+    {
+      "name": "unarchive",
+      "value": "Unarchive"
+    },
+    {
+      "name": "unarchived_toast",
+      "value": "Unarchived"
+    },
+    {
+      "name": "archived_search_placeholder",
+      "value": "Search Archived Chats"
+    },
+    {
+      "name": "archived_empty_title",
+      "value": "No Archived Chats"
+    },
+    {
+      "name": "archived_empty_message",
+      "value": "Archived conversations will appear here. Tap one to open or unarchive it."
+    },
+    {
+      "name": "archived_search_empty",
+      "value": "No matching archived chats"
+    },
+    {
+      "name": "fork_continue_new_chat",
+      "value": "Continue in New Chat"
+    },
+    {
+      "name": "fork_chat_done_toast",
+      "value": "Opened branch in new chat"
+    },
+    {
+      "name": "undo",
+      "value": "Undo"
+    },
+    {
+      "name": "assistant",
+      "value": "Assistant"
     }
   ]
 }

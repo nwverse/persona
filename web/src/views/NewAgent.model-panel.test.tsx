@@ -419,7 +419,7 @@ describe("New agent's model panel (#5104)", () => {
     expect(pill().title).toContain("only-mac");
     act(() => machineChip("Studio").click());
     await flush();
-    expect(q("[data-testid=new-agent-dropped]")!.textContent).toBe("Studio 上用不了 only-mac，已换回这台电脑的默认设置。");
+    expect(q("[data-testid=new-agent-dropped]")!.textContent).toBe("only-mac 无法在 Studio 上运行，已改用这台电脑的默认设置。");
     expect(pill().title).toBe("Claude Code · Opus 5.5 · High");
     // a pick on this computer takes the note away
     await pick("model:claude\nsonnet");
@@ -496,7 +496,7 @@ describe("New agent's model panel (#5104)", () => {
     failList = "claude";
     await open();
     expect(pill().dataset.modelPill).toBe("failed");
-    expect(q("[data-testid=new-agent-models-failed]")!.textContent).toBe("没读到模型列表，仍可以用默认模型启动");
+    expect(q("[data-testid=new-agent-models-failed]")!.textContent).toBe("无法加载模型列表，仍可使用默认模型启动。");
     start();
     expect(launched[0]).toMatchObject({ machineId: "mac", launcher: "" });
     expect(launched[0].model).toBeUndefined();

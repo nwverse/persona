@@ -214,8 +214,8 @@ describe("Mermaid blocks", () => {
   it("errors read in Chinese with the line, Mermaid's text kept", async () => {
     const { mermaidProblem } = await import("../lib/mermaid");
     const raw = "Parse error on line 3:\nflowchart TD A -->\n--------------^\nExpecting 'NODE', got 'EOF'";
-    expect(mermaidProblem(new Error(raw))).toEqual({ summary: "这张图有语法错误（第 3 行）", detail: raw });
-    expect(mermaidProblem(new Error("No diagram type detected")).summary).toBe("这张图画不出来");
+    expect(mermaidProblem(new Error(raw))).toEqual({ summary: "图表存在语法错误（第 3 行）", detail: raw });
+    expect(mermaidProblem(new Error("No diagram type detected")).summary).toBe("无法渲染此图表");
   });
 });
 

@@ -281,7 +281,7 @@ export function SurfaceStyleRow() {
               value={translucency}
               min={0}
               max={100}
-              step={2}
+              step={5}
               label={t("ui-look.glass_translucency")}
               valueText={`${translucency}%`}
               onInput={setGlassTranslucency}

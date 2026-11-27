@@ -43,7 +43,7 @@
         if (localStorage.getItem("persona.surface-style") === "liquid-glass") {
           document.documentElement.dataset.surfaceStyle = "liquid-glass";
           var gt = Number(localStorage.getItem("persona.glass-translucency"));
-          var g = Number.isFinite(gt) && localStorage.getItem("persona.glass-translucency") ? Math.round(Math.min(100, Math.max(0, gt))) : 68;
+          var g = Number.isFinite(gt) && localStorage.getItem("persona.glass-translucency") ? Math.round(Math.min(100, Math.max(0, gt))) : 75;
           document.documentElement.style.setProperty("--glass-t", (g / 100).toFixed(2));
         }
       } catch (e) {}

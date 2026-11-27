@@ -1,7 +1,7 @@
 {
   "pasted_preview_hint": "点击预览或展开到输入框",
   "pasted_chip_other": "已粘贴文本 · {count} 字",
-  "pasted_remove": "移除粘贴文本",
+  "pasted_remove": "移除已粘贴的文本",
   "pasted_stats": "{lines} 行 · {chars} 字",
   "pasted_expand": "展开到输入框",
   "collapse": "收起输入框",

@@ -565,8 +565,8 @@ export struct TodoWorkspacePage {
     }
   }
   private phoneStateInk(state:string):ResourceColor {
-    if (state==='needs_you') return nativeEnvironment.dark ? '#409CFF' : '#0064C8';
-    if (state==='working' || state==='waiting') return nativeEnvironment.dark ? '#FFB224' : '#A35A00';
+    if (state==='needs_you') return Colors.needs;
+    if (state==='working' || state==='waiting') return Colors.working;
     return state==='unread' ? Colors.unread : $r('app.color.project_card_secondary');
   }
   private phoneDotInk(state:string):ResourceColor {
@@ -575,9 +575,9 @@ export struct TodoWorkspacePage {
     return state==='unread' ? Colors.unreadMark : $r('app.color.project_card_secondary');
   }
   private phoneReviewInk(tone:string):ResourceColor {
-    if (tone==='caution') return nativeEnvironment.dark ? '#FF9F0A' : '#B35400';
-    if (tone==='danger') return nativeEnvironment.dark ? '#FF5F57' : '#D93A3A';
-    return tone==='positive' ? (nativeEnvironment.dark ? '#30D158' : '#248A3D') : $r('app.color.project_card_secondary');
+    if (tone==='caution') return $r('app.color.persona_dock_warning');
+    if (tone==='danger') return Colors.danger;
+    return tone==='positive' ? Colors.positive : $r('app.color.project_card_secondary');
   }
   private phoneReviewCaption(group:TodoWorkspaceGroup):string {
     const review=group.phone, label=tr(review.reviewKey).replace('{round}',String(review.reviewRound));

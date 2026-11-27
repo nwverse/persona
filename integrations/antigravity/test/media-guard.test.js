@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { execFile, execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -52,6 +53,91 @@ test('read_file of a truncated JPEG is refused with a reason and a readable copy
   const header = decide({ toolCall: { args: { Path: file } } }, state)
   assert.equal(header.decision, 'deny')
   assert.doesNotMatch(header.reason, /separate copy/)
+})
+
+test('truncated JPEG is still denied when the optional partial copy cannot be written', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-media-guard-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const cut = jpeg.subarray(0, jpeg.length - 2)
+  const file = join(dir, 'shot.jpg')
+  writeFileSync(file, cut)
+  // A regular file where the state directory would live makes mkdirSync fail with EEXIST/ENOTDIR on every OS.
+  const blockedState = join(dir, 'not-a-dir')
+  writeFileSync(blockedState, 'blocker')
+  const answer = decide({ toolCall: { name: 'read_file', args: { Path: file } } }, blockedState)
+  assert.equal(answer.decision, 'deny')
+  assert.match(answer.reason, /cut short \(truncated\)/)
+  assert.doesNotMatch(answer.reason, /separate copy/)
+  assert.deepEqual(readFileSync(file), cut)
+})
+
+test('parallel media-guard hooks on the same truncated JPEG all deny without temp-file races', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-media-guard-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const cut = jpeg.subarray(0, jpeg.length - 2)
+  const file = join(dir, 'shot.jpg')
+  writeFileSync(file, cut)
+  const state = join(dir, 'state')
+  const payload = JSON.stringify({ toolCall: { name: 'read_file', args: { Path: file } } })
+  const runAsync = () => new Promise((resolve, reject) => {
+    const child = execFile(process.execPath, [SCRIPT, '--state', state], (err, stdout) => {
+      if (err) reject(err)
+      else resolve(JSON.parse(stdout.toString()))
+    })
+    child.stdin.end(payload)
+  })
+  const answers = await Promise.all(Array.from({ length: 6 }, runAsync))
+  for (const answer of answers) {
+    assert.equal(answer.decision, 'deny')
+    assert.match(answer.reason, /cut short \(truncated\)/)
+  }
+  const files = readdirSync(state)
+  assert.equal(files.filter((name) => name.endsWith('.tmp')).length, 0)
+  assert.equal(files.length, 1)
+  assert.ok(files[0].endsWith('.partial.jpg'))
+  assert.deepEqual(readFileSync(join(state, files[0])), Buffer.concat([cut, Buffer.from([0xff, 0xd9])]))
+})
+
+test('truncated JPEG stays denied for non-string state, missing --state value, directory collision, and self-heals bad partial copies', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-media-guard-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const cut = jpeg.subarray(0, jpeg.length - 2)
+  const wantCopy = Buffer.concat([cut, Buffer.from([0xff, 0xd9])])
+  const file = join(dir, 'shot.jpg')
+  writeFileSync(file, cut)
+  const payload = { toolCall: { name: 'read_file', args: { Path: file } } }
+  const copyName = `${createHash('sha256').update(cut).digest('hex').slice(0, 32)}.partial.jpg`
+
+  // (a) Non-string truthy state (as parseArgs({ strict: false }) yields for bare `--state`) must deny, never fail open.
+  const boolState = decide(payload, true)
+  assert.equal(boolState.decision, 'deny')
+  assert.doesNotMatch(boolState.reason, /separate copy/)
+  const cliBareFlag = JSON.parse(execFileSync(process.execPath, [SCRIPT, '--state'], {
+    input: JSON.stringify(payload),
+  }).toString())
+  assert.equal(cliBareFlag.decision, 'deny')
+  assert.doesNotMatch(cliBareFlag.reason, /separate copy/)
+
+  // (b) Pre-existing directory at the partial copy path must deny without claiming a readable copy or leaving .tmp files.
+  const dirState = join(dir, 'dir-collision')
+  mkdirSync(join(dirState, copyName), { recursive: true })
+  const dirCollision = decide(payload, dirState)
+  assert.equal(dirCollision.decision, 'deny')
+  assert.doesNotMatch(dirCollision.reason, /separate copy/)
+  assert.equal(readdirSync(dirState).filter((name) => name.endsWith('.tmp')).length, 0)
+
+  // (c) Pre-existing 0-byte or truncated partial copy is self-healed to valid cut + EOI bytes.
+  const healState = join(dir, 'heal-state')
+  mkdirSync(healState, { recursive: true })
+  const copyPath = join(healState, copyName)
+  for (const stale of [Buffer.alloc(0), cut.subarray(0, 10)]) {
+    writeFileSync(copyPath, stale)
+    const healed = decide(payload, healState)
+    assert.equal(healed.decision, 'deny')
+    assert.equal(/readable as a separate copy: (\S+)$/.exec(healed.reason)?.[1], copyPath)
+    assert.deepEqual(readFileSync(copyPath), wantCopy)
+    assert.equal(readdirSync(healState).filter((name) => name.endsWith('.tmp')).length, 0)
+  }
 })
 
 test('everything else gets no opinion, and the script never fails closed', (t) => {

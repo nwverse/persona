@@ -87,9 +87,9 @@ describe("收件箱：还没接入消息来源", () => {
     act(() => root.render(<InboxList />));
     await flush();
     const none = host.querySelector("[data-inbox-no-sources]");
-    expect(none?.textContent).toContain("还没接入消息来源");
+    expect(none?.textContent).toContain("尚未接入消息来源");
     expect([...none!.querySelectorAll("button")].map((b) => b.textContent?.trim())).toContain("接入邮箱");
-    expect(host.textContent).not.toContain("都处理完了");
+    expect(host.textContent).not.toContain("已全部处理完毕");
   });
 });
 
@@ -99,9 +99,9 @@ describe("收件箱：首次加载失败", () => {
     act(() => root.render(<InboxList />));
     await flush();
     const failed = host.querySelector("[data-inbox-failed]");
-    expect(failed?.textContent).toContain("收件箱没能加载");
-    expect(failed?.textContent).toContain("连不上 hub");
-    expect(host.textContent).not.toContain("都处理完了");
+    expect(failed?.textContent).toContain("无法加载收件箱");
+    expect(failed?.textContent).toContain("无法连接 hub");
+    expect(host.textContent).not.toContain("已全部处理完毕");
     expect(host.querySelector("p.text-red")).toBeNull(); // the reason is in the empty state, not a red line over it
 
     fail = false;
@@ -111,7 +111,7 @@ describe("收件箱：首次加载失败", () => {
     await flush();
     expect(calls.filter((c) => c.startsWith("/inbox")).length).toBe(before + 1);
     expect(host.querySelector("[data-inbox-failed]")).toBeNull();
-    expect(host.textContent).toContain("都处理完了");
+    expect(host.textContent).toContain("已全部处理完毕");
   });
 
   // the section bar (#9053): Done chosen, with its day counts from the hub, still says the list couldn't be read, as the
@@ -127,7 +127,7 @@ describe("收件箱：首次加载失败", () => {
     act(() => done!.click());
     await flush();
     expect(host.querySelector('[data-section="done"]')).not.toBeNull();
-    expect(host.querySelector("[data-inbox-failed]")?.textContent).toContain("收件箱没能加载");
+    expect(host.querySelector("[data-inbox-failed]")?.textContent).toContain("无法加载收件箱");
   });
 
   it("with agents waiting the list is not empty: the error is one red line over it, no failed empty state", async () => {
@@ -136,10 +136,10 @@ describe("收件箱：首次加载失败", () => {
     try {
       act(() => root.render(<InboxList />));
       await flush();
-      expect(host.querySelector("p.text-red")?.textContent).toContain("连不上 hub");
+      expect(host.querySelector("p.text-red")?.textContent).toContain("无法连接 hub");
       expect(host.querySelector("[data-inbox-failed]")).toBeNull();
       expect(host.textContent).toContain("改登录页");
-      expect(host.textContent).not.toContain("都处理完了");
+      expect(host.textContent).not.toContain("已全部处理完毕");
     } finally {
       fakeStore.waiting = false;
     }
@@ -158,7 +158,7 @@ describe("收件箱：首屏一次画好", () => {
       expect(calls.some((c) => c.startsWith("/inbox"))).toBe(true);
       expect(host.textContent).toContain("加载中");
       expect(host.textContent).not.toContain("改登录页");
-      expect(host.textContent).not.toContain("都处理完了");
+      expect(host.textContent).not.toContain("已全部处理完毕");
       expect(host.querySelector("section")).toBeNull();
 
       fakeStore.storeLoaded = true;

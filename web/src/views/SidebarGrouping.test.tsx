@@ -113,7 +113,7 @@ describe("按待办 before the todos have loaded", () => {
     await render();
     expect(checked()).toBe("按待办");
     expect(agentsBlock().textContent).toContain("加载中…");
-    expect(agentsBlock().textContent).not.toContain("没挂待办的");
+    expect(agentsBlock().textContent).not.toContain("未关联待办");
     expect(agentsBlock().textContent).not.toContain("改发布脚本");
 
     await act(async () => answer(new Response(JSON.stringify({ todos: [todo] }), { status: 200 })));
@@ -123,7 +123,7 @@ describe("按待办 before the todos have loaded", () => {
     expect(agentsBlock().textContent).toContain("改发布脚本");
     // the agent sits under its to-do; 没挂待办的 is listed (#6458) and holds none
     expect(agentsBlock().querySelector('[data-tree-branch="todo:td1"]')?.textContent).toContain("改发布脚本");
-    expect(agentsBlock().querySelector('[data-tree-branch="todo:none"] [data-tree-branch-row]')?.textContent).toMatch(/^没挂待办的.*0 个 Agent$/);
+    expect(agentsBlock().querySelector('[data-tree-branch="todo:none"] [data-tree-branch-row]')?.textContent).toMatch(/^未关联待办.*0 个 Agent$/);
     expect(agentsBlock().querySelector('[data-tree-branch="todo:none"]')?.textContent).not.toContain("改发布脚本");
   });
 

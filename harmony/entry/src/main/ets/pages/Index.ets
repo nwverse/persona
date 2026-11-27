@@ -63,6 +63,11 @@ import { TodoWorkspacePage } from '../components/TodoWorkspacePage';
 import { KnowledgeWorkspacePage } from '../components/KnowledgeWorkspacePage';
 import { HealthWorkspacePage } from '../components/HealthWorkspacePage';
 import { NavigationContext } from '../models/NavigationContext';
+import { StarredMessagesSheet } from '../components/StarredMessagesSheet';
+import { ChatExportSheet } from '../components/ChatExportSheet';
+import { ArchivedConversationsSheet } from '../components/ArchivedConversationsSheet';
+import type { StarredSnapshot } from '../core/StarredMessages';
+import { starredStore } from '../models/StarredStore';
 import { LinkReader } from '../components/LinkReader';
 import { readerLink, readerHost } from '../platform/ReaderLink';
 import { common } from '@kit.AbilityKit';
@@ -239,6 +244,10 @@ struct Index {
   @Local inboxSourcesNav:InboxSourcesNavigation=new InboxSourcesNavigation();
   @Local directionPermissionRoutes:AllChatActions=new AllChatActions();
   @Local directionPermissionsVisible:boolean=false;
+  @Local private starredSheetShown: boolean = false;
+  @Local private exportSheetShown: boolean = false;
+  @Local private archivedSheetShown: boolean = false;
+  @Local private forkSessionTarget: string = '';
   private directionPermissionsTarget:string='';
   private pairingSettingsOwner:string='';
   @Local activeChild: string = '';
@@ -773,16 +782,17 @@ struct Index {
   }
   @Builder phoneModuleMore(kind:string,owner:string) {
     Button({type:ButtonType.Circle}) {
-      Stack() {
-        Circle().width(22).height(22).stroke(Colors.link).strokeWidth(1.7).fill(Color.Transparent)
-        Row({space:2}) {
-          Circle().width(2.9).height(2.9).fill(Colors.link)
-          Circle().width(2.9).height(2.9).fill(Colors.link)
-          Circle().width(2.9).height(2.9).fill(Colors.link)
-        }
+      Row({space:3}) {
+        ForEach([0,1,2], (_dot:number) => {
+          Circle().width(3.5).height(3.5).fill(Colors.ink)
+        }, (dot:number) => String(dot))
       }
-    }.width(44).height(44).padding(0).backgroundColor(Colors.surface)
-      .border({width:0.5,color:Colors.divider,radius:22}).accessibilityText(tr(kind==='recordings' ? 'meeting_start_options' : 'more'))
+    }.width(PhoneStyle.bar).height(PhoneStyle.bar).padding(0)
+      .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:PhoneStyle.bar/2})
+      .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+      .accessibilityText(tr(kind==='recordings' ? 'meeting_start_options' : 'more'))
       .id(kind==='recordings' ? 'recordings.options' : kind==='knowledge' ? 'knowledge.filters' : 'inbox.more')
       .onClick(()=>this.openModuleMenu(kind,owner))
       .bindMenu(this.moduleMenuShown && this.moduleMenuKind===kind && this.moduleMenuOwner===owner,this.rootModuleMenu,
@@ -1131,6 +1141,9 @@ struct Index {
       this.spacesShown ||
       this.showSheet ||
       this.chatForward.isChoosing(this.detailModel) ||
+      this.starredSheetShown ||
+      this.exportSheetShown ||
+      this.archivedSheetShown ||
       !!this.messageLift.current;
   }
   private openQuickPalette(): void {
@@ -1193,6 +1206,12 @@ struct Index {
         }
       }).catch(() => {});
       this.openSettings('notifications');
+    } else if (id === 'action:open_starred') {
+      this.starredSheetShown = true;
+    } else if (id === 'action:open_archived') {
+      this.archivedSheetShown = true;
+    } else if (id === 'action:export_chat') {
+      this.openChatExport();
     }
   }
   @Builder quickPaletteButton(diameter: number = PhoneStyle.bar, compactWide: boolean = false) {
@@ -1214,7 +1233,7 @@ struct Index {
       this.quickPaletteOpen
         ? Colors.selection
         : Colors.styleID === 'glass'
-          ? (this.environment.dark ? '#CC1C1C1E' : '#E6FFFFFF')
+          ? Colors.elevatedGlass
           : Colors.surface
     )
     .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
@@ -1241,6 +1260,7 @@ struct Index {
           model: this.model,
           showWorkbench: this.wide() && this.foldLayout.supportsInspector,
           showLiveView: true,
+          showExportChat: this.detailModel.isChat() && this.detailModel.messages.length > 0,
           autoFocus: this.wide(),
           onSelectEntry: (entry: QuickCommandEntry) => this.executeQuickCommand(entry),
           onClose: () => { this.quickPaletteOpen = false; }
@@ -1248,7 +1268,134 @@ struct Index {
       }
     }
   }
+  private openChatExport(): void {
+    if (!this.detailModel.isChat()) return;
+    this.exportSheetShown = true;
+  }
+  private openStarredOriginal(star: StarredSnapshot): void {
+    this.starredSheetShown = false;
+    const pool = star.conversation === 'agent' ? this.model.sessions : this.model.conversations;
+    const existing = pool.find((row: ResourceRow) =>
+      row.machine === star.machine_id && (row.session || row.id) === star.session_id
+    );
+    if (existing) {
+      this.openPickedChat(existing, star.item_id);
+      return;
+    }
+    const kind = star.conversation === 'agent' ? 'session' : 'conversation';
+    const data = Wire.payload(
+      ['id', 'session_id', 'machine_id', 'manager', 'title'],
+      [star.session_id, star.session_id, star.machine_id, star.source_manager || this.model.profile.manager, star.title || tr('conversation')]
+    );
+    const fallbackRow = ResourceRow.from(data, kind);
+    fallbackRow.group = this.model.profile.id;
+    fallbackRow.manager = star.source_manager || this.model.profile.manager;
+    fallbackRow.machine = star.machine_id;
+    fallbackRow.session = star.session_id;
+    this.openPickedChat(fallbackRow, star.item_id);
+  }
+  private async forkCurrentChat(): Promise<void> {
+    const owner = this.detailModel, row = owner.selected;
+    const machine = row.machine, sid = row.session || row.id;
+    if (!owner.connected || !owner.isChat() || !machine || !sid) return;
+    const isMain = row.kind === 'conversation' && sid === owner.mainId && (!owner.mainMachineId || machine === owner.mainMachineId);
+    if (isMain || (!owner.demo && !Wire.bool(row.data(), 'can_fork'))) return;
+    const path = '/api/v1/sessions/' + encodeURIComponent(machine) + '/' + encodeURIComponent(sid) + '/fork';
+    if (owner.operationBlocked(path)) {
+      toastCenter.error(tr('pending_action'));
+      return;
+    }
+    const busyKey = JSON.stringify([owner.scope(), owner.connectionGeneration(), machine, sid]);
+    if (this.forkSessionTarget === busyKey) return;
+    const generation = owner.connectionGeneration(), scope = owner.scope(), selectedKey = row.key();
+    const admit = (): boolean => this.detailModel === owner && owner.owns(generation, scope) && owner.selected.key() === selectedKey;
+    this.forkSessionTarget = busyKey;
+    try {
+      const response = await owner.repo().call(path, 'POST', {}, util.generateRandomUUID(), admit);
+      if (!this.detailModel || this.detailModel !== owner || !owner.owns(generation, scope)) return;
+      const forkedId = Wire.text(response, 'session_id');
+      if (!forkedId || forkedId === sid) {
+        toastCenter.error(tr('result_unknown'));
+        return;
+      }
+      const data = Wire.payload(
+        ['id', 'session_id', 'machine_id', 'manager', 'title', 'cwd', 'status', 'state', 'can_fork'],
+        [forkedId, forkedId, machine, owner.profile.manager, Wire.text(response, 'title') || row.title, row.path, 'idle', 'idle', true]
+      );
+      const forkedRow = ResourceRow.from(data, row.kind);
+      forkedRow.group = row.group || owner.profile.id;
+      forkedRow.manager = row.manager || owner.profile.manager;
+      forkedRow.machine = machine;
+      forkedRow.session = forkedId;
+      forkedRow.path = row.path;
+      Haptics.success();
+      toastCenter.success(tr('fork_chat_done_toast'));
+      owner.refresh().catch(() => {});
+      this.openPickedChat(forkedRow);
+    } catch (error) {
+      if (this.detailModel === owner && owner.owns(generation, scope)) {
+        owner.reportError(error as Error);
+        Haptics.error();
+        toastCenter.error(trError(owner.error || 'failed'));
+      }
+    } finally {
+      if (this.forkSessionTarget === busyKey) this.forkSessionTarget = '';
+    }
+  }
+  @Builder starredSheetContent() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        StarredMessagesSheet({
+          model: this.model,
+          onOpenOriginal: (star: StarredSnapshot) => this.openStarredOriginal(star),
+          onClose: () => { this.starredSheetShown = false; }
+        })
+      }
+    }
+  }
+  @Builder exportSheetContent() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        ChatExportSheet({
+          model: this.detailModel,
+          onClose: () => { this.exportSheetShown = false; }
+        })
+      }
+    }
+  }
+  @Builder archivedSheetContent() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        ArchivedConversationsSheet({
+          model: this.model,
+          onOpen: (row: ResourceRow) => {
+            this.archivedSheetShown = false;
+            this.openPickedChat(row);
+          },
+          onClose: () => { this.archivedSheetShown = false; }
+        })
+      }
+    }
+  }
   private dismissTopOverlay(): boolean {
+    if (this.exportSheetShown) { this.exportSheetShown = false; return true; }
+    if (this.starredSheetShown) { this.starredSheetShown = false; return true; }
+    if (this.archivedSheetShown) { this.archivedSheetShown = false; return true; }
     if (this.quickPaletteOpen) { this.quickPaletteOpen = false; return true; }
     if (this.directionPermissionsVisible) { this.directionPermissionsVisible = false; return true; }
     if (this.messageLift.dismiss() || this.closeForwardNavigation()) return true;
@@ -1927,13 +2074,16 @@ struct Index {
     Button({type:ButtonType.Circle}) {
       Row({space:3}) {
         ForEach([0,1,2], (_dot:number) => {
-          Circle().width(4).height(4).fill(Colors.link)
+          Circle().width(3.5).height(3.5).fill(slim ? Colors.link : Colors.ink)
         }, (dot:number) => String(dot))
       }
-    }.attributeModifier(ButtonStyles.chrome).width(this.sessionActionSize()).height(slim ? 40 : this.sessionActionSize())
-      .backgroundColor(slim ? Color.Transparent : Colors.surface)
+    }.width(this.sessionActionSize()).height(slim ? 40 : this.sessionActionSize()).padding(0)
+      .backgroundColor(slim ? Color.Transparent : (Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface))
+      .backgroundBlurStyle(!slim && Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
       .responseRegion({x:0,y:slim ? (40-this.sessionActionSize())/2 : 0,width:this.sessionActionSize(),height:this.sessionActionSize()})
-      .border({width:slim ? 0 : 0.5,color:Colors.divider,radius:this.sessionActionSize()/2}).accessibilityText(tr('more')).id('chat.title.more')
+      .border(slim ? {width:0} : {width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:this.sessionActionSize()/2})
+      .shadow(slim ? {radius:0,color:Color.Transparent} : PhoneStyle.floatingElevation(this.environment.dark))
+      .accessibilityText(tr('more')).id('chat.title.more')
       .enabled(this.phoneChatActionsReady).onClick(() => this.showChatActions(this.phoneTop,this.phoneParam))
       .bindMenu(this.chatTitleMenuVisible && this.phoneChatActionsReady,this.chatActionsMenu,this.chatMenuOptions(this.chatMenuRevision))
   }
@@ -2314,6 +2464,28 @@ struct Index {
           Row() { Text(tr('flow_all_chats')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.ink).layoutWeight(1); SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary]) }
             .width('100%').constraintSize({minHeight:this.drawerMetric(44)}).padding({left:12,right:12})
         }.onClick(() => { if (this.drawerAcceptsTap()) this.showAllChats(false); }).id('spaces.all_chats')
+        if (starredStore.isOffered(this.model)) {
+          ListItem() {
+            Row({ space: 10 }) {
+              SymbolGlyph($r('sys.symbol.star')).fontSize('16vp').fontColor([Colors.working])
+              Text(tr('starred_messages')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.ink).layoutWeight(1)
+              SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+            }.width('100%').constraintSize({ minHeight: this.drawerMetric(44) }).padding({ left: 12, right: 12 })
+          }.onClick(() => { if (this.drawerAcceptsTap()) { this.spacesShown = false; this.starredSheetShown = true; } }).id('spaces.starred')
+        }
+        if (this.model.connected) {
+          ListItem() {
+            Row({ space: 10 }) {
+              SymbolGlyph($r('sys.symbol.archivebox')).fontSize('16vp').fontColor([Colors.secondary])
+              Text(tr('archived_chats')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.ink).layoutWeight(1)
+              if (this.model.conversations.filter((row: ResourceRow) => Wire.bool(row.data(), 'archived')).length > 0) {
+                Text(String(this.model.conversations.filter((row: ResourceRow) => Wire.bool(row.data(), 'archived')).length))
+                  .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
+              }
+              SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+            }.width('100%').constraintSize({ minHeight: this.drawerMetric(44) }).padding({ left: 12, right: 12 })
+          }.onClick(() => { if (this.drawerAcceptsTap()) { this.spacesShown = false; this.archivedSheetShown = true; } }).id('spaces.archived')
+        }
         if (this.mergedPhone() && this.drawerAgentRows.length) {
           ListItem() {
             Row() {
@@ -2441,6 +2613,14 @@ struct Index {
     sheets.push({ title: tr('voice'), action: () => { if (valid()) this.openSettings('voice', true); } });
     if (canEdit && sessionModeAvailable(owner.selected, 'effort')) sheets.push({ title: tr('effort'), action: () => { if (valid()) this.openSettings('session_effort', true); } });
     if (canEdit && sessionModeAvailable(owner.selected, 'model')) sheets.push({ title: tr('model'), action: () => { if (valid()) this.openSettings('session_model', true); } });
+    if (owner.isChat() && owner.messages.length > 0) {
+      sheets.push({ title: tr('export_chat'), identity: 'chat.actions.export', action: () => { if (valid()) this.openChatExport(); } });
+    }
+    const sid = owner.selected.session || owner.selected.id;
+    const isMainChat = owner.selected.kind === 'conversation' && sid === owner.mainId && (!owner.mainMachineId || owner.selected.machine === owner.mainMachineId);
+    if (owner.connected && owner.isChat() && !isMainChat && owner.selected.machine && (owner.demo || Wire.bool(owner.selected.data(), 'can_fork'))) {
+      sheets.push({ title: tr('fork_continue_new_chat'), identity: 'chat.actions.fork', action: () => { if (valid()) { void this.forkCurrentChat(); } } });
+    }
     const identity = JSON.stringify([owner.scope(), owner.connectionGeneration(), owner.target()]);
     if (owner.canStop() && this.inlineStopIdentity !== identity) sheets.push({ title: tr('stop'), action: () => { if (valid()) owner.stop(valid); } });
     this.chatMenuRevision++; this.chatMenuActions = sheets;
@@ -4017,7 +4197,7 @@ struct Index {
         Stack() {
           Row().width('100%').height('100%').background(Colors.canvas, { ignoresLayoutSafeAreaEdges: [LayoutSafeAreaEdge.BOTTOM] })
           Row().width('100%').height('100%').opacity(this.drawerFraction)
-            .background(this.environment.dark ? '#73000000' : '#33000000', { ignoresLayoutSafeAreaEdges: [LayoutSafeAreaEdge.BOTTOM] })
+            .background(Colors.subtleScrim, { ignoresLayoutSafeAreaEdges: [LayoutSafeAreaEdge.BOTTOM] })
         }.layoutWeight(1).height('100%')
       }.width('100%').height('100%').hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants')
     }
@@ -4113,7 +4293,7 @@ struct Index {
         .backgroundBlurStyle(BlurStyle.COMPONENT_THIN).hitTestBehavior(HitTestMode.Transparent)
         .accessibilityLevel(this.spacesShown || this.chatSearchShown ? 'no-hide-descendants' : 'auto')
       if (this.drawerFraction > 0 && !this.wide()) Row().width('100%').height('100%')
-        .backgroundColor(this.environment.dark ? '#73000000' : '#33000000')
+        .backgroundColor(Colors.subtleScrim)
         .opacity(this.drawerFraction)
         .onClick(() => this.spacesShown = false).accessibilityText(tr('close')).id('spaces.dismiss')
       }.width('100%').height('100%').backgroundColor(Colors.canvas)
@@ -4158,6 +4338,30 @@ struct Index {
       showClose: false,
       backgroundColor: Colors.sheetBackground,
       onDisappear: () => { this.quickPaletteOpen = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.starredSheetShown, this.starredSheetContent(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.starredSheetShown = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.exportSheetShown, this.exportSheetContent(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.exportSheetShown = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.archivedSheetShown, this.archivedSheetContent(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.archivedSheetShown = false; }
     })
     Column().width(0).height(0).bindSheet(!this.model.profile.id && this.phoneSettingsShown, this.phoneSettings(), {
       height: this.wide() ? SheetSize.LARGE : this.compactFormHeight(),

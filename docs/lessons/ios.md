@@ -572,6 +572,21 @@ this by changing a locale, allowing an address or rearranging the generated plis
 - Set `--remap-path-prefix=$HOME=/build/home --remap-path-prefix=$ROOT=/build/persona` in `native/app-core/scripts/build-apple.sh` for every Apple target. This changes only debug/panic paths, not the runtime code or the privacy scanner's exemptions; verify the actual exported archive with `check_bundle_privacy.py`.
 - A successful archive does not prove the package can ship: the bundle privacy scan runs after it, before export and upload. Keep that gate.
 
+## The Rust core's XCFramework on Linux (2026-11-27, #16944)
+
+- `cargo build -p persona-core-ffi` for an Apple target also links the crate's `cdylib`, which needs an Apple linker
+  that Linux does not have. Leave out only the cdylib (`cargo rustc --lib --crate-type staticlib,rlib`): a staticlib
+  alone gets the release profile's fat LTO, one merged object and a library unlike the Mac's, while with an rlib among
+  the crate types cargo runs no LTO, as on a Mac. The Rust dependencies compile no C, so neither needs an SDK or clang.
+- A home reached through a symbolic link (a devbox's home on another disk) leaks past
+  `--remap-path-prefix=$HOME=…`: rustup and cargo hand rustc the real path of the registry and the checkout. Remap the
+  real paths too.
+- A Linux host is not a Mac with another `uname -m`: a Linux Apple toolchain builds the arm64 simulator on an x86_64
+  machine too, and the framework has no macOS slice. Its cache key names the system, or a cache both could reach would
+  hand a Mac a full entry with no macOS slice.
+- `xcrun --show-sdk-build-version` reports the SDK's `System/Library/CoreServices/SystemVersion.plist`
+  `ProductBuildVersion`; a copy of the Xcode SDKs on Linux holds the same file, so both key the same SDK the same way.
+
 ## Resuming an interrupted TestFlight archive (#8890)
 
 A retained release worktree is not clean just because its source is unchanged: `release.sh` generates

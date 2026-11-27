@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { createRuntime, interactionId, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import {
@@ -1892,19 +1892,20 @@ export function createPaseoBridge(deps = {}, options = {}) {
   async function check(params) {
     const provider = params.launcher
     if (!launchers.some((l) => l.name === provider)) throw new RpcError(`Paseo has no provider ${provider ?? ''} that can start agents`, 'not_found')
-    if (!params.cwd || !params.prompt || !isDir(params.cwd)) throw new RpcError('A check needs its empty directory and a prompt', 'bad_params')
+    const cwd = expandHome(params.cwd)
+    if (!cwd || !params.prompt || !isDir(cwd)) throw new RpcError('A check needs its empty directory and a prompt', 'bad_params')
     const started = Date.now()
     const before = await projectIds()
     let workspace
     let agentId
     try {
       const ws = await paseo.request('workspace.create.request', {
-        source: { kind: 'directory', path: params.cwd }, background: true, title: 'Persona launcher check', idempotencyKey: randomUUID(),
+        source: { kind: 'directory', path: cwd }, background: true, title: 'Persona launcher check', idempotencyKey: randomUUID(),
       }, { timeoutMs: 30_000 })
       if (!ws?.workspace?.id) throw new RpcError(`Paseo did not make the check's workspace: ${ws?.error ?? 'no reason given'}`, 'paseo')
       workspace = ws.workspace
       agentId = randomUUID()
-      const config = { provider, cwd: params.cwd }
+      const config = { provider, cwd }
       if (holdsPlan(provider)) config.modeId = 'plan'
       const created = await paseo.request('agent.create.request', {
         agentId, config, workspaceId: workspace.id, initialPrompt: params.prompt, labels: { [CHECK_LABEL]: '1' },
@@ -1942,6 +1943,15 @@ export function createPaseoBridge(deps = {}, options = {}) {
       log(`paseo: listing its projects: ${err.message}`)
       return undefined
     }
+  }
+
+  // Match the Go node's proto.ExpandHome for the current user's home directory.
+  function expandHome(p) {
+    if (p === '~') return homedir()
+    if (typeof p === 'string' && p[0] === '~' && (p[1] === '/' || p[1] === sep)) {
+      return join(homedir(), p.slice(2))
+    }
+    return p
   }
 
   function isDir(p) {
@@ -2152,8 +2162,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
       root = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))?.worktrees?.root
     } catch {}
     if (typeof root === 'string' && root.trim()) {
-      let r = root.trim()
-      if (r === '~' || r.startsWith('~/')) r = join(homedir(), r.slice(1))
+      const r = expandHome(root.trim())
       return isAbsolute(r) ? resolve(r) : resolve(home, r)
     }
     return join(home, 'worktrees')
@@ -2172,7 +2181,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const named = typeof params.workspace_id === 'string' && params.workspace_id ? params.workspace_id : undefined
     const from = named ? workspaces.get(named) : undefined
     if (named && !from) throw new RpcError(`Paseo no longer has this workspace (${named}): refresh the list and choose again. Nothing was created.`, 'workspace_missing')
-    const cwd = from?.workspaceDirectory || (typeof params.cwd === 'string' ? params.cwd : '')
+    const cwd = expandHome(from?.workspaceDirectory || (typeof params.cwd === 'string' ? params.cwd : ''))
     if (!cwd || !isDir(cwd)) throw new RpcError(`No such folder: ${cwd || '(none)'}`, 'bad_request')
     const branch = typeof params.branch === 'string' ? params.branch.trim() : ''
     const source = { kind: 'worktree', cwd }
@@ -2276,7 +2285,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   async function start(params) {
     if (params.resume) return takeOver(params)
     if (!paseo.connected) throw new RpcError('Paseo 现在没有连上（没在运行，或正在重启），这次没有新建。', 'unavailable')
-    const cwd = typeof params.cwd === 'string' ? params.cwd : ''
+    const cwd = expandHome(typeof params.cwd === 'string' ? params.cwd : '')
     if (!cwd || !isDir(cwd)) throw new RpcError(`没有这个目录：${cwd || '（空）'}`, 'bad_request')
     // Read-only (plan): only a provider holding plan mode starts it, and nothing falls back to a writable one (#3238).
     const readonly = params.permission_mode === 'plan'
@@ -2544,7 +2553,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
       throw new RpcError('这个会话正在别处的 Claude Code 里开着（Paseo 之外），Paseo 再接着它就会有两个进程写同一个会话。先在那边关掉它。这次没有发送。', 'open_elsewhere')
     }
     const from = kept ?? was
-    const cwd = from?.cwd || (typeof params.cwd === 'string' ? params.cwd : '')
+    const cwd = expandHome(from?.cwd || (typeof params.cwd === 'string' ? params.cwd : ''))
     if (!cwd || !isDir(cwd)) throw new RpcError(`接不上这个会话：它的目录不在了（${cwd || '未知'}）`, 'bad_request')
     // The provider: the archived agent's own (Paseo finds its record by provider and session), else the launcher's
     // when it runs Claude Code, else the one this machine's Claude agents use most lately.
