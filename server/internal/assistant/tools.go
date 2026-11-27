@@ -1521,9 +1521,6 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		ix.Questions = append(ix.Questions, proto.Question{Question: q.Question, Header: q.Header, MultiSelect: q.MultiSelect, Options: q.Options,
 			Recommend: askRecommend(da, i, q.Options)})
 	}
-	if a.DecisionScope == "internal" && questionOwnerSource(ix) != "" {
-		return "", errors.New("personal credential actions require owner_action; use personal_unlock for an unlock in the owner's app, never ask for a private key")
-	}
 	keepAskDecision(&ix, da, deadline)
 	if !deadline.At.IsZero() && deadline.Reversible && (a.OwnerAction != "" || a.WhyOwner == whyVisible || a.WhyOwner == whyIrreversible) {
 		return "", errors.New("personal actions, outward writes, spending and irreversible decisions cannot take a default")

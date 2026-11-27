@@ -14,8 +14,9 @@ import (
 // kept in ToolInput, so asynchronous questions retain it across manager restarts.
 func questionOwnerSource(ix proto.Interaction) string {
 	var rights struct {
-		WhyOwner    string `json:"why_owner"`
-		OwnerAction string `json:"owner_action"`
+		DecisionScope string `json:"decision_scope"`
+		WhyOwner      string `json:"why_owner"`
+		OwnerAction   string `json:"owner_action"`
 	}
 	_ = json.Unmarshal(ix.ToolInput, &rights)
 	switch rights.OwnerAction {
@@ -26,6 +27,9 @@ func questionOwnerSource(ix proto.Interaction) string {
 	}
 	if slices.Contains(whyOwners, rights.WhyOwner) {
 		return decisionCardSource(rights.WhyOwner)
+	}
+	if rights.DecisionScope == "internal" {
+		return "" // a credential constraint is not itself a request to unlock or disclose it
 	}
 	// Older callers cannot label personal unlocks. Keep this narrow safety fallback
 	// while the updated tool contract asks for a typed action; never request a key.

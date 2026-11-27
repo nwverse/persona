@@ -291,3 +291,22 @@ func TestInternalRequestWithoutReviewerEndsUnanswered(t *testing.T) {
 		t.Fatal("unavailable reviewer pushed to owner or lost its terminal audit")
 	}
 }
+
+func TestInternalQuestionRetainsCredentialConstraintWithoutRequestingIt(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	args := json.RawMessage(`{"decision_scope":"internal","wait":false,"questions":[{"question":"Which verification can proceed without private key access?","options":[{"label":"Local checks"},{"label":"Wait"}]}]}`)
+	if _, err := e.s.toolAskUser(context.Background(), "server", "lead1", args); err != nil {
+		t.Fatal(err)
+	}
+	qs := e.s.pendingQuestions()
+	if len(qs) != 1 || questionOwnerSource(qs[0]) != "" || !strings.Contains(string(qs[0].ToolInput), "without private key access") {
+		t.Fatal("credential constraint was discarded or reclassified as a personal action")
+	}
+	e.noticeWith("conv1", "interaction_id="+qs[0].ID)
+	if e.pushesOf(qs[0].ID) != 0 {
+		t.Fatal("internal credential constraint pushed to owner")
+	}
+	if err := e.s.resolve(qs[0].ID, proto.Resolution{Cancel: true}); err != nil {
+		t.Fatal(err)
+	}
+}
