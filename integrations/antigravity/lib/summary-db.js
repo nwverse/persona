@@ -22,9 +22,12 @@ export function createSummaryStateStore(dbPath){
     if(db&&identity===id)return db;
     if(db){closeConnection();stats.reopens++}
     const opened=new DatabaseSync(dbPath,{readOnly:!0});
-    opened.exec("PRAGMA query_only = 1; PRAGMA busy_timeout = 50");
-    db=opened,identity=id,allStmt=db.prepare(ALL_SQL),oneStmt=db.prepare(ONE_SQL),probeStmt=db.prepare("SELECT 1 FROM conversation_summaries LIMIT 1"),stats.opens++;
-    return db;
+    try{
+      opened.exec("PRAGMA query_only = 1; PRAGMA busy_timeout = 50");
+      const nextAll=opened.prepare(ALL_SQL),nextOne=opened.prepare(ONE_SQL),nextProbe=opened.prepare("SELECT 1 FROM conversation_summaries LIMIT 1");
+      db=opened,identity=id,allStmt=nextAll,oneStmt=nextOne,probeStmt=nextProbe,stats.opens++;
+      return db;
+    }catch(error){try{opened.close()}catch{}throw error}
   }
   // Returns the cached Map when the db/-wal signature still matches, otherwise
   // scans every row. A missing database resolves to an empty cached Map.
@@ -43,7 +46,7 @@ export function createSummaryStateStore(dbPath){
   // A cache hit performs no SQL. Inventory reads that must preserve agy's own
   // lock/IO failure contract call checkedStates(): the constant-cost probe still
   // throws SQLITE_BUSY while another connection holds an exclusive lock.
-  function probe(){const conn=connection();if(conn){probeStmt.get();stats.probes++}}
+  function probe(){try{const conn=connection();if(conn){probeStmt.get();stats.probes++}}catch(error){closeConnection();throw error}}
   function checkedStates(){const map=states();probe();return map}
   // Fresh snapshots serve the Map; a cold/stale cache costs one primary-key read.
   function get(rawId){const fresh=cachedStates();if(fresh)return fresh.get(rawId);return point(rawId)}

@@ -317,11 +317,28 @@ func (d *Store) ImportTodoRepositoryLinkDetails(ctx context.Context, id string, 
 		return out, false, repository.Problem("limit")
 	}
 	err := d.Transaction(ctx, func(tx pgx.Tx) error {
+		if source == "report" {
+			// Serialize automatic claims across to-dos (and manager instances), not
+			// just writes to one row. Explicit user associations remain deliberate.
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('persona.todo_repository_reports'))`); err != nil {
+				return err
+			}
+		}
 		cur, err := ReadTodoRepositoriesTx(ctx, tx, id, nil)
 		if err != nil {
 			return err
 		}
 		out = cur
+		if source == "report" {
+			var open bool
+			if err := tx.QueryRow(ctx, `SELECT done_at IS NULL AND done_by <> $2 FROM todos WHERE id=$1`,
+				id, db.DoneByCancelled).Scan(&open); err != nil {
+				return err
+			}
+			if !open {
+				return nil
+			}
+		}
 		var seen []string
 		var legacy bool
 		err = tx.QueryRow(ctx, `SELECT seen_urls,legacy_imported FROM todo_repository_link_receipts WHERE todo_id=$1`, id).Scan(&seen, &legacy)
@@ -337,6 +354,31 @@ func (d *Store) ImportTodoRepositoryLinkDetails(ctx context.Context, id string, 
 			_, link, err := repository.ParseTaskLinkInput(in)
 			if err != nil {
 				return err
+			}
+			if source == "report" && link.Kind == "pull_request" {
+				match, err := json.Marshal([]any{map[string]any{"links": []any{map[string]string{"canonical_url": link.CanonicalURL}}}})
+				if err != nil {
+					return err
+				}
+				var claimed bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS (
+					SELECT 1 FROM todo_repository_sets r JOIN todos t ON t.id=r.todo_id
+					WHERE r.todo_id<>$1 AND t.done_at IS NULL AND t.done_by<>$3 AND r.repositories @> $2::jsonb
+				)`, id, match, db.DoneByCancelled).Scan(&claimed); err != nil {
+					return err
+				}
+				if claimed {
+					// A historical duplicate in cur is not an accepted claim.
+					// Fail closed without deleting deliberate associations.
+					for _, row := range cur.Repositories {
+						for _, existing := range row.Links {
+							if existing.CanonicalURL == link.CanonicalURL {
+								return errors.New("reported PR is already linked to multiple open to-dos")
+							}
+						}
+					}
+					continue
+				}
 			}
 			canonical = append(canonical, link.CanonicalURL)
 			if source == "explicit" || !slices.Contains(seen, link.CanonicalURL) {

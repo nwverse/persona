@@ -771,6 +771,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		}
 	}
 	b.stageWriting.Unlock()
+	s.discardStalePRFeedback(ctx, t.ID, prevPR, status)
 	s.todosChanged(ctx)
 	parkWoke := false
 	preStage := t.Stage
