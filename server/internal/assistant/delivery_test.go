@@ -233,10 +233,11 @@ func TestDefaultOffGateDoesNotTreatNegationAsEvidence(t *testing.T) {
 }
 
 func TestDefaultOffGateSeparatorsAndWordBoundaries(t *testing.T) {
-	cases := []struct {
+	type gateCase struct {
 		gate string
 		want bool
-	}{
+	}
+	cases := []gateCase{
 		{"Feature is default.off", true},
 		{"Feature is default-off", true},
 		{"Feature is default off", true},
@@ -244,6 +245,26 @@ func TestDefaultOffGateSeparatorsAndWordBoundaries(t *testing.T) {
 		{"The default office location needs review", false},
 		{"The default.offset needs review", false},
 		{"The nodefault.off value needs review", false},
+	}
+	for _, first := range []string{"-", ".", "_", " "} {
+		phrases := []string{"default" + first + "off"}
+		for _, second := range []string{"-", ".", "_", " "} {
+			phrases = append(phrases, "off"+first+"by"+second+"default", "disabled"+first+"by"+second+"default")
+		}
+		for _, phrase := range phrases {
+			cases = append(cases,
+				gateCase{"Feature is " + phrase + "; enable it in settings.", true},
+				gateCase{strings.ToUpper(phrase), true},
+				gateCase{"prefix" + phrase, false},
+				gateCase{phrase + "suffix", false},
+			)
+			for _, negation := range []string{"not", "never", "no longer"} {
+				cases = append(cases, gateCase{"Feature is " + negation + " " + phrase, false})
+			}
+		}
+	}
+	for _, phrase := range []string{"offset by default", "office by default", "disabled by defaulted"} {
+		cases = append(cases, gateCase{phrase, false})
 	}
 	for _, test := range cases {
 		t.Run(test.gate, func(t *testing.T) {
