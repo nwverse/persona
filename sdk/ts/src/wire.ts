@@ -5504,6 +5504,57 @@ export interface ChannelEditParams {
   text: string;
 }
 
+/**
+ * The host selects the provider, source, account and chat for this import.
+ */
+export interface KBImportCheckpointParams {
+}
+
+/**
+ * The host importer’s committed state for the selected chat.
+ */
+export type KBImportState = "pending" | "running" | "done" | "paused" | "error" | "unreadable";
+export const KBIMPORT_STATES: readonly KBImportState[] = ["pending", "running", "done", "paused", "error", "unreadable"];
+
+/** A KBImportState this app does not know, kept as it came. */
+export interface UnknownKBImportState {
+  unknown: string;
+}
+
+/** A raw KBImportState: one this app knows, or UnknownKBImportState with the raw value. */
+export function parseKBImportState(raw: string): KBImportState | UnknownKBImportState {
+  const known = KBIMPORT_STATES.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownKBImportState = { unknown: raw };
+  return unknown;
+}
+
+export interface KBImportCheckpointResult {
+  state: KBImportState;
+  approval: string;
+  read: number;
+  written: number;
+}
+
+export interface KBSentMarkersParams {
+  day: string;
+  approval: string;
+  after?: number;
+}
+
+export interface KBSentMarker {
+  n: number;
+  sent_by: string;
+  recalled_at?: string;
+}
+
+export interface KBSentMarkersResult {
+  markers: KBSentMarker[];
+  next_after?: number;
+}
+
 export type KBKind = "projects" | "chats" | "people" | "docs" | "meetings" | "events" | "recordings" | "topics" | (string & {});
 export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"] as const;
 
@@ -8021,6 +8072,8 @@ export const CALLS: Record<string, Call> = {
   "kb.update": { from: "program", params: "KBUpdateParams", result: "KBUpdateResult" },
   "kb.owner": { from: "program", params: "KBOwnerParams", result: "KBOwner" },
   "kb.recent": { from: "program", params: "KBRecentParams", result: "KBRecentResult" },
+  "kb.import_checkpoint": { from: "program", params: "KBImportCheckpointParams", result: "KBImportCheckpointResult" },
+  "kb.sent_markers": { from: "program", params: "KBSentMarkersParams", result: "KBSentMarkersResult" },
   "kb.put_recording": { from: "program", params: "KBPutRecordingParams", result: "KBPutRecordingResult" },
   "event.kb.changed": { from: "hub", params: "KBChangedEvent", event: true },
   "event.kb.forgotten": { from: "hub", params: "KBForgottenEvent", event: true },

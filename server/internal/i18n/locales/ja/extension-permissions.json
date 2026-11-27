@@ -63,6 +63,7 @@
   "shortcuts_title": "ショートカットと Siri のアクション：",
   "scope_kb_read": "知識ベースを読み取り",
   "scope_kb_write": "知識ベースの項目を編集",
+  "scope_kb_import_status": "選択したナレッジインポートの進捗を読み取る",
   "scope_sent_read": "アーカイブ内で Persona があなたの代わりに送ったメッセージを確認",
   "scope_inbox_read": "受信トレイを読み取り",
   "scope_inbox_write": "受信トレイを処理（完了、返信の下書きと送信、ミュート）",

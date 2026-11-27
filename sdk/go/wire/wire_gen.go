@@ -5069,6 +5069,59 @@ type ChannelEditParams struct {
 	Text         string `json:"text"`
 }
 
+// KBImportCheckpointParams: the host selects the provider, source, account and chat for this import.
+type KBImportCheckpointParams struct {
+}
+
+// KBImportState: the host importer’s committed state for the selected chat.
+// A value this side does not know keeps its raw string and is not Valid.
+type KBImportState string
+
+const (
+	KBImportStatePending    KBImportState = "pending"
+	KBImportStateRunning    KBImportState = "running"
+	KBImportStateDone       KBImportState = "done"
+	KBImportStatePaused     KBImportState = "paused"
+	KBImportStateError      KBImportState = "error"
+	KBImportStateUnreadable KBImportState = "unreadable"
+)
+
+// KBImportStates are the values of KBImportState, in order.
+var KBImportStates = []KBImportState{KBImportStatePending, KBImportStateRunning, KBImportStateDone, KBImportStatePaused, KBImportStateError, KBImportStateUnreadable}
+
+// Valid reports whether v is one of KBImportStates.
+func (v KBImportState) Valid() bool {
+	switch v {
+	case KBImportStatePending, KBImportStateRunning, KBImportStateDone, KBImportStatePaused, KBImportStateError, KBImportStateUnreadable:
+		return true
+	}
+	return false
+}
+
+type KBImportCheckpointResult struct {
+	State    KBImportState `json:"state"`
+	Approval string        `json:"approval"`
+	Read     int           `json:"read"`
+	Written  int           `json:"written"`
+}
+
+type KBSentMarkersParams struct {
+	Day      string `json:"day"`
+	Approval string `json:"approval"`
+	After    int    `json:"after,omitempty"`
+}
+
+type KBSentMarker struct {
+	N          int       `json:"n"`
+	SentBy     string    `json:"sent_by"`
+	RecalledAt time.Time `json:"recalled_at,omitzero"`
+}
+
+type KBSentMarkersResult struct {
+	Markers   []KBSentMarker `json:"markers"`
+	NextAfter int            `json:"next_after,omitempty"`
+}
+
 // Values of KBKind.
 const (
 	KBKindProjects   = "projects"
@@ -8460,6 +8513,11 @@ var newDef = map[string]func() any{
 	"ChannelSendResult":             func() any { return new(ChannelSendResult) },
 	"ChannelTypingParams":           func() any { return new(ChannelTypingParams) },
 	"ChannelEditParams":             func() any { return new(ChannelEditParams) },
+	"KBImportCheckpointParams":      func() any { return new(KBImportCheckpointParams) },
+	"KBImportCheckpointResult":      func() any { return new(KBImportCheckpointResult) },
+	"KBSentMarkersParams":           func() any { return new(KBSentMarkersParams) },
+	"KBSentMarker":                  func() any { return new(KBSentMarker) },
+	"KBSentMarkersResult":           func() any { return new(KBSentMarkersResult) },
 	"KBConflict":                    func() any { return new(KBConflict) },
 	"KBEvidence":                    func() any { return new(KBEvidence) },
 	"KBProvenance":                  func() any { return new(KBProvenance) },
@@ -8701,6 +8759,8 @@ var Calls = map[string]Call{
 	"kb.update":                       {Name: "kb.update", From: "program", Params: "KBUpdateParams", Result: "KBUpdateResult"},
 	"kb.owner":                        {Name: "kb.owner", From: "program", Params: "KBOwnerParams", Result: "KBOwner"},
 	"kb.recent":                       {Name: "kb.recent", From: "program", Params: "KBRecentParams", Result: "KBRecentResult"},
+	"kb.import_checkpoint":            {Name: "kb.import_checkpoint", From: "program", Params: "KBImportCheckpointParams", Result: "KBImportCheckpointResult"},
+	"kb.sent_markers":                 {Name: "kb.sent_markers", From: "program", Params: "KBSentMarkersParams", Result: "KBSentMarkersResult"},
 	"kb.put_recording":                {Name: "kb.put_recording", From: "program", Params: "KBPutRecordingParams", Result: "KBPutRecordingResult"},
 	"event.kb.changed":                {Name: "event.kb.changed", From: "hub", Params: "KBChangedEvent", Result: "", Event: true},
 	"event.kb.forgotten":              {Name: "event.kb.forgotten", From: "hub", Params: "KBForgottenEvent", Result: "", Event: true},
