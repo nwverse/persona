@@ -129,6 +129,13 @@ func unblockOf(s, gate string) string {
 	}
 }
 
+var defaultOffGate = lazyre.New(`(?i)默认关|默认关闭|off by default|disabled by default|default.off|既定でオフ|デフォルトでオフ`)                               // i18n-ignore: matches reported feature-gate evidence
+var negatedDefaultOffGate = lazyre.New(`(?i)(?:not|never|no longer) (?:off|disabled) by default|(?:没有|并非|不是|不再)默认关|既定でオフではない|デフォルトでオフではない`) // i18n-ignore: matches negated feature-gate evidence
+
+func hasDefaultOffGate(text string) bool {
+	return defaultOffGate.MatchString(text) && !negatedDefaultOffGate.MatchString(text)
+}
+
 // judgedDelivery is the delivery of a finished stretch of work: what the judge said (state, gate, unblock as it
 // answered), else the agents' own line, else nothing to ship; held at the PR when that says live but the replies name
 // a PR and say nothing of a deploy.
@@ -151,6 +158,13 @@ func judgedDelivery(state, gate, unblock string, replies []prompts.TaskDoneReply
 	d := TodoDelivery{State: strings.ToLower(strings.TrimSpace(state)), Gate: noneWord(gate), Unblock: unblockOf(unblock, strings.TrimSpace(gate))}
 	if d.Unblock == unblockUser && d.Gate == "" && mark.Unblock == unblockOther {
 		d.Gate, d.Unblock = mark.Gate, mark.Unblock
+	}
+	if d.State == deliveryOff {
+		if marked {
+			d = mark
+		} else {
+			d = TodoDelivery{State: deliveryMerged}
+		}
 	}
 	judged := true
 	switch d.State {

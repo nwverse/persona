@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -165,5 +166,68 @@ func TestSupervisedUndeliveredTellsWhereItIsHeld(t *testing.T) {
 	now := todoNow(s, todo.ID)
 	if now.DoneAt != nil || now.Supervision.State == reviewPending || !now.Delivery.held() {
 		t.Fatalf("todo: %+v %+v", now.Supervision, now.Delivery)
+	}
+}
+
+func TestDefaultOffVerificationRequiresExplicitReport(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply, state string
+	}{
+		{"deployed without a switch", "### Persona 工作报告\n\n- Status: done\n- Merged: yes\n- Deployed: yes\n- Did: Released without a feature switch; effective immediately.\n- Delivery: live\n- Verified: Production returned names for 5/5 records.\n\n---", deliveryLive},
+		{"legacy live report", "交付：已上线并实测；卡点：无；谁来解：无", deliveryLive},
+		{"deployed closeout", "<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\n</closeout>", deliveryLive},
+		{"explicit off", "<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\ndelivery: off\nmissing: Feature disabled by default; enable it in settings.\n</closeout>", deliveryOff},
+		{"legacy explicit off", "交付：默认关待启用；卡点：功能默认关闭，需启用；谁来解：用户", deliveryOff},
+		{"mislabeled deployed closeout", "<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\ndelivery: off\nmissing: Offline data backfill is pending.\n</closeout>", deliveryLive},
+		{"original report shape", "<closeout status=\"done\">\ndelivery: off\nverified: Online HTTP 200; 5/5 names present.\nmissing: Offline data backfill needs the data team.\n</closeout>", deliveryMerged},
+		{"unknown deployment", "The change was deployed; verification is pending.", deliveryMerged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			delivery := judgedDelivery(deliveryOff, "Enable the feature", unblockUser, []prompts.TaskDoneReply{{Text: tc.reply}})
+			if delivery.State != tc.state {
+				t.Fatalf("state = %q, want %q", delivery.State, tc.state)
+			}
+			title := verdictText(i18n.ZhHans, &acceptAsk{}, &delivery)
+			if strings.Contains(title, "默认关着") != (tc.state == deliveryOff) {
+				t.Fatalf("unexpected default-off title: %q", title)
+			}
+			if tc.state == deliveryLive && title != "✅ 做完了：已部署，按下面验收" {
+				t.Fatalf("live title = %q", title)
+			}
+		})
+	}
+}
+
+func TestDefaultOffJudgeChecksUseNormalizedDelivery(t *testing.T) {
+	model := &cannedJSON{answer: `{"verdict":"done","delivery":"off","gate":"Data backfill pending","unblock":"other"}`}
+	check, err := judgeTaskDoneWith(context.Background(), model, taskDoneInput{
+		Title: "Release the name fix", Delivery: true, Checks: true,
+		Replies: []prompts.TaskDoneReply{{Text: "<closeout status=\"done\" deployed=\"yes\">\ndelivery: live\nverified: HTTP 200, 5/5 records have names.\n</closeout>"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check.Delivery == nil || check.Delivery.State != deliveryLive || check.AutoCheck == nil || check.AutoCheck.Delivery != deliveryMerged {
+		t.Fatalf("unsupported default-off or automatic live check: %+v / %+v", check.Delivery, check.AutoCheck)
+	}
+}
+
+func TestHistoricalDefaultOffWithoutFeatureEvidenceIsNeutral(t *testing.T) {
+	delivery := &TodoDelivery{State: deliveryOff, Gate: "Offline data backfill is pending"}
+	title := verdictText(i18n.ZhHans, &acceptAsk{}, delivery)
+	if strings.Contains(title, "默认关着") || strings.Contains(title, "已部署") {
+		t.Fatalf("unsupported deployment or feature claim: %q", title)
+	}
+}
+
+func TestDefaultOffGateDoesNotTreatNegationAsEvidence(t *testing.T) {
+	for _, gate := range []string{"The feature is not off by default", "The feature is not disabled by default", "并非默认关闭", "没有默认关闭", "既定でオフではない"} {
+		if hasDefaultOffGate(gate) {
+			t.Fatalf("negation accepted: %q", gate)
+		}
+		title := verdictText(i18n.ZhHans, &acceptAsk{}, &TodoDelivery{State: deliveryOff, Gate: gate})
+		if strings.Contains(title, "默认关着") {
+			t.Fatalf("negated gate in title: %q", title)
+		}
 	}
 }
