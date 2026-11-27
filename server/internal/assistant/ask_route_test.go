@@ -1044,9 +1044,9 @@ func TestAskWithoutLeadersRoutesSupervisedAsksToMain(t *testing.T) {
 					res: proto.Resolution{Action: "decline"},
 				},
 				{
-					name: "main_own_permission",
+					name: "main_owner_only_permission",
 					ix: proto.Interaction{
-						ID: "ix_main_own", MachineID: "server", SessionID: "conv1", Kind: proto.IxPermission,
+						ID: "ix_main_own", MachineID: "server", SessionID: "conv1", Kind: proto.IxPermission, OwnerProposal: true,
 						ToolName: "Bash", Summary: "go test ./...", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 					},
 					res: proto.Resolution{Allow: &allow},
@@ -1058,9 +1058,9 @@ func TestAskWithoutLeadersRoutesSupervisedAsksToMain(t *testing.T) {
 					ix   proto.Interaction
 					res  proto.Resolution
 				}{
-					name: "bg_own_permission",
+					name: "background_owner_only_permission",
 					ix: proto.Interaction{
-						ID: "ix_bg_own", MachineID: "server", SessionID: "bg1", Kind: proto.IxPermission,
+						ID: "ix_bg_own", MachineID: "server", SessionID: "bg1", Kind: proto.IxPermission, OwnerProposal: true,
 						ToolName: "Bash", Summary: "go test ./...", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 					},
 					res: proto.Resolution{Allow: &allow},

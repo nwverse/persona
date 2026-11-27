@@ -199,16 +199,21 @@ func TestInternalAsyncTerminalReceiptNeverClaimsOwnerAnswer(t *testing.T) {
 }
 
 func TestQuietRemindNeverConstructsOwnerNotification(t *testing.T) {
-	for _, nth := range []int{1, 2} {
-		e := newRouteEnv(t, nil, true)
-		ix := askQuestion("ix_quiet_internal", "worker-1")
-		e.s.quietRemind(e.todo.ID, "lead1", ix, nth)
-		e.settle()
-		if len(workEventsOf(e.s, "ask_quiet_reminded")) != 1 {
-			t.Fatal("supervisor reminder audit was lost")
-		}
-		if len(e.f.pushed()) != 0 || cardsToday(t, e.s)[cardAskHeld].N != 0 || cardsToday(t, e.s)[cardAskHeld].Held != 0 {
-			t.Fatal("internal held reminder constructed an owner notification")
+	for _, quiet := range []bool{false, true} {
+		for _, nth := range []int{1, 2} {
+			e := newRouteEnv(t, nil, true)
+			e.s.pushQuiet.mu.Lock()
+			e.s.pushQuiet.force = &quiet
+			e.s.pushQuiet.mu.Unlock()
+			ix := askQuestion("ix_quiet_internal", "worker-1")
+			e.s.quietRemind(e.todo.ID, "lead1", ix, nth)
+			e.settle()
+			if len(workEventsOf(e.s, "ask_quiet_reminded")) != 1 {
+				t.Fatal("supervisor reminder audit was lost")
+			}
+			if len(e.f.pushed()) != 0 || cardsToday(t, e.s)[cardAskHeld].N != 0 || cardsToday(t, e.s)[cardAskHeld].Held != 0 {
+				t.Fatal("internal held reminder constructed an owner notification")
+			}
 		}
 	}
 }
@@ -253,5 +258,34 @@ func TestInternalAsyncQuestionRestoresFromDurableRecord(t *testing.T) {
 				t.Fatal("terminal question accepted a second answer")
 			}
 		})
+	}
+}
+
+func TestMainCreatesIndependentInternalReviewer(t *testing.T) {
+	s, _ := newQuietService(t)
+	s.noBackground = false
+	cfg := s.settings(context.Background())
+	ix := proto.Interaction{MachineID: cfg.MachineID, SessionID: cfg.Main, Kind: proto.IxPermission, ToolName: "Read"}
+	to, home := s.internalReviewer(context.Background(), ix)
+	if to == "" || to == cfg.Main || home == "" || s.settings(context.Background()).BackgroundSupervisor != to {
+		t.Fatalf("root reviewer was not independently registered: to=%q home=%q", to, home)
+	}
+}
+
+func TestInternalRequestWithoutReviewerEndsUnanswered(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	setSettings(t, e.s, func(v *Settings) {
+		v.Main, v.BackgroundSupervisor, v.Leaders = "", "", nil
+	})
+	ix := askPermission("ix_no_reviewer", "standalone-agent")
+	ix.ToolInput = json.RawMessage(`{"command":"ls /tmp | head"}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, err := e.s.waitInteraction(ctx, ix)
+	if err != nil || r.Allow != nil || !r.Dismiss || r.Reason != "internal_reviewer_unavailable" {
+		t.Fatalf("unavailable reviewer did not close unanswered: %+v %v", r, err)
+	}
+	if e.pushesOf(ix.ID) != 0 || len(workEventsOf(e.s, "ask_internal_unavailable")) != 1 {
+		t.Fatal("unavailable reviewer pushed to owner or lost its terminal audit")
 	}
 }

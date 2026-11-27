@@ -57,3 +57,29 @@ func TestSensitiveOwnedAgentDelegationWaitsForSupervisor(t *testing.T) {
 		t.Fatal("explicit supervisor approval did not release the gate")
 	}
 }
+
+func TestInternalOutboundResolutionCannotReplaceOwnerConsent(t *testing.T) {
+	allow := true
+	ix := proto.Interaction{ToolName: "agent_send", ExpiresAt: time.Now().Add(time.Minute)}
+	for _, tc := range []struct {
+		name string
+		r    proto.Resolution
+		want bool
+	}{
+		{"owner", proto.Resolution{Allow: &allow}, true},
+		{"supervisor", proto.Resolution{Allow: &allow, AnsweredBy: proto.AnsweredByAssistant}, true},
+		{"default", proto.Resolution{Allow: &allow, AnsweredBy: proto.AnsweredByDefault}, false},
+		{"late", proto.Resolution{Allow: &allow, Late: true}, false},
+		{"cancelled", proto.Resolution{Allow: &allow, Cancel: true}, false},
+		{"remembered", proto.Resolution{Allow: &allow, Remembered: true}, false},
+		{"expired", proto.Resolution{Allow: &allow, Dismiss: true, Reason: proto.DismissedExpired}, false},
+	} {
+		if got := validInternalAnswer(ix, tc.r); got != tc.want {
+			t.Fatalf("%s = %t, want %t", tc.name, got, tc.want)
+		}
+	}
+	ix.OwnerProposal = true
+	if validInternalAnswer(ix, proto.Resolution{Allow: &allow, AnsweredBy: proto.AnsweredByAssistant}) {
+		t.Fatal("supervisor replaced consent for an isolated data boundary")
+	}
+}

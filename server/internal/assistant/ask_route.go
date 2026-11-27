@@ -251,8 +251,18 @@ func (s *Service) noLeaderAskRoutable(ix proto.Interaction) bool {
 func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder []string, todo, home string, ok bool) {
 	machine, sid := ix.MachineID, ix.SessionID
 	cfg := s.settings(ctx)
-	if cfg.Main == "" || sid == "" || cfg.supervisorConversation(sid) {
+	if cfg.Main == "" || sid == "" {
 		return nil, "", "", false
+	}
+	if cfg.supervisorConversation(sid) {
+		if !routable(ix) || !s.internalCard(ix) {
+			return nil, "", "", false
+		}
+		to, home := s.internalReviewer(ctx, ix)
+		if to == "" || home == "" {
+			return nil, "", "", false
+		}
+		return []string{to}, "", home, true
 	}
 	if len(cfg.Leaders) == 0 && !s.noLeaderAskRoutable(ix) {
 		return nil, "", "", false

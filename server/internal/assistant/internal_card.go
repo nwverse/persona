@@ -84,5 +84,8 @@ func (s *Service) internalReviewer(ctx context.Context, ix proto.Interaction) (s
 }
 
 func validInternalAnswer(ix proto.Interaction, r proto.Resolution) bool {
-	return r.Allow != nil && *r.Allow && !r.Cancel && !r.Dismiss && !r.Late && time.Now().Before(ix.ExpiresAt)
+	if r.Allow == nil || !*r.Allow || r.Cancel || r.Dismiss || r.Late || r.Remembered || !time.Now().Before(ix.ExpiresAt) {
+		return false
+	}
+	return r.UserAllowed() || r.AnsweredBy == proto.AnsweredByAssistant && ix.ToolName == "agent_send" && !ix.OwnerProposal
 }

@@ -13,9 +13,9 @@ func InternalMaintenanceApproval(ix Interaction) bool {
 		return false
 	}
 	var input struct {
-		Force *bool `json:"force"`
+		Force bool `json:"force"`
 	}
-	return json.Unmarshal(ix.ToolInput, &input) == nil && input.Force != nil
+	return len(ix.ToolInput) > 0 && string(ix.ToolInput) != "null" && json.Unmarshal(ix.ToolInput, &input) == nil
 }
 
 // MaintenanceAllowed accepts a fresh explicit supervisor answer only for the

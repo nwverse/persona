@@ -21,7 +21,7 @@ func hasRelayFrom(s *Service, to, from, needle string) bool {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	for _, p := range s.fleet.interactions {
-		if p.route != nil && p.route.at() == to && (needle == "" || strings.Contains("interaction_id="+p.ix.ID, needle)) && s.inputCardSource(p.ix, false) == from {
+		if p.route != nil && !p.route.standaloneUntil.IsZero() && p.route.at() == to && (needle == "" || strings.Contains("interaction_id="+p.ix.ID, needle)) && s.inputCardSource(p.ix, false) == from {
 			return true
 		}
 	}
@@ -30,8 +30,8 @@ func hasRelayFrom(s *Service, to, from, needle string) bool {
 
 // Source 1 (agent_permission): non-six-class tool permissions from an unsupervised agent go to the main
 // conversation instead of pushing to the owner, while six-class permissions (secret/form, outward/delete
-// approval) still push to the owner. The main conversation's own permission stays the user's even with a
-// background reviewer configured (TestSupervisingConversationsRouteTheirOwnInternalCards).
+// approval) still push to the owner. The main conversation's own ordinary permission goes to an independent
+// background reviewer when configured (TestSupervisingConversationsRouteTheirOwnInternalCards).
 func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
 	setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor = "bg1" })
@@ -49,8 +49,7 @@ func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 		t.Fatal("unsupervised permission was not marked delegating")
 	}
 
-	// Main conversation's own non-six-class tool permission -> still the owner's, not the background
-	// supervisor's (bg1): nothing would wake bg1 for it or let it hand the card up (#15360).
+	// Main conversation's own internal tool permission actively wakes the independent reviewer.
 	mainOwn := proto.Interaction{
 		ID: "ix_perm_main_own", MachineID: "server", SessionID: "conv1",
 		Kind: proto.IxPermission, ToolName: "Read", Summary: "/tmp/report.md",

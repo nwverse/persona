@@ -158,11 +158,10 @@ func (s *Service) redactedNotice(ctx context.Context, l i18n.Lang, space string)
 // (outboundNotDone).
 func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text, summary string, input json.RawMessage) (allowed bool, outcome string, err error) {
 	space, _ := s.selfSpace(ctx, self)
-	policy := s.exitPolicy(ctx, text, self, space)
 	if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok && !s.selfPolicy(ctx, self).ConfirmOutbound {
 		return true, "", nil // fresh confirmation covers these words, never an isolated track boundary
 	}
-	if !policy.ConfirmOutbound {
+	if !s.exitPolicy(ctx, text, self, space).ConfirmOutbound {
 		return true, "", nil
 	}
 	return s.outbound.confirm(ctx, outboundKey(self, tool, text, summary), func() (bool, string, error) {
