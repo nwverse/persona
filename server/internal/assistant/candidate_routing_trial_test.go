@@ -46,12 +46,18 @@ func TestLauncherProviderReadsRcFileLaunchers(t *testing.T) {
 		"m2": {{Name: "agy"}},
 	})
 	for _, c := range []struct{ machine, launcher, want string }{
-		{"m1", "agy", "agy"},       // its agent field
-		{"m2", "agy", "agy"},       // no agent field: named after the agent
-		{"m1", "codex", "codex"},   // the same for codex
-		{"m1", "relay-claude", ""}, // names no agent: unknown, never guessed
-		{"m1", "missing", ""},      // not listed
-		{"m3", "agy", ""},          // another machine's list is not this one's
+		// its agent field
+		{"m1", "agy", "agy"},
+		// no agent field: named after the agent
+		{"m2", "agy", "agy"},
+		// the same for codex
+		{"m1", "codex", "codex"},
+		// names no agent: unknown, never guessed
+		{"m1", "relay-claude", ""},
+		// not listed
+		{"m1", "missing", ""},
+		// another machine's list is not this one's
+		{"m3", "agy", ""},
 	} {
 		if got := s.launcherProvider(ctx, c.machine, c.launcher); got != c.want {
 			t.Errorf("%s/%s: %q, want %q", c.machine, c.launcher, got, c.want)
@@ -157,9 +163,12 @@ func TestPoolHeadroomFallsBackToTheInventory(t *testing.T) {
 		{Source: "pool-a", AccountID: "1", Provider: "claude", Status: "active", Schedulable: true},
 		{Source: "pool-a", AccountID: "2", Provider: "claude", Status: "active", Schedulable: true},
 		{Source: "pool-a", AccountID: "3", Provider: "claude", Status: "cooldown", CooldownUntil: &cool},
-		{Source: "pool-a", AccountID: "4", Provider: "claude", Status: "disabled", Schedulable: true}, // switched off
-		{Source: "pool-a", AccountID: "5", Provider: "codex", Status: "active", Schedulable: true},    // another provider
-		{Source: "pool-b", AccountID: "6", Provider: "claude", Status: "active", Schedulable: true},   // another gateway
+		// switched off
+		{Source: "pool-a", AccountID: "4", Provider: "claude", Status: "disabled", Schedulable: true},
+		// another provider
+		{Source: "pool-a", AccountID: "5", Provider: "codex", Status: "active", Schedulable: true},
+		// another gateway
+		{Source: "pool-b", AccountID: "6", Provider: "claude", Status: "active", Schedulable: true},
 	}}
 	got := s.candidateHeadroomAt(ctx, nil, "m1", "gw-claude", "claude-opus-5-5", now)
 	if !got.Known || got.Accounts != 3 || math.Abs(got.H-2*0.17) > 1e-9 || got.RecoversAt != nil {
@@ -187,7 +196,8 @@ func TestHeadroomFallsBackToCapacity(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 11, 26, 7, 35, 0, 0, time.UTC)
 	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw-claude", Agent: "claude", BaseURL: "https://gw.example", Model: "m"}})
-	d.accounts = []proto.UsageAccount{antigravityAccount(now)} // windows of another provider only
+	// windows of another provider only
+	d.accounts = []proto.UsageAccount{antigravityAccount(now)}
 	d.capacity = proto.CapacitySnapshot{CheckedAt: now, Providers: []proto.ProviderCapacity{{Provider: "claude", Accounts: 3, Available: 2}}}
 	got := s.candidateHeadroomAt(ctx, d.accounts, "m1", "gw-claude", "claude-opus-5-5", now)
 	if !got.Known || math.Abs(got.H-0.34) > 1e-9 {
@@ -302,7 +312,9 @@ func TestReplayRoutingTrialDevDispatches(t *testing.T) {
 	t.Run("all four fixes", func(t *testing.T) {
 		s, d := routingRig(t)
 		putRcLaunchers(t, s, map[string][]proto.Launcher{
-			"m1": {{Name: "agy", Source: "agy", Agent: "agy"}}, "m2": {{Name: "agy", Source: "agy", Agent: "agy"}}})
+			"m1": {{Name: "agy", Source: "agy", Agent: "agy"}},
+			"m2": {{Name: "agy", Source: "agy", Agent: "agy"}},
+		})
 		putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw-claude", Agent: "claude", BaseURL: "https://gw.example", Model: "claude-opus-5-5"}})
 		d.accounts = []proto.UsageAccount{antigravityAccount(now)}
 		d.capacity = proto.CapacitySnapshot{CheckedAt: now, Providers: []proto.ProviderCapacity{{Provider: "claude", Accounts: 3, Available: 2}}}
