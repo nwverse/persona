@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
@@ -223,3 +224,38 @@ func (searchFailReader) SearchMinutes(context.Context, time.Time, time.Time) ([]
 func (searchFailReader) MinuteDetail(context.Context, string) (Minute, error) { return Minute{}, nil }
 func (searchFailReader) InspectDoc(context.Context, string) (string, error)   { return "", nil }
 func (searchFailReader) SearchDocs(context.Context, string) ([]Doc, error)    { return nil, nil }
+
+// A minute's note words its labels in the owner's language; zh-Hans (and no language: i18n.Default) is the text the
+// import wrote before the labels were localized, byte for byte. What Lark sent is kept as it came.
+func TestMinuteNoteLabelsInTheOwnersLanguage(t *testing.T) {
+	m := Minute{Summary: "一句\n摘要", Todos: []string{"做甲", " ", "做乙", "做丙", "做丁"}, Chapters: []string{"开场", "讨论"}}
+	for _, tc := range []struct {
+		lang i18n.Lang
+		want string
+	}{
+		{i18n.ZhHans, "摘要：一句 摘要 待办：做甲；做乙；做丙 章节：开场；讨论"},
+		{"", "摘要：一句 摘要 待办：做甲；做乙；做丙 章节：开场；讨论"},
+		{i18n.En, "Summary: 一句 摘要 To-dos: 做甲; 做乙; 做丙 Chapters: 开场; 讨论"},
+		{i18n.Ja, "要約：一句 摘要 ToDo：做甲；做乙；做丙 チャプター：开场；讨论"},
+	} {
+		if got := minuteNote(m, tc.lang); got != tc.want {
+			t.Errorf("%q: note %q, want %q", tc.lang, got, tc.want)
+		}
+	}
+}
+
+// Run writes the note in Config.Lang.
+func TestRunWritesTheNoteInConfigLang(t *testing.T) {
+	e := newEngine(t)
+	r := &fakeReader{
+		minutes:  []Minute{{Token: "t1", Title: "Weekly", URL: "https://example.feishu.cn/minutes/t1"}},
+		detail:   map[string]Minute{"t1": {Summary: "Plan", Todos: []string{"Ship"}}},
+		detailOK: true,
+	}
+	if _, err := Run(context.Background(), e, r, Config{Lang: i18n.En}, time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := meeting(t, e, "lark-minutes-t1").Note; got != "Summary: Plan To-dos: Ship" {
+		t.Fatalf("note %q", got)
+	}
+}
