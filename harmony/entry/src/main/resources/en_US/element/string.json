@@ -9491,6 +9491,350 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "Knowledge Page"
+    },
+    {
+      "name": "computer_screen_show_keys",
+      "value": "Open Mac keyboard"
+    },
+    {
+      "name": "computer_screen_hide_keys",
+      "value": "Hide Mac keyboard"
+    },
+    {
+      "name": "computer_screen_landscape",
+      "value": "View in landscape"
+    },
+    {
+      "name": "computer_screen_portrait",
+      "value": "View in portrait"
+    },
+    {
+      "name": "computer_screen_fullscreen",
+      "value": "Full screen"
+    },
+    {
+      "name": "computer_screen_exit_fullscreen",
+      "value": "Exit full screen"
+    },
+    {
+      "name": "computer_screen_fit",
+      "value": "Fit to screen"
+    },
+    {
+      "name": "computer_screen_control_short",
+      "value": "Control"
+    },
+    {
+      "name": "computer_screen_stop_short",
+      "value": "Stop"
+    },
+    {
+      "name": "computer_screen_main_display",
+      "value": "Main display"
+    },
+    {
+      "name": "computer_screen_display",
+      "value": "Display"
+    },
+    {
+      "name": "computer_screen_mac_sign_in",
+      "value": "Sign in with your macOS account"
+    },
+    {
+      "name": "computer_screen_controlling",
+      "value": "Controlling"
+    },
+    {
+      "name": "computer_screen_account_hint",
+      "value": "Account name on this Mac"
+    },
+    {
+      "name": "computer_screen_password_hint",
+      "value": "Password for this account"
+    },
+    {
+      "name": "computer_screen_remember",
+      "value": "Remember on this phone"
+    },
+    {
+      "name": "computer_screen_remember_hint",
+      "value": "Connect automatically next time you view this Mac."
+    },
+    {
+      "name": "computer_screen_forget_login",
+      "value": "Forget login"
+    },
+    {
+      "name": "computer_screen_saved_rejected",
+      "value": "The Mac declined the saved login. Enter your current account and password."
+    },
+    {
+      "name": "computer_screen_store_unavailable",
+      "value": "Saved login is unavailable. You can still sign in."
+    },
+    {
+      "name": "computer_screen_save_failed",
+      "value": "Connected. The login could not be saved on this phone."
+    },
+    {
+      "name": "computer_screen_forget_failed",
+      "value": "Couldn’t remove the saved login. Try again."
+    },
+    {
+      "name": "computer_screen_authenticating",
+      "value": "Verifying your Mac account…"
+    },
+    {
+      "name": "computer_screen_waiting_frame",
+      "value": "Waiting for the first screen image…"
+    },
+    {
+      "name": "computer_screen_auth_timeout",
+      "value": "The Mac didn’t finish signing you in. Connect again to retry."
+    },
+    {
+      "name": "computer_screen_frame_failed",
+      "value": "The screen image could not be displayed. Connect again to retry."
+    },
+    {
+      "name": "computer_screen_frame_timeout",
+      "value": "The Mac didn’t send a screen image. Connect again to retry."
+    },
+    {
+      "name": "computer_screen_shortcut_keys",
+      "value": "Mac shortcut keys"
+    },
+    {
+      "name": "computer_screen_key_escape",
+      "value": "Esc, cancel or dismiss"
+    },
+    {
+      "name": "computer_screen_key_tab",
+      "value": "Tab, move to the next field"
+    },
+    {
+      "name": "computer_screen_key_left",
+      "value": "Left arrow, move left"
+    },
+    {
+      "name": "computer_screen_key_up",
+      "value": "Up arrow, move up"
+    },
+    {
+      "name": "computer_screen_key_down",
+      "value": "Down arrow, move down"
+    },
+    {
+      "name": "computer_screen_key_right",
+      "value": "Right arrow, move right"
+    },
+    {
+      "name": "computer_screen_key_return",
+      "value": "Return, confirm or start a new line"
+    },
+    {
+      "name": "computer_screen_keyboard_unavailable",
+      "value": "Couldn’t open the keyboard. Tap the keyboard button to try again."
+    },
+    {
+      "name": "computer_screen_input_failed",
+      "value": "Some input didn’t reach the Mac. Check the remote field before typing it again."
+    },
+    {
+      "name": "browser_qr_access",
+      "value": "This browser will have full access to your Hub. Continue only if you started this sign-in."
+    },
+    {
+      "name": "browser_qr_ask",
+      "value": "Allow this browser to sign in?"
+    },
+    {
+      "name": "browser_qr_cancel",
+      "value": "Cancel sign-in"
+    },
+    {
+      "name": "browser_qr_checking",
+      "value": "Checking the sign-in request…"
+    },
+    {
+      "name": "browser_qr_denied",
+      "value": "Sign-in declined"
+    },
+    {
+      "name": "browser_qr_done",
+      "value": "Done"
+    },
+    {
+      "name": "browser_qr_ended",
+      "value": "This request has ended."
+    },
+    {
+      "name": "browser_qr_enter",
+      "value": "Enter this number in your browser"
+    },
+    {
+      "name": "browser_qr_expired",
+      "value": "This code has expired"
+    },
+    {
+      "name": "browser_qr_failed",
+      "value": "Couldn’t verify this sign-in"
+    },
+    {
+      "name": "browser_qr_internet",
+      "value": "Internet"
+    },
+    {
+      "name": "browser_qr_invalid",
+      "value": "Unrecognized sign-in code"
+    },
+    {
+      "name": "browser_qr_lan",
+      "value": "Local network"
+    },
+    {
+      "name": "browser_qr_manage",
+      "value": "You can revoke this browser’s access at any time in Devices."
+    },
+    {
+      "name": "browser_qr_number",
+      "value": "Keep this number to yourself. An incorrect entry cancels this sign-in."
+    },
+    {
+      "name": "browser_qr_other_hub",
+      "value": "This code belongs to another Hub"
+    },
+    {
+      "name": "browser_qr_refresh",
+      "value": "Refresh the QR code in your browser and scan again."
+    },
+    {
+      "name": "browser_qr_remote_access",
+      "value": "This request came from the internet. Allow full access to your Hub only if you started this sign-in."
+    },
+    {
+      "name": "browser_qr_scan",
+      "value": "Scan browser sign-in code"
+    },
+    {
+      "name": "browser_qr_scan_web",
+      "value": "Open the Persona sign-in page in your browser and scan its QR code."
+    },
+    {
+      "name": "browser_qr_success",
+      "value": "Browser signed in"
+    },
+    {
+      "name": "browser_qr_switch",
+      "value": "Switch to the Hub shown in your browser, then scan again."
+    },
+    {
+      "name": "browser_qr_title",
+      "value": "Browser sign-in"
+    },
+    {
+      "name": "browser_qr_unknown",
+      "value": "Unknown network"
+    },
+    {
+      "name": "browser_qr_voided",
+      "value": "The number didn’t match"
+    },
+    {
+      "name": "browser_qr_waiting",
+      "value": "Waiting for the browser…"
+    },
+    {
+      "name": "device_kind_browser",
+      "value": "Browser"
+    },
+    {
+      "name": "device_kind_link",
+      "value": "Computer link"
+    },
+    {
+      "name": "device_kind_other",
+      "value": "Other device"
+    },
+    {
+      "name": "device_kind_phone",
+      "value": "Phone"
+    },
+    {
+      "name": "device_kind_watch",
+      "value": "Watch"
+    },
+    {
+      "name": "devices",
+      "value": "Devices"
+    },
+    {
+      "name": "devices_added",
+      "value": "Added"
+    },
+    {
+      "name": "devices_demo",
+      "value": "Pair with a Hub to see signed-in devices."
+    },
+    {
+      "name": "devices_empty",
+      "value": "No signed-in devices."
+    },
+    {
+      "name": "devices_last_used",
+      "value": "Last used"
+    },
+    {
+      "name": "devices_load_failed",
+      "value": "Could not load the device list. Refresh to try again."
+    },
+    {
+      "name": "devices_no_history",
+      "value": "No revoked devices."
+    },
+    {
+      "name": "devices_no_match",
+      "value": "No matching devices."
+    },
+    {
+      "name": "devices_revoke",
+      "value": "Revoke"
+    },
+    {
+      "name": "devices_revoke_failed",
+      "value": "The device still has access. Refresh and try again."
+    },
+    {
+      "name": "devices_revoke_note",
+      "value": "This device will lose access to the Hub. Pair it again to reconnect."
+    },
+    {
+      "name": "devices_revoke_self",
+      "value": "This phone will disconnect from the Hub and must be paired again."
+    },
+    {
+      "name": "devices_revoke_unpair",
+      "value": "Revoke and unpair"
+    },
+    {
+      "name": "devices_revoked",
+      "value": "Revoked"
+    },
+    {
+      "name": "devices_revoked_at",
+      "value": "Revoked"
+    },
+    {
+      "name": "devices_search",
+      "value": "Search by name or device type"
+    },
+    {
+      "name": "devices_signed_in",
+      "value": "Signed in"
+    },
+    {
+      "name": "devices_this",
+      "value": "This device"
     }
   ]
 }

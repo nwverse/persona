@@ -77,7 +77,7 @@ import { SessionTools } from '../components/SessionTools';
 import { SessionWorkspace } from '../models/SessionWorkspace';
 import { sessionModeAvailable } from '../models/SessionModes';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial } from '@kit.ArkUI';
+import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial, window } from '@kit.ArkUI';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { ClientModel, client } from '../models/ClientModel';
 import { ResourceRow, HubProfile, Wire } from '../models/Wire';
@@ -89,6 +89,7 @@ import { InteractionHistoryPage } from '../components/InteractionHistoryPage';
 import { InboxWorkspacePage } from '../components/InboxWorkspacePage';
 import { inboxTier } from '../models/InboxWorkspace';
 import { ResourcePage } from '../components/ResourcePage';
+import { SignedInDevicesPage } from '../components/SignedInDevicesPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { SshSettingsPage } from '../components/SshSettingsPage';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
@@ -253,6 +254,10 @@ struct Index {
   private directionPermissionsTarget:string='';
   private pairingSettingsOwner:string='';
   @Local activeChild: string = '';
+  @Local fullscreenComputer: string = '';
+  @Local computerOrientation: window.Orientation = window.Orientation.AUTO_ROTATION_RESTRICTED;
+  @Local computerReturnOrientation: window.Orientation | undefined = undefined;
+  private computerExitTimer: number = -1;
   @Local tool: number = 0;
   private titleMaterial: uiMaterial.Material = uiMaterial.isImmersiveMaterialSupported() ? new uiMaterial.ImmersiveMaterial({ style: uiMaterial.ImmersiveStyle.THIN }) : uiMaterial.Material.empty;
   @Local projectRootRevision: number = 0;
@@ -1606,7 +1611,7 @@ struct Index {
     this.bindDeviceOwner(this.model);
     this.applications.bind(this.model); this.applications.refresh();
   }
-  aboutToDisappear(): void { this.clearPairTransport(); phonePasswordLogin.cancel(); if (this.assistantStatusTimer !== -1) clearInterval(this.assistantStatusTimer); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
+  aboutToDisappear(): void { this.finishComputerFullscreen(); this.clearPairTransport(); phonePasswordLogin.cancel(); if (this.assistantStatusTimer !== -1) clearInterval(this.assistantStatusTimer); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
   @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
     this.applications.bind(this.model); this.applications.connectionChanged();
   }
@@ -3996,12 +4001,48 @@ struct Index {
     if (this.mainDestination(name, param) && !this.wide()) this.peerTitle(true)
     else Text(this.destinationTitleText(name, param)).height(this.headerHeight()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
       .padding({ left: this.destinationBackHidden(name, param) ? Tokens.page : 0 })
+      .margin({ start: LengthMetrics.vp(this.deviceTitleGap(name, param)) })
   }
+  private deviceTitleGap(name: string, param: Object): number {
+    if (name !== 'settings' || this.destinationBackHidden(name, param)) return 0;
+    const page = this.settingsKind(param);
+    return page === 'devices' || page === 'machines' ? Tokens.inset : 0;
+  }
+  private immersiveComputer(name: string, param: Object): boolean {
+    return name === 'computer' && this.fullscreenComputer === this.childKey(name, param);
+  }
+
+  private screenOrientation(name: string, param: Object): window.Orientation | undefined {
+    if (name !== 'computer') return undefined;
+    return this.immersiveComputer(name, param) ? this.computerOrientation : this.computerReturnOrientation;
+  }
+
+  private finishComputerFullscreen(): void {
+    if (this.computerExitTimer !== -1) clearTimeout(this.computerExitTimer);
+    this.computerExitTimer = -1;
+    this.fullscreenComputer = '';
+    this.environment.setComputerImmersive(false);
+  }
+
+  @Monitor('environment.windowWidthPx')
+  computerWindowChanged(): void {
+    if (this.computerExitTimer !== -1 && this.environment.viewingOrientation() === this.computerReturnOrientation) this.finishComputerFullscreen();
+  }
+
+  private exitComputerFullscreen(): void {
+    if (this.computerExitTimer !== -1 || this.computerReturnOrientation === undefined ||
+      this.environment.viewingOrientation() === this.computerReturnOrientation) { this.finishComputerFullscreen(); return; }
+    // Rotate back while Navigation still owns the whole window. A split destination cannot request orientation.
+    this.computerOrientation = this.computerReturnOrientation;
+    this.computerExitTimer = setTimeout((): void => this.finishComputerFullscreen(), 1000);
+  }
+
   private destinationBackHidden(name: string, param: Object): boolean {
     if (this.mainDestination(name, param) || name === 'session' && Wire.bool(this.routeRow(param).data(), 'navigation_root') && this.wide() && this.model.section === 1) return true;
     return this.wide() && this.stack.size() === 1 && this.stack.getAllPathName()[0] === name && this.stack.getParamByIndex(0) === param;
   }
   private destinationTitleText(name: string, param: Object): string {
+    if (name === 'computer') return tr('computer_screen_open');
     if (name === 'resources' && param === 'health' && !this.wide()) return tr('phone_drawer_health');
     if (name === 'machine_agents') return this.routeRow(param).title || tr('phone_machines');
     if (name === 'machine_settings') return tr('phone_machine_detail');
@@ -4061,7 +4102,19 @@ struct Index {
           onChat:(row:ResourceRow) => this.openFrom(name,param,row)})
         else this.targetLoading(name,param)
       } else if (name === 'computer') {
-        if (this.targetReady(name, param)) ComputerScreenPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onClose: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
+        if (this.targetReady(name, param)) ComputerScreenPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param),
+          fullscreen: this.immersiveComputer(name, param), onFullscreen: (shown: boolean) => {
+            if (this.activeChild === this.childKey(name, param)) {
+              if (shown) {
+                this.computerReturnOrientation = this.environment.viewingOrientation();
+                this.environment.setComputerImmersive(true);
+                this.computerOrientation = window.Orientation.AUTO_ROTATION_RESTRICTED;
+                this.fullscreenComputer = this.childKey(name, param);
+              } else this.exitComputerFullscreen();
+            }
+          }, onRotate: (landscape: boolean) => {
+            if (this.immersiveComputer(name, param)) this.computerOrientation = landscape ? window.Orientation.LANDSCAPE : window.Orientation.PORTRAIT;
+          }, onClose: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
         else this.targetLoading(name, param)
       } else if (name === 'file') {
         if (this.targetReady(name, param)) RemoteDocumentPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })
@@ -4121,6 +4174,8 @@ struct Index {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) AdminWorkspacePage({ model: this.settingsModel(param), page: this.settingsKind(param) === 'phone_new_assistant' ? 'managers' : this.settingsKind(param), createManagerOnly:this.settingsKind(param) === 'phone_new_assistant', installingManager:NavigationContext.installingManagerFor(param as string,this.model.scope()), row: NavigationContext.from(name, param as string).scoped ? NavigationContext.from(name, param as string).row : undefined, active: this.activeChild === this.childKey(name, param), refreshRevision: this.adminRefreshRevision,
           onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onOpenMachine: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail('machines', row); } })
         else this.targetLoading(name, param)
+      } else if (name === 'settings' && this.settingsKind(param) === 'devices') {
+        SignedInDevicesPage({ model: this.model, active: this.activeChild === this.childKey(name, param) })
       } else if (name === 'settings' && this.settingsKind(param) === 'ssh') {
         SshSettingsPage({ tunnel: this.settingsModel(param).ssh, active: this.activeChild === this.childKey(name, param),
           onSaved: (): void => { const owner = this.settingsModel(param); if (this.activeChild === this.childKey(name, param)) owner.selectProfile(owner.profile, true); } })
@@ -4129,12 +4184,16 @@ struct Index {
         else this.targetLoading(name, param)
       }
     }.title({ builder: () => this.destinationTitle(name, param), height: this.headerHeight() }, { systemMaterial: this.titleMaterial })
-      .hideTitleBar(!this.wide() || this.hideChatTitle(name, param)).hideBackButton(this.destinationBackHidden(name, param))
+      .hideTitleBar(!this.wide() || this.immersiveComputer(name, param) || this.hideChatTitle(name, param))
+      .preferredOrientation(this.screenOrientation(name, param))
+      .hideBackButton(this.destinationBackHidden(name, param))
       .backgroundColor(name === 'resources' && param === 'inbox' ? Colors.grouped : Colors.canvas)
       .menus(this.navigationMenus(name, param))
       .onShown(() => this.routeShown(name, param))
-      .onHidden(() => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'assistant') this.detailModel.watchDecisions(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
-      .onBackPressed((): boolean => { if (this.directionPermissionsVisible) {this.directionPermissionsVisible=false;return true;} if (this.messageLift.dismiss() || this.closeForwardNavigation()) return true; if (!this.spacesShown && this.returnToPhoneSettings()) return true; if (this.spacesShown) { this.spacesShown = false; return true; } if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; this.phoneBack(); return true; })
+      .onHidden(() => { if (name === 'computer' && (this.activeChild === this.childKey(name, param) || this.immersiveComputer(name, param))) {
+        this.finishComputerFullscreen(); this.computerReturnOrientation = undefined;
+      } if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'assistant') this.detailModel.watchDecisions(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
+      .onBackPressed((): boolean => { if (this.immersiveComputer(name, param)) { this.exitComputerFullscreen(); return true; } if (this.directionPermissionsVisible) {this.directionPermissionsVisible=false;return true;} if (this.messageLift.dismiss() || this.closeForwardNavigation()) return true; if (!this.spacesShown && this.returnToPhoneSettings()) return true; if (this.spacesShown) { this.spacesShown = false; return true; } if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; this.phoneBack(); return true; })
   }
   private closeForwardNavigation(): boolean {
     if (this.chatForward.isChoosing(this.detailModel)) { this.chatForward.cancelPicker(); return true; }
@@ -4270,7 +4329,7 @@ struct Index {
             .hideBackButton(true).hideTitleBar(this.rail() || !this.wide()).menus([])
             .backgroundColor(Colors.canvas)
             .toolbarConfiguration([])
-            .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
+            .hideNavBar(!!this.fullscreenComputer).mode(this.wide() && !this.fullscreenComputer ? NavigationMode.Split : NavigationMode.Stack)
             .navBarWidth(this.rail() ? Tokens.collapsed : this.foldLayout.masterWidth)
             .navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [this.foldLayout.masterMin, this.foldLayout.masterMax])
             .minContentWidth(this.foldLayout.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)

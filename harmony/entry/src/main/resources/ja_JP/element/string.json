@@ -9671,6 +9671,350 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "ナレッジページ"
+    },
+    {
+      "name": "computer_screen_show_keys",
+      "value": "Mac のキーボードを開く"
+    },
+    {
+      "name": "computer_screen_hide_keys",
+      "value": "Mac のキーボードを閉じる"
+    },
+    {
+      "name": "computer_screen_landscape",
+      "value": "横向きで表示"
+    },
+    {
+      "name": "computer_screen_portrait",
+      "value": "縦向きで表示"
+    },
+    {
+      "name": "computer_screen_fullscreen",
+      "value": "全画面表示"
+    },
+    {
+      "name": "computer_screen_exit_fullscreen",
+      "value": "全画面表示を終了"
+    },
+    {
+      "name": "computer_screen_fit",
+      "value": "画面に合わせる"
+    },
+    {
+      "name": "computer_screen_control_short",
+      "value": "操作"
+    },
+    {
+      "name": "computer_screen_stop_short",
+      "value": "停止"
+    },
+    {
+      "name": "computer_screen_main_display",
+      "value": "メインディスプレイ"
+    },
+    {
+      "name": "computer_screen_display",
+      "value": "ディスプレイ"
+    },
+    {
+      "name": "computer_screen_mac_sign_in",
+      "value": "この Mac のアカウントでログイン"
+    },
+    {
+      "name": "computer_screen_controlling",
+      "value": "操作中"
+    },
+    {
+      "name": "computer_screen_account_hint",
+      "value": "この Mac のアカウント名"
+    },
+    {
+      "name": "computer_screen_password_hint",
+      "value": "このアカウントのパスワード"
+    },
+    {
+      "name": "computer_screen_remember",
+      "value": "この端末に保存"
+    },
+    {
+      "name": "computer_screen_remember_hint",
+      "value": "次回この Mac の画面を開くと自動接続します。"
+    },
+    {
+      "name": "computer_screen_forget_login",
+      "value": "ログイン情報を削除"
+    },
+    {
+      "name": "computer_screen_saved_rejected",
+      "value": "保存したログイン情報が拒否されました。現在のアカウントとパスワードを入力してください。"
+    },
+    {
+      "name": "computer_screen_store_unavailable",
+      "value": "保存したログイン情報を読み込めません。手動でログインできます。"
+    },
+    {
+      "name": "computer_screen_save_failed",
+      "value": "接続しました。ログイン情報を端末に保存できませんでした。"
+    },
+    {
+      "name": "computer_screen_forget_failed",
+      "value": "ログイン情報を削除できませんでした。もう一度お試しください。"
+    },
+    {
+      "name": "computer_screen_authenticating",
+      "value": "Mac のアカウントを確認中…"
+    },
+    {
+      "name": "computer_screen_waiting_frame",
+      "value": "最初の画面を待っています…"
+    },
+    {
+      "name": "computer_screen_auth_timeout",
+      "value": "Mac のログイン確認がタイムアウトしました。もう一度接続してください。"
+    },
+    {
+      "name": "computer_screen_frame_failed",
+      "value": "画面を表示できませんでした。もう一度接続してください。"
+    },
+    {
+      "name": "computer_screen_frame_timeout",
+      "value": "Mac から画面が届きませんでした。もう一度接続してください。"
+    },
+    {
+      "name": "computer_screen_shortcut_keys",
+      "value": "Mac のショートカットキー"
+    },
+    {
+      "name": "computer_screen_key_escape",
+      "value": "Esc、操作を取り消すか閉じる"
+    },
+    {
+      "name": "computer_screen_key_tab",
+      "value": "Tab、次の入力欄に移動"
+    },
+    {
+      "name": "computer_screen_key_left",
+      "value": "左矢印、左に移動"
+    },
+    {
+      "name": "computer_screen_key_up",
+      "value": "上矢印、上に移動"
+    },
+    {
+      "name": "computer_screen_key_down",
+      "value": "下矢印、下に移動"
+    },
+    {
+      "name": "computer_screen_key_right",
+      "value": "右矢印、右に移動"
+    },
+    {
+      "name": "computer_screen_key_return",
+      "value": "Return、確定または改行"
+    },
+    {
+      "name": "computer_screen_keyboard_unavailable",
+      "value": "キーボードを開けませんでした。キーボードボタンをもう一度タップしてください。"
+    },
+    {
+      "name": "computer_screen_input_failed",
+      "value": "一部の入力が Mac に届きませんでした。Mac の入力欄を確認してから再入力してください。"
+    },
+    {
+      "name": "browser_qr_access",
+      "value": "許可すると、このブラウザから Hub のすべての機能を利用できます。ご自身が開始したサインインか確認してください。"
+    },
+    {
+      "name": "browser_qr_ask",
+      "value": "このブラウザのサインインを許可しますか？"
+    },
+    {
+      "name": "browser_qr_cancel",
+      "value": "サインインを取り消す"
+    },
+    {
+      "name": "browser_qr_checking",
+      "value": "サインインのリクエストを確認中…"
+    },
+    {
+      "name": "browser_qr_denied",
+      "value": "サインインを拒否しました"
+    },
+    {
+      "name": "browser_qr_done",
+      "value": "完了"
+    },
+    {
+      "name": "browser_qr_ended",
+      "value": "リクエストは終了しました"
+    },
+    {
+      "name": "browser_qr_enter",
+      "value": "この数字をブラウザに入力"
+    },
+    {
+      "name": "browser_qr_expired",
+      "value": "QR コードの有効期限が切れました"
+    },
+    {
+      "name": "browser_qr_failed",
+      "value": "サインインを確認できませんでした"
+    },
+    {
+      "name": "browser_qr_internet",
+      "value": "インターネット"
+    },
+    {
+      "name": "browser_qr_invalid",
+      "value": "ログインコードを読み取れません"
+    },
+    {
+      "name": "browser_qr_lan",
+      "value": "ローカルネットワーク"
+    },
+    {
+      "name": "browser_qr_manage",
+      "value": "このブラウザのアクセス権は「デバイス」でいつでも個別に取り消せます。"
+    },
+    {
+      "name": "browser_qr_number",
+      "value": "この数字は他の人に伝えないでください。入力できるのは一度だけで、間違えるとサインインは取り消されます。"
+    },
+    {
+      "name": "browser_qr_other_hub",
+      "value": "別の Hub のログインコードです"
+    },
+    {
+      "name": "browser_qr_refresh",
+      "value": "ブラウザで QR コードを更新して、もう一度スキャンしてください。"
+    },
+    {
+      "name": "browser_qr_remote_access",
+      "value": "インターネット経由のリクエストです。Hub へのフルアクセスは、ご自身が開始したサインインにのみ許可してください。"
+    },
+    {
+      "name": "browser_qr_scan",
+      "value": "ブラウザのログインコードをスキャン"
+    },
+    {
+      "name": "browser_qr_scan_web",
+      "value": "ブラウザで Persona のサインインページを開き、表示された QR コードをスキャンしてください。"
+    },
+    {
+      "name": "browser_qr_success",
+      "value": "ブラウザにログインしました"
+    },
+    {
+      "name": "browser_qr_switch",
+      "value": "ブラウザで開いている Hub に切り替えて、もう一度スキャンしてください。"
+    },
+    {
+      "name": "browser_qr_title",
+      "value": "ブラウザへのサインイン"
+    },
+    {
+      "name": "browser_qr_unknown",
+      "value": "不明なネットワーク"
+    },
+    {
+      "name": "browser_qr_voided",
+      "value": "数字が一致せず、サインインは取り消されました"
+    },
+    {
+      "name": "browser_qr_waiting",
+      "value": "ブラウザでの入力を待っています…"
+    },
+    {
+      "name": "device_kind_browser",
+      "value": "ブラウザ"
+    },
+    {
+      "name": "device_kind_link",
+      "value": "コンピュータ接続"
+    },
+    {
+      "name": "device_kind_other",
+      "value": "その他のデバイス"
+    },
+    {
+      "name": "device_kind_phone",
+      "value": "スマートフォン"
+    },
+    {
+      "name": "device_kind_watch",
+      "value": "ウォッチ"
+    },
+    {
+      "name": "devices",
+      "value": "デバイス"
+    },
+    {
+      "name": "devices_added",
+      "value": "追加日時"
+    },
+    {
+      "name": "devices_demo",
+      "value": "Hub とペアリングすると、ログイン中のデバイスを確認できます。"
+    },
+    {
+      "name": "devices_empty",
+      "value": "ログイン中のデバイスはありません。"
+    },
+    {
+      "name": "devices_last_used",
+      "value": "最終利用"
+    },
+    {
+      "name": "devices_load_failed",
+      "value": "デバイスを読み込めませんでした。更新して再試行してください。"
+    },
+    {
+      "name": "devices_no_history",
+      "value": "取り消したデバイスはありません。"
+    },
+    {
+      "name": "devices_no_match",
+      "value": "一致するデバイスがありません。"
+    },
+    {
+      "name": "devices_revoke",
+      "value": "アクセスを取り消す"
+    },
+    {
+      "name": "devices_revoke_failed",
+      "value": "このデバイスは引き続きアクセスできます。更新して再試行してください。"
+    },
+    {
+      "name": "devices_revoke_note",
+      "value": "このデバイスは Hub にアクセスできなくなります。再接続にはペアリングが必要です。"
+    },
+    {
+      "name": "devices_revoke_self",
+      "value": "この端末は Hub から切断されます。再接続にはペアリングが必要です。"
+    },
+    {
+      "name": "devices_revoke_unpair",
+      "value": "取り消してペアリングを解除"
+    },
+    {
+      "name": "devices_revoked",
+      "value": "取り消し済み"
+    },
+    {
+      "name": "devices_revoked_at",
+      "value": "取り消し日時"
+    },
+    {
+      "name": "devices_search",
+      "value": "名前または種類で検索"
+    },
+    {
+      "name": "devices_signed_in",
+      "value": "ログイン中"
+    },
+    {
+      "name": "devices_this",
+      "value": "このデバイス"
     }
   ]
 }

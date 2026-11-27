@@ -62,6 +62,7 @@ function settingIcon(id:string):Resource {
     case 'launchers': return $r('sys.symbol.play_fill');
     case 'engine': return $r('sys.symbol.computer');
     case 'machines': return $r('sys.symbol.desktop');
+    case 'devices': return Symbols.device;
     case 'appearance': return Symbols.appearance;
     case 'phone_language_options': return $r('sys.symbol.textformat');
     case 'notifications': return $r('sys.symbol.bell');

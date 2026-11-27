@@ -55,6 +55,10 @@ redrawn.
 | `web/src/ui/brands/telegram.svg` | Telegram in the web client | Same file as `brand-telegram` | Telegram's trademark |
 | `os-*` | Ubuntu, Debian, Fedora, Red Hat, CentOS, Rocky Linux, AlmaLinux, Arch Linux, Alpine Linux, openSUSE, NixOS, Linux (Tux) | Simple Icons (CC0 for the files) | Debian CC-BY-SA-3.0, NixOS CC-BY-4.0, Rocky Linux CC-BY-SA-4.0; the others under each project's trademark policy |
 
+The HarmonyOS device directory identifies the signing-in browser with the single-color Google Chrome, Firefox and Safari marks from Simple Icons 16.38.1 (`googlechrome.svg`, `firefoxbrowser.svg`, `safari.svg`; CC0 for the files), used under each owner's trademark terms. Microsoft Edge is no longer in Simple Icons and is shown with a generic glyph.
+
+The Apple, Android and Windows system glyphs come from [Bootstrap Icons 1.13.1](https://github.com/twbs/icons/tree/v1.13.1). The Linux distribution marks are shared with the iOS app. The HAP includes attribution and the Bootstrap Icons license in `rawfile/device-mark-notices.txt`.
+
 ## Lobe Icons
 
 https://github.com/lobehub/lobe-icons

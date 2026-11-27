@@ -1,6 +1,5 @@
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
-import { RFBBigUInt } from './RFBBigUInt';
 
 export class RFBCredentials {
   account: string = '';
@@ -14,33 +13,16 @@ export class RFBARDReply {
   constructor(sealed: Uint8Array, publicKey: Uint8Array) { this.sealed = sealed; this.publicKey = publicKey; }
 }
 
-export interface RFBAuthCrypto {
-  random(length: number): Promise<Uint8Array>;
-  md5(bytes: Uint8Array): Promise<Uint8Array>;
-  aesEcb(key: Uint8Array, bytes: Uint8Array): Promise<Uint8Array>;
+function unsignedValue(bytes: Uint8Array): bigint {
+  return BigInt('0x' + Array.from(bytes).map((byte: number): string => byte.toString(16).padStart(2, '0')).join(''));
 }
 
-class RFBHarmonyCrypto implements RFBAuthCrypto {
-  async random(length: number): Promise<Uint8Array> {
-    const result = await cryptoFramework.createRandom().generateRandom(length);
-    return result.data.slice();
-  }
-
-  async md5(bytes: Uint8Array): Promise<Uint8Array> {
-    const digest = cryptoFramework.createMd('MD5');
-    await digest.update({ data: bytes });
-    return (await digest.digest()).data.slice();
-  }
-
-  async aesEcb(keyBytes: Uint8Array, bytes: Uint8Array): Promise<Uint8Array> {
-    const generator = cryptoFramework.createSymKeyGenerator('AES128');
-    const key = await generator.convertKey({ data: keyBytes });
-    try {
-      const cipher = cryptoFramework.createCipher('AES128|ECB|NoPadding');
-      await cipher.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, key, null);
-      return (await cipher.doFinal({ data: bytes })).data.slice();
-    } finally { key.clearMem(); }
-  }
+function publicKeyBytes(value: bigint, width: number): Uint8Array {
+  const hex: string = value.toString(16).padStart(width * 2, '0');
+  if (hex.length !== width * 2) throw new Error('rfb_crypto');
+  const bytes = new Uint8Array(width);
+  for (let index: number = 0; index < width; index++) bytes[index] = parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  return bytes;
 }
 
 /** Security types and credential encodings used by the Apple RFB client. */
@@ -70,39 +52,55 @@ export class RFBAuth {
     return out;
   }
 
-  static async ard(generator: Uint8Array, prime: Uint8Array, serverKey: Uint8Array, account: string, password: string,
-    crypto: RFBAuthCrypto = new RFBHarmonyCrypto(), privateKey?: Uint8Array, fill?: Uint8Array): Promise<RFBARDReply> {
+  static async ard(generator: Uint8Array, prime: Uint8Array, serverKey: Uint8Array, account: string, password: string): Promise<RFBARDReply> {
     if (prime.length < 1 || prime.length > RFBAuth.maxPrimeBytes || (prime[prime.length - 1] & 1) !== 1 ||
-      generator.length < 1 || generator.length > 4 || serverKey.length !== prime.length ||
-      privateKey !== undefined && privateKey.length !== prime.length || fill !== undefined && fill.length !== 128)
+      generator.length < 1 || generator.length > 4 || serverKey.length !== prime.length)
       throw new Error('rfb_crypto');
-    const exponent: Uint8Array = privateKey === undefined ? await crypto.random(prime.length) : privateKey.slice();
-    let shared: Uint8Array = new Uint8Array(0);
-    let key: Uint8Array = new Uint8Array(0);
-    let block: Uint8Array = new Uint8Array(0);
-    let user: Uint8Array = new Uint8Array(0);
-    let pass: Uint8Array = new Uint8Array(0);
+    // Screen Sharing supplies its own DH group. Keep the two large exponentiations in the async native provider.
+    const params: cryptoFramework.DHCommonParamsSpec = { algName: 'DH', specType: cryptoFramework.AsyKeySpecType.COMMON_PARAMS_SPEC,
+      p: unsignedValue(prime), g: unsignedValue(generator), l: 0 };
+    const peerSpec: cryptoFramework.DHPubKeySpec = { algName: 'DH', specType: cryptoFramework.AsyKeySpecType.PUBLIC_KEY_SPEC,
+      params: params, pk: unsignedValue(serverKey) };
+    const peer = await cryptoFramework.createAsyKeyGeneratorBySpec(peerSpec).generatePubKey();
+    const pair = await cryptoFramework.createAsyKeyGeneratorBySpec(params).generateKeyPair();
+    const shared = new Uint8Array(prime.length);
     try {
-      if (exponent.length !== prime.length) throw new Error('rfb_crypto');
-      const modulus: RFBBigUInt = RFBBigUInt.fromBytes(prime);
-      const publicKey: Uint8Array = RFBBigUInt.modPow(RFBBigUInt.fromBytes(generator), RFBBigUInt.fromBytes(exponent), modulus).toBytes(prime.length);
-      shared = RFBBigUInt.modPow(RFBBigUInt.fromBytes(serverKey), RFBBigUInt.fromBytes(exponent), modulus).toBytes(prime.length);
-      key = await crypto.md5(shared);
-      if (key.length !== 16) throw new Error('rfb_crypto');
-      block = fill === undefined ? await crypto.random(128) : fill.slice();
-      if (block.length !== 128) throw new Error('rfb_crypto');
-      const encoder = new util.TextEncoder();
-      user = encoder.encodeInto(account).slice(0, 63);
-      pass = encoder.encodeInto(password).slice(0, 63);
-      block.set(user, 0);
-      block[user.length] = 0;
-      block.set(pass, 64);
-      block[64 + pass.length] = 0;
-      const sealed: Uint8Array = await crypto.aesEcb(key, block);
-      if (sealed.length !== 128) throw new Error('rfb_crypto');
-      return new RFBARDReply(sealed, publicKey);
+      const secret = await cryptoFramework.createKeyAgreement('DH').generateSecret(pair.priKey, peer);
+      try {
+        if (!secret.data.length || secret.data.length > shared.length) throw new Error('rfb_crypto');
+        shared.set(secret.data, shared.length - secret.data.length);
+      } finally { secret.data.fill(0); }
+      const publicValue = pair.pubKey.getAsyKeySpec(cryptoFramework.AsyKeySpecItem.DH_PK_BN) as bigint;
+      const padding = await cryptoFramework.createRandom().generateRandom(128);
+      const sealed = await RFBAuth.sealARD(shared, account, password, padding.data);
+      return new RFBARDReply(sealed, publicKeyBytes(publicValue, prime.length));
     } finally {
-      exponent.fill(0); shared.fill(0); key.fill(0); block.fill(0); user.fill(0); pass.fill(0);
+      pair.priKey.clearMem();
+      shared.fill(0);
+    }
+  }
+
+  static async sealARD(shared: Uint8Array, account: string, password: string, block: Uint8Array): Promise<Uint8Array> {
+    if (block.length !== 128) throw new Error('rfb_crypto');
+    const digest = cryptoFramework.createMd('MD5');
+    await digest.update({ data: shared });
+    const keyBytes = (await digest.digest()).data;
+    const encoder = new util.TextEncoder();
+    const user = encoder.encodeInto(account);
+    const pass = encoder.encodeInto(password);
+    try {
+      block.set(user.subarray(0, 63), 0);
+      block[Math.min(user.length, 63)] = 0;
+      block.set(pass.subarray(0, 63), 64);
+      block[64 + Math.min(pass.length, 63)] = 0;
+      const key = await cryptoFramework.createSymKeyGenerator('AES128').convertKey({ data: keyBytes });
+      try {
+        const cipher = cryptoFramework.createCipher('AES128|ECB|NoPadding');
+        await cipher.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, key, null);
+        return (await cipher.doFinal({ data: block })).data;
+      } finally { key.clearMem(); }
+    } finally {
+      keyBytes.fill(0); block.fill(0); user.fill(0); pass.fill(0);
     }
   }
 }

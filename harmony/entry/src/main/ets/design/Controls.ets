@@ -59,3 +59,14 @@ class PersonaSelectModifier implements AttributeModifier<SelectAttribute> {
 export class SelectStyles {
   static readonly inline: AttributeModifier<SelectAttribute> = new PersonaSelectModifier();
 }
+
+/** Keep the first row in place when a sheet gains a field, an error, or a result. */
+class FormScrollModifier implements AttributeModifier<ScrollAttribute> {
+  applyNormalAttribute(scroll: ScrollAttribute): void {
+    scroll.align(Alignment.Top).scrollBar(BarState.Auto);
+  }
+}
+
+export class ScrollStyles {
+  static readonly form: AttributeModifier<ScrollAttribute> = new FormScrollModifier();
+}

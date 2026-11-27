@@ -4,29 +4,24 @@ import { HubRepository, segment } from './HubRepository';
 import { HubTransport, HttpFailure } from '../platform/HubTransport';
 import { RFBClient, RFBScreenInfo, RFBCursor } from '../core/RFBClient';
 import type { RFBTransport } from '../core/RFBClient';
-import { RFBFramebuffer } from '../core/RFBFramebuffer';
+import { RFBFramebuffer, RFBRegion } from '../core/RFBFramebuffer';
+import { ScreenDisplay, ScreenDisplays } from './ScreenDisplays';
+import { decodeScreenPatch } from '../platform/ScreenDecode';
 import { RFBCredentials } from '../core/RFBAuth';
 import { RFBOwnerLease } from '../core/RFBOwnerLease';
+import { ScreenCredentialStore } from '../platform/ScreenCredentialStore';
 
-const FRAME_EDGE: number = 1920;
-const MAX_TYPED_TEXT: number = 256;
+const KEY_BATCH_SIZE: number = 256;
+// macOS Screen Sharing accepts pointer events before it reliably accepts keys after sign-in.
+const KEYBOARD_SETTLE_MS: number = 3500;
 const MAX_PRELUDE_BYTES: number = 2 * 1024 * 1024;
-
-export class ComputerScreenFrame {
-  width: number = 0;
-  height: number = 0;
-  pixels: Uint8Array = new Uint8Array(0);
-  constructor(width: number = 0, height: number = 0, pixels: Uint8Array = new Uint8Array(0)) {
-    this.width = width;
-    this.height = height;
-    this.pixels = pixels;
-  }
-}
+const SCREEN_RESPONSE_TIMEOUT_MS: number = 20000;
+const FRAME_INTERVAL_MS: number = 16;
 
 class ComputerScreenRelay implements RFBTransport {
   private readonly stream: HubTransport;
   constructor(stream: HubTransport) { this.stream = stream; }
-  sendBinary(bytes: ArrayBuffer): boolean { return this.stream.sendBinary(bytes); }
+  sendBinary(bytes: ArrayBuffer, replaceQueuedMotion: boolean = false): boolean { return this.stream.sendBinary(bytes, replaceQueuedMotion); }
   close(): void { this.stream.close(); }
 }
 
@@ -36,13 +31,19 @@ export class ComputerScreen {
   @Trace phase: string = 'idle';
   @Trace messageKey: string = 'computer_screen_waiting';
   @Trace credentialsRequested: boolean = false;
+  @Trace loginRemembered: boolean = false;
+  @Trace loginNotice: string = '';
   @Trace frameRevision: number = 0;
   @Trace remoteWidth: number = 0;
   @Trace remoteHeight: number = 0;
-  @Trace screenList: RFBScreenInfo[] = [];
+  @Trace displays: ScreenDisplay[] = [];
+  @Trace selectedDisplay: string = '';
+  @Trace hasFrame: boolean = false;
+  @Trace failureDetail: string = '';
   @Trace cursor: RFBCursor | undefined = undefined;
   @Trace clipboard: string = '';
-  @Trace controlRevision: number = 0;
+  @Trace controlling: boolean = false;
+  @Trace keyboardInputFailed: boolean = false;
 
   private parent: ClientModel | undefined;
   private owner: ClientModel | undefined;
@@ -57,15 +58,29 @@ export class ComputerScreen {
   private ownerGeneration: number = 0;
   private ownerScope: string = '';
   private attempt: number = 0;
+  private controlRevision: number = 0;
+  private keysReadyAt: number = 0;
+  private inputTail: Promise<void> = Promise.resolve();
   private frameTimer: number = -1;
+  private lastFrameAt: number = 0;
+  private responseTimer: number = -1;
   private visible: boolean = false;
   private socketReady: boolean = false;
   private credentialAnswer: ((value: RFBCredentials | undefined) => void) | undefined;
+  private loginStore: ScreenCredentialStore | undefined;
+  private savedAttempt: RFBCredentials | undefined;
+  private rememberOnSuccess: RFBCredentials | undefined;
+  private manualLogin: boolean = false;
+  private machineUID: string = '';
+  private machineManager: string = '';
+  private skipSaved: boolean = false;
 
   constructor() {}
 
-  async open(parent: ClientModel, row: ResourceRow): Promise<void> {
+  async open(parent: ClientModel, row: ResourceRow, rejectedSaved: boolean = false): Promise<void> {
     this.close();
+    this.skipSaved = rejectedSaved;
+    if (rejectedSaved) this.loginNotice = 'computer_screen_saved_rejected';
     this.parent = parent;
     this.row = row;
     this.rowKey = row.key();
@@ -101,6 +116,12 @@ export class ComputerScreen {
       this.ownerScope = owner.scope();
       const repository: HubRepository = owner.repo();
       this.repository = repository;
+      this.machineUID = Wire.text(machine.data(), 'machine_uid');
+      this.machineManager = machine.manager || owner.profile.manager;
+      if (owner.profile.id && owner.profile.hubId) {
+        this.loginStore = new ScreenCredentialStore(owner.profile.id, owner.profile.hubId,
+          owner.profile.pin || owner.profile.baseUrl, this.machineManager, machine.id, this.machineUID);
+      }
       const lease: RFBOwnerLease = new RFBOwnerLease((): boolean => this.isCurrent(attempt));
       this.lease = lease;
 
@@ -123,15 +144,23 @@ export class ComputerScreen {
         (): boolean => this.lease?.allowsInput() === true && this.isCurrent(attempt)
       );
       this.client = client;
-      client.onState = (phase: string, code: string, _detail: string): void => this.protocolState(attempt, phase, code);
+      client.decodePatch = decodeScreenPatch;
+      const machineDisplays = ScreenDisplays.machine(response);
+      client.chooseView = (width: number, height: number, screens: RFBScreenInfo[]): RFBRegion | undefined => {
+        if (!this.isCurrent(attempt)) return undefined;
+        const available = ScreenDisplays.layout(width, height, screens, machineDisplays);
+        const selected = available.find((d: ScreenDisplay) => d.key === this.selectedDisplay) || available[0];
+        this.displays = available;
+        this.selectedDisplay = selected?.key || '';
+        return selected;
+      };
+      client.onState = (phase: string, code: string, detail: string): void => this.protocolState(attempt, phase, code, detail);
       client.onFrame = (_framebuffer: RFBFramebuffer): void => this.frameArrived(attempt);
       client.onResize = (width: number, height: number): void => {
         if (!this.isCurrent(attempt)) return;
         this.remoteWidth = width;
         this.remoteHeight = height;
-      };
-      client.onScreens = (screens: RFBScreenInfo[]): void => {
-        if (this.isCurrent(attempt)) this.screenList = screens.slice();
+        this.waitForFrame(attempt);
       };
       client.onCursor = (next: RFBCursor): void => {
         if (this.isCurrent(attempt)) this.cursor = next;
@@ -185,7 +214,19 @@ export class ComputerScreen {
   close(): void {
     this.visible = false;
     this.attempt++;
+    this.keysReadyAt = 0;
+    this.keyboardInputFailed = false;
+    this.loginStore = undefined;
+    this.savedAttempt = undefined;
+    this.rememberOnSuccess = undefined;
+    this.manualLogin = false;
+    this.machineUID = '';
+    this.machineManager = '';
+    this.loginRemembered = false;
+    this.loginNotice = '';
+    this.clearResponseTimer();
     this.socketReady = false;
+    this.lastFrameAt = 0;
     if (this.frameTimer !== -1) { clearTimeout(this.frameTimer); this.frameTimer = -1; }
     const answer: ((value: RFBCredentials | undefined) => void) | undefined = this.credentialAnswer;
     this.credentialAnswer = undefined;
@@ -204,12 +245,15 @@ export class ComputerScreen {
     this.rowKey = '';
     this.remoteWidth = 0;
     this.remoteHeight = 0;
-    this.screenList = [];
+    this.displays = [];
+    this.selectedDisplay = '';
+    this.hasFrame = false;
+    this.failureDetail = '';
     this.cursor = undefined;
     this.clipboard = '';
     this.phase = 'closed';
     this.frameRevision++;
-    this.controlRevision++;
+    this.controlling = false;
   }
 
   hide(): void { this.close(); }
@@ -228,20 +272,24 @@ export class ComputerScreen {
     return false;
   }
 
-  controlAllowed(): boolean { return this.isCurrent(this.attempt) && this.lease?.allowsInput() === true; }
+  controlAllowed(): boolean { return this.controlling && this.isCurrent(this.attempt) && this.lease?.allowsInput() === true; }
 
   connectionRevision(): number { return this.attempt; }
 
   grantControl(): boolean {
     if (!this.isLive() || !this.lease?.grant()) return false;
-    this.controlRevision++;
+    if (!this.controlling) this.controlRevision++;
+    this.keyboardInputFailed = false;
+    this.controlling = true;
     return true;
   }
 
   releaseControl(): void {
     if (this.controlAllowed()) this.client?.releasePointer();
-    this.lease?.disable();
     this.controlRevision++;
+    this.keyboardInputFailed = false;
+    this.lease?.disable();
+    this.controlling = false;
   }
 
   refresh(): void {
@@ -249,25 +297,41 @@ export class ComputerScreen {
     else this.retry();
   }
 
-  private pointInView(x:number,y:number,viewWidth:number,viewHeight:number):number[] {
-    if (!this.controlAllowed() || this.remoteWidth <= 0 || this.remoteHeight <= 0 || viewWidth <= 0 || viewHeight <= 0) return [];
-    const scale: number = Math.min(viewWidth / this.remoteWidth, viewHeight / this.remoteHeight);
+  setViewingGesture(active: boolean): void { this.client?.holdUpdates(active); }
+
+  displayAspect(): number {
+    const view = this.client?.framebuffer.view;
+    return view ? view.width / view.height : 0;
+  }
+
+  selectDisplay(index: number): void {
+    const next: ScreenDisplay | undefined = this.displays[index];
+    if (!next || next.key === this.selectedDisplay || !this.isLive()) return;
+    this.releasePointer();
+    if (!this.client?.selectView(next)) { this.fail(this.attempt, 'computer_screen_connection_lost'); return; }
+    this.selectedDisplay = next.key;
+    this.waitForFrame(this.attempt);
+  }
+
+  /** The framebuffer pixel under a point of the viewer, within the display it shows; [] outside the picture. */
+  private pointInView(x: number, y: number, viewWidth: number, viewHeight: number): number[] {
+    const view = this.client?.framebuffer.view;
+    if (!this.hasFrame || !this.controlAllowed() || !view || view.width <= 0 || view.height <= 0 || viewWidth <= 0 || viewHeight <= 0) return [];
+    const scale: number = Math.min(viewWidth / view.width, viewHeight / view.height);
     if (!Number.isFinite(scale) || scale <= 0) return [];
-    const contentWidth: number = this.remoteWidth * scale;
-    const contentHeight: number = this.remoteHeight * scale;
+    const contentWidth: number = view.width * scale;
+    const contentHeight: number = view.height * scale;
     const offsetX: number = (viewWidth - contentWidth) / 2;
     const offsetY: number = (viewHeight - contentHeight) / 2;
     const localX: number = x - offsetX;
     const localY: number = y - offsetY;
     if (localX < 0 || localY < 0 || localX >= contentWidth || localY >= contentHeight) return [];
-    const pixelX: number = Math.min(this.remoteWidth - 1, Math.floor(localX / scale));
-    const pixelY: number = Math.min(this.remoteHeight - 1, Math.floor(localY / scale));
-    return [pixelX,pixelY];
+    return [view.x + Math.floor(localX / contentWidth * view.width), view.y + Math.floor(localY / contentHeight * view.height)];
   }
 
-  pointerFromView(x:number,y:number,width:number,height:number,buttons:number):boolean {
-    const pt=this.pointInView(x,y,width,height);
-    return pt.length===2 && (this.client?.pointer(pt[0],pt[1],buttons) || false);
+  pointerFromView(x: number, y: number, viewWidth: number, viewHeight: number, buttons: number): boolean {
+    const pt = this.pointInView(x, y, viewWidth, viewHeight);
+    return pt.length === 2 && (this.client?.pointer(pt[0], pt[1], buttons) || false);
   }
 
   scrollFromView(x:number,y:number,width:number,height:number,notches:number):boolean {
@@ -276,7 +340,8 @@ export class ComputerScreen {
   }
 
   scrollPointsInView(width:number,height:number):number {
-    if (!this.controlAllowed() || width<=0 || height<=0 || this.remoteWidth<=0 || this.remoteHeight<=0) return 0;
+    const view=this.client?.framebuffer.view;
+    if (!this.controlAllowed() || !view || view.width<=0 || view.height<=0 || width<=0 || height<=0 || this.remoteWidth<=0 || this.remoteHeight<=0) return 0;
     const machine=this.row?.data();
     const computer=machine ? Wire.object(machine,'computer') : Wire.payload([],[]);
     const browser=machine ? Wire.object(machine,'browser') : Wire.payload([],[]);
@@ -291,102 +356,154 @@ export class ComputerScreen {
     }
     const sx=this.remoteWidth/(r-x),sy=this.remoteHeight/(b-y);
     const macScale=sx>0 && sy>0 && Math.abs(sx/sy-1)<=.02 ? Math.max(1,Math.min(4,sx)) : 1;
-    return Math.max(this.remoteWidth/width,this.remoteHeight/height)/macScale;
+    return Math.max(view.width/width,view.height/height)/macScale; // the framebuffer's pixels per display point stay the same in one display's view
+  }
+
+  pointerAt(x: number, y: number, buttons: number): boolean {
+    const view = this.client?.framebuffer.view;
+    if (!view || !this.hasFrame || !this.controlAllowed() || !(x >= 0 && x < 1 && y >= 0 && y < 1)) return false;
+    return this.client?.pointer(view.x + Math.floor(x * view.width), view.y + Math.floor(y * view.height), buttons) || false;
   }
 
   releasePointer(): void { if (this.controlAllowed()) this.client?.releasePointer(); }
 
-  pressKey(keysym: number): boolean { return this.controlAllowed() && (this.client?.pressKey(keysym) || false); }
-
-  async sendText(text: string): Promise<boolean> {
-    if (!text || text.length > MAX_TYPED_TEXT || !this.controlAllowed()) return false;
+  private enqueueInput(write: (current: () => boolean) => Promise<boolean>): Promise<boolean> {
+    if (!this.controlAllowed()) return Promise.resolve(false);
+    const grant: number = this.controlRevision;
     const attempt: number = this.attempt;
-    const client: RFBClient | undefined = this.client;
-    const lease: RFBOwnerLease | undefined = this.lease;
-    const repository: HubRepository | undefined = this.repository;
-    const row: ResourceRow | undefined = this.row;
-    if (!client || !lease || !repository || !row) return false;
-    let needsClipboard: boolean = false;
-    for (let at: number = 0; at < text.length; at++) {
-      const codepoint: number = text.codePointAt(at) || 0;
-      if (codepoint > 65535) at++;
-      if (codepoint > 255) needsClipboard = true;
-    }
-    if (!needsClipboard) return client.typeText(text);
-    try {
-      await repository.transport.request('/api/v1/machines/' + segment(row.id) + '/computer/clipboard', 'POST', JSON.stringify(Wire.payload(['text'], [text])));
-    } catch (_) { return false; }
-    if (!this.isCurrent(attempt) || this.client !== client || this.lease !== lease || !lease.allowsInput()) return false;
-    return client.pressWithModifiers(0x76, [0xffeb]);
+    const current = (): boolean => grant === this.controlRevision && attempt === this.attempt && this.controlAllowed();
+    const result: Promise<boolean> = this.inputTail.then(async (): Promise<boolean> => {
+      if (!current()) return false;
+      const wait: number = this.keysReadyAt - Date.now();
+      if (wait > 0) await new Promise<void>((resolve): void => { setTimeout(resolve, wait); });
+      if (!current()) return false;
+      const sent: boolean = await write(current).catch((): boolean => false);
+      if (!sent && current()) this.keyboardInputFailed = true;
+      return sent;
+    });
+    this.inputTail = result.then((): void => {});
+    return result;
   }
 
-  frameSnapshot(maxEdge: number = FRAME_EDGE): ComputerScreenFrame {
-    const client: RFBClient | undefined = this.client;
-    if (!client || !this.isLive() || maxEdge < 1) return new ComputerScreenFrame();
-    const framebuffer: RFBFramebuffer = client.framebuffer;
-    const source: Uint8Array = framebuffer.pixels;
-    const scale: number = Math.min(1, maxEdge / Math.max(framebuffer.width, framebuffer.height));
-    const width: number = Math.max(1, Math.floor(framebuffer.width * scale));
-    const height: number = Math.max(1, Math.floor(framebuffer.height * scale));
-    const pixels: Uint8Array = new Uint8Array(width * height * 4);
-    for (let y: number = 0; y < height; y++) {
-      const sourceY: number = Math.min(framebuffer.height - 1, Math.floor(y / scale));
-      for (let x: number = 0; x < width; x++) {
-        const sourceX: number = Math.min(framebuffer.width - 1, Math.floor(x / scale));
-        const sourceAt: number = (sourceY * framebuffer.width + sourceX) * 4;
-        const targetAt: number = (y * width + x) * 4;
-        pixels[targetAt] = source[sourceAt];
-        pixels[targetAt + 1] = source[sourceAt + 1];
-        pixels[targetAt + 2] = source[sourceAt + 2];
-        pixels[targetAt + 3] = source[sourceAt + 3];
+  pressKey(keysym: number, count: number = 1): Promise<boolean> {
+    return this.enqueueInput(async (): Promise<boolean> => {
+      if (!this.client || !Number.isSafeInteger(count) || count < 1 || count > KEY_BATCH_SIZE) return false;
+      for (let i = 0; i < count; i++) if (!this.client.pressKey(keysym)) return false;
+      return true;
+    });
+  }
+
+  sendText(text: string): Promise<boolean> {
+    return this.enqueueInput(async (current: () => boolean): Promise<boolean> => {
+      if (!text || !this.client || !this.repository || !this.row) return false;
+      if (!/[^\x00-\xff]/.test(text)) {
+        for (let at: number = 0; at < text.length; at += KEY_BATCH_SIZE) {
+          if (!this.client.typeText(text.slice(at, at + KEY_BATCH_SIZE))) return false;
+        }
+        return true;
+      }
+      await this.repository.transport.request('/api/v1/machines/' + segment(this.row.id) + '/computer/clipboard',
+        'POST', JSON.stringify(Wire.payload(['text'], [text])));
+      return current() && this.client.pressWithModifiers(0x76, [0xffeb]);
+    });
+  }
+
+  presentationSource(): RFBFramebuffer | undefined {
+    return this.hasFrame && this.isLive() ? this.client?.framebuffer : undefined;
+  }
+
+  presentationFailed(attempt: number): void {
+    if (this.isCurrent(attempt) && this.isLive()) this.fail(attempt, 'computer_screen_frame_failed');
+  }
+
+  private async askForCredentials(attempt: number): Promise<RFBCredentials | undefined> {
+    if (!this.isCurrent(attempt) || this.credentialAnswer) return undefined;
+    if (this.loginStore && !this.skipSaved) {
+      let saved: RFBCredentials | undefined;
+      try { saved = await this.loginStore.load(); }
+      catch (_) { if (this.isCurrent(attempt)) this.loginNotice = 'computer_screen_store_unavailable'; }
+      if (!this.isCurrent(attempt)) return undefined;
+      if (saved) {
+        // The RFB client wipes the object it receives as soon as authentication bytes are sent.
+        this.savedAttempt = new RFBCredentials(saved.account, saved.password);
+        this.phase = 'authenticating';
+        this.messageKey = 'computer_screen_authenticating';
+        this.startResponseTimer(attempt, 'computer_screen_auth_timeout');
+        return saved;
       }
     }
-    return new ComputerScreenFrame(width, height, pixels);
-  }
-
-  private askForCredentials(attempt: number): Promise<RFBCredentials | undefined> {
-    if (!this.isCurrent(attempt) || this.credentialAnswer) return Promise.resolve(undefined);
     this.phase = 'credentials';
     this.messageKey = 'computer_screen_enter_credentials';
     this.credentialsRequested = true;
     return new Promise<RFBCredentials | undefined>((resolve) => { this.credentialAnswer = resolve; });
   }
 
-  submitCredentials(account: string, password: string): boolean {
-    if (!this.credentialsRequested || !this.isCurrent(this.attempt)) return false;
+  submitCredentials(account: string, password: string, remember: boolean = false): boolean {
+    if (!this.credentialsRequested) return false;
+    const answer: ((value: RFBCredentials | undefined) => void) | undefined = this.credentialAnswer;
+    if (!this.isCurrent(this.attempt) || !answer) {
+      this.fail(this.attempt, 'computer_screen_connection_lost');
+      return false;
+    }
     const cleanAccount: string = account.trim();
     if (!cleanAccount || cleanAccount.length > 256 || password.length === 0 || password.length > 256) return false;
-    const answer: ((value: RFBCredentials | undefined) => void) | undefined = this.credentialAnswer;
     this.credentialAnswer = undefined;
     this.credentialsRequested = false;
-    this.phase = 'connecting';
-    this.messageKey = 'computer_screen_waiting';
-    answer?.(new RFBCredentials(cleanAccount, password));
-    return answer !== undefined;
+    this.phase = 'authenticating';
+    this.messageKey = 'computer_screen_authenticating';
+    this.startResponseTimer(this.attempt, 'computer_screen_auth_timeout');
+    const credentials = new RFBCredentials(cleanAccount, password);
+    this.manualLogin = true;
+    if (remember) this.rememberOnSuccess = new RFBCredentials(cleanAccount, password);
+    answer(credentials);
+    return true;
   }
 
-  cancelCredentials(): void {
-    const answer: ((value: RFBCredentials | undefined) => void) | undefined = this.credentialAnswer;
-    this.credentialAnswer = undefined;
-    this.credentialsRequested = false;
-    this.fail(this.attempt, 'computer_screen_auth_failed');
-    answer?.(undefined);
+  async forgetLogin(): Promise<void> {
+    const store = this.loginStore, attempt = this.attempt;
+    if (!store || !this.loginRemembered) return;
+    try {
+      await store.forget();
+      if (this.isCurrent(attempt)) { this.loginRemembered = false; this.loginNotice = ''; }
+    } catch (_) { if (this.isCurrent(attempt)) this.loginNotice = 'computer_screen_forget_failed'; }
   }
 
-  private protocolState(attempt: number, phase: string, code: string): void {
+  private acceptedLogin(attempt: number): void {
+    const newlyEntered = this.rememberOnSuccess;
+    const manual = this.manualLogin;
+    this.manualLogin = false;
+    if (this.savedAttempt) this.loginRemembered = true;
+    this.savedAttempt = undefined;
+    this.rememberOnSuccess = undefined;
+    this.loginNotice = '';
+    if (!newlyEntered) {
+      if (manual) this.loginStore?.forget().catch((): void => {
+        if (this.isCurrent(attempt)) this.loginNotice = 'computer_screen_forget_failed';
+      });
+      return;
+    }
+    if (!this.loginStore) { this.loginNotice = 'computer_screen_save_failed'; return; }
+    this.loginStore.save(newlyEntered).then((): void => {
+      if (this.isCurrent(attempt)) this.loginRemembered = true;
+    }).catch((): void => { if (this.isCurrent(attempt)) this.loginNotice = 'computer_screen_save_failed'; });
+  }
+
+  private protocolState(attempt: number, phase: string, code: string, detail: string): void {
     if (!this.isCurrent(attempt)) { if (attempt === this.attempt) this.close(); return; }
     if (this.phase === 'failed' || this.phase === 'auth_failed' || this.phase === 'sharing_off' || this.phase === 'closed') return;
     if (phase === 'live') {
+      if (this.phase !== 'live') {
+        this.keysReadyAt = Date.now() + KEYBOARD_SETTLE_MS;
+        this.acceptedLogin(attempt);
+      }
       this.phase = 'live';
-      this.messageKey = 'computer_screen_read_only';
+      this.waitForFrame(attempt);
       this.remoteWidth = this.client?.framebuffer.width || 0;
       this.remoteHeight = this.client?.framebuffer.height || 0;
       return;
     }
     if (phase === 'credentials') {
-      this.phase = 'credentials';
-      this.messageKey = 'computer_screen_enter_credentials';
-      this.credentialsRequested = true;
+      // The credential callback publishes the form only after looking for this Mac's saved login.
       return;
     }
     if (phase === 'connecting') {
@@ -395,8 +512,17 @@ export class ComputerScreen {
       return;
     }
     if (phase === 'closed' || phase === 'failed') {
+      if (code === 'auth_failed' && this.savedAttempt && this.loginStore && this.parent && this.row) {
+        this.loginStore.forget(this.savedAttempt).catch((): void => {});
+        this.open(this.parent, this.row, true).catch((): void => {});
+        return;
+      }
       if (code === 'auth_failed') this.fail(attempt, 'computer_screen_auth_failed');
-      else if (code === 'unsupported') this.fail(attempt, 'computer_screen_unsupported');
+      else if (code === 'unsupported') {
+        if (['rfb_size_limit','rfb_rect_limit','rfb_input_limit','rfb_zrle_limit','rfb_zrle_inflate','rfb_zrle_tile',
+          'rfb_bad_rect','rfb_encoding','rfb_unknown_message','rfb_name_limit','rfb_clipboard_limit'].includes(detail)) this.failureDetail = detail;
+        this.fail(attempt, 'computer_screen_unsupported');
+      }
       else if (code === 'connection_lost') this.fail(attempt, 'computer_screen_connection_lost');
       else this.fail(attempt, 'computer_screen_connection_failed');
     }
@@ -404,16 +530,38 @@ export class ComputerScreen {
 
   private frameArrived(attempt: number): void {
     if (!this.isCurrent(attempt)) { if (attempt === this.attempt) this.close(); return; }
+    this.clearResponseTimer();
+    this.hasFrame = true;
     if (this.frameTimer !== -1) return;
+    const wait = FRAME_INTERVAL_MS - (Date.now() - this.lastFrameAt);
+    if (wait <= 0) { this.lastFrameAt = Date.now(); this.frameRevision++; return; }
     this.frameTimer = setTimeout((): void => {
       this.frameTimer = -1;
-      if (this.isCurrent(attempt)) this.frameRevision++;
-    }, 100);
+      if (this.isCurrent(attempt)) { this.lastFrameAt = Date.now(); this.frameRevision++; }
+    }, wait);
+  }
+
+  private waitForFrame(attempt: number): void {
+    this.hasFrame = false;
+    this.messageKey = 'computer_screen_waiting_frame';
+    this.startResponseTimer(attempt, 'computer_screen_frame_timeout');
+  }
+
+  private startResponseTimer(attempt: number, messageKey: string): void {
+    this.clearResponseTimer();
+    this.responseTimer = setTimeout((): void => this.fail(attempt, messageKey), SCREEN_RESPONSE_TIMEOUT_MS);
+  }
+
+  private clearResponseTimer(): void {
+    if (this.responseTimer !== -1) { clearTimeout(this.responseTimer); this.responseTimer = -1; }
   }
 
   private fail(attempt: number, messageKey: string): void {
     if (attempt !== this.attempt) return;
     this.attempt++;
+    this.rememberOnSuccess = undefined;
+    this.savedAttempt = undefined;
+    this.clearResponseTimer();
     this.phase = messageKey === 'computer_screen_sharing_off' ? 'sharing_off' : messageKey === 'computer_screen_auth_failed' ? 'auth_failed' : 'failed';
     this.messageKey = messageKey;
     this.credentialsRequested = false;
@@ -422,7 +570,9 @@ export class ComputerScreen {
     if (this.frameTimer !== -1) { clearTimeout(this.frameTimer); this.frameTimer = -1; }
     this.remoteWidth = 0;
     this.remoteHeight = 0;
-    this.screenList = [];
+    this.displays = [];
+    this.selectedDisplay = '';
+    this.hasFrame = false;
     this.cursor = undefined;
     this.clipboard = '';
     this.frameRevision++;
@@ -435,7 +585,7 @@ export class ComputerScreen {
     const stream: HubTransport | undefined = this.stream;
     this.stream = undefined;
     stream?.close();
-    this.controlRevision++;
+    this.controlling = false;
   }
 
   private parentCurrent(attempt: number): boolean {
@@ -455,7 +605,9 @@ export class ComputerScreen {
       if (owner.repo() !== repository) return false;
     } catch (_) { return false; }
     const machine: ResourceRow | undefined = owner.machines.find((candidate: ResourceRow) => candidate.id === row.id);
-    return !!machine && (!row.manager || machine.manager === row.manager) && this.machineCanConnect(machine);
+    return !!machine && (!row.manager || machine.manager === row.manager) &&
+      (machine.manager || owner.profile.manager) === this.machineManager &&
+      Wire.text(machine.data(), 'machine_uid') === this.machineUID && this.machineCanConnect(machine);
   }
 
   private machineCanConnect(machine: ResourceRow): boolean {

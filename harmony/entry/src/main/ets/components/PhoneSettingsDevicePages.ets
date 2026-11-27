@@ -120,6 +120,7 @@ export struct PhoneSettingsDevicePages {
         } else if (this.page==='phone_pairing') {
           this.action(tr('connect'),'settings.pairing.connect',()=>this.onPair())
           this.action(tr('phone_machines'),'settings.pairing.machines',()=>this.onOpen('machines'))
+          this.action(tr('devices'),'settings.pairing.devices',()=>this.onOpen('devices'))
         }
       }.width('100%').backgroundColor(Colors.card(this.elevated)).borderRadius(PhoneStyle.cardRadius).clip(true) }
     }.width('100%').height('100%').padding({left:16,right:16,top:28,bottom:24}).backgroundColor(Colors.listGroup(this.elevated))

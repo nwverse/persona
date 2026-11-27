@@ -1,3 +1,6 @@
+import { DeviceMark } from '../design/DeviceMark';
+import type { MachinePlatform } from '../models/DeviceIdentity';
+import { machinePlatform } from '../models/DeviceIdentity';
 import { bindingPermission } from '../core/PhoneSettingsPermissions';
 import { PhoneSectionTitle, PhoneStyle } from '../design/PhoneStyle';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
@@ -371,6 +374,7 @@ export struct SettingsPage {
   private machineRow(): ManagementRow | undefined {
     return this.management.rows.find((item: ManagementRow) => item.id === this.management.selectedId);
   }
+  @Computed get selectedPlatform(): MachinePlatform { return machinePlatform(this.machineRow()?.raw || {}); }
   private screenMachine(): ResourceRow | undefined {
     const selected = this.machineRow();
     if (!selected || !this.machineOwner) return undefined;
@@ -783,8 +787,16 @@ export struct SettingsPage {
             .onSelect((index: number) => { const row = this.machineOptions()[index]; if (row) this.chooseMachine(row); }).enabled(!this.management.loading && !this.addComputerOpen).width('100%')
         }.padding({ left: Tokens.page, right: Tokens.page })
         if (this.machineRow()) {
-          ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('platform'),
-            secondaryText: [Wire.text(this.machineRow()?.raw || {}, 'platform'), Wire.text(this.machineRow()?.raw || {}, 'engine'), Wire.text(this.machineRow()?.raw || {}, 'version')].filter((v: string) => !!v).join(' · ') }) }) }
+          ListItem() {
+            Row({ space: Tokens.inset }) {
+              DeviceMark({ family: this.selectedPlatform.family, fallback: Symbols.machine })
+                .id('machines.os.' + (this.selectedPlatform.family || 'unknown'))
+              Column({ space: Tokens.fine }) {
+                Text(tr('platform')).fontSize(Tokens.body).fontColor(Colors.ink)
+                if (this.selectedPlatform.detail) Text(this.selectedPlatform.detail).fontSize(Tokens.meta).fontColor(Colors.secondary)
+              }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+            }.width('100%').padding(Tokens.page)
+          }
           ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('status'),
             secondaryText: Wire.text(this.machineRow()?.raw || {}, 'error', Wire.text(this.machineRow()?.raw || {}, 'state', tr(Wire.bool(this.machineRow()?.raw || {}, 'online') ? 'online' : 'offline'))) }) }) }
           ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('computer_screen_open')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('computer_screen_open', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('computer_screen_open')).bindTips(tr('computer_screen_open')).enabled(this.canOpenScreen()).onClick(() => { const row = this.screenMachine(); if (row && this.canOpenScreen()) this.onComputer(row); }).id('machines.screen') }.padding({ left: Tokens.page, right: Tokens.page })

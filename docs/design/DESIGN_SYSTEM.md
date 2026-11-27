@@ -3137,7 +3137,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 
 HarmonyOS 7 / API 26 uses native ArkUI Navigation, destination titles, lists, menus, sheets, selection controls and
 confirmation dialogs. Persona and Agents are peer conversation views in the native title control. Inbox, Todos,
-Knowledge, Health, Apps, Devices and full Settings open from the native Spaces sheet; extensions do not add peer
+Knowledge, Health, Apps, Machines, Devices and full Settings open from the native Spaces sheet; extensions do not add peer
 views. The peer switch uses the message/group symbols in native `CapsuleSegmentButtonV2`, with localized accessible names and at least 48 vp per item at every font scale. It does not revert to a text Select. XS/SM/MD use a stack and LG/XL use native split navigation, based on the actual window class rather than a
 device name. The expanded master pane starts at 320 vp, drags from 280 to 440 vp and collapses to 64 vp. It has no
 permanent third pane or replacement navigation rail.
@@ -3156,6 +3156,8 @@ contexts restore the native title. Child pages keep their own title and back act
 destination is not repeated in the body. Avoid explanatory subtitles, child controls and duplicate actions; native
 control placement, names and state must explain their purpose. Explicit target and consequence text remains
 necessary for consequential decisions.
+
+`DeviceMark` draws a computer's system or a signed-in browser as a single-color mark tinted with the current ink, falling back to a native symbol for anything without a licensed mark; it never shows full-color product artwork. The browser sign-in number uses the `signInNumber` token (64 fp) in a monospaced face.
 
 Use the shared native roles and `Tokens`, not screen-specific literals. The System style's light palette uses the
 emphasized action blue (`#0071E3`) with white on-action text, text-link blue (`#0064C8`) and a light
