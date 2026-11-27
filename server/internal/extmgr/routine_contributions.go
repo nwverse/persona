@@ -1,6 +1,7 @@
 package extmgr
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/modapi"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 const (
@@ -52,7 +54,7 @@ func (ps *extensions) routineTargets() []routineTarget {
 			continue
 		}
 		items := p.Manifest.RoutineFacts()
-		slices.SortFunc(items, func(a, b wire.RoutineFactsItem) int { return strings.Compare(a.ID, b.ID) })
+		slices.SortFunc(items, func(a, b wire.RoutineFactsItem) int { return cmp.Compare(a.ID, b.ID) })
 		for _, item := range items {
 			targets = append(targets, routineTarget{p.Record.ID, p.Manifest, hp, item})
 			if len(targets) == routineMostSources {
@@ -162,7 +164,7 @@ func routineAnswer(owner string, item wire.RoutineFactsItem, raw json.RawMessage
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return empty, err
 	}
-	entry := modapi.RoutineContribution{ExtensionID: owner, ContributionID: item.ID, Title: item.Title}
+	entry := modapi.RoutineContribution{ExtensionID: wireids.ExtensionID(owner), ContributionID: item.ID, Title: item.Title}
 	for _, fact := range result.Facts {
 		if !routineTextOK(fact, false) {
 			return empty, errors.New("invalid routine fact")

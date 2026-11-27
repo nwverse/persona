@@ -1705,13 +1705,38 @@ public nonisolated enum ExtensionRepositoryLinkKind {
     public static let all = ["issue", "pull_request"]
 }
 
+/// Identifies one routine facts source within its extension.
+/// It encodes as the bare string.
+public nonisolated struct ExtensionRoutineContributionID: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
 /// A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
 /// permissions.routine_facts.
 public nonisolated struct ExtensionRoutineFactsItem: Codable, Hashable, Sendable {
-    public var id: String
+    public var id: ExtensionRoutineContributionID
     public var title: String
 
-    public init(id: String = "", title: String = "") {
+    public init(id: ExtensionRoutineContributionID = ExtensionRoutineContributionID(""), title: String = "") {
         self.id = id
         self.title = title
     }
@@ -1723,7 +1748,7 @@ public nonisolated struct ExtensionRoutineFactsItem: Codable, Hashable, Sendable
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.id = (try? c.decodeIfPresent(ExtensionRoutineContributionID.self, forKey: .id)) ?? ExtensionRoutineContributionID("")
         self.title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? ""
     }
 }

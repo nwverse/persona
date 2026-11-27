@@ -647,12 +647,18 @@
       "type": "string",
       "enum": ["issue", "pull_request"]
     },
+    "RoutineContributionID": {
+      "type": "string",
+      "x-id": "RoutineContributionID",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+      "description": "Identifies one routine facts source within its extension."
+    },
     "RoutineFactsItem": {
       "description": "A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and permissions.routine_facts.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "id": {"$ref": "#/$defs/ID"},
+        "id": {"$ref": "#/$defs/RoutineContributionID"},
         "title": {"type": "string", "minLength": 1, "maxLength": 80}
       },
       "required": ["id", "title"]

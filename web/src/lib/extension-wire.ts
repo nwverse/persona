@@ -672,11 +672,20 @@ export type RepositoryLinkKind = "issue" | "pull_request" | (string & {});
 export const REPOSITORY_LINK_KINDS = ["issue", "pull_request"] as const;
 
 /**
+ * Identifies one routine facts source within its extension.
+ */
+export type RoutineContributionID = string & { readonly __brand: "RoutineContributionID" };
+/** A RoutineContributionID from its raw string. */
+export function routineContributionID(raw: string): RoutineContributionID {
+  return raw as RoutineContributionID;
+}
+
+/**
  * A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
  * permissions.routine_facts.
  */
 export interface RoutineFactsItem {
-  id: string;
+  id: RoutineContributionID;
   title: string;
 }
 

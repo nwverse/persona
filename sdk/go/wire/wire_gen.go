@@ -679,11 +679,17 @@ const (
 // RepositoryLinkKinds are the values of RepositoryLinkKind, in order.
 var RepositoryLinkKinds = []string{"issue", "pull_request"}
 
+// RoutineContributionID: identifies one routine facts source within its extension.
+type RoutineContributionID string
+
+// String returns the ID as it is on the wire.
+func (v RoutineContributionID) String() string { return string(v) }
+
 // RoutineFactsItem: A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
 // permissions.routine_facts.
 type RoutineFactsItem struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID    RoutineContributionID `json:"id"`
+	Title string                `json:"title"`
 }
 
 // ErrorReportsItem: it is given the error and crash reports of the hub and the user's devices
@@ -7526,7 +7532,7 @@ type OffloadError struct {
 }
 
 type RoutineFactsParams struct {
-	Contribution string `json:"contribution"`
+	Contribution RoutineContributionID `json:"contribution"`
 	// Calendar date in the routine's time zone.
 	Date     string `json:"date"`
 	Language string `json:"language"`

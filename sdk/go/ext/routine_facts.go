@@ -19,9 +19,9 @@ func (s *server) collectRoutineFacts(ctx context.Context, method string, raw jso
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, &Error{Code: "invalid", Message: err.Error()}
 	}
-	collect := s.prog.RoutineFacts[req.Contribution]
+	collect := s.prog.RoutineFacts[req.Contribution.String()]
 	if collect == nil {
-		return nil, NoContribution(req.Contribution)
+		return nil, NoContribution(req.Contribution.String())
 	}
 	return collect(ctx, req)
 }

@@ -1,15 +1,19 @@
 package modapi
 
-import "context"
+import (
+	"context"
+	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/wireids"
+)
 
 // RoutineContribution is the host-attributed, read-only content of one installed
 // extension's routine provider, retained alongside a run's other fixed facts.
 type RoutineContribution struct {
-	ExtensionID    string           `json:"extension_id"`
-	ContributionID string           `json:"contribution_id"`
-	Title          string           `json:"title"`
-	Facts          []string         `json:"facts,omitempty"`
-	Sections       []RoutineSection `json:"sections,omitempty"`
+	ExtensionID    wireids.ExtensionID        `json:"extension_id"`
+	ContributionID wire.RoutineContributionID `json:"contribution_id"`
+	Title          string                     `json:"title"`
+	Facts          []string                   `json:"facts,omitempty"`
+	Sections       []RoutineSection           `json:"sections,omitempty"`
 }
 
 // PlainLines is the reading order used by plain-text clients and delivery channels.

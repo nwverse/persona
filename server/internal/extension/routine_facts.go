@@ -16,13 +16,13 @@ func init() {
 			if err := strict(raw, &item); err != nil {
 				return "", err
 			}
-			if !ValidID(item.ID) {
+			if !ValidID(item.ID.String()) {
 				return "", fmt.Errorf("routine_facts: invalid id %q", item.ID)
 			}
 			if !shortText(item.Title, 80) {
 				return "", fmt.Errorf("routine_facts %s: title must have 1 to 80 characters of plain text", item.ID)
 			}
-			return item.ID, nil
+			return item.ID.String(), nil
 		},
 	}
 	catalogItemTypes["routine_facts"] = reflect.TypeFor[wire.RoutineFactsItem]()

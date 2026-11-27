@@ -992,12 +992,21 @@ object ExtensionRepositoryLinkKind {
 }
 
 /**
+ * Identifies one routine facts source within its extension. It encodes as the bare string.
+ */
+@Serializable
+@JvmInline
+value class ExtensionRoutineContributionID(val raw: String) {
+    override fun toString(): String = raw
+}
+
+/**
  * A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
  * permissions.routine_facts.
  */
 @Serializable
 data class ExtensionRoutineFactsItem(
-    val id: String = "",
+    val id: ExtensionRoutineContributionID = ExtensionRoutineContributionID(""),
     val title: String = "",
 )
 

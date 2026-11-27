@@ -12,7 +12,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "contribution": {"$ref": "manifest.schema.json#/$defs/ID"},
+        "contribution": {"$ref": "manifest.schema.json#/$defs/RoutineContributionID"},
         "date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Calendar date in the routine's time zone."},
         "language": {"type": "string", "enum": ["en", "zh-Hans", "ja"]}
       },
