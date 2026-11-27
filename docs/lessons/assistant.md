@@ -377,6 +377,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   it hands out as within the `mine` context made a lone mention `mentions+mine` (the longer days) where daily ingestion says `mentions`. Its `Kept` hook
   names those; `pick` leaves them out of `near`.
 - **A small-task model call is sized by what the model is today, not by the first measurement** (#1532): chat titles had 15 s per call and `max_tokens` 200 from a 2–3 s measurement. Once "Chat title" inherited a thinking flash model behind the gateway, a title-sized call took p50 6 s / p90 21.6 s and its thinking ate the 200 tokens (188–192 thinking + 4–8 output, `stop_reason: max_tokens`), so about a fifth of new chats kept "explore | the first message cut short" and some kept a two-character half topic that still parsed. A call off the user's path gets minutes, room for the thinking, and `Chat` instead of `Complete` so a cut-off reply (`Reply.Truncated`) is not taken as an answer; retry only what another try can change (`ai.Transient`: no answer, 5xx; not a 4xx or a model that isn't set up), each kind of failure once, so one doesn't use up another's retry; a naming that got no answer is a stand-in, done again later, and "again later" must read the first turn (`after_seq: 0`): `turns: 1` is the newest. To find which, match the hub's `context deadline exceeded` lines with the gateway's request log: the hub's cancellations sit at the call's timeout to the millisecond (14 996 ms).
+- **Short naming calls must switch thinking off and still guard their write-back against reasoning leaks** (#17207): giving title calls more token room (#1532) did not stop a Direct API thinking model whose compatible gateway surfaces cut-off monologue as ordinary text deltas — first lines like `We need answer title` became todo titles, `we-need-answer-title` tab slugs, and (behind a known kind prefix) assistant topics. `ai.Request.DisableThinking` forces the protocol's existing "off" encoding (`ApplyReasoningEffort`: Messages `thinking.type=disabled` with the model-specific fallbacks, Chat `reasoning_effort=none` with its rejection cache, Responses `reasoning.effort=none`) for `todo.title` / `agent.title` / `assistant.title` only; long-reasoning purposes keep the connection effort. The parsers stay strict (Messages skips thinking blocks/deltas, Chat reads only `delta.content`, never `reasoning_content`, Responses only `output_text`), and `title_guard.go` is the second line: strip `<think>` blocks, reject a bar-delimited topic/first line that pairs a monologue opener with a second meta-reasoning signal, and never overwrite on a reject. An opener alone is not enough (`We need new icons`, `I should answer Sarah's email`, `我应该回复客户邮件` are titles); keep those near-misses in the guard test corpus.
 
 - **Model listing and saving must agree on online launcher selection** (#1840). A cached provider's first machine can be offline even when another machine successfully lists its models. For a purpose without a bound machine, reuse `pickMachine` for model validation; if no reported candidate is online, allow saving without a live check. Keep known bound-machine validation and managed-launcher behavior intact. Cover the HTTP save and profile-apply paths, including effort-only edits, rejected online models, exact RPC destinations, and unchanged storage after rejection.
 
@@ -1142,3 +1143,15 @@ restart in place for a new binary), `run()` closed the store, but both loops wen
 for days, and each restart left another pair. Take the cancellation off only the one-time reads; a loop gets the
 run's context. Test it by finding the loop's goroutine in the stacks, ending the run, and waiting until it is gone
 (`server/internal/assistant/fleet_loops_run_test.go`).
+
+## A start path of its own skips what the shared start decides (#14887)
+
+`a2a_send`'s new Agent and `dispatch_start` built their own `session.start`, so they never got two things `agent_start`
+and `task_plan` decide before a start goes out: the start host (an agy launcher on the computer's Antigravity companion,
+`companionStartHost`, #13447) and the read-only refusal (`readonlyLauncherRefusal`, #8316). An agy launch, in `plan` by
+default, went to a pane, where the node refused it after its A2A task was recorded. The failed task then said "Persona
+could not confirm the Agent started.", the words for an unknown outcome, about a definite refusal with a reason. A path
+that starts an Agent readies its start with the same steps as the others (`agentStartedHost`,
+`server/internal/assistant/start_host.go`), refuses what it can before anything is recorded, and keeps a definite
+refusal's reason; only an outcome that is really unknown says it is unknown.
+
