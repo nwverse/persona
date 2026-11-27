@@ -390,6 +390,13 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				conversation := agyConversations[id]
 				u, readable := n.agyTranscriptMeta(conversation)
 				if readable {
+					// Rev changes whenever the transcript does (its size), as on every transcript-backed row: the apps
+					// pull a session's new items from the light revs event, which carries only rows whose Rev changed
+					// (proto.Session.Rev, revsChanged). A pane the companion lists before its transcript is on this
+					// computer keeps Rev 0 until the file appears, so the pane's Rev only ever moves up from there.
+					if s.Rev == 0 && u.size > 0 {
+						s.Rev = u.size
+					}
 					transcriptAt := u.turn.lastTextAt
 					if transcriptAt.IsZero() {
 						transcriptAt = u.modTime

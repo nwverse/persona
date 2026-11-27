@@ -139,6 +139,9 @@ func (w *boundedResponse) Write(b []byte) (int, error) {
 func (p *Proxy) requestLifetime(parent context.Context, ext string, chk *check) (context.Context, func(), bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, nil, false
+	}
 	if _, ok := p.rules[ext]; !ok {
 		return nil, nil, false
 	}
@@ -154,9 +157,14 @@ func (p *Proxy) requestLifetime(parent context.Context, ext string, chk *check) 
 	if len(p.active[ext]) >= 128 {
 		return nil, nil, false
 	}
-	ctx, cancel := context.WithCancel(parent)
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
 	if chk != nil {
 		ctx, cancel = context.WithDeadline(parent, chk.expires)
+	} else {
+		ctx, cancel = context.WithCancel(parent)
 	}
 	lease := &ioLease{cancel: cancel}
 	p.active[ext][lease] = struct{}{}
