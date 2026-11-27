@@ -109,11 +109,8 @@ func TestExtensionAssistantEventForwardsWithTheExtensionsOwnIdentity(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, ok := out.(assistantwire.AssistantEventResult); !ok || result.Delivery != assistantwire.EventReplaced {
-		t.Fatalf("typed event reply: %#v", out)
-	}
-	if b, _ := json.Marshal(out); string(b) != `{"delivery":"replaced"}` {
-		t.Fatalf("the assistant's answer: %s", b)
+	if b, err := json.Marshal(out); err != nil || string(b) != `{"delivery":"replaced"}` {
+		t.Fatalf("the assistant's answer: %s (%v)", b, err)
 	}
 	got := asked()
 	if len(got) != 1 || got[0].method != assistantwire.MethodExtensionEvent {
@@ -216,7 +213,7 @@ func serveEventExtensionForTest() {
 		mu.Unlock()
 		body, _ := io.ReadAll(r.Body)
 		out := map[string]any{"hub_url_env": os.Getenv("PERSONA_HUB_URL")}
-		var res assistantwire.AssistantEventResult
+		var res json.RawMessage
 		if err := h.Call(r.Context(), "assistant.event", json.RawMessage(body), &res); err != nil {
 			var re *rpc.Error
 			if errors.As(err, &re) {
@@ -225,7 +222,7 @@ func serveEventExtensionForTest() {
 				out["code"] = err.Error()
 			}
 		} else {
-			out["delivery"] = res.Delivery
+			out["reply"] = string(res)
 		}
 		_ = json.NewEncoder(w).Encode(out)
 	}))
@@ -273,11 +270,12 @@ func TestExtensionAssistantEventFromARealProgram(t *testing.T) {
 			}
 			h, _ := extensionTestHub(t)
 			h.extensions.sandboxes.noDefault = !boxed
+			const reply = `{"delivery":"delivered","receipt":{"source":"example","version":2}}`
 			asked := recordAssistant(h, func(a eventAsk) (json.RawMessage, error) {
 				if strings.Contains(string(a.params), "no-main") {
 					return nil, &rpc.Error{Code: assistantwire.CodeNoMainConversation, Message: "there is no main conversation"}
 				}
-				return json.RawMessage(`{"delivery":"delivered"}`), nil
+				return json.RawMessage(reply), nil
 			})
 			h.extensions.eventLimit.most = 4
 			mux := h.routes()
@@ -307,8 +305,8 @@ func TestExtensionAssistantEventFromARealProgram(t *testing.T) {
 				return out
 			}
 			got := tell(`{"key":"disk","severity":"critical","title":"Disk almost full","body":"92% used"}`)
-			if got["delivery"] != "delivered" || got["code"] != nil {
-				t.Fatalf("the program's call: %v", got)
+			if got["reply"] != reply || got["code"] != nil {
+				t.Fatalf("the program received %v (code %v), want the full assistant reply %s", got["reply"], got["code"], reply)
 			}
 			ev := asked()
 			if len(ev) != 1 || ev[0].method != assistantwire.MethodExtensionEvent {

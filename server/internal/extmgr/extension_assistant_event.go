@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -92,7 +91,7 @@ func (ps *extensions) extensionAssistantEvent(ctx context.Context, id string, pa
 		name = p.Full.Name
 	}
 	request := assistantwire.ExtensionEvent{Extension: id, Name: name, Params: assistantwire.UncheckedEventParams(params)}
-	out, err := buswire.Call(ctx, ps.h.kbCaller(), assistantwire.ExtensionEventMethod, request)
+	out, err := callAssistantRaw(ctx, ps.h.kbCaller().Call, assistantwire.ExtensionEventMethod, request)
 	if err != nil {
 		return nil, err
 	}
