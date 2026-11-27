@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -683,9 +684,9 @@ func valueHasPathOrCommandKey(v any, depth int) bool {
 	switch x := v.(type) {
 	case map[string]any:
 		for k, val := range x {
-			switch strings.ToLower(k) {
-			case "file_path", "path", "targetfile", "absolutepath", "directorypath", "searchpath",
-				"notebook_path", "notebookpath", "source", "destination", "target",
+			switch strings.ReplaceAll(strings.ToLower(k), "_", "") {
+			case "filepath", "path", "targetfile", "absolutepath", "directorypath", "searchpath",
+				"notebookpath", "source", "destination", "target",
 				"command", "commandline", "cmd", "script":
 				return true
 			}
@@ -771,21 +772,31 @@ func runtimeFileRuleScope(input json.RawMessage, home string) string {
 		if identity.InSpace(slash) || identity.InSpace(dir) {
 			return ""
 		}
-		if !strings.HasPrefix(dir, "/") {
-			dir = "/" + dir
+		// On non-Windows hosts, return the lexically validated Windows directory key;
+		// on Windows, fall through to run native os.Lstat / realPath symlink and dir checks.
+		if runtime.GOOS != "windows" {
+			if !strings.HasPrefix(dir, "/") {
+				dir = "/" + dir
+			}
+			trimmed := strings.TrimSuffix(dir, "/")
+			if trimmed == "" {
+				return ""
+			}
+			return "/" + trimmed + "/**"
 		}
-		trimmed := strings.TrimSuffix(dir, "/")
-		if trimmed == "" {
-			return ""
-		}
-		return "/" + trimmed + "/**"
 	}
 	cleanP := filepath.Clean(p)
 	dir := filepath.Dir(cleanP)
 	if filepath.Dir(dir) == dir {
 		return ""
 	}
-	if cleanHome != "" && (cleanP == cleanHome || dir == cleanHome) {
+	samePath := func(a, b string) bool {
+		if runtime.GOOS == "windows" {
+			return strings.EqualFold(a, b)
+		}
+		return a == b
+	}
+	if cleanHome != "" && (samePath(cleanP, cleanHome) || samePath(dir, cleanHome)) {
 		return ""
 	}
 	// Reject direct file symlinks (both live and dangling), existing directories (whose Dir would widen
@@ -796,10 +807,10 @@ func runtimeFileRuleScope(input json.RawMessage, home string) string {
 	}
 	realP := realPath(cleanP)
 	realDir := realPath(dir)
-	if filepath.Dir(realP) != realDir || filepath.Dir(realDir) == realDir {
+	if !samePath(filepath.Dir(realP), realDir) || samePath(filepath.Dir(realDir), realDir) {
 		return ""
 	}
-	if cleanHome != "" && realDir == realPath(cleanHome) {
+	if cleanHome != "" && samePath(realDir, realPath(cleanHome)) {
 		return ""
 	}
 	if identity.InSpace(cleanP) || identity.InSpace(dir) || identity.InSpace(realP) || identity.InSpace(realDir) {

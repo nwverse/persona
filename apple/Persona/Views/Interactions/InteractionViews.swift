@@ -1433,7 +1433,6 @@ struct AgentPermissionForm: View {
                 Text(scope)
                     .font(Theme.Font.caption)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
