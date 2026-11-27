@@ -182,7 +182,8 @@
         "platform": {"$ref": "view.schema.json#/$defs/Platform"},
         "machine": {"$ref": "#/$defs/UIMachine"},
         "launcher": {"$ref": "#/$defs/UILauncher"},
-        "item": {"$ref": "#/$defs/UIInboxItem"}
+        "item": {"$ref": "#/$defs/UIInboxItem"},
+        "project_id": {"type": "string", "minLength": 1, "maxLength": 120, "description": "Knowledge project ID selected in the Web panel. Only a project_section receives it. Limited to 120 UTF-8 bytes."}
       },
       "required": ["contribution", "state", "placement", "size", "ui_version"]
     },
@@ -264,6 +265,7 @@
         "launcher": {"type": "string"},
         "machine": {"type": "string"},
         "item": {"type": "string"},
+        "project_id": {"type": "string", "minLength": 1, "maxLength": 120, "description": "Knowledge project ID selected in the Web panel. Only a project_section receives it. Limited to 120 UTF-8 bytes."},
         "size": {"$ref": "view.schema.json#/$defs/Size"},
         "tz": {"type": "string"},
         "locale": {"type": "string"},

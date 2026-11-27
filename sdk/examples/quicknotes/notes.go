@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,12 +109,21 @@ type bookFile struct {
 
 // Book is the notes, newest first, kept in one file.
 type Book struct {
-	mu   sync.Mutex
+	mu   *sync.Mutex
 	path string
 }
 
 // OpenBook is the book in dir (the extension's data directory).
-func OpenBook(dir string) *Book { return &Book{path: filepath.Join(dir, "notes.json")} }
+func OpenBook(dir string) *Book {
+	return &Book{mu: &sync.Mutex{}, path: filepath.Join(dir, "notes.json")}
+}
+
+// Use a digest for the filename so Unicode and case-distinct project IDs stay distinct on every filesystem.
+// All views of this installation share a lock across the read/modify/write that assigns a note ID.
+func (b *Book) forProject(id string) *Book {
+	digest := sha256.Sum256([]byte(id))
+	return &Book{mu: b.mu, path: filepath.Join(filepath.Dir(b.path), "projects", hex.EncodeToString(digest[:])+".json")}
+}
 
 func (b *Book) read() (bookFile, error) {
 	var f bookFile

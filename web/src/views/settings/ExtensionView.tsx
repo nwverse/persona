@@ -397,7 +397,7 @@ export function LegacyExtensionUI({
   const drawnRef = useRef(false); // a view has been drawn
   const asked = useRef(0);
   const inFlightRef = useRef(false);
-  const ctxKey = `${context?.launcher ?? ""}\n${context?.machine ?? ""}\n${context?.item ?? ""}\n${context?.size ?? ""}`;
+  const ctxKey = `${context?.launcher ?? ""}\n${context?.machine ?? ""}\n${context?.item ?? ""}\n${context?.size ?? ""}\n${context?.project_id ?? ""}`;
   const mode = pages ?? (compact || embedded ? "open" : "stack");
   useEffect(() => onDepth?.(depth), [depth, onDepth]);
 

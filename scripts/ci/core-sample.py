@@ -36,6 +36,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -75,9 +76,12 @@ def features(base):
     return set(json.loads(body).get("features") or [])
 
 
-def entries(base, token, lang="en"):
+def entries(base, token, lang="en", placement=None):
     """The sample's places among what the apps draw (GET /api/v1/extensions/-/ui)."""
-    status, body = call(base, token, "GET", "/api/v1/extensions/-/ui", lang=lang)
+    path = "/api/v1/extensions/-/ui"
+    if placement:
+        path += "?" + urllib.parse.urlencode({"placement": placement, "platform": "web"})
+    status, body = call(base, token, "GET", path, lang=lang)
     check(status == 200, f"/api/v1/extensions/-/ui: {status}")
     return [p for p in body.get("ui") or [] if p.get("extension") == ID]
 
@@ -179,10 +183,22 @@ def main():
         check(FLAG in features(base), "installed: the hub does not announce the flag")
         titles = {}
         for lang, title in TITLES.items():
-            got = entries(base, token, lang)
+            got = entries(base, token, lang, "nav_page")
             check(len(got) == 1 and got[0]["placement"] == "nav_page", f"installed: the navigation entry ({lang}): {got}")
             titles[lang] = got[0]["title"]
             check(titles[lang] == title, f"the entry's title in {lang}: {titles[lang]!r}, want {title!r}")
+        projects = entries(base, token, placement="project_section")
+        check([p["id"] for p in projects] == ["project-notes"], "installed: missing project section")
+        project_route = f"/api/v1/extensions/{ID}/-/ui/project-notes"
+        project_context = {"platform": "web", "project_id": "reading", "ui_version": 12}
+        status, _ = call(base, token, "POST", project_route, {
+            "context": project_context, "action": "add", "values": {"text": "Reading project note"},
+        })
+        check(status == 200, f"adding a project note: {status}")
+        status, project_page = call(base, token, "POST", project_route, {"context": project_context})
+        check(status == 200 and "Reading project note" in json.dumps(project_page), "project note could not be reopened")
+        status, other = call(base, token, "POST", project_route, {"context": {**project_context, "project_id": "garden"}})
+        check(status == 200 and "Reading project note" not in json.dumps(other), "note appeared under another project")
         status, note = call(base, token, "POST", ROUTE, {"text": "kept when off", "mark": "important"})
         check(status == 201 and note.get("id") == "n1" and note.get("mark") == "important", f"storing a note: {status} {note}")
         status, bad = call(base, token, "POST", ROUTE, {"text": "x", "mark": "urgent"})
@@ -200,6 +216,9 @@ def main():
         personad(bindir, env, work, "extension", "disable", ID)
         smoke.wait_for("the flag to go", 30, lambda: FLAG not in features(base))
         check(not entries(base, token), "off: the navigation entry is still listed")
+        check(not entries(base, token, placement="project_section"), "off: the project section is still listed")
+        section_status, _ = call(base, token, "POST", project_route, {"context": project_context})
+        check(section_status != 200, "off: the project handler still answers")
         read, _ = call(base, token, "GET", ROUTE)
         write, _ = call(base, token, "POST", ROUTE, {"text": "written while off"})
         check(read == 404 and write == 404, f"off: the route answers {read} (read) and {write} (write), want 404")
@@ -216,7 +235,9 @@ def main():
         smoke.wait_for("the sample's route again", 60, lambda: call(base, token, "GET", ROUTE)[0] == 200)
         status, body = call(base, token, "GET", ROUTE)
         check(body == {"notes": [note]}, f"on again: the route lists {body}, want the note stored before")
-        check(FLAG in features(base) and len(entries(base, token)) == 1, "on again: the flag or the entry is missing")
+        check(FLAG in features(base) and len(entries(base, token, placement="nav_page")) == 1, "on again: the flag or the entry is missing")
+        status, reopened = call(base, token, "POST", project_route, {"context": project_context})
+        check(status == 200 and "Reading project note" in json.dumps(reopened), "on again: the project note is missing")
         check(sha(stored) == before, "on again: the stored file changed")
         seen["on_again"] = {"flag": True, "entries": 1, "notes": body["notes"], "stored_sha256": sha(stored)}
         print("on again: flag and entry back, the stored note read back, file unchanged", flush=True)
@@ -226,6 +247,9 @@ def main():
         personad(bindir, env, work, "extension", "uninstall", ID)
         smoke.wait_for("the flag to go after uninstall", 30, lambda: FLAG not in features(base))
         check(not entries(base, token), "uninstalled: the navigation entry is still listed")
+        check(not entries(base, token, placement="project_section"), "uninstalled: the project section is still listed")
+        status, _ = call(base, token, "POST", project_route, {"context": project_context})
+        check(status != 200, "uninstalled: the project handler still answers")
         status, _ = call(base, token, "GET", ROUTE)
         check(status == 404, f"uninstalled: the route answers {status}, want 404")
         core_answers(base, token)

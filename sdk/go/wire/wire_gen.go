@@ -1181,6 +1181,8 @@ type UIParams struct {
 	Machine      *UIMachine        `json:"machine,omitempty"`
 	Launcher     *UILauncher       `json:"launcher,omitempty"`
 	Item         *UIInboxItem      `json:"item,omitempty"`
+	// Knowledge project ID selected in the Web panel. Only a project_section receives it. Limited to 120 UTF-8 bytes.
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 // UIImageParams: ui.image's parameters (UI version 6): the hub asks the extension for a picture it drew as a ref, for
@@ -1245,9 +1247,11 @@ type InvalidateEvent struct {
 // UIContext: what an app says when it draws a slot: for whom and where (the hub checks it and hands the extension
 // UIParams).
 type UIContext struct {
-	Launcher  string `json:"launcher,omitempty"`
-	Machine   string `json:"machine,omitempty"`
-	Item      string `json:"item,omitempty"`
+	Launcher string `json:"launcher,omitempty"`
+	Machine  string `json:"machine,omitempty"`
+	Item     string `json:"item,omitempty"`
+	// Knowledge project ID selected in the Web panel. Only a project_section receives it. Limited to 120 UTF-8 bytes.
+	ProjectID string `json:"project_id,omitempty"`
 	Size      string `json:"size,omitempty"`
 	TZ        string `json:"tz,omitempty"`
 	Locale    string `json:"locale,omitempty"`
@@ -1756,10 +1760,11 @@ const (
 	PlacementExtensionPage   = "extension_page"
 	PlacementWidget          = "widget"
 	PlacementCapsuleCard     = "capsule_card"
+	PlacementProjectSection  = "project_section"
 )
 
 // Placements are the values of Placement, in order.
-var Placements = []string{"plugin_page", "launcher_section", "nav_page", "overview_card", "machine_section", "inbox_item", "extension_page", "widget", "capsule_card"}
+var Placements = []string{"plugin_page", "launcher_section", "nav_page", "overview_card", "machine_section", "inbox_item", "extension_page", "widget", "capsule_card", "project_section"}
 
 // Size: how much room a view has: compact (a card), full (a page, a section), or for a widget the family it is drawn
 // for (WidgetFamily).

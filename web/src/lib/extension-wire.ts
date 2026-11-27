@@ -1190,6 +1190,10 @@ export interface UIParams {
   machine?: UIMachine;
   launcher?: UILauncher;
   item?: UIInboxItem;
+  /**
+   * Knowledge project ID selected in the Web panel. Only a project_section receives it. Limited to 120 UTF-8 bytes.
+   */
+  project_id?: string;
 }
 
 /**
@@ -1266,6 +1270,10 @@ export interface UIContext {
   launcher?: string;
   machine?: string;
   item?: string;
+  /**
+   * Knowledge project ID selected in the Web panel. Only a project_section receives it. Limited to 120 UTF-8 bytes.
+   */
+  project_id?: string;
   size?: Size;
   tz?: string;
   locale?: string;
@@ -1735,8 +1743,8 @@ export const BUTTON_ROLES = ["normal", "destructive"] as const;
  * A slot in the apps an extension draws at (docs "UI slots"). extension_page is plugin_page's new name (UI version
  * 3): the hub takes both and answers the new API with extension_page, the old one with plugin_page.
  */
-export type Placement = "plugin_page" | "launcher_section" | "nav_page" | "overview_card" | "machine_section" | "inbox_item" | "extension_page" | "widget" | "capsule_card" | (string & {});
-export const PLACEMENTS = ["plugin_page", "launcher_section", "nav_page", "overview_card", "machine_section", "inbox_item", "extension_page", "widget", "capsule_card"] as const;
+export type Placement = "plugin_page" | "launcher_section" | "nav_page" | "overview_card" | "machine_section" | "inbox_item" | "extension_page" | "widget" | "capsule_card" | "project_section" | (string & {});
+export const PLACEMENTS = ["plugin_page", "launcher_section", "nav_page", "overview_card", "machine_section", "inbox_item", "extension_page", "widget", "capsule_card", "project_section"] as const;
 
 /**
  * How much room a view has: compact (a card), full (a page, a section), or for a widget the family it is drawn for

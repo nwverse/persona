@@ -9,6 +9,7 @@ import { ConfirmedFacts } from "./ConfirmedFacts";
 // A meeting's and an all-day recording's own sections come from the recording module through the `kb.detail` slot.
 import { ModuleKBDetail, useKBKindShown } from "../../core/ModuleKBDetail";
 import type { ModuleKBDetailParts } from "../../core/module-host";
+import { ProjectExtensionSections } from "./ProjectExtensionSections";
 import { Relationships } from "./Relationships";
 import { RecordingReadOnlyDetail } from "./RecordingReadOnlyDetail";
 import { TopicPoints } from "./TopicPoints";
@@ -301,6 +302,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
 
             {d && (
               <div className="mt-7 flex flex-col gap-6" style={{ animation: "fade-in 200ms ease-out both" }}>
+                {kind === "projects" && d.kind === "projects" && <ProjectExtensionSections project={id} manager={manager} />}
                 {parts.lead}
                 {facts && (
                   <section>

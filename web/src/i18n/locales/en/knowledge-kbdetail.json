@@ -1,4 +1,6 @@
 {
+  "project_extensions": "Project extensions",
+  "close_section": "Close section",
   "empty_title": "Pick an entry",
   "empty_body": "See its profile, timeline and connections. Ask Persona hands it to the main chat.",
   "send_failed": "Couldn't send: {error}",

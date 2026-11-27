@@ -102,6 +102,7 @@
   "slot_nav_page": "主导航上的入口",
   "slot_overview_card": "总览上的卡片",
   "slot_capsule_card": "Android 跨 App 悬浮胶囊里的卡片（在 App 外显示）",
+  "slot_project_section": "知识库项目详情页中的一节（会收到所选项目的标识）",
   "slot_machine_section": "机器详情页里的一节（会知道是哪台机器）",
   "slot_inbox_item": "收件箱里它的连接器的条目详情（会读到那一条的标题、总结和分级）",
   "slot_widget": "主屏幕小组件和表盘（在 App 外显示）",

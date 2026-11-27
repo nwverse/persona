@@ -168,6 +168,8 @@ func Check(t T, m *extension.Manifest, run Run, init extension.InitializeParams)
 		params := extension.UIParams{Contribution: u.ID, Placement: u.Placement, Size: slot.Size, UIVersion: extension.UIVersion,
 			TZ: "Asia/Shanghai", Locale: "zh-Hans-CN", Platform: "web"}
 		switch slot.Context {
+		case "project_id":
+			params.ProjectID = "example-project"
 		case "machine":
 			params.Machine = &extension.UIMachine{ID: "example-machine", Name: "Example", OS: "darwin", Online: true}
 		case "launcher":

@@ -6,6 +6,7 @@ Core. It is an ordinary extension, installed onto a running core-only hub.
 | It adds | Where |
 | --- | --- |
 | A page on the main navigation, **Quick notes** (en, zh-Hans, ja) | `persona-extension.json` (`ui`), `page.go`, `text.go`, `l10n/` |
+| A Quick notes entry on each Web Knowledge project | `project_section`, with one book for each project ID |
 | An app-facing route, `GET` and `POST /api/v1/quicknotes/notes` | `persona-extension.json` (`api`), `api.go` |
 | A hub feature flag, `quicknotes` | `persona-extension.json` (`api.features`) |
 | A stored value, `notes.json` in its data directory | `notes.go` |
@@ -13,6 +14,8 @@ Core. It is an ordinary extension, installed onto a running core-only hub.
 Switched off (`personad extension disable quicknotes`), the page, the route and the flag are gone and `notes.json`
 stays as it is; switched on again, the same notes are back. Uninstall is different: it deletes `notes.json` unless
 `--keep-data` is passed.
+
+In Web, open a Knowledge project and choose Quick notes. A bookmark with the form `/kb/projects/<project-id>?extension=quicknotes&ui=project-notes` opens the same project's book. When the extension is disabled the project itself remains accessible. Project books stay under the extension's data directory across restarts, upgrades and re-enabling. The standalone Quick notes page and its HTTP route read the original `notes.json`.
 
 Use the `sand` wrapper defined in `docs/extensions/core-only-features.md`: it gives every CLI command a clean
 environment with the test home's explicit `PERSONA_HOME`, prints the resolved home and hub, and uses a read-only list

@@ -1663,6 +1663,10 @@ data class ExtensionUIParams(
     val machine: ExtensionUIMachine? = null,
     val launcher: ExtensionUILauncher? = null,
     val item: ExtensionUIInboxItem? = null,
+    /**
+     * Knowledge project ID selected in the Web panel. Only a project_section receives it. Limited to 120 UTF-8 bytes.
+     */
+    @SerialName("project_id") val projectId: String? = null,
 )
 
 /**
@@ -1749,6 +1753,10 @@ data class ExtensionUIContext(
     val launcher: String? = null,
     val machine: String? = null,
     val item: String? = null,
+    /**
+     * Knowledge project ID selected in the Web panel. Only a project_section receives it. Limited to 120 UTF-8 bytes.
+     */
+    @SerialName("project_id") val projectId: String? = null,
     val size: String? = null,
     val tz: String? = null,
     val locale: String? = null,
@@ -2378,7 +2386,8 @@ object ExtensionPlacement {
     const val EXTENSION_PAGE = "extension_page"
     const val WIDGET = "widget"
     const val CAPSULE_CARD = "capsule_card"
-    val ALL = listOf("plugin_page", "launcher_section", "nav_page", "overview_card", "machine_section", "inbox_item", "extension_page", "widget", "capsule_card")
+    const val PROJECT_SECTION = "project_section"
+    val ALL = listOf("plugin_page", "launcher_section", "nav_page", "overview_card", "machine_section", "inbox_item", "extension_page", "widget", "capsule_card", "project_section")
 }
 
 /**
