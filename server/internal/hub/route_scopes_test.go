@@ -200,3 +200,13 @@ func TestTodoHandoffRequiresFullCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestConversationInputResolutionRequiresFullCredentials(t *testing.T) {
+	const pattern = "POST /api/v1/assistant/conversations/{id}/inputs/resolve"
+	if !slices.Contains(routePatterns(t), pattern) {
+		t.Fatalf("missing input resolution route: %s", pattern)
+	}
+	if scope := extwire.RouteScopes[pattern]; scope != "" {
+		t.Fatalf("an extension token must not authorize input settlement or replay: %s has scope %s", pattern, scope)
+	}
+}
