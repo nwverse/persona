@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 )
 
@@ -379,6 +380,30 @@ const GitBash = "git-bash"
 // shell is the Windows shell the terminal runs (GitBash, "powershell.exe"…; only with CapShellSelection), "" for
 // the user's default.
 func (c *Client) CreateTerminal(ctx context.Context, worktree, title, mutationID, shell string) (*Terminal, error) {
+	return c.OpenTerminal(ctx, NewTerminal{Worktree: worktree, Title: title, MutationID: mutationID, Shell: shell})
+}
+
+// NewTerminal is the terminal OpenTerminal asks terminal.create for.
+type NewTerminal struct {
+	// Worktree is the worktree selector ("id:<worktree id>"), Title the tab's title, MutationID the request's
+	// idempotency key (clientMutationId).
+	Worktree, Title, MutationID string
+	// Shell is the Windows shell the terminal runs (CreateTerminal), "" for the user's default.
+	Shell string
+	// Env is added to the environment the terminal's shell starts with (terminal.create's env). An Orca that refuses
+	// the request with it (invalid_argument: a schema without env) is asked again without it, so the terminal still
+	// opens, its shell without those variables. One that does not know the field drops it the same way (zod strips
+	// unknown keys).
+	Env map[string]string
+	// Command is a line Orca types into the new shell once it is ready (terminal.create's command, delivered
+	// shell-ready): where Orca can tell, after the shell's startup files and never into a question they ask. It goes
+	// only into the terminal this request makes. terminal.create's cwd is not honoured for a create like this one
+	// (Orca 1.4.277), so a terminal for a folder deeper than its worktree is put there this way.
+	Command string
+}
+
+// OpenTerminal is CreateTerminal for a NewTerminal.
+func (c *Client) OpenTerminal(ctx context.Context, n NewTerminal) (*Terminal, error) {
 	var res struct {
 		Terminal struct {
 			Terminal
@@ -386,15 +411,32 @@ func (c *Client) CreateTerminal(ctx context.Context, worktree, title, mutationID
 		} `json:"terminal"`
 	}
 	params := map[string]any{
-		"worktree": worktree, "title": title, "clientMutationId": mutationID,
+		"worktree": n.Worktree, "title": n.Title, "clientMutationId": n.MutationID,
 		// Explicit "background" skips desktop tab registration entirely. Omit it to create an inactive tab;
 		// Orca awaits the renderer's creation receipt before returning, without switching the user's active tab.
 		"focus": false, "activate": false,
 	}
-	if shell != "" {
-		params["shell"] = shell
+	if n.Shell != "" {
+		params["shell"] = n.Shell
 	}
-	err := c.Call(ctx, SendTimeout, "terminal.create", params, &res)
+	if n.Command != "" {
+		params["command"], params["startupCommandDelivery"] = n.Command, "shell-ready"
+	}
+	create := func(p map[string]any) error {
+		res.Terminal.Terminal, res.Terminal.PaneKey = Terminal{}, ""
+		return c.Call(ctx, SendTimeout, "terminal.create", p, &res)
+	}
+	var err error
+	if len(n.Env) > 0 {
+		with := maps.Clone(params)
+		with["env"] = maps.Clone(n.Env)
+		// invalid_argument is answered before anything is made, so the same request without env makes one terminal.
+		if err = create(with); IsCode(err, "invalid_argument") {
+			err = create(params)
+		}
+	} else {
+		err = create(params)
+	}
 	if err != nil {
 		return nil, err
 	}

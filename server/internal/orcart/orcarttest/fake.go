@@ -41,6 +41,8 @@ type Fake struct {
 	revisions   map[string]int
 	writes      []Write
 	invalid     []string
+	// unknown: params each method's schema does not have and refuses (Unknown), as an older, strict Orca's would.
+	unknown map[string][]string
 }
 
 // Call is one request the fake got (status.get included).
@@ -164,7 +166,10 @@ func (f *Fake) serve(c net.Conn) {
 		invalid := ""
 		if authed {
 			f.log = append(f.log, Call{Method: req.Method, Params: req.Params})
-			if invalid = validate(req.Method, req.Params); invalid == "" {
+			if invalid = f.unknownLocked(req.Method, req.Params); invalid == "" {
+				invalid = validate(req.Method, req.Params)
+			}
+			if invalid == "" {
 				result = f.answerLocked(req.Method, req.Params)
 			} else {
 				f.invalid = append(f.invalid, req.Method+": "+invalid)
@@ -474,7 +479,21 @@ func validate(method string, p map[string]any) string {
 		}
 		return ""
 	case "terminal.create":
-		return first(str("worktree", true), str("title", true), str("shell", false))
+		if v, ok := p["env"]; ok {
+			env, isObj := v.(map[string]any)
+			if !isObj {
+				return "env must be an object of strings"
+			}
+			for _, val := range env {
+				if _, isStr := val.(string); !isStr {
+					return "env must be an object of strings"
+				}
+			}
+		}
+		if v, ok := p["startupCommandDelivery"]; ok && v != "fast" && v != "shell-ready" {
+			return "startupCommandDelivery must be fast or shell-ready"
+		}
+		return first(str("worktree", true), str("title", true), str("shell", false), str("command", false))
 	case "terminal.send":
 		if r := first(handle(), literalTrue("agentPrompt"), literalTrue("requireWriteSettlement"),
 			literalTrue("claimViewport")); r != "" {
@@ -524,6 +543,27 @@ func (f *Fake) Writes() []Write {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.writes)
+}
+
+// Unknown makes the fake refuse method's requests that carry any of keys (invalid_argument, before any handler), as
+// an Orca whose schema for it does not have them and refuses unknown keys would.
+func (f *Fake) Unknown(method string, keys ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.unknown == nil {
+		f.unknown = map[string][]string{}
+	}
+	f.unknown[method] = keys
+}
+
+// unknownLocked is the refusal of a request carrying a key Unknown named for its method, "" for none.
+func (f *Fake) unknownLocked(method string, p map[string]any) string {
+	for _, k := range f.unknown[method] {
+		if _, ok := p[k]; ok {
+			return "Unrecognized key: \"" + k + "\""
+		}
+	}
+	return ""
 }
 
 // Invalid are the requests refused for their params so far ("method: reason").
