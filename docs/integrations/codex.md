@@ -691,7 +691,7 @@ Two things Claude Code sessions have are missing here. Persona installs no Codex
 
 ## Not supported yet
 
-- Resuming from the phone covers a thread nothing has open in the default home ("Resuming from the phone"). Offline / archived history on external app-server instances is read-only; never silently start another app-server to continue it. Codex App threads continue through the App while it owns them; once the App has exited, the guarded same-home resume / takeover described above is available.
+- A stopped thread can resume in the default home or on its already connected shared app-server. Shared recovery on send requires an unarchived thread and no live writer. Codex App threads continue through the App while it owns them. Once the App exits, guarded same-home terminal resume is available.
 - Threads archived only in Codex (the Codex App's Archive) are not listed in Persona's archive; only Persona's own archives are mirrored to Codex ("Archive").
 - Custom launcher functions can supply their own provider, home, or profile. Persona preserves their launch behavior and shows a task-card notice when an effort override requires the terminal route.
 - Permission mode cannot be changed on the phone. Thinking effort and model change on app-server sessions ("Thinking effort") and, from Codex 0.169, on the terminal route ("On the terminal route"); TRAE CLI changes neither.

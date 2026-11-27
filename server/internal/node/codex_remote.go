@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -223,6 +224,9 @@ func codexSocketPath(path string) (string, error) {
 	want := filepath.Join(tmp, "codex-daemon-"+strconv.Itoa(os.Geteuid()), hex.EncodeToString(sum[:]))
 	if target, err := os.Readlink(path); err != nil || target != want {
 		return "", errors.New("Unix 入口是指向别处的符号链接")
+	}
+	if _, err := os.Stat(want); err != nil {
+		return "", fmt.Errorf("Codex control socket symlink target: %w", err)
 	}
 	return want, nil
 }
@@ -1098,6 +1102,30 @@ func (n *Node) sendCodex(ctx context.Context, id, text string, images []proto.Im
 	if t.status == proto.StatusWorking || t.status == proto.StatusBlocked {
 		if _, a2a := ctx.Value(a2aIdleKey{}).(bool); a2a {
 			return a2aBusy()
+		}
+		clientID, _ := ctx.Value(sendTraceKey{}).(string)
+		if clientID == "" {
+			clientID = newUUID()
+		}
+		queueParams := map[string]any{"threadId": t.id, "input": input, "clientUserMessageId": clientID}
+		var ack struct {
+			QueuedSubmission struct {
+				ID string `json:"id"`
+			} `json:"queuedSubmission"`
+		}
+		queueErr := c.wire.call(ctx, "thread/queue/add", queueParams, &ack)
+		if queueErr == nil && ack.QueuedSubmission.ID != "" {
+			markSendQueued(ctx)
+			n.notifyCodex()
+			return nil
+		}
+		var rejected *codexError
+		if !errors.As(queueErr, &rejected) {
+			// Without an explicit rejection, steering could deliver the same message twice.
+			if queueErr == nil {
+				queueErr = errors.New("Codex returned no queued message receipt")
+			}
+			return uncertain(queueErr)
 		}
 		if t.turn == "" {
 			t.turn = c.activeTurn(ctx, t.id) // a turn already running when Persona joined (codex_daemon.go)

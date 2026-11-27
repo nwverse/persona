@@ -1,5 +1,9 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A missing queue receipt leaves delivery unknown (#17444)
+
+Fall back to steering after an explicit queue rejection. A lost or incomplete receipt may follow a persisted submission, so steering then can deliver a duplicate.
+
 ## A delivery label does not prove a disabled feature (#16936)
 
 - A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require

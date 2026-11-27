@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -186,7 +187,7 @@ func TestCodexDaemonAsyncAnswer(t *testing.T) {
 }
 
 // 0.163's control sockets are aliases: only the target Codex itself computes is followed.
-func TestCodexSocketAlias(t *testing.T) {
+func TestCodexSocketPathAlias(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o700); err != nil { // as Codex makes app-server-control/ (a umask may leave it group-writable)
 		t.Fatal(err)
@@ -199,6 +200,18 @@ func TestCodexSocketAlias(t *testing.T) {
 	if err := os.Symlink(want, alias); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := codexSocketPath(alias); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dangling alias: %v", err)
+	}
+	if err := os.Mkdir(filepath.Dir(want), 0o700); err == nil {
+		t.Cleanup(func() { _ = os.Remove(filepath.Dir(want)) })
+	} else if !errors.Is(err, os.ErrExist) {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(want, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(want) })
 	if got, err := codexSocketPath(alias); err != nil || got != want {
 		t.Errorf("alias: %q %v, want %q", got, err, want)
 	}
