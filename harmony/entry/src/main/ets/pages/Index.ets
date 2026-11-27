@@ -747,7 +747,7 @@ struct Index {
         if (this.model.features.includes('inbox_sources')) MenuItem({content:tr('phone_inbox_sources')})
           .onClick(()=>{if(this.menuCurrent('inbox') && this.model.connected && this.model.features.includes('inbox_sources'))this.openSettings('phone_inbox_sources');})
           .id('inbox.more.sources')
-        MenuItem({content:tr('mail_compose')}).enabled(this.canComposeFromMenu())
+        if (this.model.mailModuleAllowed()) MenuItem({content:tr('mail_compose')}).enabled(this.canComposeFromMenu())
           .onClick(()=>{if(this.menuCurrent('inbox') && this.canComposeFromMenu())this.inboxComposeRevision++;}).id('inbox.more.compose')
         MenuItem({content:tr('refresh')}).enabled(this.model.connected)
           .onClick(()=>{if(this.menuCurrent('inbox') && this.model.connected)this.inboxRefreshRevision++;}).id('inbox.more.refresh')
@@ -1311,11 +1311,22 @@ struct Index {
     if (this.model.projectsRequested && this.model.ready) { this.consumeProjectLaunch(); return; }
     if (this.model.pendingXiaoYiRoute && this.model.ready) { this.consumeXiaoYiRoute(); return; }
     if (intent !== this.navigationIntent) this.savePath();
+    if (this.model.section === 2 && !this.model.inboxPageVisible() || this.model.section === 5 && !this.model.todosPageVisible()) {
+      this.openSpace('persona');
+      return;
+    }
     if (this.model.section === 2 && !this.stack.size()) this.openResources('inbox');
     else if (this.model.section === 3 && !this.stack.size()) this.openSettingsRoot();
     else if (this.model.section === 4) this.projectCatalog.refresh(this.model);
     else if (this.model.section >= 5 && !this.stack.size()) this.showPlaceRoot(this.model.section);
     else this.ensureMainDestination();
+  }
+  @Monitor('model.sidebarConfig', 'model.demo') hiddenPagesChanged(): void {
+    const viewingInbox = this.model.section === 2 || this.phoneTop === 'inbox' || this.phoneTop === 'resources' && this.phoneParam === 'inbox';
+    const viewingTodos = this.model.section === 5 || this.phoneTop === 'todo' || this.phoneTop === 'resources' && this.phoneParam === 'todo';
+    if (viewingInbox && !this.model.inboxPageVisible() || viewingTodos && !this.model.todosPageVisible()) {
+      this.openSpace('persona');
+    }
   }
   @Monitor('model.pairingLink') pairingChanged(): void { this.consumePairingLink(); }
   @Monitor('model.notificationTarget') notificationChanged(): void { this.consumeNotification(); }
@@ -1347,10 +1358,10 @@ struct Index {
       }
       return;
     }
-    if (dest === 'todos') { this.openSpace('todo'); return; }
+    if (dest === 'todos') { this.openSpace(this.model.todosPageVisible() ? 'todo' : 'persona'); return; }
     if (dest === 'knowledge') { this.openSpace('knowledge'); return; }
     if (dest === 'health') { this.openSpace('health'); return; }
-    if (dest === 'inbox') { this.openSpace('inbox'); return; }
+    if (dest === 'inbox') { this.openSpace(this.model.inboxPageVisible() ? 'inbox' : 'persona'); return; }
     if (dest === 'recording') {
       const autoStart = Wire.bool(parsed, 'autoStart');
       if (!this.model.isRecordingModuleAllowed()) {
@@ -1790,6 +1801,9 @@ struct Index {
   private openSettingsRoot(): void { this.stack.pushPath({ name: 'settings_root', param: '' }); this.savePath(); }
   private openSpace(kind: string): void {
     this.phoneSettingsDepth = -1;
+    if (kind === 'inbox' && !this.model.inboxPageVisible() || kind === 'todo' && !this.model.todosPageVisible()) {
+      kind = 'persona';
+    }
     if (kind === 'settings' && !this.wide() && this.spacesShown) {
       this.phoneSettingsMachine = undefined;
       this.phoneSettingsQuery = '';
@@ -2033,6 +2047,7 @@ struct Index {
       .sort((a:ResourceRow,b:ResourceRow) => (Date.parse(Wire.text(b.data(),'updated_at')) || 0) - (Date.parse(Wire.text(a.data(),'updated_at')) || 0));
   }
   @Computed get shellHasInboxAction(): boolean {
+    if (!this.model.inboxPageVisible()) return false;
     return this.model.inbox.some((row:ResourceRow) => !row.isDone() && inboxTier(row.data()) === 'action');
   }
   private placeCount(kind:string): number {
@@ -2093,8 +2108,8 @@ struct Index {
           this.spaceRow('projects')
         }
         this.spaceRow('recordings')
-        this.spaceRow('inbox')
-        this.spaceRow('todo')
+        if (this.model.inboxPageVisible()) this.spaceRow('inbox')
+        if (this.model.todosPageVisible()) this.spaceRow('todo')
         this.spaceRow('schedules')
         this.spaceRow('knowledge')
         this.spaceRow('health')
@@ -2330,8 +2345,8 @@ struct Index {
       }, (binding: BoundRow<ResourceRow>) => binding.key)
       }.backgroundColor(Colors.canvas)
       ListItemGroup() {
-      this.spaceRow('inbox')
-      this.spaceRow('todo')
+      if (this.model.inboxPageVisible()) this.spaceRow('inbox')
+      if (this.model.todosPageVisible()) this.spaceRow('todo')
       this.spaceRow('knowledge')
       this.spaceRow('health')
       if (this.applications.visible) this.spaceRow('applications')
@@ -2678,8 +2693,8 @@ struct Index {
         .onClick(() => { Haptics.selection(); this.openMain(); })
         .id('shell.rail.main')
       }.width('100%').padding({ top: 4, bottom: 4 })
-      this.railSpaceButton('inbox')
-      this.railSpaceButton('todo')
+      if (this.model.inboxPageVisible()) this.railSpaceButton('inbox')
+      if (this.model.todosPageVisible()) this.railSpaceButton('todo')
       this.railSpaceButton('knowledge')
       this.railSpaceButton('health')
       this.railSpaceButton('devices')

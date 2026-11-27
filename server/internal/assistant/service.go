@@ -95,6 +95,7 @@ type Service struct {
 	moduleSwitch    moduleswitch.Set
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
+	agyNodePush     agyNodeConfigPush
 	// nodeRecovery tracks node online/boot timestamps to run recovery sweeps after outages or reboots (#14781).
 	nodeRecovery nodeRecoveryBook
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).

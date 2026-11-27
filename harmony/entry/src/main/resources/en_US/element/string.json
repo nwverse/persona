@@ -9119,6 +9119,30 @@
     {
       "name": "agents_use_herdr_tab_name_hint",
       "value": "Shows the tab name first and syncs this preference across devices on this hub."
+    },
+    {
+      "name": "composer_queued_count",
+      "value": "{count} queued"
+    },
+    {
+      "name": "composer_queue_send_now",
+      "value": "Send now"
+    },
+    {
+      "name": "composer_queue_relayed",
+      "value": "Relayed"
+    },
+    {
+      "name": "code_wrap_lines",
+      "value": "Wrap"
+    },
+    {
+      "name": "code_unwrap_lines",
+      "value": "Scroll"
+    },
+    {
+      "name": "copied",
+      "value": "Copied"
     }
   ]
 }

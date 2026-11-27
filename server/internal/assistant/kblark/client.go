@@ -9,12 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/cliwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 const (
@@ -64,11 +64,12 @@ type Client struct {
 	zone   *time.Location
 }
 
-// NewClient returns a client on runner; a wall-clock time lark-cli prints without a zone is read in zone (nil:
-// time.Local).
+// NewClient returns a client on runner; a wall-clock time lark-cli prints without a zone is read in zone. Every caller
+// passes the knowledge base's zone (kb.Store.Zone, never nil). A nil zone is read as UTC only as a defensive
+// fallback, never the machine's zone: the hub runs in UTC and its user does not (internal/tzguard).
 func NewClient(runner Runner, zone *time.Location) *Client {
 	if zone == nil {
-		zone = time.Local
+		zone = time.UTC
 	}
 	return &Client{runner: runner, zone: zone}
 }
@@ -212,8 +213,8 @@ func (c *Client) SearchDocs(ctx context.Context, query string) ([]Doc, error) {
 }
 
 var (
-	htmlTag   = regexp.MustCompile(`<[^>]*>`)
-	startTime = regexp.MustCompile(`(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?`)
+	htmlTag   = lazyre.New(`<[^>]*>`)
+	startTime = lazyre.New(`(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?`)
 )
 
 // cleanText undoes the HTML lark-cli escapes and marks up in display and highlight fields.

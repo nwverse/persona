@@ -20,7 +20,10 @@ WKWebView ─ http://localhost:5173 ─▶ local 127.0.0.1:5173 (App listens)
 
 - **Who owns it**: for each live Agent's pane, take the process the host reports (herdr's foreground process; the first one is claude / codex itself),
   walk all its descendants, and add the processes on the same terminal (tty) (including ones adopted by init after `npm run dev &` and the outer shell exiting).
-  Listeners belonging to claude / codex themselves (IDE bridge, MCP) do not count.
+  Listeners belonging to claude / codex themselves (IDE bridge, MCP) do not count. herdr lists the foreground group's leader first, which is a wrapper
+  when the launcher runs claude under one (`<wrapper> run -- <claude arguments>`), so the herdr client puts Claude Code's own process first: the one named
+  after a version (Claude Code names its process so), else one whose name or program file says claude. herdr 0.9.5 reports a process's `argv`, not
+  `argv0`. Taking the wrapper for the agent listed Claude Code's own loopback listener as a server it runs, which kept an idle Agent from Close (#14681).
   The host is asked for a pane's foreground processes only when the pane is new or its first process has changed (#5515): while that process is still in the
   process table with the same parent, terminal and name, the last answer is used again, less any other process in it that exited or whose pid now names a different process (a reused pid could belong to another pane). A shell first (the Agent not started yet) is asked for on every scan,
   so claude starting under it is not taken for one of the pane's servers. Before this, every scan made one herdr call per pane (about 10 calls/s with 40 Agents at work).

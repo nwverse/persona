@@ -296,6 +296,14 @@ type Node struct {
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
 	usageRetried map[string]time.Time
+
+	// agyIdle*: Antigravity idle auto-compaction policy, per-session idle tracking, and hub-reported pending
+	// interaction session IDs (agy_idle_compact.go).
+	agyIdleMu         sync.Mutex
+	agyIdleClock      func() time.Time // nil uses time.Now (tests override per-node)
+	agyIdlePolicy     *assistantwire.AgyIdleCompaction
+	agyIdleSessions   map[string]*agyIdleState
+	pendingIxSessions map[string]bool
 	// recoveries: a conversation's bounded model-failure recovery, surviving the process replaced by a model switch.
 	// recoveryClosed stops the ended connection's Node from starting another attempt while its processes hand over.
 	recoveries     map[string]*assistantTurnRecovery
@@ -1138,7 +1146,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				}
 				return n.sendFirstCodexCall(ctx, w, params, p.Text, p.Images)
 			}
-			if r, err, handled := n.codexWaitCalls(method, p.SessionID); handled {
+			if r, err, handled := n.codexWaitCalls(method, p.SessionID, p.UserInputs); handled {
 				return r, err
 			}
 		}
@@ -1492,6 +1500,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// PrivateNetwork: the hub is in office network mode (hub.json security.private_network_only), so this node's
 			// tailcat endpoint stops (tailcat.go stopTailcat); nil or false (an older hub) leaves it as it is.
 			PrivateNetwork *bool `json:"private_network"`
+			// AgyIdleCompaction: proactive idle auto-compaction policy for Antigravity sessions (agy_idle_compact.go);
+			// nil leaves the current policy (or defaults) unchanged.
+			AgyIdleCompaction *assistantwire.AgyIdleCompaction `json:"agy_idle_compaction"`
+			// PendingInteractionSessions: session IDs on this machine currently holding pending hub interaction cards
+			// (ask_user / approval), so idle auto-compaction does not compact sessions waiting on the user.
+			PendingInteractionSessions *[]string `json:"pending_interaction_sessions"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
@@ -1509,7 +1523,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 			n.hubMCPWait.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.MCPWait))
 		}
-		if c.ClaudeDirs != nil || c.Keep == nil { // a call that only changes what is kept leaves the directories
+		if c.ClaudeDirs != nil || (c.Keep == nil && c.AgyIdleCompaction == nil && c.PendingInteractionSessions == nil) { // partial updates leave the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
 		}
 		if c.ClaudeDirsBlocked != nil {
@@ -1561,6 +1575,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if c.ClaudeLiveReplies != nil {
 			n.setLiveReplies(*c.ClaudeLiveReplies)
+		}
+		if c.AgyIdleCompaction != nil {
+			n.setAgyIdleCompaction(*c.AgyIdleCompaction)
+		}
+		if c.PendingInteractionSessions != nil {
+			n.setPendingInteractionSessions(*c.PendingInteractionSessions)
 		}
 		return map[string]any{"claude_dirs": n.claudeConfigDirs()}, nil
 	case "usage.windows": // subscription rate-limit windows collected on this computer (usagewindows.go, #2432)

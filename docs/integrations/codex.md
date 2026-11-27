@@ -503,6 +503,7 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
 - **The waiting row**: its id is the node's own: a UUID whose first group is `c0de0000`, which no Codex thread id (a UUIDv7) or Claude session id takes. It carries `awaiting_first_message: true`,
   `agent: codex`, the pane and tab, `status: idle` whatever herdr says (Codex starting its MCP servers reads as working, then done), or `blocked` while a dialog holds the pane.
   Its capabilities are read, send and terminal. Its conversation is empty. Modes, the queue and forking are refused until the thread exists, and it has no history, archive or resume.
+  The message index returns a valid empty list under the waiting row's history token.
   Web follows the replacement Codex row on the same computer and pane from either the compact session list or the full session list, then reads its complete settings.
   The node binds the pane to the row's id. The hub stores and returns that binding, so a restarted node knows the row again from the id's shape and its record.
   A Codex started by hand in a herdr or Herdr App tab uses the same row. Its title is the tab's label, with the directory name as a fallback. The row's time is when Persona first saw that pane.
@@ -527,6 +528,7 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
   On the way it answers the trust dialog and the update offer, and waits out the model loading and "Starting MCP servers".
   It types nothing, and refuses with the usual codes, when the box holds a draft (`input_draft`), when an approval, question or dialog that isn't ours is open (`dialog_open`), or when the box doesn't come (`codex_not_ready`).
   The message goes in as one bracketed paste, unchanged, and Enter is pressed only once the box shows it (or Codex's `[Pasted Content N chars]` chips with matching visible text before, between or after them). Chip lengths and visible fragments must cover the whole expected message in order, allowing terminal wrapping whitespace; a chip for only a prefix waits for its tail before Enter. Hidden content is still unverified: only a complete first-message rollout match confirms startup. A compact status row whose directory is just `~` is excluded from the draft too.
+  A recognized footer delimits the whole draft across blank paragraph breaks, including Codex 0.171's separate warning row.
   If the recognized update offer appears after paste, startup skips it once. A retained matching draft is submitted without pasting again; only an empty, unqueued composer may receive one replay. A different draft or unknown dialog is never cleared or submitted. This recovery has a bounded confirmation window within the original startup request.
   The send then waits up to 45 seconds for the thread (rules 1–3) and answers `{ok, session}` with the thread's session. Rule 3 finding two threads answers `{ok}` alone, and the row stays until rule 1 or 2 knows it.
   No thread in time is `codex_first_unconfirmed` with `delivered: unknown`: the message went in, so it is not sent again.

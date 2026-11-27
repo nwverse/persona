@@ -403,6 +403,18 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		return "", err
 	}
 	plan.PartOf, plan.After = links.PartOf, links.After
+	if cfg := s.settings(ctx); cfg.todosV2On() && plan.DirectionID == nil {
+		if callerConv := strings.TrimSpace(self); callerConv != "" && callerConv != cfg.Main && slices.Contains(cfg.Leaders, callerConv) {
+			dir := callerConv
+			plan.DirectionID = &dir
+		} else if plan.PartOf != nil && *plan.PartOf != "" {
+			if parent, ok := s.todoNow(*plan.PartOf); ok {
+				if parentDir := strings.TrimSpace(parent.DirectionID); parentDir != "" {
+					plan.DirectionID = &parentDir
+				}
+			}
+		}
+	}
 	if t, ok := s.openTodoLike(title, kind, plan); ok {
 		if bindings != nil {
 			return "", fmt.Errorf("to-do %s already exists; associations were not changed: read todo_repositories_get and edit with todo_repositories_set", t.ID)

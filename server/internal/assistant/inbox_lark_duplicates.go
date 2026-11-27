@@ -1,11 +1,12 @@
 package assistant
 
 import (
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 type larkMentionKey struct {
@@ -87,7 +88,7 @@ const (
 	larkBackground      = "\n\nBackground history (context only, not new requests):\n"
 )
 
-var larkContextMessageLine = regexp.MustCompile(`(?m)^\[\d{4}-\d\d-\d\dT[^\]\n]+\] `)
+var larkContextMessageLine = lazyre.New(`(?m)^\[\d{4}-\d\d-\d\dT[^\]\n]+\] `)
 
 func larkMentionMatchKey(it *InboxItem) (larkMentionKey, bool) {
 	var key larkMentionKey

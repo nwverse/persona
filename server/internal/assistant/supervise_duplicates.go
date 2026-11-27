@@ -254,11 +254,12 @@ func (s *Service) planReuseHints(ctx context.Context, self string, tasks []PlanT
 	return out
 }
 
-// planDuplicates is what the task_plan tool adds to its answer about the plan's tasks that look like work already
-// going on (duplicateHints); "" when none does. A hint, not a refusal: the plan goes on as ever.
-func (s *Service) planDuplicates(ctx context.Context, tasks []PlanTask) string {
+// planDuplicates adds existing work and idle reuse hints to the task_plan receipt.
+// A nil reuseSpace excludes idle hints for Agent callers with restricted messaging.
+func (s *Service) planDuplicates(ctx context.Context, tasks []PlanTask, reuseSpace *string) string {
 	var open []Todo
-	if s.ensureTodosLoaded(ctx) == nil {
+	todosLoaded := s.ensureTodosLoaded(ctx) == nil
+	if todosLoaded {
 		own := map[string]bool{} // a todo a task runs on is that task, not a copy of it
 		for _, t := range tasks {
 			if t.ReuseTodo != "" {
@@ -306,12 +307,16 @@ func (s *Service) planDuplicates(ctx context.Context, tasks []PlanTask) string {
 		}
 		fmt.Fprintf(&b, "\n- 「%s」可能和这些重复：%s", t.Title, strings.Join(hints, "；"))
 	}
+	reuse := ""
+	if reuseSpace != nil && todosLoaded {
+		reuse = s.idlePlanReuse(*reuseSpace, tasks, sessions)
+	}
 	if b.Len() == 0 {
-		return ""
+		return reuse
 	}
 	return "\n\nPossible duplicates (work already going on): look at them (agent_read, the todo) before this goes on; if it is the " +
 		"same work, cancel the new task (task_review cancelled, or dismiss the plan) or send what is new to the agent already on it. " +
 		"If the new task takes over from one of them (a retry elsewhere, a rework round, a part split off), plan it again with " +
 		"continues set to that todo id and continues_why, so it keeps that task's brief (the owner's request and criteria); " +
-		"if it is different work, say why in your answer." + b.String()
+		"if it is different work, say why in your answer." + b.String() + reuse
 }
