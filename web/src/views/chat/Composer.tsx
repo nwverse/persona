@@ -21,12 +21,12 @@ import { focusTaken } from "../../lib/dock-focus";
 import { useComposition } from "../../lib/ime";
 import { COMPACT_COMPOSER, COMPOSER_LINES, lineCount, offersExpand } from "./composer-grow";
 import { INPUT_MAX } from "./dock";
-import { base64File, releaseAttachments } from "../../lib/attachments";
 import { imageLimitsFor, pictureRoom } from "../../lib/image-limits";
-import { addFiles as addComposerFiles, filesBusy, MAX_FILES, readyFiles, restoreFiles, splitFileTags, takeReadyFiles, useComposerFiles, withFiles } from "../../lib/composer-files";
+import { filesBusy, readyFiles, restoreFiles, splitFileTags, takeReadyFiles, useComposerFiles, withFiles } from "../../lib/composer-files";
+import { fromDraftImage, getComposerImages, moveComposerImages, setComposerImages, takeComposerImages, useComposerImages, type Attachment } from "../../lib/composer-images";
 import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ContextRef, type ComposerHandle } from "../../lib/links";
 import { addQuote, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, restoreQuotes, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, type CommentImagePicker, type DraftEvent, type DraftImage } from "../../lib/drafts";
-import type { EditedImage, EditState } from "../../lib/image-edit";
+import type { EditState } from "../../lib/image-edit";
 import { mentionAt, sessionQuote, workspaceContext, type MentionToken } from "../../lib/mentions";
 import { machineWithHub } from "../../lib/mesh";
 import { skillContext, skillDraft, splitSkillDraft } from "../../lib/skill-mentions";
@@ -59,7 +59,8 @@ import type { ComposerAction } from "../../core/module-host";
 // The + / @ panel loads on picker intent.
 const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel));
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
-const ComposerOverlay = lazyPage(() => import("./ComposerOverlays").then((m) => m.ComposerOverlay));
+const loadComposerOverlays = () => import("./ComposerOverlays");
+const ComposerOverlay = lazyPage(() => loadComposerOverlays().then((m) => m.ComposerOverlay));
 const preloadComposerOverlay = () => void ComposerOverlay.preload().catch(() => {});
 const SlashSkillEntry = lazyPage(() => import("./SlashSkillView").then((m) => m.SlashSkillEntry));
 // Skill-aware history labels are needed only when recall search opens, not on the first screen.
@@ -69,16 +70,7 @@ const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.Slash
 /** How long "Not sent yet" stays under the box after Enter was pressed while blocked. */
 const NUDGE_MS = 4000;
 
-export interface Attachment {
-  id: string;
-  name: string;
-  mime: string;
-  data: string; // base64
-  url: string; // object URL for the preview
-  /** Set once the picture has been through the image editor: its source, edits and history (lib/image-edit.ts), so
-   *  its tile opens it where the editor stopped; freed with the picture (releaseAttachments). */
-  edited?: EditedImage;
-}
+export type { Attachment } from "../../lib/composer-images";
 
 export interface Outgoing {
   text: string;
@@ -144,13 +136,6 @@ function parseSlash(draft: string) {
 
 function joinDrafts(first: InlineDocument, second: InlineDocument): InlineDocument {
   return first.length && second.length ? joinInline(first, ["\n"], second) : first.length ? first : second;
-}
-
-function fromDraftImage(img: DraftImage, id = uuid(), edited?: EditedImage): Attachment {
-  const bin = atob(img.data);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return { ...img, id, url: URL.createObjectURL(new Blob([bytes], { type: img.mime })), ...(edited ? { edited } : {}) };
 }
 
 // memo: a chat renders again for each transcript item, and this box takes none of them (ChatView keeps its props stable)
@@ -261,7 +246,7 @@ export const Composer = memo(function Composer({
   const draft = useMemo(() => editorText(doc), [doc]);
   const hasInline = doc.some((part) => typeof part !== "string");
   const editingPrompt = Boolean(editor);
-  const [atts, setAtts] = useState<Attachment[]>([]);
+  const atts = useComposerImages(editingPrompt ? null : draftKey);
   // The suggestion just sent with its arrow: it stays on the hub until the agent starts, and each tap would be a new message.
   const [sentPill, setSentPill] = useState<string | null>(null);
   useEffect(() => {
@@ -345,10 +330,6 @@ export const Composer = memo(function Composer({
   useEffect(() => editor ? undefined : registerComposer(handle), [handle, editingPrompt]);
 
   const quote = quotes.length > 0;
-  // the pictures in the box right now and the conversation shown, read by the cleanups and by a send that finishes
-  // after the box moved on: their object URLs are freed when they leave the box without being sent
-  const attsNow = useRef(atts);
-  attsNow.current = atts;
   // pictures being read for this box, counted against a message's pictures before they land (their size unknown yet)
   const reading = useRef(0);
   const commentReads = useMemo(() => new Set<object>(), [draftKey]);
@@ -356,17 +337,15 @@ export const Composer = memo(function Composer({
   // whether a picture of `size` base64 characters fits beside those in the box and those being read (#12973)
   const roomForImage = (size: number) => {
     const comments = getQuotes(draftKey).list.flatMap((q) => q.images ?? []);
-    const held = [...attsNow.current, ...comments].map((a) => a.data.length);
+    const held = [...getComposerImages(draftKey), ...comments].map((a) => a.data.length);
     return pictureRoom([...held, ...Array<number>(reading.current + commentReads.size).fill(0)], size, limits());
   };
-  const imageRoomError = (why: "count" | "bytes") => {
-    toast(why === "count" ? t("chat-composer.too_many_images", { max: limits().per_message }) : t("chat-composer.images_too_large"), "error");
-  };
-  // appends at once to the ref as well, so a second paste or draft image in the same tick sees it
+  const imageRoomError = (why: "count" | "bytes") =>
+    void loadComposerOverlays().then((m) => m.showImageRoomError(why, limits()));
+  const imageTarget = { draftKey, machineId, uploadDest, limits };
   const appendImage = (a: Attachment) => {
     preloadComposerOverlay();
-    attsNow.current = [...attsNow.current, a];
-    setAtts((cur) => [...cur, a]);
+    setComposerImages(draftKey, [...getComposerImages(draftKey), a]);
     setImagePreview((cur) => (cur && !cur.closing ? { ...cur, id: a.id } : cur));
   };
   const closeImagePreview = () => {
@@ -378,11 +357,12 @@ export const Composer = memo(function Composer({
     setImagePreview({ id });
   };
   const removeAttachment = (id: string) => {
-    const idx = attsNow.current.findIndex((a) => a.id === id);
-    if (idx >= 0) releaseAttachments([attsNow.current[idx]]);
-    const next = attsNow.current.filter((a) => a.id !== id);
-    attsNow.current = next;
-    setAtts(next);
+    if (!canWriteDraft()) return;
+    const images = getComposerImages(draftKey);
+    const idx = images.findIndex((a) => a.id === id);
+    if (idx < 0) return;
+    const next = images.filter((a) => a.id !== id);
+    setComposerImages(draftKey, next);
     setImagePreview((cur) => {
       if (!cur) return null;
       if (!next.length) return ComposerOverlay.ready() ? { ...cur, closing: true } : null;
@@ -391,51 +371,21 @@ export const Composer = memo(function Composer({
     });
   };
   const updateAttachment = (id: string, img: DraftImage, state: EditState) => {
-    const old = attsNow.current.find((a) => a.id === id);
+    if (!canWriteDraft()) return;
+    const images = getComposerImages(draftKey);
+    const old = images.find((a) => a.id === id);
     if (!old) return;
     // the picture as it came stays the source (the first edit's tile URL, kept); the earlier result goes
     const source = old.edited?.source ?? old.url;
-    const updated = fromDraftImage(img, old.id, { source, ...state });
-    attsNow.current = attsNow.current.map((a) => (a.id === old.id ? updated : a));
-    setAtts((cur) => cur.map((a) => (a.id === old.id ? updated : a)));
-    if (old.url !== source) URL.revokeObjectURL(old.url);
-  };
-  // Pictures past what a message holds are not dropped (#12973): they go to the session's computer as files, as the share
-  // sheet sends them, with one word on which limit it was; with no computer to send them to they are turned away.
-  const spillImages = (files: File[], why: "count" | "bytes") => {
-    if (!files.length) return;
-    if (!machineId) {
-      imageRoomError(why);
-      return;
-    }
-    const r = addComposerFiles(draftKey, machineId, files, uploadDest);
-    const went = files.length - r.tooMany;
-    if (went > 0) toast(why === "count" ? t("chat-composer.images_as_files", { max: limits().per_message, count: went }) : t("chat-composer.images_bytes_as_files", { count: went }));
-    if (r.tooMany) toast(t("chat-composer.too_many_files", { max: MAX_FILES }), "error");
-  };
-  // draft pictures that do not fit, gathered over one tick (a burst of forwarded ones) for one word
-  const spilling = useRef<{ count: File[]; bytes: File[] } | null>(null);
-  const spillLater = (f: File, why: "count" | "bytes") => {
-    if (!spilling.current) {
-      const batch = { count: [] as File[], bytes: [] as File[] };
-      spilling.current = batch;
-      queueMicrotask(() => {
-        spilling.current = null;
-        spillImages(batch.count, "count");
-        spillImages(batch.bytes, "bytes");
-      });
-    }
-    spilling.current[why].push(f);
+    const updated = fromDraftImage(img, old.id, { source, ...state }, old.original);
+    setComposerImages(draftKey, images.map((a) => (a.id === id ? updated : a)));
   };
   const keyNow = useRef(draftKey);
   keyNow.current = draftKey;
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
-    return () => {
-      mounted.current = false;
-      releaseAttachments(attsNow.current);
-    };
+    return () => { mounted.current = false; };
   }, []);
 
   // a different conversation: its own draft
@@ -444,17 +394,15 @@ export const Composer = memo(function Composer({
     if (editingPrompt) return;
     const from = shownKey.current;
     shownKey.current = draftKey;
-    if (carryDraft && from !== draftKey && (doc.length || attsNow.current.length)) {
+    if (carryDraft && from !== draftKey && (doc.length || getComposerImages(from).length)) {
       // the same conversation re-addressed: what is being typed stays, saved under its new key only
       storeDraft(draftKey, skillDraft(getContexts(from), writeInlineDraft(doc)));
       storeDraft(from, "");
+      moveComposerImages(from, draftKey);
       return;
     }
     setDraft(restoreSkills(storedValue(`draft:${draftKey}`) ?? ""));
     setPlusOpen(false);
-    releaseAttachments(attsNow.current);
-    attsNow.current = [];
-    setAtts([]);
     setImagePreview(null);
     setPastedBlocks([]);
     // not on a touch screen alone: there the focus brings the keyboard up over the conversation just opened. Nor when
@@ -486,10 +434,10 @@ export const Composer = memo(function Composer({
       if (e.type === "image") {
         const room = roomForImage(e.image.data.length);
         if (room !== "ok") {
-          spillLater(base64File(e.image.name, e.image.mime, e.image.data), room);
+          void loadComposerOverlays().then((m) => m.spillDraftImage(imageTarget, e.image, room, canWriteDraft));
           return;
         }
-        appendImage(fromDraftImage(e.image, uuid(), e.edited));
+        appendImage(fromDraftImage(e.image, undefined, e.edited));
         input.current?.focus({ preventScroll: true });
         return;
       }
@@ -739,9 +687,7 @@ export const Composer = memo(function Composer({
     storeDraft(draftKey, "");
     setQuotes(draftKey, []);
     getContexts(draftKey).forEach((r) => removeContext(draftKey, r.id));
-    releaseAttachments(attsNow.current);
-    attsNow.current = [];
-    setAtts([]);
+    setComposerImages(draftKey, []);
     setImagePreview(null);
     edit.cancel();
     requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
@@ -831,7 +777,7 @@ export const Composer = memo(function Composer({
     const raw = e.dataTransfer.getData(ENTRY_DRAG_TYPE);
     if (!raw) return false;
     if (!disabled && !editor) {
-      void import("./ComposerOverlays").then((m) =>
+      void loadComposerOverlays().then((m) =>
         m.resolveEntryDrop(raw, { mid: machineId, cwd: mention?.cwd }, (path) =>
           replaceAtCaret([fileReference(path, baseName(path.replace(/\/$/, "")) || path)], null, true),
         ),
@@ -842,51 +788,12 @@ export const Composer = memo(function Composer({
 
   const addFiles = async (picked: FileList | File[]) => {
     if (disabled || editor) return;
-    // pictures are scaled down as on the phone and held to the hub's limits (#12973; the count takes in pictures still
-    // being read by an earlier paste or drop); the ones past them go as files (spillImages)
-    const spill = { count: [] as File[], bytes: [] as File[] };
-    const others: File[] = [];
-    for (const f of Array.from(picked)) {
-      if (f.type.startsWith("image/")) {
-        if (roomForImage(0) === "count") {
-          spill.count.push(f);
-          continue;
-        }
-        reading.current++;
-        let a: Attachment | null;
-        try {
-          a = await import("./ComposerOverlays").then((m) => m.readImage(f, limits()));
-        } finally {
-          reading.current--;
-        }
-        if (!a) {
-          // one the page cannot read (a HEIC in most browsers) or bring under the limits: a file, as it is
-          if (machineId) others.push(f);
-          else toast(t("chat-composer.image_unreadable", { name: f.name }), "error");
-          continue;
-        }
-        const room = roomForImage(a.data.length);
-        if (room !== "ok" || !mounted.current || keyNow.current !== draftKey) {
-          releaseAttachments([a]);
-          // read after the box closed or moved to another conversation: freed, not put into that one
-          if (room !== "ok" && mounted.current && keyNow.current === draftKey) spill[room].push(f);
-          continue;
-        }
-        appendImage(a);
-      } else if (machineId) {
-        others.push(f);
-      } else {
-        toast(t("chat-composer.images_only"), "error");
-      }
-    }
-    spillImages(spill.count, "count");
-    spillImages(spill.bytes, "bytes");
-    // other files go to the session's machine as tiles above the input, never words in it (lib/composer-files.ts, #8361)
-    if (others.length) {
-      const r = addComposerFiles(draftKey, machineId!, others, uploadDest);
-      if (r.tooMany) toast(t("chat-composer.too_many_files", { max: MAX_FILES }), "error");
-      if (r.tooBig.length) toast(t("chat-composer.file_too_large"), "error");
-    }
+    const files = Array.from(picked);
+    const { addPickedFiles } = await loadComposerOverlays();
+    await addPickedFiles(files, imageTarget, {
+      current: () => mounted.current && keyNow.current === draftKey && canWriteDraft(),
+      reading, roomForImage, attach: appendImage,
+    });
   };
 
   const addCommentImages: CommentImagePicker = async (target, files, signal) => {
@@ -903,7 +810,7 @@ export const Composer = memo(function Composer({
     commentReads.add(read);
     signal.addEventListener("abort", release, { once: true });
     try {
-      const { runCommentImagePicker } = await import("./ComposerOverlays");
+      const { runCommentImagePicker } = await loadComposerOverlays();
       await runCommentImagePicker({
         target,
         files,
@@ -983,7 +890,7 @@ export const Composer = memo(function Composer({
       return;
     }
     const hasFiles = readyFiles(draftKey).length > 0;
-    const sent = attsNow.current;
+    const sent = getComposerImages(draftKey);
     const sentPasted = pastedBlocks;
     const fullDoc = sentPasted.length ? joinInline([sentPasted.map((b) => b.text).join("\n\n")], text.trim() ? ["\n\n"] : [], text.trim() ? value : []) : value;
     const fullText = codec?.inlineBody(fullDoc) ?? editorText(fullDoc);
@@ -1020,8 +927,7 @@ export const Composer = memo(function Composer({
     draftNow.current = [];
     unsaved.current = null;
     storeDraft(draftKey, "");
-    attsNow.current = [];
-    setAtts([]);
+    const settleImages = takeComposerImages(draftKey, sent);
     closeImagePreview();
     setPastedBlocks([]);
     refs.forEach((r) => removeContext(draftKey, r.id));
@@ -1045,23 +951,24 @@ export const Composer = memo(function Composer({
     const ok = await onSend({ text: wire, images,
       ...(commentImages.length ? { restoreCommentDraft: true } : {}),
       ...(now && queues ? { sendNow: true } : {}),
-      ...(quoteReply ? { quoteReply: true } : {}), ...(committed ? { edit: committed } : {}) });
-    if (!canWriteDraft()) { releaseAttachments(sent); return; }
+      ...(quoteReply ? { quoteReply: true } : {}), ...(committed ? { edit: committed } : {}) }).catch((error) => {
+      settleImages(false);
+      throw error;
+    });
+    const current = canWriteDraft();
+    settleImages(!ok && current);
+    if (!current) return;
     if (ok && now && queues) await onSendNow?.();
     if (ok) {
       history.record(skillDraft(refs, writeInlineDraft(fullDoc)));
-      releaseAttachments(sent);
     } else {
       // the box closed or shows another conversation now: the words go back to this conversation's draft (its open
-      // box, or the stored one), not into the box; the pictures are not put back there, only freed
+      // box, or the stored one). The image store has already restored the pictures to that same draft.
       if (mounted.current && keyNow.current === draftKey) {
         setDraft((cur) => joinDrafts(value, cur));
         if (sentPasted.length) setPastedBlocks((cur) => [...sentPasted, ...cur]);
-        attsNow.current = [...sent, ...attsNow.current];
-        setAtts((cur) => [...sent, ...cur]);
       } else {
         if (fullDoc.length) sendDraft(draftKey, { type: "unsent", text: writeInlineDraft(fullDoc) });
-        releaseAttachments(sent);
       }
       refs.forEach((r) => addContext(draftKey, r));
       // the files back above this conversation's box: they are on the machine, ready to go again; ones over the
@@ -1202,14 +1109,7 @@ export const Composer = memo(function Composer({
           dragging && "ring-2 ring-accent",
         )}
       >
-        {dragging && (
-          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[14px] bg-surface/80 backdrop-blur-[2px]">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-surface px-3 py-1 text-xs font-medium text-accent shadow-card">
-              <Icon name="image" size={14} />
-              {t("chat-composer.drop_here")}
-            </span>
-          </div>
-        )}
+        {dragging && <Suspense fallback={null}><ComposerOverlay dropHint /></Suspense>}
         {/* out to the card's border over its padding; nothing drawn yet (its chunk on the way), no gap either */}
         {top && <div data-composer-top className="-mx-1.5 -mt-1.5 empty:hidden">{top}</div>}
         {editingLast && (
