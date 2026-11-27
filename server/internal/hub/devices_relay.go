@@ -40,7 +40,9 @@ const linkManagerWait = 5 * time.Second
 // has taken (cutRelays ends them when the machine moves or the manager goes).
 type relayState struct {
 	mu       sync.Mutex
-	stopping bool // set by stopLinks under mu; prevents new links registering after shutdown snapshot
+	stopping bool              // set by stopLinks under mu; prevents new links registering after shutdown snapshot
+	cutSeq   uint64            // monotonic counter incremented on each cutRelays(gone, ...) call
+	lastCut  map[string]uint64 // manager id → cutSeq of its most recent cutRelays(gone, ...)
 	pending  map[string]chan *relayTaken
 	owner    map[string]relayFor // pending id → what it is for (only its manager may take it)
 	links    map[*relayLink]struct{}
@@ -334,12 +336,15 @@ func (h *Hub) offerRelay(f relayFor) (id string, taken <-chan *relayTaken, drop 
 // serveRelay is the manager's side of a relay: one the hub holds for it (?id=), or a node stream through another hub
 // of the mesh (?hub=&machine=).
 func (h *Hub) serveRelay(w http.ResponseWriter, r *http.Request) {
+	rs := &h.relay
+	rs.mu.Lock()
+	beforeAuth := rs.cutSeq
+	rs.mu.Unlock()
 	ident, ok := h.busCaller(w, r)
 	if !ok {
 		return
 	}
 	q := r.URL.Query()
-	rs := &h.relay
 	if ident.ID != h.relayOwner(q) {
 		writeErr(w, http.StatusForbidden, errors.New("only the manager it is for relays it"))
 		return
@@ -350,7 +355,7 @@ func (h *Hub) serveRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.wsHandlers.Done()
 	if hub := q.Get("hub"); hub != "" {
-		h.relayThroughHub(w, r, hub, q.Get("machine"))
+		h.relayThroughHub(w, r, ident.ID, beforeAuth, hub, q.Get("machine"))
 		return
 	}
 	id := q.Get("id")
@@ -372,9 +377,10 @@ func (h *Hub) serveRelay(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(64 << 20)
 	t := &relayTaken{id: id, conn: conn, done: make(chan struct{}), handed: f}
 	rs.mu.Lock()
-	// Still the machine's manager's, checked with the relay registered (cutRelays takes rs.mu after a move changed the
-	// owner): a move either finds it here or is seen by this check.
-	delivered := rs.pending[id] == ch && (f.machine == "" || h.machineOwner(f.machine) == f.manager)
+	// Still the machine's manager's and not cut since authentication, checked with the relay registered (cutRelays takes
+	// rs.mu after a move changed the owner or a manager hung up): a move or hangup either finds it here or is seen by
+	// this check.
+	delivered := rs.pending[id] == ch && rs.lastCut[f.manager] <= beforeAuth && (f.machine == "" || h.machineOwner(f.machine) == f.manager)
 	if delivered {
 		delete(rs.pending, id)
 		delete(rs.owner, id)
@@ -410,7 +416,7 @@ func (h *Hub) relayOwner(q url.Values) string {
 }
 
 // relayThroughHub opens a node stream through hub of the mesh for the manager and copies it to the relay.
-func (h *Hub) relayThroughHub(w http.ResponseWriter, r *http.Request, hub, mid string) {
+func (h *Hub) relayThroughHub(w http.ResponseWriter, r *http.Request, manager string, beforeAuth uint64, hub, mid string) {
 	octx, ocancel := context.WithCancel(context.Background())
 	defer ocancel()
 	pipe, err := h.openThroughHub(octx, hub, mid)
@@ -424,8 +430,8 @@ func (h *Hub) relayThroughHub(w http.ResponseWriter, r *http.Request, hub, mid s
 		return
 	}
 	conn.SetReadLimit(64 << 20)
-	t := &relayTaken{conn: conn, handed: relayFor{manager: h.machineOwner(mid), machine: mid}}
-	if !h.holdRelay(t) {
+	t := &relayTaken{conn: conn, handed: relayFor{manager: manager, machine: mid}}
+	if !h.holdRelay(t, beforeAuth) {
 		_ = conn.Close(websocket.StatusTryAgainLater, relayMoved)
 		return
 	}
@@ -482,13 +488,16 @@ func spliceWS(a, b *websocket.Conn, why func() string) {
 // relayMoved is why a relay is cut: its machine is another manager's now, or its manager is gone.
 const relayMoved = "the machine's manager changed"
 
-// holdRelay keeps t among the relays taken (cutRelays) if its machine is still its manager's; false: it is not, and
-// t is not kept. Checked with t registered: a move's cut, which comes after the owner changed, finds it, or the check
-// sees the new owner.
-func (h *Hub) holdRelay(t *relayTaken) bool {
+// holdRelay keeps t among the relays taken (cutRelays) if its machine is still its manager's and the manager was not
+// cut since beforeAuth; false: it is not, and t is not kept. Checked with t registered: a move's or hangup's cut,
+// which comes after the owner changed or the token was revoked, finds it, or the check sees the new owner or cutSeq.
+func (h *Hub) holdRelay(t *relayTaken, beforeAuth uint64) bool {
 	rs := &h.relay
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+	if rs.lastCut[t.handed.manager] > beforeAuth {
+		return false
+	}
 	if t.handed.machine != "" && h.machineOwner(t.handed.machine) != t.handed.manager {
 		return false
 	}
@@ -517,6 +526,13 @@ func (h *Hub) cutRelays(gone, mid string) {
 	}
 	rs := &h.relay
 	rs.mu.Lock()
+	if gone != "" {
+		rs.cutSeq++
+		if rs.lastCut == nil {
+			rs.lastCut = map[string]uint64{}
+		}
+		rs.lastCut[gone] = rs.cutSeq
+	}
 	var cut []*websocket.Conn
 	for t := range rs.taken {
 		if gone != "" && t.handed.manager == gone || mid != "" && t.handed.machine == mid && t.handed.manager != owner {
