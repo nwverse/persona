@@ -110,5 +110,11 @@
   "memory_load_failed": "无法加载记忆：{error}",
   "load_earlier": "加载更早的消息",
   "close": "关闭",
-  "icon_sun": "太阳"
+  "icon_sun": "太阳",
+  "chat_count_one": "{count} 个对话",
+  "chat_count_other": "{count} 个对话",
+  "new_chat_in": "在「{name}」中新建对话",
+  "edit_md_for": "查看或编辑「{name}」的 SPACE.md",
+  "expand_space": "展开「{name}」的对话",
+  "collapse_space": "收起「{name}」的对话"
 }

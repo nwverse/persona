@@ -173,14 +173,14 @@ describe("SidebarSpaces", () => {
     expect(navigated[0]).toEqual({ name: "track", slug: "reading", sid: "c2" });
 
     // Clicking the space's quick new-chat button navigates to /tracks/<slug>/new
-    const newChatLink = readingRow.querySelector(`a[aria-label="${t("sidebar.space_new_chat", { name: "Reading" })}"]`) as HTMLAnchorElement;
+    const newChatLink = readingRow.querySelector(`a[aria-label="${t("spaces.new_chat_in", { name: "Reading" })}"]`) as HTMLAnchorElement;
     expect(newChatLink).not.toBeNull();
     expect(newChatLink.getAttribute("href")).toBe("/tracks/reading/new");
     act(() => newChatLink.click());
     expect(navigated[1]).toEqual({ name: "track", slug: "reading", fresh: true });
 
     // Clicking the SPACE.md button opens the editor dialog inline without leaving the page
-    const mdBtn = readingRow.querySelector(`button[aria-label="${t("sidebar.space_edit_md", { name: "Reading" })}"]`) as HTMLButtonElement;
+    const mdBtn = readingRow.querySelector(`button[aria-label="${t("spaces.edit_md_for", { name: "Reading" })}"]`) as HTMLButtonElement;
     expect(mdBtn).not.toBeNull();
     act(() => mdBtn.click());
     await vi.waitFor(() => {

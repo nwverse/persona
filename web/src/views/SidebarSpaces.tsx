@@ -114,7 +114,7 @@ function SidebarSpaceItem({ space, route, reg, hover, go, defaultFolded, onEditM
           type="button"
           onClick={toggle}
           aria-expanded={!folded}
-          aria-label={folded ? t("sidebar.space_expand", { name: title }) : t("sidebar.space_collapse", { name: title })}
+          aria-label={folded ? t("spaces.expand_space", { name: title }) : t("spaces.collapse_space", { name: title })}
           title={space.description || title}
           className="flex min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap py-1 text-left [@media(pointer:coarse)]:min-h-11"
         >
@@ -131,7 +131,7 @@ function SidebarSpaceItem({ space, route, reg, hover, go, defaultFolded, onEditM
         <div className="flex shrink-0 items-center gap-0.5">
           {list !== null && (
             <span className="px-1">
-              <GroupCount n={list.length} label={t("sidebar.space_chat_count", { count: list.length })} />
+              <GroupCount n={list.length} label={t("spaces.chat_count", { count: list.length })} />
             </span>
           )}
           <div
@@ -143,8 +143,8 @@ function SidebarSpaceItem({ space, route, reg, hover, go, defaultFolded, onEditM
             <a
               href={href(newChatRoute)}
               onClick={go(newChatRoute)}
-              aria-label={t("sidebar.space_new_chat", { name: title })}
-              title={t("sidebar.space_new_chat", { name: title })}
+              aria-label={t("spaces.new_chat_in", { name: title })}
+              title={t("spaces.new_chat_in", { name: title })}
               aria-current={activeNew ? "page" : undefined}
               className={cx(ACTION_BUTTON, activeNew && "bg-hover-2 text-ink")}
             >
@@ -153,8 +153,8 @@ function SidebarSpaceItem({ space, route, reg, hover, go, defaultFolded, onEditM
             <button
               type="button"
               onClick={onEditMd}
-              aria-label={t("sidebar.space_edit_md", { name: title })}
-              title={t("sidebar.space_edit_md", { name: title })}
+              aria-label={t("spaces.edit_md_for", { name: title })}
+              title={t("spaces.edit_md_for", { name: title })}
               className={ACTION_BUTTON}
             >
               <Icon name="file" size={12} stroke={1.9} />
