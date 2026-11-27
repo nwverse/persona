@@ -4,7 +4,7 @@
 // A thread that cannot be read (a CI run, a rate limit, a connector without threads) shows what the hub collected
 // about the item instead, with "Open in X". Read-only otherwise: no pages for browsing the source (CLAUDE.md).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, ApiError, errorText } from "../../lib/api";
+import { api, ApiError, errorText, isAbort } from "../../lib/api";
 import {
   chatHeadline, checkLabel, githubStateLabel, isChatThread, isGitHubThread, labelColor, loadThread, mediaLine, mediaURL, mergeNewest, mergeOlder,
   reachMessage, replyInThread, reviewLabel, startsGroup, type ThreadChat, type ThreadMedia, type ThreadMessage, type ThreadPage, type ThreadPerson,
@@ -188,11 +188,13 @@ function ConnectorText({ item, problem, onRetry }: { item: InboxItem; problem?: 
   const c = item.connector;
   useEffect(() => {
     let live = true;
-    api<InboxItem>(itemPath(item.id), { headers: itemRequest(item) })
+    const abort = new AbortController();
+    api<InboxItem>(itemPath(item.id), { headers: itemRequest(item), signal: abort.signal })
       .then((r) => live && (setContext(r.context ?? ""), setFailure("")))
-      .catch((e) => live && setFailure(errorText(e)));
+      .catch((e) => { if (live && !isAbort(e)) setFailure(errorText(e)); });
     return () => {
       live = false;
+      abort.abort();
     };
   }, [item.id, item.manager]);
   return (

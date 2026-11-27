@@ -27,6 +27,9 @@ func listKeySized(list []proto.Session, size int) string {
 		w.str(s.ParentSpaceID, '|')
 		w.str(s.SlotName, '|')
 		w.str(s.LastText, '|')
+		if s.NativeTurnVerified {
+			w.b.WriteString("native-turn-verified|")
+		}
 		w.int(s.UpdatedAt.Unix()/10, '|')
 		w.quotes(s.Queued)
 		w.b.WriteByte('|')
@@ -91,11 +94,14 @@ func listKeySized(list []proto.Session, size int) string {
 		w.quote(s.FailureReason, '/')
 		w.str(s.ExternalURL, '\n')
 		// A topic dispatched or a session's chat known: the todos follow it at once.
-		if s.Chat != "" || len(s.Dispatched) > 0 {
+		if s.Chat != "" || len(s.Dispatched) > 0 || s.BotmuxExternalTrigger() {
 			w.b.WriteString("botmux:")
 			w.str(s.Chat, '/')
 			w.str(s.Topic, '/')
 			w.quotes(s.Dispatched)
+			if s.BotmuxExternalTrigger() {
+				w.b.WriteString("/ext")
+			}
 			w.b.WriteByte('\n')
 		}
 		// The pane's place in its tab, present or not: a swap or a closed shell pane changes only this (and 0 is not none).

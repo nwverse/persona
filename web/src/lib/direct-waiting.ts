@@ -1,6 +1,6 @@
 import { decisionDismissed, reviewState } from "./supervision";
 import { decisionLaterKey, type NeedsYouItem } from "./assistant-entries";
-import { heldDelivery, openAsk } from "./todos";
+import { heldDelivery, openAsk, taskReviewDecisionAsk } from "./todos";
 import { hubNeedsYou } from "./todo-triage";
 import type { Interaction } from "./types";
 
@@ -39,10 +39,13 @@ function ownerDecision(item: Extract<NeedsYouItem, { kind: "task" }>, deferred: 
   // Delivery acceptance is its own explicit owner gate, not the dismissed review round that preceded it.
   if (heldDelivery(todo)?.unblock === "user") return true;
   if (item.status === "not_started" || decisionDismissed(todo) || deferred[decisionLaterKey(todo)]) return false;
-  const ask = openAsk(todo);
-  if (ask && (ask.questions?.length || ask.outcome === "decide" || !ask.outcome || ask.why_owner)) return true;
   const review = reviewState(todo);
-  return review === "needs_user" || review === "user_check";
+  const ask = openAsk(todo);
+  if (review === "user_check") {
+    return Boolean(ask && (ask.questions?.length || ask.outcome === "decide" || ask.outcome === "cannot"));
+  }
+  if (ask && (ask.questions?.length || ask.outcome === "decide" || !ask.outcome || ask.why_owner)) return true;
+  return review === "needs_user";
 }
 
 /** The one projection behind both the Needs-you number and the rows that number opens. */
@@ -57,7 +60,10 @@ export function directUserWaiting(items: NeedsYouItem[], deferred: Record<string
     // already left out a step its parent carries): the tray, the To-dos badge and the hub say one number
     const hub = item.kind === "task" ? hubNeedsYou(item.todo, () => false) : undefined;
     if (item.kind === "task" && hub !== undefined) {
-      if (hub) {
+      // assistantEntries already selects the explicit review asks that belong in this tray.
+      const quietOwnerAsk = item.todo.quiet && item.todo.view?.section === "needs_you" &&
+        (reviewState(item.todo) === "user_check" || taskReviewDecisionAsk(item.todo) && !deferred[decisionLaterKey(item.todo)]);
+      if (hub || quietOwnerAsk) {
         out.push({ ...item, asks: item.asks.filter((ix) => hubTaskInteraction(item.todo, ix)) });
         continue;
       }

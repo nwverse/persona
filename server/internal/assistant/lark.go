@@ -185,6 +185,11 @@ func (h larkHost) OpenButton(ctx context.Context, machine, session string) botca
 	return h.s.openButton(ctx, machine, session)
 }
 
+func (h larkHost) RememberRun(messageID string, r *channel.Run) {
+	h.s.rememberBotThread(messageID, botTargetOf(r), r.Label)
+}
+
+// Unreachable: nothing went out and the call is tried again later.
 func (h larkHost) Unreachable(err error) bool { return unreachable(err) }
 func (h larkHost) Offline(err error) bool     { return errors.Is(err, bus.ErrOffline) }
 

@@ -559,7 +559,7 @@
   },
   {
     "name": "agent_send",
-    "description": "Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Any stop but the user's allows resume, an unknown one too. User or exit stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nGive task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.\n\nUse `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Any stop but the user's allows resume, an unknown one too. User or exit stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nGive task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.\n\nUse `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result. A stopped Agent resumes onto its own open to-do with `todo_id` (never with `task`).\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -589,6 +589,10 @@
         "resume_why": {
           "type": "string",
           "description": "shown to the user"
+        },
+        "todo_id": {
+          "type": "string",
+          "description": "with resume: the stopped Agent's open unassigned to-do to re-link; omit for task adoption"
         },
         "dismiss_notice": {
           "type": "boolean",
@@ -784,7 +788,7 @@
   },
   {
     "name": "agent_start",
-    "description": "Start a new agent on one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so. Claude-family launchers and Paseo providers with Auto Accept always start in bypassPermissions. TRAE CLI and omp take no effort setting.\n\nThe launcher decides the agent: Claude Code's starts Claude Code; pi or cursor (or one listed as that agent) starts pi or the Cursor CLI in a herdr pane with the model you give; agy starts the Antigravity CLI on the computer's companion when connected, else in a pane. Those three take no permission mode and no ultracode; their effort is their own.\n\nFor parallel work needing its own checkout, give `worktree.branch`: Persona uses the machine's engine (herdr or Orca) to create and list it under the workspace containing `cwd`, then starts the agent there. Never tell the agent to run `git worktree add`: that hides it from Orca and the app. Existing branches are checked out; new ones start at that workspace's HEAD. A branch checked out elsewhere is refused.\n\nWhen the agent needs credentials the user keeps in a secret provider (a token in 1Password, say), give `secret_env`: each environment variable it should have, with the reference its value comes from (such as `op://vault/item/field`), never the secret itself. The user approves the hand-off on a card on iPhone or the web before anything starts, and the values reach only that agent's environment, for this run: you never see them, and the answer lists each variable as granted, declined, expired or failed. Only Claude Code agents on a computer this manager connects take them. Tell the agent the variables exist; never ask it to print them.\n\nGive `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier: off for small work. Do not write the word \"ultracode\" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, an older Claude Code or a node too old for it starts without it, and the answer says so. Once Claude Code confirms it, agents_list shows `ultracode=on`. An organization policy may keep some conversations read-only: a call from such a conversation is refused with the policy's reason. Do not retry; follow the refusal.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.",
+    "description": "Start a new agent on one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so. Claude-family launchers and Paseo providers with Auto Accept always start in bypassPermissions. TRAE CLI takes model and effort overrides. Omp takes no effort setting.\n\nThe launcher decides the agent: Claude Code's starts Claude Code; pi or cursor (or one listed as that agent) starts pi or the Cursor CLI in a herdr pane with the model you give; agy starts the Antigravity CLI on the computer's companion when connected, else in a pane. Those three take no permission mode and no ultracode; their effort is their own.\n\nFor parallel work needing its own checkout, give `worktree.branch`: Persona uses the machine's engine (herdr or Orca) to create and list it under the workspace containing `cwd`, then starts the agent there. Never tell the agent to run `git worktree add`: that hides it from Orca and the app. Existing branches are checked out; new ones start at that workspace's HEAD. A branch checked out elsewhere is refused.\n\nWhen the agent needs credentials the user keeps in a secret provider (a token in 1Password, say), give `secret_env`: each environment variable it should have, with the reference its value comes from (such as `op://vault/item/field`), never the secret itself. The user approves the hand-off on a card on iPhone or the web before anything starts, and the values reach only that agent's environment, for this run: you never see them, and the answer lists each variable as granted, declined, expired or failed. Only Claude Code agents on a computer this manager connects take them. Tell the agent the variables exist; never ask it to print them.\n\nGive `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier: off for small work. Do not write the word \"ultracode\" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, an older Claude Code or a node too old for it starts without it, and the answer says so. Once Claude Code confirms it, agents_list shows `ultracode=on`. An organization policy may keep some conversations read-only: a call from such a conversation is refused with the policy's reason. Do not retry; follow the refusal.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1393,6 +1397,43 @@
     "defer_loading": true
   },
   {
+    "name": "message_send",
+    "description": "Send Lark text (default bot), not via CLI/ask_user. Use a revocable channel/chat/scenario/identity grant or owner approval. Repository grants do not apply. If bot cannot send, report it without changing identity. Reuse idempotency_key on retries. Check destination after uncertain delivery. Other approvals stay.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": [
+            "larkcli"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "description": "oc_ chat ID; resolve read-only."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Maximum 16000 UTF-8 bytes."
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "channel",
+        "target",
+        "text",
+        "idempotency_key"
+      ],
+      "additionalProperties": false
+    },
+    "defer_loading": true
+  },
+  {
     "name": "kb_search",
     "description": "Search the knowledge base: summaries and metadata of chats, people, projects, docs, meetings, events, recordings (with their minutes and any transcript still retained), topics (curated knowledge points: how something works, what was decided and why, the steps and pitfalls), project timelines, the notes directories the user added (hits with an absolute path) and, with messages=true, the full message archive (newest days first). All words must match. Hits come in the order the files are read, not by relevance, so a broad search can fill the limit with chats: give kind to search one kind only, the entries whose name matches first, then as kb_list ranks them. A past meeting (its decisions, what is still open, who does what) is kind=recordings: found by its title, the calendar event's title, its minutes or any transcript still retained; then kb_get it. Transcripts expire before minutes: never promise a trimmed recording's full transcript.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
@@ -1431,7 +1472,7 @@
   },
   {
     "name": "kb_list",
-    "description": "List knowledge-base entities of one kind ranked by importance (P0 first), relevance to the user, recency: projects (short = a feature / launch, long = a team mission), chats, people, docs, meetings, events, recordings (the user's phone / watch recordings; newest first, saying which have meeting minutes, which are all-day recordings with a day recap and its state, and which transcripts have expired), topics (knowledge points curated by subject out of the timelines and chats: concepts, decisions with their reasons, practices, pitfalls, facts, open questions; the biggest first). Transcripts stay for recording_days (14 days by default), minutes and recaps for minutes_days (forever by default). Meetings, events and recordings show when they started, in the user's time zone. Optional tag filter.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "List knowledge-base entities of one kind ranked by importance (P0 first), relevance to the user, recency: projects (short = a feature / launch, long = a team mission), chats, people, docs, meetings, events, recordings (the user's phone / watch recordings; newest first, saying which have meeting minutes, which are all-day recordings with a day recap and its state, and which transcripts have expired), topics (knowledge points curated by subject out of the timelines and chats: concepts, decisions with their reasons, practices, pitfalls, facts, open questions; the biggest first). Transcripts stay for recording_text_days, minutes and recaps for minutes_days (both forever by default). Meetings, events and recordings show when they started, in the user's time zone. Optional tag filter.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1463,7 +1504,7 @@
   },
   {
     "name": "kb_get",
-    "description": "Read one entity: its metadata (links to people / chats / projects, tags), compressed context (summary.md), a project's timeline, a chat's messages of the last 7 days, a recording's meeting minutes, or an all-day recording's day recap (the day's timeline, meetings, suggested to-dos), with each action item's state (suggested, or its to-do's) and its timestamped transcript while still retained (phone/watch recordings, text only), a meeting's / event's recordings, a topic's knowledge points by subtopic (each with its kind, reason and the entries it came from). Transcripts expire after recording_days (14 days by default); minutes and recaps stay for minutes_days (forever by default). id from kb_list / kb_search (a project also by name). A project lists its 20 most relevant people and a count (all: meta.json).\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Read one entity: its metadata (links to people / chats / projects, tags), compressed context (summary.md), a project's timeline, parent, sub-projects and milestones, a chat's messages of the last 7 days, a recording's meeting minutes, or an all-day recording's day recap (the day's timeline, meetings, suggested to-dos), with each action item's state (suggested, or its to-do's) and its timestamped transcript while still retained (phone/watch recordings, text only), a meeting's / event's recordings, a topic's knowledge points by subtopic (each with its kind, reason and the entries it came from). Transcripts stay for recording_text_days, minutes and recaps for minutes_days (both forever by default). id from kb_list / kb_search (a project also by name). A project lists its 20 most relevant people and a count (all: meta.json).\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1492,7 +1533,7 @@
   },
   {
     "name": "kb_update",
-    "description": "Write settled facts to the KB. Projects: edit name, project_kind (short|long), status, goal, my_role, aliases, chats/people, code dirs (`\u003cmachine\u003e:\u003cpath\u003e`, linking Agents), timeline log or summary; merge_into folds duplicates, unmerge reverses it, with no other changes in that call. Annotate chats, people, docs, meetings, events, recordings (phone-owned content; tags, pinned and projects only) and topics (name, note, aliases, tags only). Explicit tags override automatic ones. remove_* (ids) permanently unlinks only that link; other updates proceed. Change project_mode/source_urls only at the user's direction: reference-only keeps pointers and aliases but leaves details at the source; full in a separate call restores detail writes.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Write settled facts to the KB. Projects: the fields below (dirs: `\u003cmachine\u003e:\u003cpath\u003e`, linking Agents); merge_into folds a duplicate, unmerge reverses it, each alone in its call. Other kinds take annotations; recordings (phone-owned) only tags, pinned, projects; topics only name, note, aliases, tags. Explicit tags beat automatic ones. remove_* (ids) unlinks only that link, for good. At the user's word only: parent (\"\" = top level); milestone adds (no id), edits or removes (id, remove) a flag; its result has the undo. project_mode/source_urls: reference-only keeps pointers and aliases, details stay at the source; full, alone, restores detail writes.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1519,11 +1560,40 @@
         },
         "merge_into": {
           "type": "string",
-          "description": "projects only: fold this project into the target (slug or name)"
+          "description": "projects: fold into this target (slug or name)"
         },
         "unmerge": {
           "type": "boolean",
-          "description": "projects only: undo the merge that folded this project into another"
+          "description": "projects: undo its merge"
+        },
+        "parent": {
+          "type": "string"
+        },
+        "milestone": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string",
+              "description": "YYYY-MM-DD"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "open",
+                "accepted",
+                "not_accepted"
+              ]
+            },
+            "remove": {
+              "type": "boolean"
+            }
+          }
         },
         "name": {
           "type": "string"
@@ -1935,7 +2005,7 @@
   },
   {
     "name": "model_profile_capture",
-    "description": "Capture current purposes/launcher model fields into an existing profile with exact before/after phone approval. Preserves tiers, rechecks revision and reads back. Does not change current configuration; switch to apply.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Capture current model fields into a profile with phone approval; does not apply them.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1953,29 +2023,25 @@
   },
   {
     "name": "model_probe",
-    "description": "Run bounded samples through a saved provider; real inference, configuration unchanged. Saved connection settings only; no overrides or secrets in output. Ordered results: status, latency, block types, usage, redacted text (8 KiB cap), generation_truncated for token limits. Messages off sends thinking.type=disabled; Chat off sends reasoning_effort=none. Retries reported; 429 returns Retry-After without retry.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Run bounded real samples through a saved provider; configuration unchanged, secrets hidden. Returns status, latency, blocks, usage, retries and redacted text.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "properties": {
         "provider": {
-          "type": "string",
-          "description": "Saved provider name"
+          "type": "string"
         },
         "api": {
           "type": "string",
           "enum": [
             "messages",
             "chat"
-          ],
-          "description": "Protocol on the same saved gateway; default: provider's API"
+          ]
         },
         "model": {
-          "type": "string",
-          "description": "Model override; default: provider's model"
+          "type": "string"
         },
         "effort": {
-          "type": "string",
-          "description": "Effort override; default: provider's effort"
+          "type": "string"
         },
         "samples": {
           "type": "array",
@@ -1993,8 +2059,7 @@
                 "maxLength": 128
               },
               "system": {
-                "type": "string",
-                "description": "system+user \u003c=16384 UTF-8 bytes"
+                "type": "string"
               },
               "user": {
                 "type": "string",
@@ -2030,6 +2095,45 @@
       "required": [
         "provider",
         "samples"
+      ]
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "launcher_import",
+    "description": "Preview/import Claude shell aliases. Preview is read-only/redacted. Commit needs names/owner approval and reuses current import rules. Names select groups/raw aliases; split/hide_originals control per-alias import/hiding. No overrides or secrets.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "preview",
+            "commit"
+          ]
+        },
+        "machine": {
+          "type": "string"
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 128
+        },
+        "split": {
+          "type": "boolean"
+        },
+        "hide_originals": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "machine"
       ]
     },
     "defer_loading": true
@@ -2455,7 +2559,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Use task_plan for code, repo research and multi-step work (one task per independent piece). Check machines_list, KB, agents_list and preferences for editable choices and one-line reasons. Main/lead plans start at once; elsewhere read-only, user_requested and preapproved kinds do; others and owner_step wait for 开始. Queued receipt means dispatched; check to-do outcome and use agent_send.\n\nExplicit machine keeps fixed (default, refuses unavailable launchers) or flexible (moves portable work on failed health checks, explain why). Omit machine for automatic placement with optional placement_constraints. Planning leads own their tasks; main owns its own and receives needs_user escalations. Main may pick a lead; agent_transfer persists ownership. Incompatible leads need supervision_policy first. Check returned supervisor and similar work. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).\n\nStarted tasks keep a hub brief (owner request or started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides. Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.\n\nEdits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.\n\nResolve repository via repositories_list (repository_get when useful); an explicit repository URL or path takes precedence. Saved bindings are references only; never infer machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Closing terminal on acceptance is owner-only.\n\nSaved workspace naming plan on existing todo: {\"backend\":{\"operation_id\":\"\u003cid\u003e\"}}. Multi-repo container: {\"container\":{\"selected_repo_ids\":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.\n\nWorkspace: \"new\" isolates checkout; {\"new\":{\"branch\":\"task/my-change\"}} names branch; {\"existing\":\"\u003ccwd or id\u003e\",\"queue\":true} picks one (queue:true or owner in after queues FIFO, else busy refuses); \"none\" creates nothing. Omitted: readonly=none; writable Git follows assistant.task_workspace_preference, busy cwd uses new. Explicit existing never switches silently. Reusing explicit new branch needs clean checkout, no live Agent/owner. Engine owns creation; never run git worktree add. Default branch: task/\u003ctodo id\u003e. Failed creation starts no Agent; workspaces stay after acceptance. Follow org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Use task_plan for code, repo research and multi-step work (one task per independent piece). Check machines_list, KB, agents_list and preferences for editable choices and one-line reasons. Main/lead plans start at once; elsewhere read-only, user_requested and preapproved kinds do; others and owner_step wait for 开始. Queued receipt means dispatched; check to-do outcome and use agent_send.\n\nExplicit machine keeps fixed (default, refuses unavailable launchers) or flexible (moves portable work on failed health checks, explain why). Omit machine for automatic placement with optional placement_constraints. Planning leads own their tasks; main owns its own and receives needs_user escalations. Main may pick a lead; agent_transfer persists ownership. Incompatible leads need supervision_policy first. Check returned supervisor and similar work, reusing an active same-directory Agent before starting a new one. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).\n\nStarted tasks keep a hub brief (owner request or started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides. Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.\n\nEdits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.\n\nResolve repository via repositories_list (repository_get when useful); an explicit repository URL or path takes precedence. Saved bindings are references only; never infer machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Closing terminal on acceptance is owner-only.\n\nSaved workspace naming plan on existing todo: {\"backend\":{\"operation_id\":\"\u003cid\u003e\"}}. Multi-repo container: {\"container\":{\"selected_repo_ids\":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.\n\nWorkspace: \"new\" isolates checkout; {\"new\":{\"branch\":\"task/my-change\"}} names branch; {\"existing\":\"\u003ccwd or id\u003e\",\"queue\":true} picks one (queue:true or owner in after queues FIFO, else busy refuses); \"none\" creates nothing. Omitted: readonly=none; writable Git follows assistant.task_workspace_preference, busy cwd uses new. Explicit existing never switches silently. Reusing explicit new branch needs clean checkout, no live Agent/owner. Engine owns creation; never run git worktree add. Default branch: task/\u003ctodo id\u003e. Failed creation starts no Agent; workspaces stay after acceptance. Follow org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2735,6 +2839,10 @@
                 "type": "boolean",
                 "description": "large tasks only (Claude Code 2.1.284+ multi-agent); small: false; never in prompt/title"
               },
+              "multi_issue_report": {
+                "type": "boolean",
+                "description": "Only for a report investigating several issues; requires a findings list before park or close."
+              },
               "readonly": {
                 "type": "boolean",
                 "description": "true only for read-only tasks; false for authorized edits. Adds「本任务只读：不改项目文件、不提交、不对外写入」when true"
@@ -2887,7 +2995,7 @@
   },
   {
     "name": "task_review",
-    "description": "accepted closes after delivery_gate (default merged: park verified open PRs; linked issues must close). user_check keeps task/Agent open until owner Pass and routes feedback there. If opted in at Start, accepted done cleans the idle tab unless user_check; report closed/skipped/pending, never close tabs yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new: 10 total); accept with a note over low-ROI edge/style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits; needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), list each done_when once in checks (met=true, nonblank evidence), even with user_check; outcome=cannot, cancelled and criteria-free tasks keep prior rules. Other verdicts may omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers/Agent claims; uncovered scope needs needs_user, user_check, or a linked follow-up to-do—never chat text alone.\n\nGive accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user defaults to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "accepted closes after delivery_gate (default merged: park verified open PRs; linked issues must close). user_check keeps task/Agent open until owner Pass and routes feedback there. If opted in at Start, accepted done cleans the idle tab unless user_check; report closed/skipped/pending, never close tabs yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new: 10 total); accept with a note over low-ROI edge/style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits; needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), list each done_when once in checks (met=true, nonblank evidence), even with user_check; outcome=cannot, cancelled and criteria-free tasks keep prior rules. Other verdicts may omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers/Agent claims; uncovered scope needs needs_user, user_check, or a linked follow-up to-do—never chat text alone.\n\nIf an outcome decision or your review leaves part of the original brief for later, use needs_user to ask, or include deferred_scope with user_check or an open linked follow_up_todo_id. Keep the remaining scope visible even when every done_when check passes.\n\nGive accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2906,8 +3014,52 @@
             "rework",
             "needs_user",
             "parked",
-            "cancelled"
+            "cancelled",
+            "findings"
           ]
+        },
+        "findings_review": {
+          "type": "object",
+          "description": "verdict=findings: omit to read; supply the displayed version to confirm and record dispositions without moving task state.",
+          "required": [
+            "version"
+          ],
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "dispositions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "follow_up_todo_id": {
+                    "type": "string",
+                    "description": "Independent supervised to-do with the finding’s exact next action in done_when."
+                  },
+                  "wait_target": {
+                    "type": "string",
+                    "description": "A single finding may match the park evidence's target."
+                  },
+                  "done_evidence": {
+                    "type": "string",
+                    "description": "Evidence that this finding was resolved."
+                  },
+                  "owner_drop_decision_id": {
+                    "type": "string",
+                    "description": "Owner's manual decision, question 'Drop investigation finding \u003cid\u003e?', choice 'Drop', with reason."
+                  }
+                }
+              }
+            }
+          }
         },
         "rework_kind": {
           "type": "string",
@@ -3045,6 +3197,15 @@
         "user_check": {
           "type": "boolean",
           "description": "accepted only: user must inspect result (e.g. UI change); shows \"Please verify\" card awaiting \"Pass\" instead of auto-passing; default false"
+        },
+        "deferred_scope": {
+          "type": "string",
+          "maxLength": 600,
+          "description": "accepted: describe in the owner's language which work in the original brief is deferred or requires separate approval. The personal verification card shows the first 120 characters"
+        },
+        "follow_up_todo_id": {
+          "type": "string",
+          "description": "With deferred_scope and without user_check, identify the open to-do that owns the remaining work. Its part_of must name this to-do, or its after must name this piece of the same request"
         },
         "reversible": {
           "type": "boolean",
@@ -3798,7 +3959,7 @@
   },
   {
     "name": "todo_create",
-    "description": "Record requested/agreed work or reminders immediately, without confirmation; execute via task_plan. Open title/due duplicates return existing to-dos but refuse bindings: use todo_repositories_get/set. Short title in the user's language; details in notes. In leader chats: record that direction's work; task_plan dispatches, todo_complete finishes unassigned work. Bindings save atomically; IDs/catalog_revision from repositories_list. No files or task progress changes.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Record agreed work or reminders now; run work via task_plan. Open title/due duplicates return the existing to-do; edit its bindings via todo_repositories_get/set. Leader chats record work in their direction and complete unassigned work via todo_complete. Bindings are atomic, using repositories_list IDs and revision. No file or progress changes. A result naming an active related Agent means reuse it, not a new dispatch.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3812,6 +3973,10 @@
         "notes": {
           "type": "string",
           "description": "Details."
+        },
+        "topic_message_id": {
+          "type": "string",
+          "description": "Lark message ID supplied in the current prompt."
         },
         "due": {
           "type": "string",
