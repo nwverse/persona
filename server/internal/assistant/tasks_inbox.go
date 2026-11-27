@@ -3,7 +3,9 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -11,12 +13,34 @@ import (
 func (s *Service) planInboxSource(ctx context.Context, machine, conversation string, t *PlanTask) error {
 	source := strings.TrimSpace(t.InboxItem)
 	if source == "none" {
-		t.InboxItem, t.InboxHandoff = "", ""
+		t.InboxItem, t.InboxHandoff, t.InboxOptOut = "", "", true
 		return nil
 	}
 	t.InboxItem = source
 	if t.InboxItem == "" {
-		return nil
+		if err := s.inboxReady(ctx); err != nil {
+			return err
+		}
+		// The persisted handoff is authoritative; never extract an item ID from model text.
+		var candidates []string
+		s.inbox.mu.Lock()
+		for _, it := range s.inbox.items {
+			h := handoffTo(it, conversation)
+			if it.open() && inboxTaskLinkEligible(it) && h != nil && h.MachineID == machine && h.Op != "" {
+				candidates = append(candidates, it.ID)
+			}
+		}
+		s.inbox.mu.Unlock()
+		switch len(candidates) {
+		case 0:
+			return nil
+		case 1:
+			t.InboxItem = candidates[0]
+		default:
+			slices.Sort(candidates)
+			return fmt.Errorf("multiple unarchived Inbox items were handed to this conversation (%s); "+
+				"set inbox_item explicitly for each task; nothing was planned", strings.Join(candidates, ", "))
+		}
 	}
 	if todo, ok := s.todoNow(t.ReuseTodo); ok && todo.InboxItem != "" && todo.InboxItem != t.InboxItem {
 		return fmt.Errorf("todo %s already belongs to another Inbox item", todo.ID)
@@ -44,6 +68,12 @@ func (b *inboxBook) checkTaskInbox(conversation string, t PlanTask) error {
 	it := b.items[t.InboxItem]
 	if it == nil || !it.open() || !inboxTaskLinkEligible(it) {
 		return fmt.Errorf("inbox_item %q is missing, filed or excluded from task links", t.InboxItem)
+	}
+	if t.InboxMatch != "" && it.Agent != nil && it.Agent.TodoID != "" && it.Agent.TodoID != t.ReuseTodo && it.Agent.TodoID != t.ReservedTodoID && it.Agent.TodoID != t.TodoID {
+		return fmt.Errorf("inbox_item %q already belongs to another task", t.InboxItem)
+	}
+	if t.InboxMatch != "" {
+		return b.checkSoftInbox(t, time.Now(), func(it *InboxItem) bool { return it.VisibilityExcluded })
 	}
 	h := handoffOp(it, t.InboxHandoff)
 	if t.InboxHandoff == "" || h == nil || h.SessionID != conversation {
@@ -86,6 +116,7 @@ func (s *Service) linkPlannedInbox(ctx context.Context, conversation string, t P
 	b.mu.Lock()
 	err = b.checkTaskInbox(conversation, t)
 	var w *inboxWrite
+	var related []*inboxWrite
 	if err == nil {
 		it := b.items[t.InboxItem]
 		w = beginWrite(it)
@@ -93,10 +124,17 @@ func (s *Service) linkPlannedInbox(ctx context.Context, conversation string, t P
 			it.Agent = &InboxAgent{State: AgentSkipped}
 		}
 		it.Agent.TodoID = todo.ID
+		related = b.linkSoftInboxRelated(t, it)
 		b.settle(w)
 	}
 	b.mu.Unlock()
-	if err == nil && s.saveWrites(ctx, []*inboxWrite{w}, "its planned task link")[t.InboxItem] {
+	failed := false
+	if err == nil {
+		for _, bad := range s.saveWrites(ctx, append([]*inboxWrite{w}, related...), "its planned task link") {
+			failed = failed || bad
+		}
+	}
+	if err == nil && failed {
 		b.mu.Lock()
 		it := b.items[t.InboxItem]
 		keep = it != nil && it.Agent != nil && it.Agent.TodoID == todo.ID

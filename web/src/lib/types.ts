@@ -1,8 +1,11 @@
+import type { AgentPhase, AgentView } from "./agent-view-wire";
 import type { UsageCard } from "./tokens";
 import type { RuleSuggestion } from "./rule-suggestion";
 // The hub's wire types (docs/protocol/protocol.md). Only the fields the web client reads.
 
-export type AgentState = "needs_you" | "working" | "unread" | "idle" | "offline" | "unknown";
+/** Frozen Session.state and the host-state filters on older paging endpoints. */
+export type AgentState = NonNullable<Session["state"]>;
+export type StatusMarkState = AgentPhase | AgentState;
 
 /** An engine as the machine's node found it (docs/integrations/engines.md): `note` says why one that is there cannot be used. */
 export interface DetectedEngine {
@@ -29,7 +32,7 @@ export interface Machine {
   deploying?: boolean;
   can_deploy?: boolean;
   deploy_reason?: string;
-  deploy_phase?: "waiting_idle" | "transferring" | "restarting" | "confirming";
+  deploy_phase?: "waiting_idle" | "transferring" | "draining" | "restarting" | "confirming";
   deploy_error?: string;
   /** Where the owning assistant obtained the program for this deployment, when known. */
   deploy_source?: "hub_package" | "local_build";
@@ -187,6 +190,8 @@ export interface SessionCapabilities {
 /** A session's work state (docs/assistant/agent-work.md): working, blocked on a named precondition, or done. */
 export interface WorkState {
   phase: "working" | "blocked" | "done" | "";
+  /** End of this turn, unlike state_since which changes when a reply is read or the hub restarts. */
+  turn_at?: string;
   /** What a blocked one waits on: user (a decision), agent, external (a deploy, CI, a time), transient (a model error). */
   on?: "user" | "agent" | "external" | "transient";
   /** One line for the lists: what it waits for, or what it concluded. */
@@ -285,7 +290,10 @@ export interface Session {
   /** The failed start's coded refusal (launcher_missing, claude_missing…) and its details; start_error is the hub's sentence for it. */
   start_error_code?: string;
   start_error_args?: Record<string, string>;
-  state?: AgentState;
+  state?: Extract<AgentPhase, "needs_you" | "working" | "idle"> | "unread" | "offline" | "unknown";
+  view?: AgentView;
+  /** Local seen-outbox overlay until the manager acknowledges the read. */
+  locallySeen?: boolean;
   state_since?: string;
   agent?: string;
   agent_name?: string;
@@ -321,6 +329,9 @@ export interface Session {
    *  once its turn is over, resuming the same conversation (#6476, node/mode_restart.go); `permission_mode` is the mode
    *  it still runs in until then. */
   bypass_pending?: boolean;
+  /** On a botmux session whose botmux instance does not advertise ownerActor, sends go through the untrusted
+   *  external-event trigger; the composer shows a one-line notice. */
+  botmux_external_trigger?: boolean;
   /** What the model saw in the latest reply and the model's window, in tokens (#2430); omitted while the node cannot tell. */
   context_tokens?: number;
   context_restart_recommended?: boolean;
@@ -497,7 +508,7 @@ export interface Session {
   channels?: string[];
   todo?: { id: string; title: string };
   /** Display-only completed association; never an active task or a reason to suppress notifications. */
-  completed_todo?: { id: string; title: string };
+  completed_todo?: { id: string; title: string; cancelled?: boolean };
   /** Works (or worked) for a quiet task (#1731): not in the global badge; the main conversation tells about it. */
   quiet?: boolean;
   /** Why it waits for the user, in its host's words (a botmux attention's reason); only while it needs you (docs/integrations/engines.md "botmux"). */
@@ -722,6 +733,24 @@ export interface TokenUsage {
   fast?: boolean;
 }
 
+/** proto.Botmux: a BotMux-wrapped item's own words and the facts shown as tags. */
+export interface Botmux {
+  kind: "message" | "trigger" | "reply";
+  text: string;
+  sender?: string;
+  sender_type?: string;
+  quoted?: boolean;
+  topic_context?: boolean;
+  thread?: boolean;
+  attachments?: number;
+  attachment_meta?: { kind: string; name?: string; mime_type?: string }[];
+  mentions?: string[];
+  source?: string;
+  final?: boolean;
+  voice?: boolean;
+  truncated?: boolean;
+}
+
 export interface Item {
   id: string;
   seq: number;
@@ -743,7 +772,7 @@ export interface Item {
   narration?: boolean;
   codex_heartbeat_quiet?: boolean;
   task?: TaskNote;
-  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[]; sources?: FoldSource[]; tool_views?: FoldToolView[] };
+  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[]; sources?: FoldSource[]; botmux?: Botmux[]; tool_views?: FoldToolView[] };
   /** Out-of-band declarative UI views returned by a tool call (#14730); never sent to model runtimes. */
   tool_views?: unknown[];
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
@@ -752,6 +781,9 @@ export interface Item {
   visualization?: { path: string; mode?: string; title?: string };
   /** Sent by another Claude session (cross-session messaging), not typed by you: its name. */
   from?: string;
+  /** What a BotMux-wrapped message or `botmux send` call says without BotMux's blocks (docs/protocol/protocol.md
+   *  "BotMux messages"); `text` stays the original. Absent from older nodes. */
+  botmux?: Botmux;
   /** The client_msg_id of the message this came from, as the hub tied it (every item of it: the text, its images, a
    *  queued copy, or the notice it became); older hubs never send it (lib/echo.ts). */
   client_msg_id?: string;
@@ -921,6 +953,8 @@ export function isSessionReview(ix: Pick<Interaction, "kind" | "tool_name">): bo
 
 export interface Interaction {
   id: string;
+  /** Authoritative interaction for a display-only copy; aggregates count only cards without this field. */
+  mirror_of?: string;
   /** The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); none: the default one. */
   manager?: string;
   machine_id: string;
@@ -933,7 +967,11 @@ export interface Interaction {
   seen_at?: string;
   seen_ttl_seconds?: number;
   tool_name?: string;
+  /** The transcript call that raised this card, when its runtime supplies one. */
+  tool_use_id?: string;
   questions?: Question[];
+  /** The hub accepts a bare cancellation for this question. */
+  can_cancel?: boolean;
   plan?: string;
   /** The permission mode a plan-mode session goes on in once this plan is approved (#3784). */
   plan_then?: string;
@@ -993,6 +1031,9 @@ export interface Interaction {
   elicitation?: Elicitation;
   /** Whether this assistant-owned operation can take a non-final owner question. */
   can_clarify?: boolean;
+  /** True when the card has no interactive computer terminal or UI to hand back to (headless assistant, command gates,
+   *  manager-owned cards, headless ACP companions like AGY, Grok, and builtin OpenCode); absent/false keeps "Leave to computer". */
+  no_hand_back?: boolean;
   /** What a permission card needs filled in before it is approved (a password): such a card is never approved in one tap. */
   fields?: { key: string; label: string; secret?: boolean }[];
   /** The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
@@ -1067,13 +1108,16 @@ export interface LauncherHealth {
 export type TodosV2AutoSeen = "off" | "subtasks" | "all_autonomous";
 export type TodosV2PendingReviewSLAHours = 0 | 12 | 24 | 48;
 export type TodosV2CanWaitSLAHours = 0 | 24 | 48 | 72;
+export type TodosV2DigestWindowMinutes = 0 | 30 | 60 | 120;
 
-/** Additive user-configurable attention preferences under todos_v2 (#16098, #16111). */
+/** Additive user-configurable attention preferences under todos_v2 (#16098, #16111, #16433). */
 export interface TodosV2AttentionPrefs {
   todos_v2_auto_seen?: TodosV2AutoSeen;
   todos_v2_pending_review_sla_hours?: TodosV2PendingReviewSLAHours;
   todos_v2_can_wait_sla_hours?: TodosV2CanWaitSLAHours;
   todos_v2_fold_children?: boolean;
+  todos_v2_quiet_hours?: string;
+  todos_v2_digest_window_minutes?: TodosV2DigestWindowMinutes;
 }
 
 export interface AssistantInfo {
@@ -1118,6 +1162,10 @@ export interface AssistantInfo {
   todos_v2_can_wait_sla_hours?: TodosV2CanWaitSLAHours;
   /** Fold non-urgent child tasks under top-level goals in board projection under todos_v2 (#16098, #16111); defaults to true. */
   todos_v2_fold_children?: boolean;
+  /** Daily quiet-hours window ("HH:MM-HH:MM" 24h range with distinct start/end, or "" for off) under todos_v2 (#16433). */
+  todos_v2_quiet_hours?: string;
+  /** Digest batching window in minutes (0, 30, 60, or 120) for non-urgent notifications under todos_v2 (#16433). */
+  todos_v2_digest_window_minutes?: TodosV2DigestWindowMinutes;
   /** Unified experimental Integrations & Extensions Labs toggle (#14802, #14805); off by default and absent from older hubs. */
   integrations_v2?: boolean;
   work_guide?: boolean;

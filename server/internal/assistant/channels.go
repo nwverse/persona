@@ -75,6 +75,8 @@ type channelsBook struct {
 	st       channelsState
 	stLoaded bool
 	live     map[string]*chanLive // run id -> its live progress (not persisted)
+	// A topic tool can arrive before the node acknowledges the message that prompted it.
+	topicStarting map[string]chan struct{}
 	// answered: conversation -> when its last run was answered (no "finished" push, no mirror for it)
 	answered map[[2]string]time.Time
 	// notified: channel + conversation (machine, session) -> when its notify_user copy arrived
@@ -86,12 +88,15 @@ type channelsBook struct {
 	// followRetry: the followed conversations whose session.follow failed -> when a run's watcher asks again
 	followRetry map[[2]string]time.Time
 	// announced: the cards this process heard of (interaction.announced, or pending when it first connected); one
-	// that came while it was not connected is taken when it is back (channelsCatchUp).
-	announced map[string]bool
-	connected bool
+	// that came while it was not connected is taken when it is back (channelsCatchUp). announcedOccurrence
+	// distinguishes a same-ID replacement. A missing timestamp is legacy/held ID-only bookkeeping.
+	announced           map[string]bool
+	announcedOccurrence map[string]time.Time
+	connected           bool
 	// ended: the cards that ended lately (interaction.ended), by when: one still being sent to a channel then is closed
-	// (or not asked) as soon as it is out.
-	ended map[string]time.Time
+	// (or not asked) as soon as it is out. endedOccurrence distinguishes a same-ID replacement.
+	ended           map[string]time.Time
+	endedOccurrence map[string]time.Time
 	// lastEnded: channel -> the latest text ask there that ended without being answered there (answered in the app,
 	// in a terminal, withdrawn), by when: a late reply to it is told so instead of going into the conversation.
 	lastEnded map[string]endedAsk
@@ -251,12 +256,7 @@ func (s *Service) bindChannelThread(id, thread, machine, session string, generat
 	}
 	now := c.clock().UTC()
 	p.Threads[thread] = &channelThread{MachineID: machine, SessionID: session, At: now}
-	keepFor := channelThreadsKeepFor
-	if p.ThreadIdleHours > 0 {
-		if custom := time.Duration(p.ThreadIdleHours) * time.Hour; custom > keepFor {
-			keepFor = custom
-		}
-	}
+	keepFor := max(channelThreadsKeepFor, channelThreadIdleTTL(true, p))
 	pruneChannelThreadsWithTTL(p.Threads, now, keepFor)
 	s.saveChannelsLocked()
 	return true
@@ -283,7 +283,7 @@ func (s *Service) unbindChannelThread(id, thread string, generation ...uint64) {
 // While integrations_v2 is off (or thread_idle_hours is 0), the legacy 30-day timeout applies.
 func channelThreadIdleTTL(v2 bool, p *channelPrefs) time.Duration {
 	if v2 && p != nil && p.ThreadIdleHours > 0 {
-		return time.Duration(p.ThreadIdleHours) * time.Hour
+		return time.Duration(min(p.ThreadIdleHours, channel.MaxThreadIdleHours)) * time.Hour
 	}
 	return channelThreadsKeepFor
 }
@@ -301,44 +301,26 @@ func channelGroupRouteKey(chatID string) string {
 // channelRouteKey computes the integrations_v2 conversation routing key for m under mode.
 // Empty string means the message routes to the channel's configured default target.
 func channelRouteKey(mode channel.ThreadMode, m channel.Message) string {
-	chatID := strings.TrimSpace(m.ChatID)
-	chatKind := channel.ChatKind(strings.TrimSpace(string(m.ChatKind)))
-	topicID := strings.TrimSpace(m.TopicID)
-	legacyThread := strings.TrimSpace(m.Thread)
-	hasStructured := chatID != "" || chatKind != "" || topicID != ""
-
-	switch mode.Normalized() {
-	case channel.ThreadModePerGroupAndTopic:
-		if topicID != "" {
-			return channelTopicRouteKey(chatID, topicID)
-		}
-		if chatKind == channel.ChatKindGroup && chatID != "" {
-			return channelGroupRouteKey(chatID)
-		}
-		if chatKind == channel.ChatKindDirect {
-			return ""
-		}
-		if !hasStructured {
-			return legacyThread
-		}
-		if chatKind == channel.ChatKindTopic && legacyThread != "" {
-			return legacyThread
-		}
-		return ""
-	case channel.ThreadModePerTopic:
-		if topicID != "" {
-			return channelTopicRouteKey(chatID, topicID)
-		}
-		if !hasStructured {
-			return legacyThread
-		}
-		if chatKind == channel.ChatKindTopic && legacyThread != "" {
-			return legacyThread
-		}
-		return ""
-	default:
+	if mode != channel.ThreadModePerGroupAndTopic && mode != channel.ThreadModePerTopic {
 		return ""
 	}
+	kind := m.ChatKind.Known()
+	if kind == channel.ChatKindDirect {
+		return ""
+	}
+	chatID := strings.TrimSpace(m.ChatID)
+	topicID := strings.TrimSpace(m.TopicID)
+	if topicID != "" && chatID != "" {
+		return channelTopicRouteKey(chatID, topicID)
+	}
+	if topicID == "" && kind == channel.ChatKindGroup {
+		if mode == channel.ThreadModePerGroupAndTopic && chatID != "" {
+			return channelGroupRouteKey(chatID)
+		}
+		return ""
+	}
+	// An unclassified message or an incomplete topic can still identify its legacy conversation.
+	return strings.TrimSpace(m.Thread)
 }
 
 // channelThreadOf is thread's conversation, nil when it has none (or it went quiet too long ago).

@@ -68,6 +68,13 @@ interface MachineManagement {
     suspend fun setEngine(machineId: String, engine: String): Machine
 
     /**
+     * `PUT /api/v1/machines/{id}/engine {"hosts", "default"}` (hubs that report `engine_hosts`): keeps a computer's set of
+     * engines and makes [default] its default (#17052), where [setEngine] would leave one engine; returns the updated machine.
+     */
+    suspend fun setEngineHosts(machineId: String, hosts: List<String>, default: String): Machine =
+        throw UnsupportedOperationException("engine hosts")
+
+    /**
      * `GET /api/v1/machines/{id}/botmux`: whether "Also show botmux sessions" is on for the machine (#2575; on unless hub.json's
      * `machines[].botmux` or the switch turned it off). Null when the hub has no such route (an older hub): no switch.
      */

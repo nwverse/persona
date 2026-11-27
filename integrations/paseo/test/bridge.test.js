@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { syncBuiltinESMExports } from 'node:module'
+import os from 'node:os'
+import { dirname, join, sep } from 'node:path'
 import { RpcError } from '../../runtime-sdk/index.js'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createPaseoBridge, TIMELINES_MAX, uuidOf } from '../lib/bridge.js'
@@ -22,6 +24,8 @@ const ENTRIES = [
   { provider: 'my-codex', enabled: true, status: 'ready', label: 'My Codex', models: [{ id: 'gpt', label: 'GPT', isDefault: true }] },
   { provider: 'grok', enabled: true, status: 'ready', label: 'Grok', models: [] },
 ]
+// macOS keeps /tmp behind a link to /private/tmp; the bridge creates an Agent in the resolved folder.
+const TMP = realpathSync('/tmp')
 const PROJECT = { projectKey: 'prj_1', projectName: 'proj', workspaceName: '主线', checkout: { cwd: '/tmp', isGit: false } }
 
 function agents() {
@@ -567,6 +571,9 @@ test("seen in Persona, no longer unread in Paseo: a loaded agent's mark cleared,
   const { fake, node, a, rows } = await setup(t)
   fake.handlers.clear_agent_attention = (msg) => ({ payload: { agentId: msg.agentId, agents: [] } })
   fake.handlers['workspace.clear_attention.request'] = (msg) => ({ payload: { workspaceId: msg.workspaceId, clearedAgentIds: [a.grok.id], results: [], success: true, error: null } })
+  // A legacy row with a past turn already says done before the bridge receives the attention flag.
+  fake.update(a.claude.id, { requiresAttention: false })
+  await until('seen in Paseo', () => rows().find((r) => r.session_id === SID)?.status === 'idle')
   fake.update(a.claude.id, { requiresAttention: true })
   await until('unread', () => rows().find((r) => r.session_id === SID)?.status === 'done')
   await call(node, 'session.seen', { session_id: SID })
@@ -574,7 +581,7 @@ test("seen in Persona, no longer unread in Paseo: a loaded agent's mark cleared,
   // Stored (closed): through its workspace, while it is the only one flagged there; not the agent's own (it would start it).
   fake.update(a.claude.id, { requiresAttention: false })
   fake.update(a.grok.id, { requiresAttention: true, status: 'closed' })
-  await until('the grok flagged', () => fake.agents.get(a.grok.id).agent.requiresAttention === true)
+  await until('the grok flagged', () => rows().find((r) => r.session_id === `paseo-${a.grok.id}`)?.status === 'done')
   await until('known flagged', () => rows().find((r) => r.session_id === SID)?.status === 'idle')
   await call(node, 'session.seen', { session_id: `paseo-${a.grok.id}` })
   assert.deepEqual(fake.requestsOf('workspace.clear_attention.request').map((r) => r.workspaceId), ['wks_1'])
@@ -680,7 +687,7 @@ test("an Agent for a provider that takes no MCP servers is created again without
   const [first, second, ...more] = fake.requestsOf('agent.create.request')
   assert.equal(more.length, 0, 'one more request, not a loop')
   assert.ok(first.config.mcpServers.persona.env.PERSONA_SESSION_ID)
-  assert.deepEqual(second.config, { provider: 'grok', cwd: '/tmp' }, 'the old configuration, no mcpServers')
+  assert.deepEqual(second.config, { provider: 'grok', cwd: TMP }, 'the old configuration, no mcpServers')
   assert.notEqual(second.agentId, first.agentId, 'a new agent id: the failed one has a record in Paseo')
   assert.equal(first.labels['persona.session'], `paseo-${first.agentId}`)
   assert.equal(second.labels['persona.session'], first.labels['persona.session'], 'the Persona session stays; only the Paseo agent is new')
@@ -743,7 +750,7 @@ test('a new session without a usable MCP config is created as before, and the lo
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const missing = await setup(t, { mcpConfig: join(dir, 'absent.json') })
   await call(missing.node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' })
-  assert.deepEqual(missing.fake.requestsOf('agent.create.request')[0].config, { provider: 'my-claude', cwd: '/tmp' })
+  assert.deepEqual(missing.fake.requestsOf('agent.create.request')[0].config, { provider: 'my-claude', cwd: TMP })
   assert.ok(missing.logs.some((l) => /cannot read the MCP config .*absent\.json.*no Persona tools/.test(l)), missing.logs.join('\n'))
   const unset = await setup(t)
   await call(unset.node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' })
@@ -770,6 +777,61 @@ test('a new session: an agent of the launcher\'s provider, with the form\'s choi
   await assert.rejects(call(node, 'session.start', { cwd: '/nonexistent/dir', prompt: 'x' }), /没有这个目录/)
   fake.handlers['agent.create.request'] = () => ({ payload: { agent: null, error: 'Provider unavailable' } })
   await assert.rejects(call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' }), /Paseo 没能新建：Provider unavailable/)
+})
+
+test('home paths are expanded before validating and forwarding working directories', async (t) => {
+  const { fake, node, paseo } = await setup(t)
+  const userHome = realpathSync(mkdtempSync(join(TMP, 'ppaseo-home-')))
+  t.after(() => rmSync(userHome, { recursive: true, force: true }))
+  const dir = join(userHome, 'sub', 'dir')
+  mkdirSync(dir, { recursive: true })
+  const homeStub = t.mock.method(os, 'homedir', () => userHome)
+  syncBuiltinESMExports()
+  t.after(() => {
+    homeStub.mock.restore()
+    syncBuiltinESMExports()
+  })
+
+  const start = (cwd) => call(node, 'session.start', { cwd, prompt: 'x', launcher: 'my-claude' })
+  await t.test('start', async () => {
+    for (const [input, expected] of [['~', userHome], ['~/sub/dir', dir], [dir, dir]]) {
+      await start(input)
+      assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, expected, input)
+    }
+    if (sep === '\\') {
+      await start('~\\sub\\dir')
+      assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, dir)
+    }
+  })
+
+  await t.test('refused paths', async () => {
+    const before = fake.requestsOf('agent.create.request').length
+    await assert.rejects(start('~/missing'), { code: 'bad_request' })
+    await assert.rejects(start('~otheruser'), { code: 'bad_request', message: /~otheruser/ })
+    if (sep === '/') await assert.rejects(start('~\\sub\\dir'), { code: 'bad_request' })
+    assert.equal(fake.requestsOf('agent.create.request').length, before)
+  })
+
+  await t.test('worktree creation', async () => {
+    writeFileSync(join(paseo.home, 'config.json'), JSON.stringify({ worktrees: { root: '~/trees' } }))
+    const { checkouts } = await call(node, 'workspace.prepare', { cwd: dir })
+    assert.equal(dirname(checkouts), join(userHome, 'trees'))
+    await call(node, 'workspace.create', { cwd: '~/sub/dir', branch: 'feature' })
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.cwd, dir)
+  })
+
+  await t.test('takeover', async () => {
+    await call(node, 'session.start', { cwd: '~/sub/dir', resume: 'cccccccc-0000-4000-8000-000000000009' })
+    assert.equal(fake.requestsOf('import_agent_request').at(-1).cwd, dir)
+  })
+
+  await t.test('launcher check', async () => {
+    fake.handlers.wait_for_finish_request = () => ({ payload: { status: 'idle', lastMessage: 'OK' } })
+    const res = await call(node, 'launchers.check', { cwd: '~/sub/dir', launcher: 'my-claude', prompt: 'Say OK' })
+    assert.equal(res.ok, true)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.path, dir)
+    assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, dir)
+  })
 })
 
 test("a new Codex session: bypassPermissions starts it with Paseo's full-access mode; the other modes are left alone", async (t) => {
@@ -895,7 +957,7 @@ test('an unchanged or unspecified launcher keeps the requested model and effort'
   for (const params of [{ launcher: 'my-claude' }, { launcher: 'my-claude', shell_launcher: true }, {}, { launcher: '' }]) {
     await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', model: 'fable[1m]', effort: 'high', ...params })
     assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config, {
-      provider: 'my-claude', cwd: '/tmp', model: 'fable[1m]', thinkingOptionId: 'high',
+      provider: 'my-claude', cwd: TMP, model: 'fable[1m]', thinkingOptionId: 'high',
     })
   }
 })
@@ -914,7 +976,7 @@ test('a provider in error is replaced only by one of its own kind; with none, th
   const second = await setup(t, { providers: { ...PROVIDERS, 'backup-claude': { extends: 'claude' } }, entries: [...failing(ENTRIES), backup] })
   const res = await call(second.node, 'session.start', params)
   assert.deepEqual(second.fake.requestsOf('agent.create.request').at(-1).config,
-    { provider: 'backup-claude', cwd: '/tmp', model: 'fable[1m]', modeId: 'bypassPermissions', thinkingOptionId: 'high' })
+    { provider: 'backup-claude', cwd: TMP, model: 'fable[1m]', modeId: 'bypassPermissions', thinkingOptionId: 'high' })
   assert.deepEqual(res.instead, { launcher: 'my-claude' })
 })
 
@@ -942,7 +1004,7 @@ test('a read-only (plan) start: Paseo\'s plan mode on a Claude provider, never a
   assert.equal(fake.requestsOf('agent.create.request').at(-1).config.modeId, 'plan')
   // A Claude Code launcher Paseo does not have: its Claude provider in plan mode, without the model it does not offer.
   const stood = await plan({ launcher: 'cc_gateway', agent_type: 'claude', model: 'preset-only-model', effort: 'high' })
-  assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config, { provider: 'my-claude', cwd: '/tmp', modeId: 'plan', thinkingOptionId: 'high' })
+  assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config, { provider: 'my-claude', cwd: TMP, modeId: 'plan', thinkingOptionId: 'high' })
   assert.deepEqual(stood.instead, { launcher: 'cc_gateway', model: 'preset-only-model' })
   const before = fake.requestsOf('agent.create.request').length
   // A non-Claude provider, or a Codex launcher Paseo lacks (its Codex provider holds no plan mode): refused, never a
@@ -2572,6 +2634,66 @@ test('duplicate projects at one physical root resolve deterministically; an expl
   assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_original')
   await call(node, 'session.start', { cwd: f.alias, workspace_id: w.id, launcher: 'my-codex' })
   assert.equal(fake.requestsOf('agent.create.request').at(-1).workspaceId, w.id)
+})
+
+test('symlink-alias duplicate projects at one physical root resolve deterministically to the canonical path', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  let projects = [f.project('prj_canonical', f.repo), f.project('prj_alias', f.alias)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await makeTree(node, f.alias)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_canonical')
+    await call(node, 'session.start', { cwd: f.alias, launcher: 'my-codex' })
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_canonical')
+  }
+})
+
+test('symlink-alias duplicates with no record at the physical path prefer the project with more workspaces, then the lowest ID', async (t) => {
+  const f = projectFixture(t)
+  const alias2 = join(f.dir, 'alias2')
+  symlinkSync(f.repo, alias2)
+  const w = workspaceDescriptor({ workspaceDirectory: alias2, projectId: 'prj_zbusy' })
+  const { fake, node } = await setup(t, { workspaces: [w] })
+  await until('the workspace', () => node.last('runtime.workspaces'))
+  let projects = [f.project('prj_aidle', f.alias), f.project('prj_zbusy', alias2)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await makeTree(node, f.repo)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_zbusy', 'more workspaces beats a lower ID')
+  }
+  projects = [f.project('prj_b', f.alias), f.project('prj_a', alias2)]
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await makeTree(node, f.repo)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_a', 'equal workspaces fall back to the lowest ID')
+  }
+})
+
+test('a linked worktree start picks the canonical record among its main checkout\'s symlink duplicates', async (t) => {
+  const f = projectFixture(t)
+  const tree = join(f.dir, 'linked')
+  f.git(f.repo, 'worktree', 'add', '-b', 'linked', tree)
+  const { fake, node } = await setup(t)
+  let projects = [f.project('prj_legacy', tree), f.project('prj_alias', f.alias), f.project('prj_main', f.repo)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await call(node, 'session.start', { cwd: tree, launcher: 'my-codex' })
+    assert.deepEqual(fake.requestsOf('workspace.create.request').at(-1).source, { kind: 'directory', path: tree, projectId: 'prj_main' })
+  }
+})
+
+test('path-only creation with no existing Paseo project canonicalizes symlink cwd before calling Paseo', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [] } })
+  await makeTree(node, f.alias)
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.cwd, f.repo)
+  await call(node, 'session.start', { cwd: f.alias, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, f.repo)
 })
 
 for (const [name, reply] of [

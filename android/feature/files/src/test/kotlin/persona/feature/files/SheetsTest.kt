@@ -68,6 +68,149 @@ class SheetsTest {
         assertEquals("1900-02-28", Xlsx.date("59"))
         assertEquals("1900-02-29", Xlsx.date("60"))
         assertEquals("1900-03-01", Xlsx.date("61"))
+        // Boundary & rollover cases: serial 0 is midnight time-only, negative serials are invalid, and rounding past
+        // 23:59:59.5 carries cleanly across the 1900-02-29 boundary instead of emitting "1900-02-29 00:00".
+        assertEquals("00:00", Xlsx.date("0"))
+        assertEquals("00:00", Xlsx.date("0.000001"))
+        assertEquals("-0.5", Xlsx.date("-0.5"))
+        assertEquals("1900-01-01", Xlsx.date("0.999999"))
+        assertEquals("1900-02-29", Xlsx.date("59.999999"))
+        assertEquals("1900-02-29 12:00", Xlsx.date("60.5"))
+        assertEquals("1900-03-01", Xlsx.date("60.999999"))
+        assertEquals("2024-01-16", Xlsx.date("45306.999999"))
+    }
+
+    @Test fun escapedAndPaddedCustomNumberFormatsAreNotTreatedAsDates() {
+        val parts = mapOf(
+            "xl/workbook.xml" to """<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Units" sheetId="1" r:id="rId1"/></sheets></workbook>""",
+            "xl/_rels/workbook.xml.rels" to """<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>""",
+            "xl/styles.xml" to """<styleSheet>
+                <numFmts>
+                    <numFmt numFmtId="164" formatCode="#,##0\m"/>
+                    <numFmt numFmtId="165" formatCode="0.0\s"/>
+                    <numFmt numFmtId="166" formatCode="#,##0_m"/>
+                    <numFmt numFmtId="167" formatCode="*d0"/>
+                    <numFmt numFmtId="168" formatCode="yyyy\-mm\-dd"/>
+                    <numFmt numFmtId="169" formatCode="0\"/>
+                </numFmts>
+                <cellXfs>
+                    <xf numFmtId="0"/>
+                    <xf numFmtId="164"/>
+                    <xf numFmtId="165"/>
+                    <xf numFmtId="166"/>
+                    <xf numFmtId="167"/>
+                    <xf numFmtId="168"/>
+                    <xf numFmtId="169"/>
+                </cellXfs>
+            </styleSheet>""",
+            "xl/worksheets/sheet1.xml" to """<worksheet><sheetData>
+                <row r="1">
+                    <c r="A1" s="1"><v>45306</v></c>
+                    <c r="B1" s="2"><v>12.5</v></c>
+                    <c r="C1" s="3"><v>100</v></c>
+                    <c r="D1" s="4"><v>100</v></c>
+                    <c r="E1" s="5"><v>45306</v></c>
+                    <c r="F1" s="6"><v>7</v></c>
+                </row>
+            </sheetData></worksheet>""",
+        )
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip -> parts.forEach { (name, xml) -> zip.putNextEntry(ZipEntry(name)); zip.write(xml.toByteArray()); zip.closeEntry() } }
+        val sheet = Xlsx.read(out.toByteArray()).single()
+        assertEquals(listOf("45306", "12.5", "100", "100", "2024-01-15", "7"), sheet.rows.single())
+    }
+
+    @Test fun inlineStringsIgnorePhoneticRubyRuns() {
+        val parts = mapOf(
+            "xl/workbook.xml" to """<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Inline" sheetId="1" r:id="rId1"/></sheets></workbook>""",
+            "xl/_rels/workbook.xml.rels" to """<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>""",
+            "xl/worksheets/sheet1.xml" to """<worksheet><sheetData>
+                <row r="1">
+                    <c r="A1" t="inlineStr"><is><r><t>東</t></r><r><t>京</t></r><rPh sb="0" eb="2"><t>とうきょう</t></rPh></is></c>
+                    <c r="B1" t="inlineStr"><is><t>渋谷</t><rPh sb="0" eb="2"><t>しぶや</t></rPh></is></c>
+                </row>
+            </sheetData></worksheet>""",
+        )
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip -> parts.forEach { (name, xml) -> zip.putNextEntry(ZipEntry(name)); zip.write(xml.toByteArray()); zip.closeEntry() } }
+        val sheet = Xlsx.read(out.toByteArray()).single()
+        assertEquals(listOf("東京", "渋谷"), sheet.rows.single())
+    }
+
+    @Test fun cappedWorksheetStopsParsingWithoutRetainingTrailingCellValues() {
+        // Exact limit: not capped, all rows preserved.
+        val exactXml = buildString {
+            append("<worksheet><sheetData>")
+            for (r in 1..4) append("<row r=\"$r\"><c r=\"A$r\"><v>$r</v></c></row>")
+            append("</sheetData></worksheet>")
+        }.toByteArray()
+        val exact = Xlsx.cells(exactXml, "Exact", emptyList(), emptyList(), maxRows = 4)
+        assertFalse(exact.capped)
+        assertEquals(listOf(listOf("1"), listOf("2"), listOf("3"), listOf("4")), exact.rows)
+
+        // Past the row cap: stops immediately without parsing trailing rows or retaining their cell text.
+        val payload = "x".repeat(4096)
+        val overCapXml = buildString {
+            append("<worksheet><sheetData>")
+            append("<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>keep-1</t></is></c></row>")
+            append("<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>keep-2</t></is></c></row>")
+            append("<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>keep-3</t></is></c></row>")
+            for (r in 4..4000) {
+                append("<row r=\"$r\"><c r=\"A$r\" t=\"inlineStr\"><is><t>").append(payload).append("</t></is></c></row>")
+            }
+            append("</sheetData></worksheet>")
+        }.toByteArray()
+        val capped = Xlsx.cells(overCapXml, "Over", emptyList(), emptyList(), maxRows = 3)
+        assertTrue(capped.capped)
+        assertEquals(listOf(listOf("keep-1"), listOf("keep-2"), listOf("keep-3")), capped.rows)
+
+        // Exact sparse jump to `r == maxRows + 1`: gap fills `maxRows`, marks capped, and aborts SAX before reading row 4's cells.
+        var sharedStringLookups = 0
+        val trackingStrings = object : AbstractList<String>() {
+            override val size: Int = 1
+            override fun get(index: Int): String {
+                sharedStringLookups++
+                return "must-not-be-read"
+            }
+        }
+        val exactSparseJumpXml = """<worksheet><sheetData>
+            <row r="1"><c r="A1" t="inlineStr"><is><t>row-1</t></is></c></row>
+            <row r="4"><c r="A4" t="s"><v>0</v></c></row>
+        </sheetData></worksheet>""".toByteArray()
+        val sparseCapped = Xlsx.cells(exactSparseJumpXml, "SparseExact", trackingStrings, emptyList(), maxRows = 3)
+        assertTrue(sparseCapped.capped)
+        assertEquals(listOf(listOf("row-1"), emptyList(), emptyList()), sparseCapped.rows)
+        assertEquals("SAX must abort before reading row maxRows + 1 cells", 0, sharedStringLookups)
+
+        // End-to-end workbook capped via a sparse row jump past TableSheet.MAX_ROWS: row 1 stays intact and huge trailing cells do not blow up memory.
+        val jumpXml = buildString {
+            append("<worksheet><sheetData>")
+            append("<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>first</t></is></c></row>")
+            append("<row r=\"200005\">")
+            for (c in 1..2000) append("<c t=\"inlineStr\"><is><t>").append(payload).append("</t></is></c>")
+            append("</row></sheetData></worksheet>")
+        }
+        val parts = mapOf(
+            "xl/workbook.xml" to """<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Jump" sheetId="1" r:id="rId1"/></sheets></workbook>""",
+            "xl/_rels/workbook.xml.rels" to """<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>""",
+            "xl/worksheets/sheet1.xml" to jumpXml,
+        )
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip -> parts.forEach { (name, xml) -> zip.putNextEntry(ZipEntry(name)); zip.write(xml.toByteArray()); zip.closeEntry() } }
+        val jumped = Xlsx.read(out.toByteArray()).single()
+        assertTrue(jumped.capped)
+        assertEquals(TableSheet.MAX_ROWS, jumped.rows.size)
+        assertEquals(listOf("first"), jumped.rows.first())
+
+        // Non-positive row attributes `r="0"` and `r="-5"` fall back to sequential row numbering instead of corrupting rowIndex.
+        val badRowXml = """<worksheet><sheetData>
+            <row r="1"><c r="A1"><v>10</v></c></row>
+            <row r="0"><c r="A2"><v>20</v></c></row>
+            <row r="-5"><c r="A3"><v>30</v></c></row>
+        </sheetData></worksheet>""".toByteArray()
+        val badRow = Xlsx.cells(badRowXml, "BadRow", emptyList(), emptyList(), maxRows = 10)
+        assertFalse(badRow.capped)
+        assertEquals(listOf(listOf("10"), listOf("20"), listOf("30")), badRow.rows)
     }
 
     @Test fun readsAWorkbook() {
