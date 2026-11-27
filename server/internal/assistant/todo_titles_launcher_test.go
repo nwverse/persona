@@ -41,7 +41,7 @@ func TestLaterTodoTitleWaitsForACLIOnALauncher(t *testing.T) {
 	f.ownModels = true
 	f.hello.Models.AI = ai.Config{BaseURL: "http://127.0.0.1:1", APIKey: "test-key", Model: "relay-model"}
 	s := newServiceOn(t, f, &downStore{memStore: &memStore{}})
-	if _, got := s.laterTodoTitleModel(ctx); got != 15*time.Second {
+	if _, got, err := s.laterTodoTitleModel(ctx); err != nil || got != 15*time.Second {
 		t.Fatalf("on an API connection: %s; want 15s", got)
 	}
 
@@ -51,7 +51,7 @@ func TestLaterTodoTitleWaitsForACLIOnALauncher(t *testing.T) {
 	if r := modelRequest(s, "PATCH", "kb", fmt.Sprintf(`{"revision":0,"provider":"launcher.claude","model":%q}`, model)); r.Code != 200 {
 		t.Fatalf("pick claude: %d %s", r.Code, r.Body.String())
 	}
-	if _, got := s.laterTodoTitleModel(ctx); got != 50*time.Second {
+	if _, got, err := s.laterTodoTitleModel(ctx); err != nil || got != 50*time.Second {
 		t.Fatalf("on a launcher: %s; want 50s", got)
 	}
 	s.nameTodoLater(ctx, "no-such-todo", "from", "fix the login crash on the phone")
