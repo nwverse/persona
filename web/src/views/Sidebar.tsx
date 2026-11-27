@@ -1275,8 +1275,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const filtered = filter !== "all" || dimActive;
   const panesOn = useStore((s) => s.features.includes("terminal_panes"));
   const sidebarTerminals = useSidebarTerminals();
-  // Shells sit alongside Agents in their workspace. The quick filters describe Agents only.
-  const wantsShells = (panesOn || sidebarTerminals) && !chatList && filter === "all" && (shownGrouping === "machine" || shownGrouping === "space");
+  // Shells sit alongside Agents in their workspace. The quick filters describe Agents only, and so does Agents set to
+  // running now (#16898, lib/looks.ts): a terminal with no Agent in it is not listed there.
+  const wantsShells = (panesOn || sidebarTerminals) && !activeOnly && !chatList && filter === "all" && (shownGrouping === "machine" || shownGrouping === "space");
   const { listing: panes, refresh: refreshPanes } = usePanes(machines, wantsShells);
   const visibleShellTrees = useMemo(() => {
     if (!wantsShells) return undefined;

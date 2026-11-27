@@ -178,6 +178,13 @@ describe("Sidebar unified active shell tabs", () => {
     expect(agentLink.children[1]?.className).toContain("size-3.5");
   });
 
+  it("lists only the Agents, no plain shells, with Agents set to running now (#16898)", async () => {
+    localStorage.setItem("persona.look.agents", "active");
+    await mountSidebar();
+    expect(host.querySelector('a[href*="/t/mac/w1/w1%3At1"]')).toBeTruthy();
+    expect(host.querySelector("a[data-shell-row]")).toBeNull();
+  });
+
   it("shows plain shells in All and counts only Agents in the In a tab filter", async () => {
     await mountSidebar();
 
