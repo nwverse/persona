@@ -1090,7 +1090,7 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 			if p, _, err := s.currentPlanAssignment(ctx, before); err == nil {
 				s.tasks.planEdits.acquire(p.ID)
 				if current, err := s.loadPlan(ctx, p.ID); err == nil {
-					s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, current)})
+					s.publishTaskPlan(ctx, current)
 				}
 				s.tasks.planEdits.release(p.ID)
 			}

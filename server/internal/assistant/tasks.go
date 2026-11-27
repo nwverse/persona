@@ -542,6 +542,10 @@ func (s *Service) movePlan(ctx context.Context, p *TaskPlan, from string) (moved
 	return st.UpdateTaskPlan(ctx, p.ID, from, p.State, raw, p.UpdatedAt)
 }
 
+func (s *Service) publishTaskPlan(ctx context.Context, p *TaskPlan) {
+	s.broadcastEvent(ctx, assistantwire.TaskPlanEvent[*TaskPlan]{Type: assistantwire.TaskPlanChanged, Plan: s.planWithSpace(ctx, p)})
+}
+
 // patchPlanTask changes task i of started plan planID with change, writes the plan back and tells the apps. The plan
 // stays locked from reading it until the apps are told, so what its other tasks record meanwhile stays, and the apps get
 // the plan in the order it was written (they keep the last one they got). Telling them is a one-way broadcast, so the
@@ -565,7 +569,7 @@ func (s *Service) patchPlanTask(ctx context.Context, planID string, i int, chang
 			return errPlanNotFound
 		}
 		if err == nil && row != nil {
-			s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, planFromRow(*row))})
+			s.publishTaskPlan(ctx, planFromRow(*row))
 		}
 		return err
 	}
@@ -580,7 +584,7 @@ func (s *Service) patchPlanTask(ctx context.Context, planID string, i int, chang
 	if ok, err := s.movePlan(ctx, p, planStarted); err != nil || !ok {
 		return err
 	}
-	s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, p)})
+	s.publishTaskPlan(ctx, p)
 	return nil
 }
 
