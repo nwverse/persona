@@ -31,5 +31,12 @@
   "pinned_label": "置顶会话",
   "pinned": "置顶",
   "at_all": "[@所有人]",
-  "at_me": "[有人@我]"
+  "at_me": "[有人@我]",
+  "pin_agent": "置顶",
+  "unpin_agent": "取消置顶",
+  "kind_agent": "AI 助手",
+  "filter_label": "显示",
+  "filter_all": "全部",
+  "filter_lark": "飞书",
+  "filter_agents": "AI 助手"
 }
