@@ -487,5 +487,12 @@
   "status_pr_checks_pending": "检查中",
   "status_pr_waiting_merge": "等合入",
   "status_parked": "已搁置",
-  "status_tracking": "跟进中"
+  "status_tracking": "跟进中",
+  "grouping_v2_status": "按状态",
+  "grouping_v2_direction": "按方向",
+  "grouping_v2_folder": "按项目",
+  "grouping_v2_request": "按要求",
+  "detail_direction_inherited_hint": "继承自「{name}」",
+  "detail_direction_inherited_picker_hint": "当前继承自「{name}」。点应用可显式固定，也可改选其他方向或移出方向。",
+  "detail_subtask_direction_mismatch": "所属方向：{direction}"
 }
