@@ -1757,7 +1757,6 @@ if os.environ.get("MOCK_TERMINAL_ONLY") == "1":
     SESSIONS.append(sess("macbook", TERMINAL_ONLY, "kiro-demo", "/Users/me/code/kiro-demo", "idle", "idle", "kiro-demo", 8, "kiro", 1, 1,
                          "", agent="kiro", launcher="kiro", read_only_reason="Persona 还不能读 kiro 的对话：手机上只能看终端、按键盘"))  # i18n-ignore
 
-
 # MOCK_OMP=1 (docs/integrations/omp.md): every computer lists the omp launcher, which takes no model, mode, effort or
 # ultracode (omp's own config decides) and starts with its first message, as the node does (control.go): a start that
 # is async or sets any of those is refused (omp_options), else it answers with omp's session, the first message in it.
@@ -10659,26 +10658,6 @@ if os.environ.get("MOCK_SECRET_RUN") in ("pending", "ran", "withheld", "long"):
             ensure_ascii=False), 1) + [
             it("assistant", "text", 0.5, text="第二条命令失败了（退出码 5）：launchd 没能加载这个任务。我先看看 plist 的权限再告诉你。")]
 
-# MOCK_SECRET_RUN=env: the explicit one-off non-sudo mode. Every command receives PERSONA_SECRET; the card warns
-# about it after showing the commands. It is separate so the original stdin fixtures stay byte for byte unchanged.
-if os.environ.get("MOCK_SECRET_RUN") == "env":
-    _env_input = {"machine": "studio", "machine_name": "Mac Studio", "delivery": "env",
-                  "purpose": "登录一次局域网设备，查看已连接客户端",
-                  "commands": ["/usr/bin/env sh -c 'test -n \"$PERSONA_SECRET\"'",
-                               "/usr/bin/curl -H \"Authorization: Bearer $PERSONA_SECRET\" https://example.test"]}
-    ITEMS[ASK1] = ITEMS[ASK1] + [
-        it("user", "text", 2, text="帮我登录一次局域网设备，看看现在连着哪些客户端，用一次就行"),
-        it("assistant", "text", 1.5, text="这次不用 sudo。每条命令都会通过 PERSONA_SECRET 拿到密码，请逐条核对后再运行。")]
-    ITEMS[ASK1].append(it("assistant", "tool_use", 1, tool_use_id="toolu_secret_run", tool_name="mcp__persona__secret_run",
-                          tool_input=_env_input))
-    INTERACTIONS.append(
-        {"id": "ix_secret_run", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
-         "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=9),
-         "tool_name": "secret_run", "tool_use_id": "toolu_secret_run", "tool_input": _env_input,
-         "summary": "在 Mac Studio 上运行（%s）：\n" % _env_input["purpose"]
-                    + "\n".join("$ " + c for c in _env_input["commands"])
-                    + "\n警告：你输入的密码会通过 PERSONA_SECRET 直接传给上面列出的每一条命令。编码后的输出可能绕过脱敏。",
-         "fields": [{"key": "password", "label": "密码", "placeholder": "只用这一次，不会保存", "secret": True}]})
 
 # MOCK_SECRET_HANDOFF=1: the hand-off card (secret_handoff, #3962) in Persona's main conversation: the assistant asked to
 # start an Agent on the MacBook with two values from a made-up provider; nothing has been handed over. Its approval is

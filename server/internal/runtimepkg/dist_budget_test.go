@@ -40,6 +40,7 @@ import (
 // Antigravity launchers.check honoring explicit params.model (#15905) adds 1 B (266,213 B).
 // Antigravity withoutStaleWorking coverage for send policy, fork, rewind, modes, and native error reads (#15924) adds 48 B (266,261 B).
 // Runtime package lifecycle support for preserving tools across upgrades (#16016) adds 4,368 B (270,629 B).
+// An agy main chat on Windows finding personad.exe and a cmd.exe media-guard hook that also checks Node.js (#14511) add 163 B (270,792 B).
 // ACP instruction fitting to the mounted device tools and supervision role (#16052) adds 244 B (270,873 B).
 // Antigravity settled-turn recovery across delayed shifted-index exports and structured agy_turn_end turn_duration items (#15619) add 1,169 B (272,042 B).
 // Antigravity non-rewind negative cache for summary_behind GetCascadeTrajectory checks + summarizeTranscript prefix summary reuse (#13086) add 872 B (272,914 B).
@@ -63,12 +64,26 @@ import (
 // Antigravity incremental transcript append (tail anchor + rolling SHA-256 + deferred/periodic verification),
 // sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights (with decoupled
 // raw-byte and object-weight transcriptCache caps) add 1,969 B (289,171 B).
-// Reusing one read-only conversation_summaries connection with a stat-validated parsed snapshot, prepared
-// primary-key lookup and the watch-poll short-circuit (#16403), with the poll gate held open for nativeWorking so
-// main's 400 ms active interval is preserved, adds 1,830 B (291,001 B) on top of main's 289,171 B.
+// Merging #16001 onto that main keeps its settled list-summary / .persona-turn-completion keying and static summary_behind readListedTranscript cache, restores dev/ino/ctime wake-receipt detection, and adds a fixed
+// 4 KiB head-sample integrity check inside the racy window alongside the tail anchor. The union measures
+// 290,316 B exactly. The merge also restores one missing ASI semicolon in main's runtime.js.
+// With the compat.js declaration fix (#16771), main measured 290,321 B.
+// Keeping legacy effort-only requests in the selected model family adds 694 B (291,015 B).
+// Antigravity keep_always declaration, Assistant allow_once-absent fail-closed guard, and MultiEdit/NotebookEdit tool mapping add 101 B (291,116 B).
+// Treating epoch-zero resetTime on untouched Antigravity quota buckets as unset and emitting a SHA-256 account_key for
+// signed-in Antigravity accounts add 180 B (291_296 B).
+// Antigravity unknown-status jitter fixes (CANCELING/BUSY native working, empty 0-step idle, fresh empty-transcript
+// start, settled-turn recovery across transient empty/UNSPECIFIED summary_not_idle and tool-only turns with
+// autonomous-wake cleanup, cached GetCascadeTrajectory idle verification for summary_behind, last_modified_time
+// listed cache invalidation, and sanitized unrecognized-status logging) add 1,066 B (292,362 B).
+// Antigravity Run-prefixed Persona MCP permission normalization (with shell/file/a2a guards), fork mode/model/effort preservation with RPC-gated implicit-option recovery, and assistant capabilities.rewind=false advertisement add 1,976 B (294,338 B).
+// PR #16425 (P0-1) merged onto that main reuses one read-only conversation_summaries connection with a stat-validated
+// parsed snapshot, prepared primary-key lookup and the watch-poll short-circuit (the nativeWorking gate stays open so
+// the active interval keeps evaluating). It reuses main's object-shaped transcriptVersion key and ships summary-db.js
+// through the antigravity/lib/*.js glob. The union measures 296,024 B exactly (+1,686 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 291_001
+	const budget = 296_024
 
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)

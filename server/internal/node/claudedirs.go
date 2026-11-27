@@ -335,7 +335,10 @@ func (n *Node) blockedBy(dir, real, def, defReal string, patterns []string) bool
 	if !claudeDirHasParent(dir) && !claudeDirHasParent(def) && filepath.Clean(dir) == filepath.Clean(def) {
 		return false
 	}
-	return proto.ClaudeDirBlocked(dir, n.home, patterns) || (real != "" && proto.ClaudeDirBlocked(real, n.home, patterns))
+	// Either name of a linked home (a resolved spelling names it by its real path), as dirMatches compares.
+	homeReal := realHome(n.home)
+	return proto.DirPatternMatchedOn(dir, n.home, homeReal, patterns) != "" ||
+		(real != "" && proto.DirPatternMatchedOn(real, n.home, homeReal, patterns) != "")
 }
 
 // reportableDirs: the found directories the hub may remember, those patterns do not block.
@@ -442,7 +445,7 @@ func (n *Node) refreshClaudeDirs() {
 	runs := map[string]claudeRun{}
 	twice := map[string]bool{}
 	for pid, e := range envs {
-		launcher := e.BaseURL != "" || e.Model != "" || e.FastUnavailable || e.Vertex
+		launcher := e.BaseURL != "" || e.Model != "" || e.ConfigDir != "" || e.FastUnavailable || e.Vertex
 		if !launcher && !e.Cmd {
 			continue
 		}

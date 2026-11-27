@@ -82,7 +82,7 @@ func (n *Node) runtimeUsageReport(h *runtimeConn, params json.RawMessage, now ti
 				cwd = row.Cwd
 			}
 		}
-		dir = n.usageDirKey(cwd)
+		dir = n.usageDirKey(cwd, dirs.temps)
 		dirs.want(dir)
 	}
 	u := &n.runtimeUsage
