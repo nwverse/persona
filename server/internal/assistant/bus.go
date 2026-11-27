@@ -539,12 +539,11 @@ func (b *BusHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage,
 	if out, ok, err := b.localDeviceCall(ctx, p); ok { // the manager's own machines (devices.go)
 		return out, err
 	}
-	var out json.RawMessage
-	method := assistantwire.MethodDevice
+	method := assistantwire.DeviceMethod
 	if p.Method == nodeproto.StopIfIdle {
-		method = assistantwire.MethodDeviceRetire
+		method = assistantwire.DeviceRetireMethod
 	}
-	err := b.client.Call(ctx, method, p, &out)
+	out, err := buswire.Call(ctx, b.client, method, p)
 	return out, busError(err)
 }
 
@@ -555,8 +554,7 @@ func (b *BusHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, error
 	if out, ok, err := b.localAppCall(ctx, p); ok { // the manager's extensions, connectors and bots (extensions.go)
 		return out, err
 	}
-	var out json.RawMessage
-	err := b.client.Call(ctx, assistantwire.MethodApp, p, &out)
+	out, err := buswire.Call(ctx, b.client, assistantwire.AppMethod, p)
 	return out, busError(err)
 }
 
@@ -670,24 +668,20 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	}
 	switch method {
 	case assistantwire.MethodHTTP:
-		var p assistantwire.HTTPRequest
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		defer memtrim.AfterLarge(len(p.Body)) // a large upload's buffers go back to the system after it
-		return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
+		return handleBusRequest(ctx, assistantwire.HTTPMethod, decode, func(ctx context.Context, p assistantwire.HTTPRequest) (assistantwire.HTTPResponse, error) {
+			defer memtrim.AfterLarge(len(p.Body)) // a large upload's buffers go back to the system after it
+			return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
+		})
 	case assistantwire.MethodHTTPStreamed: // http.request with its body on a relay of its own (bus_body.go)
-		var p assistantwire.HTTPRequest
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		body, err := b.streamedBody(ctx, p.BodyStream)
-		if err != nil {
-			return nil, &rpc.Error{Code: assistantwire.CodeBodyIncomplete, Message: method + ": " + err.Error()}
-		}
-		p.Body, p.BodyStream = body, nil
-		defer memtrim.AfterLarge(len(p.Body))
-		return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
+		return handleBusRequest(ctx, assistantwire.HTTPStreamedMethod, decode, func(ctx context.Context, p assistantwire.HTTPRequest) (assistantwire.HTTPResponse, error) {
+			body, err := b.streamedBody(ctx, p.BodyStream)
+			if err != nil {
+				return assistantwire.HTTPResponse{}, &rpc.Error{Code: assistantwire.CodeBodyIncomplete, Message: method + ": " + err.Error()}
+			}
+			p.Body, p.BodyStream = body, nil
+			defer memtrim.AfterLarge(len(p.Body))
+			return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
+		})
 	case assistantwire.MethodTools:
 		return handleBusRequest(ctx, assistantwire.ToolsMethod, decode, func(ctx context.Context, target assistantwire.SessionRef) (assistantwire.ToolsResult, error) {
 			return assistantwire.ToolsResult{Tools: s.ToolsFor(ctx, target.MachineID, target.SessionID)}, nil
