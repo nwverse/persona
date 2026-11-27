@@ -6,7 +6,7 @@ Started tasks keep a hub brief (owner request or started_why). Give goal, done_w
 
 Edits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.
 
-Use repositories_list or repository_get when needed; explicit repo URL/path wins. Saved bindings never imply machine/cwd. No lookup for non-repo tasks. Only the owner can close terminals on acceptance.
+Use repositories_list or repository_get when needed; an explicit repository URL or path takes precedence. Bindings never imply machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.
 
 Saved workspace naming plan on existing todo: {"backend":{"operation_id":"<id>"}}. Multi-repo container: {"container":{"selected_repo_ids":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.
 
@@ -111,7 +111,7 @@ Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default
             "type": "string",
             "description": "model id/alias; empty: launcher default"
           },
-          "model_aliases": {"type":"object","description":"Claude Code only: sonnet_model, haiku_model, opus_model, fable_model, subagent_model → concrete IDs; omitted inherit.","additionalProperties":{"type":"string"}},
+          "model_aliases": {"type":"object","description":"Claude Code IDs: sonnet_model, haiku_model, opus_model, fable_model, subagent_model.","additionalProperties":{"type":"string"}},
           "permission": {
             "type": "string",
             "enum": [
