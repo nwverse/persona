@@ -342,7 +342,8 @@ public final class X264Session<Context>: @unchecked Sendable {
         let now = clock()
         guard !ended, let run = active, let oldest = run.pending.first,
               X264Watch.overdue(oldest: oldest.given, now: now) else { return }
-        let detail = String(format: "frame %d still inside after %.0f ms", oldest.index, Double(now &- oldest.given) / 1000)
+        let elapsed = now > oldest.given ? now - oldest.given : 0
+        let detail = String(format: "frame %d still inside after %.0f ms", oldest.index, Double(elapsed) / 1000)
         off(oldest.index == 0 ? .failed : .slow, detail)
     }
 
@@ -388,7 +389,8 @@ public final class X264Session<Context>: @unchecked Sendable {
                     return off(.failed, "frame \(pending.index) out of order (\(timestamp) ms)")
                 }
                 let now = clock()
-                let micros = Int64(bitPattern: now &- pending.given)
+                let elapsed = now > pending.given ? now - pending.given : 0
+                let micros = elapsed > UInt64(Int64.max) ? Int64.max : Int64(elapsed)
                 let own = X264Watch.ownMicros(given: pending.given, lastOut: run.lastOut, now: now)
                 run.lastOut = now
                 onEvent(.frame(sample: sample, keyframe: keyframe, context: pending.context, encodeMicros: micros))
