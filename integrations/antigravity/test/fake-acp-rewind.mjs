@@ -196,6 +196,14 @@ input.on('line', (line) => {
     send({ id: req.id, error: { code: -32000, message: `Unsupported config option: ${req.params.configId}` } })
     return
   }
+  if (req.method === 'session/resume' && Array.isArray(snapshot.resumePlan) && snapshot.resumePlan.length) {
+    const step = snapshot.resumePlan.shift()
+    writeFileSync(`${directory}/trajectory.json`, JSON.stringify(snapshot))
+    if (step?.error) {
+      send({ id: req.id, error: { code: -32603, message: step.error } })
+      return
+    }
+  }
   if (req.method === 'session/resume' || req.method === 'session/load') {
     loaded.add(req.params.sessionId)
     if (snapshot.resumeDefaults) {

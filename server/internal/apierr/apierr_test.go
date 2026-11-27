@@ -56,10 +56,11 @@ func TestCallNotFoundIs404(t *testing.T) {
 func TestCallNotFoundReason(t *testing.T) {
 	const words = "transcript for session 11111111-2222-3333-4444-555555555555 not found"
 	for reason, key := range map[string]string{
-		proto.NotFoundNoTranscript:   "apierr-apierr.session_no_transcript",
-		proto.NotFoundUnknownSession: "apierr-apierr.session_unknown",
-		"":                           "http-status.not_found",
-		"gone_elsewhere":             "http-status.not_found",
+		proto.NotFoundNoTranscript:      "apierr-apierr.session_no_transcript",
+		proto.NotFoundUnknownSession:    "apierr-apierr.session_unknown",
+		proto.NotFoundSessionUnreadable: "apierr-apierr.session_unreadable",
+		"":                              "http-status.not_found",
+		"gone_elsewhere":                "http-status.not_found",
 	} {
 		var data json.RawMessage
 		if reason != "" {

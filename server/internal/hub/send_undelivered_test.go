@@ -205,6 +205,33 @@ func TestSendRefusedForAnotherReasonIsNotKept(t *testing.T) {
 	}
 }
 
+// A conversation whose runtime can no longer read it (404 not_found, reason session_unreadable) fails immediately
+// instead of being kept and retried for a day (#17176).
+func TestSendToUnreadableConversationIsNotKept(t *testing.T) {
+	const raw = "Failed to read session s1; retry, or load it with session/load"
+	h, m, k := undeliveredHub(t, func(context.Context) error {
+		return &rpc.Error{
+			Code:    proto.CodeNotFound,
+			Message: raw,
+			Data:    json.RawMessage(`{"delivered":"none","reason":"session_unreadable"}`),
+		}
+	})
+	w := sendAs(h, m, `{"text":"hi","client_msg_id":"keep-unreadable"}`)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("answer: %d %s, want 404", w.Code, w.Body)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["code"] != proto.CodeNotFound || out["reason"] != proto.NotFoundSessionUnreadable || out["delivered"] != "none" || out["detail"] != raw {
+		t.Fatalf("unexpected body: %v", out)
+	}
+	if kept := k.keeps(); len(kept) != 0 {
+		t.Fatalf("kept %+v", kept)
+	}
+}
+
 // Older owner messages to the conversation are kept: the manager refuses to prepare a newer one, and the hub keeps it
 // behind them without typing anything.
 func TestSendBehindKeptMessagesIsKeptToo(t *testing.T) {

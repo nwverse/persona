@@ -197,6 +197,7 @@ async function fixture(t, options = {}) {
     ] },
     promptError: options.rpcError,
     promptPlan: options.promptPlan,
+    resumePlan: options.resumePlan,
     stepsRequireLoad: options.stepsRequireLoad,
     stepsUnavailable: options.stepsUnavailable,
   }
@@ -640,4 +641,31 @@ test('prepareTranscript refreshes the exported transcript after awaiting a nativ
     page.items.some((item) => item.text === 'Fresh reply during error probe'),
     'session.items must include steps written while awaiting errFlight',
   )
+})
+
+test('session.send fails with not_found session_unreadable when reload still fails to read the session', async (t) => {
+  const unreadable = `Failed to read session ${RAW}; retry, or load it with session/load`
+  const { node, calls } = await fixture(t, {
+    initialCount: 1,
+    resumePlan: [{ error: unreadable }, { error: unreadable }],
+  })
+  await assert.rejects(
+    node.peer.call('session.send', { session_id: SESSION, text: 'Hello?' }),
+    (err) => err.code === 'not_found' && err.data?.delivered === 'none' && err.data?.reason === 'session_unreadable' && err.message === unreadable,
+  )
+  assert.equal(calls().filter((call) => call.method === 'session/resume').length, 2)
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 0)
+})
+
+test('session.send succeeds when the first resume fails to read the session and the reload recovers', async (t) => {
+  const unreadable = `Failed to read session ${RAW}; retry, or load it with session/load`
+  const { node, row, calls, idle } = await fixture(t, {
+    initialCount: 1,
+    resumePlan: [{ error: unreadable }, {}],
+    promptPlan: [{ reply: 'Recovered.' }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Hello?' })
+  await until('recovered reply published', () => row()?.last_text === 'Recovered.' && idle())
+  assert.equal(calls().filter((call) => call.method === 'session/resume').length, 2)
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 1)
 })

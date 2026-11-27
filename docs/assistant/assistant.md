@@ -1849,7 +1849,7 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **In order.** While a conversation has kept messages, `assistant.send_params` answers `undelivered_ahead` for a newer
   owner message, and the hub keeps it behind them instead of letting it overtake.
 - **Gives up after a day.** A message not delivered within 24 hours is marked failed; the owner picks Retry (a new day
-  of tries) or Delete. A conversation that was deleted fails it at once. Retry sends the message even after a try in
+  of tries) or Delete. A conversation that was deleted or that its runtime can no longer read (`not_found`, #17176) fails it at once. Retry sends the message even after a try in
   doubt (the owner looked and said so; a line found by a last look still counts as delivered), and a Retry that cannot
   be saved answers an error and changes nothing. Until the message goes in, each try of the Retry first looks for the
   earlier try, also when the computer was still away at the Retry and comes back later (a try that typed nothing keeps

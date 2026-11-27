@@ -385,6 +385,55 @@ func TestUndeliveredToAGoneConversationFails(t *testing.T) {
 	}
 }
 
+// A conversation whose runtime reports not_found (including unreadable session data after reload) fails kept messages
+// at once instead of retrying for a day (#17176).
+func TestUndeliveredToUnreadableConversationFailsAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     *rpc.Error
+		wantKey string
+	}{
+		{
+			name:    "session_unreadable",
+			err:     &rpc.Error{Code: codeSessionNotFound, Message: "Failed to read session conv1; retry, or load it with session/load", Data: json.RawMessage(`{"delivered":"none","reason":"session_unreadable"}`)},
+			wantKey: "assistant-undelivered.unreadable",
+		},
+		{
+			name:    "plain_not_found",
+			err:     &rpc.Error{Code: codeSessionNotFound, Message: "session not found"},
+			wantKey: "assistant-undelivered.gone",
+		},
+	} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			t.Run(tc.name+"/"+string(lang), func(t *testing.T) {
+				s, f := newQuietServiceOn(t, &memStore{})
+				if _, err := s.KeepUndelivered(context.Background(), assistantwire.KeepUndeliveredParams{
+					MachineID: "server", SessionID: "conv1", Lang: string(lang),
+					Params: map[string]any{"text": "hello", "client_msg_id": "msg-1"},
+				}); err != nil {
+					t.Fatal(err)
+				}
+				failSends(f, tc.err)
+				s.undeliveredPass(context.Background(), time.Now().Add(time.Hour))
+				q := undeliveredOf(t, s, "conv1")
+				if len(q) != 1 || q[0].State != proto.UndeliveredFailed {
+					t.Fatalf("after %s: %+v", tc.name, q)
+				}
+				want := i18n.T(lang, tc.wantKey)
+				if q[0].Error != want {
+					t.Fatalf("error = %q, want %q", q[0].Error, want)
+				}
+				// No further send attempts on later passes.
+				before := sendCalls(f, "msg-1")
+				s.undeliveredPass(context.Background(), time.Now().Add(2*time.Hour))
+				if after := sendCalls(f, "msg-1"); after != before {
+					t.Fatalf("retried failed message: before=%d after=%d", before, after)
+				}
+			})
+		}
+	}
+}
+
 // conversation_send to a conversation that cannot start keeps the message in its queue instead of failing.
 func TestConversationSendToOneThatCannotStartIsQueued(t *testing.T) {
 	s, f := newQuietService(t)

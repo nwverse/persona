@@ -622,7 +622,7 @@ func (s *Service) undeliveredSend(ctx context.Context, id string) {
 			s.logf("undelivered: a kept message to %s may have gone in (try %d): %v; looking for it", short(id), k.Attempts+1, err)
 		case undeliveredGone(err):
 			saveErr = s.updateKeptLocked(id, k.ID, func(m *keptMessage) {
-				m.State, m.TriedAt, m.Error = proto.UndeliveredFailed, time.Time{}, i18n.T(i18n.Lang(m.Lang), "assistant-undelivered.gone")
+				m.State, m.TriedAt, m.Error = proto.UndeliveredFailed, time.Time{}, undeliveredGoneMessage(i18n.Lang(m.Lang), err)
 			})
 		default: // refused before anything was typed: tried again with backoff
 			saveErr = s.updateKeptLocked(id, k.ID, func(m *keptMessage) {
@@ -727,10 +727,31 @@ func keptErrCode(err error) string {
 	return ""
 }
 
-// undeliveredGone: the conversation will never take it (deleted, gone): nothing to try again.
+func keptErrReason(err error) string {
+	var re *rpc.Error
+	if !errors.As(err, &re) || len(re.Data) == 0 {
+		return ""
+	}
+	var data struct {
+		Reason string `json:"reason"`
+	}
+	if json.Unmarshal(re.Data, &data) != nil {
+		return ""
+	}
+	return data.Reason
+}
+
+// undeliveredGone: the conversation will never take it (deleted, gone, or unreadable by its runtime): nothing to try again (#17176).
 func undeliveredGone(err error) bool {
 	code := keptErrCode(err)
-	return code == "conversation_deleted" || code == CodeBadRequest || strings.Contains(err.Error(), "is gone")
+	return code == "conversation_deleted" || code == codeSessionNotFound || code == CodeBadRequest || strings.Contains(err.Error(), "is gone")
+}
+
+func undeliveredGoneMessage(lang i18n.Lang, err error) string {
+	if keptErrReason(err) == proto.NotFoundSessionUnreadable {
+		return i18n.T(lang, "assistant-undelivered.unreadable")
+	}
+	return i18n.T(lang, "assistant-undelivered.gone")
 }
 
 // keptLocked is kept message mid of conversation sid, to change in memory only (nil: there is none); b.mu is held.

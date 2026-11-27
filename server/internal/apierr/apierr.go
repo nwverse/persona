@@ -476,12 +476,13 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeSwitchBusy:            "rpc-errors.switch_busy",
 }
 
-// notFoundKeys word a node's not_found by why its session's history can't be read (data.reason, node/transcript_files.go
-// readErr, #11388). One without a known reason (an older node, a runtime's own answer, a missing file) keeps the plain
-// summary.
+// notFoundKeys word a node's or runtime's not_found by why its session can't be read (data.reason,
+// node/transcript_files.go readErr, #11388, #17176). One without a known reason (an older node, a runtime's own
+// answer, a missing file) keeps the plain summary.
 var notFoundKeys = map[string]string{
-	proto.NotFoundNoTranscript:   "apierr-apierr.session_no_transcript",
-	proto.NotFoundUnknownSession: "apierr-apierr.session_unknown",
+	proto.NotFoundNoTranscript:      "apierr-apierr.session_no_transcript",
+	proto.NotFoundUnknownSession:    "apierr-apierr.session_unknown",
+	proto.NotFoundSessionUnreadable: "apierr-apierr.session_unreadable",
 }
 
 // openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
