@@ -59,13 +59,13 @@ describe("macOS unified titlebar bridge & Apple G2 contour", () => {
     expect(plain.clip.startsWith("M 14,0 ")).toBe(true);
 
     const rail = appleG2Contour(900, 600, "rail");
-    expect(rail.clip.startsWith("M 116,0 ")).toBe(true);
-    expect(rail.clip).toContain("14,44 H 84 C 95.5,44");
-    expect(rail.stroke).toContain("14,44.5 H 84.5");
+    expect(rail.clip.startsWith("M 126,0 ")).toBe(true);
+    expect(rail.clip).toContain("14,44 H 94 C 105.5,44");
+    expect(rail.stroke).toContain("14,44.5 H 94.5");
 
     const hidden = appleG2Contour(900, 600, "hidden");
-    expect(hidden.clip.startsWith("M 166,0 ")).toBe(true);
-    expect(hidden.clip).toContain("14,44 H 134");
+    expect(hidden.clip.startsWith("M 180,0 ")).toBe(true);
+    expect(hidden.clip).toContain("14,44 H 148");
   });
 
   it("clips <main> immediately on initial mount in rail mode (Cmd+R reload regression)", () => {
@@ -86,25 +86,28 @@ describe("macOS unified titlebar bridge & Apple G2 contour", () => {
     }
     act(() => root.render(<ShellProbe />));
     const main = host.querySelector("main")!;
-    expect(main.style.clipPath).toContain("M 116,0 ");
+    expect(main.style.clipPath).toContain("M 126,0 ");
     expect(host.querySelector("[data-mac-contour]")).not.toBeNull();
   });
 
-  it("places collapse button inside MacBayTools in expanded mode without duplicate search button and collapses to rail (#17136)", () => {
+  it("places collapse and search buttons side-by-side inside MacBayTools without a divider across expanded, rail, and hidden states", () => {
     const onSearch = vi.fn();
     setSidebarCollapsed(false);
     act(() => root.render(<MacBayTools bay="expanded" onSearch={onSearch} />));
     const expandedButtons = host.querySelectorAll("button");
-    expect(expandedButtons).toHaveLength(1);
+    expect(expandedButtons).toHaveLength(2);
     expect(expandedButtons[0]!.getAttribute("aria-label")).toBe("收起侧边栏");
     expect(expandedButtons[0]!.getAttribute("aria-expanded")).toBe("true");
+    expect(expandedButtons[1]!.getAttribute("aria-label")).toBe("搜索会话");
     const tools = host.querySelector<HTMLElement>("[data-mac-bay-tools]")!;
-    expect(tools.style.left).toBe("80px");
-    expect(tools.style.top).toBe("11px");
+    expect(tools.style.left).toBe("86px");
+    expect(tools.style.top).toBe("10px");
+    expect(tools.querySelector(".w-px")).toBeNull();
 
     act(() => expandedButtons[0]!.click());
     expect(getLayout().sidebarCollapsed).toBe(true);
-    expect(onSearch).not.toHaveBeenCalled();
+    act(() => expandedButtons[1]!.click());
+    expect(onSearch).toHaveBeenCalledTimes(1);
   });
 
   it("expands from rail and exits maximized hidden state when MacBayTools expand button is clicked", () => {

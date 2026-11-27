@@ -81,6 +81,13 @@
 [data-sidebar-scroller] {
   scroll-padding-top: calc(var(--sidebar-sticky-top, 0px) + var(--sidebar-controls-height, 0px) + var(--sidebar-row));
 }
+/* Fade overflowing sidebar row text before the overlay ⋯ button so "..." and "⋯" never read as six dots. */
+[data-sidebar-rows] .group\/row:has(> button[aria-haspopup="menu"]):hover > :is(a, div) .truncate,
+[data-sidebar-rows] .group\/row:has(> button[aria-haspopup="menu"]) > :is(a, div)[aria-current="page"] .truncate {
+  text-overflow: clip;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+}
 
 /* Assistant trays (#4656): an open one lets the dock (ChatView's DOCK_MAX) take most of what is visible, the chat above
    giving up the room, and fills only what it needs; expanded, it fills the chat column and the chat steps aside. Count
@@ -783,10 +790,10 @@ select:not([multiple], [size], .appearance-none) {
     -webkit-app-region: no-drag;
   }
   [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 header.h-14 {
-    padding-left: 130px;
+    padding-left: 138px;
   }
   [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 header.h-14 {
-    padding-left: 180px;
+    padding-left: 192px;
   }
   [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main > .min-h-0 > * > :not(:first-child) header.h-14 {
     padding-left: 1rem;
@@ -854,6 +861,22 @@ select:not([multiple], [size], .appearance-none) {
 }
 :root[data-surface-style="liquid-glass"] [data-sidebar-column] {
   text-shadow: var(--glass-sidebar-shadow);
+}
+@media (width >= 64rem) and (prefers-reduced-transparency: no-preference) {
+  :root[data-surface-style="liquid-glass"] [data-sidebar-column] {
+    --inset: rgba(15, 23, 42, 0.065);
+    --surface: rgba(255, 255, 255, 0.78);
+    --field: rgba(15, 23, 42, 0.08);
+    --shadow-hairline: 0 0 0 1px rgba(15, 23, 42, 0.09);
+    --shadow-btn: inset 0 1px 0 rgba(255, 255, 255, 0.88), 0 1px 2px rgba(15, 23, 42, 0.08);
+  }
+  :root.dark[data-surface-style="liquid-glass"] [data-sidebar-column] {
+    --inset: rgba(255, 255, 255, 0.075);
+    --surface: rgba(255, 255, 255, 0.16);
+    --field: rgba(255, 255, 255, 0.10);
+    --shadow-hairline: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 0 0 1px rgba(255, 255, 255, 0.10);
+    --shadow-btn: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 1px 3px rgba(0, 0, 0, 0.22);
+  }
 }
 @media (width < 64rem) {
   :root[data-surface-style="liquid-glass"] [data-sidebar-column] {
