@@ -79,11 +79,19 @@ func (n *Node) checkOrcaEngine(ctx context.Context) {
 	}
 }
 
-// Why a start could not reach an engine (engine_missing's data reason, the hub's rpc-errors.engine_<reason>).
+// Why a start could not reach an engine (engine_missing's data reason, the hub's rpc-errors.engine_<reason>): Orca's
+// (orcaMissing), and since #17057 any engine's: it did not answer (unavailable), herdr's autostart failed too
+// (start_failed), a stopped session's resume found no engine to open it in (resume_unavailable), the start named an
+// engine the computer does not turn on (not_enabled), the computer turns on none (none).
 const (
-	engineNotRunning   = "not_running"
-	engineNotInstalled = "not_installed"
-	engineIncompatible = "incompatible"
+	engineNotRunning        = "not_running"
+	engineNotInstalled      = "not_installed"
+	engineIncompatible      = "incompatible"
+	engineUnavailable       = "unavailable"
+	engineStartFailed       = "start_failed"
+	engineResumeUnavailable = "resume_unavailable"
+	engineNotEnabled        = "not_enabled"
+	engineNone              = "none"
 )
 
 // orcaUnreachable: err says Orca is not running or speaks a protocol Persona does not (what orcaMissing words).
