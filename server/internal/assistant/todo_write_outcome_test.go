@@ -377,7 +377,7 @@ func TestOwnerOKInDoubtTakesNoDefaultAtTheDeadline(t *testing.T) {
 		sent int // what reaches the Agent at the deadline
 	}{
 		{"in doubt", context.DeadlineExceeded, 0},
-		{"never sent", rpc.NotSent(context.Canceled), 1},
+		{"failed, nothing typed", errors.New("the link dropped"), 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, f, todo, _, _ := conclusionService(t, false)
