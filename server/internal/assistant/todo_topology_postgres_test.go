@@ -75,8 +75,11 @@ func TestTodoTopologyPostgresSplitRollbackAndRetry(t *testing.T) {
 	if rows, err := st.ListTodos(ctx); err != nil || len(rows) != 1 || rows[0].Notes != source.Notes {
 		t.Fatalf("failed split wrote to PostgreSQL: rows=%+v err=%v", rows, err)
 	}
-	if rows := e.s.todosWhere(ctx, "*", func(*Todo) bool { return true }); len(rows) != 1 || rows[0].Notes != source.Notes {
-		t.Fatalf("failed split published to memory: %+v", rows)
+	e.s.todos.mu.RLock()
+	liveCount := len(e.s.todos.todos)
+	e.s.todos.mu.RUnlock()
+	if live, ok := e.s.todoNow(source.ID); !ok || liveCount != 1 || live.Notes != source.Notes {
+		t.Fatalf("failed split published to memory: count=%d source=%+v", liveCount, live)
 	}
 	if rows, err := st.ListActiveTodoBlockers(ctx); err != nil || len(rows) != 1 || rows[0].ID != blocker.ID {
 		t.Fatalf("failed split changed blockers: rows=%+v err=%v", rows, err)
