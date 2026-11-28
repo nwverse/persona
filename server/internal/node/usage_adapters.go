@@ -34,7 +34,7 @@ type usageAdapter interface {
 func (n *Node) usageAdapters() []usageAdapter {
 	return []usageAdapter{claudeUsage{}, codexUsage{tokenuse.Codex, (*Node).meteredCodexHomes},
 		codexUsage{tokenuse.Traex, func(n *Node) []string { return []string{n.traexHome()} }},
-		piUsageFiles{tokenuse.Pi, piAgentDir}, piUsageFiles{tokenuse.Omp, ompAgentDir}}
+		piUsageFiles{tokenuse.Pi, piAgentDir}, piUsageFiles{tokenuse.Omp, ompAgentDir}, agyUsage{}}
 }
 
 // usageAgents are the agents this node meters, by file and by query.
@@ -182,4 +182,108 @@ func piAgentDir(home string) string {
 		return d
 	}
 	return filepath.Join(home, ".pi", "agent")
+}
+
+// agyUsage: Antigravity (agy) conversation transcripts under each known data root
+// (<root>/brain/<conversation>/.system_generated/logs/transcript.jsonl, falling back to transcript_full.jsonl).
+// A node bound to a session scope reads none.
+type agyUsage struct{}
+
+func (agyUsage) agent() string           { return agyAgent }
+func (agyUsage) parser() tokenuse.Parser { return tokenuse.NewAgyParser() }
+
+// agyUsageRoots returns the default agy data root plus any extra multi-account roots discovered by the node.
+func (n *Node) agyUsageRoots() []string {
+	def := n.agyDataRoot()
+	n.agyRoots.mu.Lock()
+	extra := append([]string(nil), n.agyRoots.extra...)
+	n.agyRoots.mu.Unlock()
+	var out []string
+	seen := map[string]bool{}
+	for _, root := range append([]string{def}, extra...) {
+		if root == "" {
+			continue
+		}
+		key := root
+		if real, err := filepath.EvalSymlinks(root); err == nil {
+			key = real
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, root)
+	}
+	return out
+}
+
+func (agyUsage) paths(n *Node, _ time.Time) []string {
+	if n.sessionScope != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	compactRel := filepath.FromSlash(agyTranscriptPath)
+	fullRel := filepath.FromSlash(agyFullTranscriptPath)
+	for _, root := range n.agyUsageRoots() {
+		brainDir := filepath.Join(root, "brain")
+		entries, err := os.ReadDir(brainDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if !entry.IsDir() || strings.HasPrefix(name, ".") {
+				continue
+			}
+			convDir := filepath.Join(brainDir, name)
+			candidate := filepath.Join(convDir, compactRel)
+			if st, err := os.Stat(candidate); err != nil || !st.Mode().IsRegular() {
+				candidate = filepath.Join(convDir, fullRel)
+				if st, err := os.Stat(candidate); err != nil || !st.Mode().IsRegular() {
+					continue
+				}
+			}
+			if !seen[candidate] {
+				seen[candidate] = true
+				out = append(out, candidate)
+			}
+		}
+	}
+	return out
+}
+
+// agyUsageConvDir returns the conversation directory (<root>/brain/<id>) for a transcript path.
+func agyUsageConvDir(path string) string {
+	logs := filepath.Dir(path)
+	if filepath.Base(logs) != "logs" {
+		return ""
+	}
+	sysgen := filepath.Dir(logs)
+	if filepath.Base(sysgen) != ".system_generated" {
+		return ""
+	}
+	convDir := filepath.Dir(sysgen)
+	if filepath.Base(filepath.Dir(convDir)) != "brain" {
+		return ""
+	}
+	return convDir
+}
+
+// session returns the Persona session id ("agy-<conversation>") so launcher and start-dir state lookups match.
+func (agyUsage) session(path string) string {
+	convDir := agyUsageConvDir(path)
+	if convDir == "" {
+		return ""
+	}
+	return agyAgent + "-" + filepath.Base(convDir)
+}
+
+// startDir reads the conversation's .persona-session.json cwd when present.
+func (agyUsage) startDir(path string) string {
+	convDir := agyUsageConvDir(path)
+	if convDir == "" {
+		return ""
+	}
+	return headCwd(filepath.Join(convDir, ".persona-session.json"))
 }

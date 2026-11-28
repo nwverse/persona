@@ -50,7 +50,7 @@ func (u *piUsage) tokens() Tokens {
 }
 
 // PiParser reads a session file of agent's (pi, or omp: the same format).
-func PiParser(agent string) Parser { return &piParser{agent: agent} }
+func PiParser(agent string) Parser { return lineParser((&piParser{agent: agent}).line) }
 
 type piParser struct {
 	agent string
@@ -62,7 +62,7 @@ var (
 	piModelChangeMark = []byte(`"model_change"`)
 )
 
-func (p *piParser) Line(line []byte) (Record, bool) {
+func (p *piParser) line(line []byte) (Record, bool) {
 	change := bytes.Contains(line, piModelChangeMark)
 	if !change && !bytes.Contains(line, piUsageMark) {
 		return Record{}, false

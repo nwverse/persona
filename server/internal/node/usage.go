@@ -343,19 +343,24 @@ func startOffsetFrom(path string, size int64, cutoff time.Time, small int64) (of
 	}
 }
 
-// firstTime is the first "timestamp" value in b (escaped quotes inside messages do not match).
+// firstTime is the first "timestamp" or "created_at" value in b (escaped quotes inside messages do not match).
 func firstTime(b []byte) time.Time {
-	key := []byte(`"timestamp":"`)
-	i := bytes.Index(b, key)
-	if i < 0 {
+	bestIdx := -1
+	var bestRest []byte
+	for _, key := range [][]byte{[]byte(`"timestamp":"`), []byte(`"created_at":"`)} {
+		if i := bytes.Index(b, key); i >= 0 && (bestIdx < 0 || i < bestIdx) {
+			bestIdx = i
+			bestRest = b[i+len(key):]
+		}
+	}
+	if bestIdx < 0 {
 		return time.Time{}
 	}
-	rest := b[i+len(key):]
-	j := bytes.IndexByte(rest, '"')
+	j := bytes.IndexByte(bestRest, '"')
 	if j < 0 {
 		return time.Time{}
 	}
-	t, _ := time.Parse(time.RFC3339Nano, string(rest[:j]))
+	t, _ := time.Parse(time.RFC3339Nano, string(bestRest[:j]))
 	return t
 }
 

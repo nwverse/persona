@@ -178,3 +178,54 @@ func TestOpencodeRow(t *testing.T) {
 		t.Error("a failed compaction's request is not counted")
 	}
 }
+
+// Antigravity (agy): terminal PLANNER_RESPONSE and CHECKPOINT steps carry per-request usage with
+// input_tokens exclusive of cache_read_tokens; running steps, unrelated step types, zero-token lines
+// and malformed JSON are skipped; CHECKPOINT inherits the latest model when omitted.
+func TestAgyParser(t *testing.T) {
+	p := NewAgyParser()
+	for i, c := range []struct {
+		line  string
+		ok    bool
+		model string
+		key   string
+		t     Tokens
+	}{
+		{`{"step_index":0,"type":"USER_INPUT","status":"DONE","created_at":"2026-11-28T08:54:17Z","content":"hi"}`,
+			false, "", "", Tokens{}},
+		{`{"step_index":1,"type":"PLANNER_RESPONSE","status":"RUNNING","created_at":"2026-11-28T08:54:18Z","model":"gemini-4-neon-medium","input_tokens":100,"output_tokens":5}`,
+			false, "", "", Tokens{}},
+		{`{"step_index":1,"type":"PLANNER_RESPONSE","status":"PENDING","created_at":"2026-11-28T08:54:18Z","model":"gemini-4-neon-medium","input_tokens":100,"output_tokens":5}`,
+			false, "", "", Tokens{}},
+		{`{"step_index":1,"type":"PLANNER_RESPONSE","status":"IN_PROGRESS","created_at":"2026-11-28T08:54:18Z","model":"gemini-4-neon-medium","input_tokens":100,"output_tokens":5}`,
+			false, "", "", Tokens{}},
+		{`{"step_index":1,"type":"PLANNER_RESPONSE","status":"QUEUED","created_at":"2026-11-28T08:54:18Z","model":"gemini-4-neon-medium","input_tokens":100,"output_tokens":5}`,
+			false, "", "", Tokens{}},
+		{`{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-28T08:54:18Z","model":"gemini-4-neon-medium","input_tokens":23514,"cache_read_tokens":0,"output_tokens":795}`,
+			true, "gemini-4-neon-medium", "agy:PLANNER_RESPONSE:1:2026-11-28T08:54:18Z:23514:0:0:795",
+			Tokens{Input: 23514, Output: 795}},
+		{`{"step_index":7,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-28T08:54:28Z","model":"gemini-4-neon-medium","input_tokens":7736,"cache_read_tokens":23515,"output_tokens":789}`,
+			true, "gemini-4-neon-medium", "agy:PLANNER_RESPONSE:7:2026-11-28T08:54:28Z:7736:23515:0:789",
+			Tokens{Input: 7736, CacheRead: 23515, Output: 789}},
+		// CHECKPOINT without model inherits the session's latest PLANNER_RESPONSE model.
+		{`{"step_index":85,"type":"CHECKPOINT","status":"DONE","created_at":"2026-11-28T08:55:00Z","input_tokens":3455,"cache_read_tokens":453842,"output_tokens":6775}`,
+			true, "gemini-4-neon-medium", "agy:CHECKPOINT:85:2026-11-28T08:55:00Z:3455:453842:0:6775",
+			Tokens{Input: 3455, CacheRead: 453842, Output: 6775}},
+		// Nested usage fallback, cache_write_1h raising cache_write, updated_at fallback, bracketed model ignored.
+		{`{"step_index":90,"type":"PLANNER_RESPONSE","status":"DONE","updated_at":"2026-11-28T08:56:00Z","model":"<synthetic>","usage":{"input_tokens":10,"cache_read_input_tokens":200,"cache_write_1h_tokens":30,"output_tokens":4}}`,
+			true, "", "agy:PLANNER_RESPONSE:90:2026-11-28T08:56:00Z:10:200:30:4",
+			Tokens{Input: 10, CacheRead: 200, CacheWrite: 30, CacheWrite1h: 30, Output: 4}},
+		// Zero-token step and malformed JSON are skipped.
+		{`{"step_index":91,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-28T08:56:05Z","model":"gemini-4-neon-medium","input_tokens":0,"output_tokens":0}`,
+			false, "", "", Tokens{}},
+		{`{"step_index":92,"type":"PLANNER_RESPONSE", broken`,
+			false, "", "", Tokens{}},
+		{`{"step_index":93,"type":"GENERIC","status":"DONE","created_at":"2026-11-28T08:56:10Z","content":"PLANNER_RESPONSE"}`,
+			false, "", "", Tokens{}},
+	} {
+		r, ok := p.Line([]byte(c.line))
+		if ok != c.ok || ok && (r.Model != c.model || r.Key != c.key || r.Tokens != c.t || r.Agent != agyAgent || r.Time.IsZero()) {
+			t.Errorf("line %d: %v %+v, want %v %q %q %+v", i, ok, r, c.ok, c.model, c.key, c.t)
+		}
+	}
+}
