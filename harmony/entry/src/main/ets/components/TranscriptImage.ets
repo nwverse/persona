@@ -1,13 +1,11 @@
-import { IconActions } from '../design/IconActions';
 import { Colors } from '../design/Colors';
-import { ButtonStyles } from '../design/Controls';
 import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
-import type { LoadedMessageImage, MessageImageGalleryEntry, MessageImageGalleryWindow } from '../core/MessageImageGallery';
-import { messageImageGalleryWindow, sameMessageImageSource } from '../core/MessageImageGallery';
-import { loadMessageImageGallery } from '../models/MessageImageGallery';
+import type { ConversationPhotoRequest, LoadedMessageImage, MessageImageGalleryEntry, MessageImageGalleryWindow } from '../core/MessageImageGallery';
+import { fittedThumbnail, messageImageGalleryWindow, sameMessageImageSource } from '../core/MessageImageGallery';
 import { loadMessageImage } from '../models/MessageImage';
-import { previewMessageImageGallery } from '../platform/NativePreview';
+import { readDisplayThumbnail, readThumbnail, thumbnailByteLimit, thumbnailCachePath, writeThumbnail } from '../platform/MessageThumbnailCache';
+import { ToolGlyph } from '../design/ToolGlyph';
 import type { ClientModel } from '../models/ClientModel';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
@@ -21,6 +19,12 @@ export struct TranscriptImage {
   @Param sourceKey: string = '';
   @Param galleryEntries: MessageImageGalleryEntry[] = [];
   @Param galleryIndex: number = -1;
+  @Param label: string = '';
+  @Param thumbnailEdge: number = 384;
+  @Param maximumThumbnailWidth: number = 0;
+  @Param maximumThumbnailHeight: number = 0;
+  private thumbnailVisible: boolean = false;
+  @Event onPreview: (request: ConversationPhotoRequest) => void = () => {};
   @Event onEdit: (image: LoadedMessageImage) => void = (_image: LoadedMessageImage): void => {};
   private loaded: LoadedMessageImage | undefined;
   @Local pixels: image.PixelMap | undefined;
@@ -113,8 +117,36 @@ export struct TranscriptImage {
       (model.profile.hubId || model.profile.id) === hub && (!gallerySignature || this.gallerySignature() === gallerySignature);
   }
 
-  private async load(): Promise<void> {
-    if (this.pixels || this.busy || !this.active || !this.mounted || !this.model.connected || !this.model.isChat()) return;
+  private cachePath(): string {
+    if (this.maximumThumbnailWidth <= 0) return '';
+    try {
+      const host = this.getUIContext().getHostContext();
+      const entry = this.sourceEntry();
+      return host ? thumbnailCachePath(host as common.UIAbilityContext, this.model.profile.hubId || this.model.profile.id,
+        JSON.stringify([this.model.scope(), entry.target, entry.key, entry.itemId, entry.remotePath])) : '';
+    } catch (_) { return ''; }
+  }
+
+  private async drawThumbnail(data: ArrayBuffer, valid: () => boolean): Promise<boolean> {
+    const source = image.createImageSource(data);
+    try {
+      const info = await source.getImageInfo();
+      if (!valid()) return false;
+      if (info.size.width <= 0 || info.size.height <= 0 || info.size.width * info.size.height > 40000000) throw new Error('response_too_large');
+      const edge = this.maximumThumbnailWidth > 0 ? this.getUIContext().vp2px(Math.max(this.maximumThumbnailWidth, this.maximumThumbnailHeight)) : 1600;
+      const scale = Math.min(1, edge / Math.max(info.size.width, info.size.height));
+      const pixels = await source.createPixelMap({ desiredSize:{ width:Math.max(1, Math.round(info.size.width * scale)), height:Math.max(1, Math.round(info.size.height * scale)) } });
+      if (!valid()) { await pixels.release(); return false; }
+      const previous = this.pixels;
+      this.pixels = pixels; this.ratio = info.size.width / info.size.height;
+      previous?.release();
+      return true;
+    } finally { await source.release(); }
+  }
+
+  private async load(requested: boolean = false): Promise<void> {
+    if (this.maximumThumbnailWidth > 0 && !requested && !this.thumbnailVisible) return;
+    if (this.pixels || this.busy || !this.active || !this.mounted || !this.model.isChat()) return;
     const model = this.model;
     const revision = this.revision;
     const visit = this.activityVisit;
@@ -124,35 +156,44 @@ export struct TranscriptImage {
     const hub = model.profile.hubId || model.profile.id;
     const galleryVisit = this.galleryVisit;
     const valid = (): boolean => this.current(model, revision, visit, generation, scope, target, hub, galleryVisit, '');
+    const cache = this.cachePath();
+    const local = (): boolean => this.active && this.mounted && this.activityVisit === visit && this.revision === revision &&
+      this.model === model && model.owns(generation, scope) && model.target() === target && (model.profile.hubId || model.profile.id) === hub;
     this.busy = true;
     this.failed = false;
-    let source: image.ImageSource | undefined;
     try {
-      const response = await loadMessageImage(model, this.itemId, this.remotePath);
+      const saved = cache ? await readDisplayThumbnail(cache) : undefined;
+      if (saved && local()) {
+        try {
+          const drawn = await this.drawThumbnail(saved, local);
+          // A recorded image item is immutable; a file at a workspace path can change.
+          if (drawn && this.itemId && !this.remotePath) return;
+        } catch (_) { /* Refresh a stale cache file when online. */ }
+      }
       if (!valid()) return;
-      source = image.createImageSource(response.data);
-      const info = await source.getImageInfo();
-      if (!valid()) return;
-      if (info.size.width <= 0 || info.size.height <= 0 || info.size.width * info.size.height > 40000000)
-        throw new Error('response_too_large');
-      const scale = Math.min(1, 1600 / Math.max(info.size.width, info.size.height));
-      const pixels = await source.createPixelMap({ desiredSize: { width: Math.max(1, Math.round(info.size.width * scale)), height: Math.max(1, Math.round(info.size.height * scale)) } });
-      if (!valid()) { await pixels.release(); return; }
-      this.ratio = info.size.width / info.size.height;
-      this.pixels = pixels;
-      const entry = this.sourceEntry();
-      this.loaded = { source: entry, target: target, scope: scope, generation: generation, hub: hub,
-        data: response.data, mime: response.mime };
+      const response = await loadMessageImage(model, this.itemId, this.remotePath, this.maximumThumbnailWidth > 0, this.thumbnailEdge);
+      if (!valid() || !await this.drawThumbnail(response.data, valid) || !valid()) return;
+      if (response.original !== false) this.loaded = { source:this.sourceEntry(), target, scope, generation, hub, data:response.data, mime:response.mime };
+      if (cache) {
+        if (response.data.byteLength <= thumbnailByteLimit) await writeThumbnail(cache, response.data, valid);
+        else if (this.pixels) {
+          const packer = image.createImagePacker();
+          try {
+            const small = await packer.packToData(this.pixels, {format:'image/jpeg',quality:76});
+            if (valid()) await writeThumbnail(cache, small, valid);
+          } finally { await packer.release(); }
+        }
+      }
     } catch (_) {
       if (valid()) this.failed = true;
     } finally {
-      await source?.release();
       if (revision === this.revision && visit === this.activityVisit) this.busy = false;
     }
   }
 
   aboutToDisappear(): void {
     this.mounted = false;
+    this.thumbnailVisible = false;
     this.activityVisit++;
     this.sourceVisit++;
     this.revision++;
@@ -162,38 +203,28 @@ export struct TranscriptImage {
     this.loaded = undefined;
   }
 
-  private async preview(): Promise<void> {
-    const loaded = this.loaded;
-    const window = this.galleryWindow();
-    if (!loaded || !window || !sameMessageImageSource(window.entries[window.selectedIndex], loaded.source)) return;
-    const model = this.model;
-    const revision = this.revision;
-    const visit = this.activityVisit;
-    const sourceVisit = this.sourceVisit;
-    const galleryVisit = this.galleryVisit;
-    const target = model.target();
-    const generation = model.connectionGeneration();
-    const scope = model.scope();
-    const hub = model.profile.hubId || model.profile.id;
-    if (loaded.target !== target || loaded.scope !== scope || loaded.generation !== generation || loaded.hub !== hub) return;
-    const validBeforeOpen = (): boolean => this.current(model, revision, visit, generation, scope, target, hub, galleryVisit, window.signature);
-    const validWhilePresented = (): boolean => this.currentOwner(model, revision, sourceVisit, generation, scope, target,
-      hub, galleryVisit, window.signature);
-    if (!validBeforeOpen()) return;
-    const host = this.getUIContext().getHostContext();
-    if (!host) return;
-    try {
-      const gallery = await loadMessageImageGallery(model, window, validBeforeOpen, loaded);
-      if (!validBeforeOpen() || gallery.target !== target) return;
-      await previewMessageImageGallery(host as common.UIAbilityContext, hub, gallery.entries, gallery.selectedIndex,
-        validBeforeOpen, validWhilePresented);
-    } catch (_) {
-      if (validBeforeOpen()) this.failed = true;
-    }
+  private preview(): void {
+    const gallery = this.galleryWindow();
+    if (!this.active || !this.mounted || !this.pixels || !gallery ||
+      !sameMessageImageSource(gallery.entries[gallery.selectedIndex], this.sourceEntry())) return;
+    const path = this.cachePath();
+    this.onPreview({ gallery, scope:this.model.scope(), hub:this.model.profile.hubId || this.model.profile.id,
+      thumbnail:path ? readThumbnail(path) : undefined, original:this.loadedOwnerCurrent() ? this.loaded : undefined });
   }
 
-  private editLoaded(): void {
-    const loaded = this.loaded;
+  private async editLoaded(): Promise<void> {
+    const model = this.model, generation = model.connectionGeneration(), scope = model.scope(), target = model.target();
+    const revision = this.revision, visit = this.activityVisit, gallery = this.galleryVisit, hub = model.profile.hubId || model.profile.id;
+    let loaded = this.loaded;
+    if (!loaded && model.connected && this.pixels) {
+      try {
+        const data = await loadMessageImage(model, this.itemId, this.remotePath);
+        if (!this.current(model, revision, visit, generation, scope, target, hub, gallery, '')) return;
+        if (!['image/jpeg','image/png'].includes(data.mime)) { this.getUIContext().getPromptAction().showToast({message:tr('preview_unavailable')}); return; }
+        loaded = { source:this.sourceEntry(), target, scope, generation, hub, data:data.data, mime:data.mime };
+        this.loaded = loaded;
+      } catch (_) { return; }
+    }
     const window = this.galleryWindow();
     if (!this.active || !this.mounted || !loaded || !window || !sameMessageImageSource(window.entries[window.selectedIndex], loaded.source) ||
       loaded.target !== this.model.target() || loaded.scope !== this.model.scope() ||
@@ -204,18 +235,51 @@ export struct TranscriptImage {
 
   @Builder imageMenu() {
     Menu() {
-      MenuItem({ content: tr('edit') }).enabled(!!this.loaded && !this.busy &&
-        ['image/jpeg', 'image/png'].includes(this.loaded.mime)).onClick(() => this.editLoaded())
+      MenuItem({ content: tr('edit') }).enabled(!!this.pixels && this.model.connected && !this.busy &&
+        (!this.loaded || ['image/jpeg', 'image/png'].includes(this.loaded.mime))).onClick(() => { void this.editLoaded(); })
     }
   }
 
+  @Computed get thumbnailSize(): number[] {
+    return fittedThumbnail(this.pixels ? this.ratio : 1.25, this.maximumThumbnailWidth, this.maximumThumbnailHeight);
+  }
   build() {
     Column() {
-      if (this.pixels) Image(this.pixels).width('100%').aspectRatio(this.ratio).objectFit(ImageFit.Contain)
-        .onClick(() => this.preview()).bindContextMenu(this.imageMenu, ResponseType.LongPress)
-        .accessibilityText(tr('image'))
-      else if (this.busy) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
-      else Button({ type: ButtonType.Circle }) { if (IconActions.busy(this.failed ? 'retry' : 'image')) LoadingProgress().width(Tokens.symbol).height(Tokens.symbol).color(Colors.link); else SymbolGlyph(IconActions.symbol(this.failed ? 'retry' : 'image')).fontSize(Tokens.symbolFont).fontColor([IconActions.color(this.failed ? 'retry' : 'image', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr(this.failed ? 'retry' : 'image')).bindTips(tr(this.failed ? 'retry' : 'image')).onClick(() => this.load())
-    }.width('100%').onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => { if (visible && ratio > 0 && !this.failed) this.load(); })
+      if (this.pixels) {
+        Stack({ alignContent: Alignment.BottomEnd }) {
+          Image(this.pixels).width(this.maximumThumbnailWidth > 0 ? this.thumbnailSize[0] : '100%')
+            .aspectRatio(this.ratio).objectFit(ImageFit.Contain).borderRadius(this.maximumThumbnailWidth > 0 ? Tokens.gap : 0)
+          SymbolGlyph($r('sys.symbol.picture')).fontSize(13).fontColor([Color.White])
+            .padding(4).backgroundColor('#99000000').borderRadius(5).margin(5)
+            .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
+        }.width('100%').height(this.maximumThumbnailWidth > 0 ? '100%' : undefined)
+          .onClick(() => this.preview()).bindContextMenu(this.imageMenu, ResponseType.LongPress)
+          .accessibilityText(this.label || tr('image')).id('chat.image.thumbnail')
+      } else if (this.busy) {
+        LoadingProgress().width(this.maximumThumbnailWidth > 0 ? Tokens.symbol : Tokens.touch)
+          .height(this.maximumThumbnailWidth > 0 ? Tokens.symbol : Tokens.touch)
+      } else {
+        Button({ type:ButtonType.Normal, buttonStyle:ButtonStyleMode.TEXTUAL }) {
+          Column({space:Tokens.fine}) {
+            ToolGlyph({name:'image', ink:Colors.activity})
+            if (this.label) Text(this.label).fontSize(Tokens.toolMeta).fontColor(Colors.secondary).maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis})
+            if (!this.model.connected || this.failed) Text(tr(this.model.connected ? 'retry' : 'chat_photo_offline'))
+              .fontSize(Tokens.toolMeta).fontColor(Colors.secondary).maxLines(2).textAlign(TextAlign.Center)
+          }
+        }.padding(Tokens.fine).backgroundColor(Color.Transparent)
+          .enabled(this.model.connected).accessibilityText(tr(!this.model.connected ? 'chat_photo_offline' : this.failed ? 'retry' : 'image'))
+          .onClick(() => { void this.load(true); }).id('chat.image.placeholder')
+      }
+    }.width(this.maximumThumbnailWidth > 0 ? Math.max(Math.min(Tokens.touch, this.maximumThumbnailWidth), this.thumbnailSize[0]) : '100%')
+      .height(this.maximumThumbnailWidth > 0 ? Math.max(Math.min(Tokens.touch, this.maximumThumbnailHeight), this.thumbnailSize[1]) : undefined)
+      .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+      .backgroundColor(this.maximumThumbnailWidth > 0 && !this.pixels ? Colors.grouped : Color.Transparent)
+      .borderRadius(this.maximumThumbnailWidth > 0 ? Tokens.gap : 0)
+      .border({ width:this.maximumThumbnailWidth > 0 ? Tokens.hairline : 0, color:Colors.divider, radius:Tokens.gap })
+      .clip(this.maximumThumbnailWidth > 0)
+      .onVisibleAreaChange([0, 0.01, 1], (_increasing: boolean, ratio: number) => {
+        this.thumbnailVisible = ratio > 0;
+        if (this.thumbnailVisible && !this.failed) this.load();
+      })
   }
 }

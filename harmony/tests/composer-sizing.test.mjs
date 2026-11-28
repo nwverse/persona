@@ -126,6 +126,13 @@ test('focus, a restored draft, a quote or an attachment opens the editing card i
   }
 });
 
+test('dismissed input fits the compact row without losing the draft', () => {
+  const v = fixture();
+  v.model.draft = '保留草稿'; v.editorDismissed = true;
+  assert.equal(v.expandedComposer(), false);
+  assert.equal(v.model.draft, '保留草稿');
+});
+
 test('a blurred empty composer returns to one line, with enough space for the keyboard and both toolbars', () => {
   const v = fixture();
   v.fieldFocused = true;

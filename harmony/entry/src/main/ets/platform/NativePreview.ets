@@ -4,7 +4,7 @@ import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { filePreview } from '@kit.PreviewKit';
-import { attachmentExtension, isAttachmentCopyName } from '../core/AttachmentTypes';
+import { attachmentExtension, isAttachmentCopyName, isMessageThumbnailName } from '../core/AttachmentTypes';
 import type { LoadedMessageImage } from '../core/MessageImageGallery';
 import { MAX_MESSAGE_IMAGE_GALLERY_BYTES, MAX_MESSAGE_IMAGE_GALLERY_COUNT } from '../core/MessageImageGallery';
 
@@ -33,7 +33,9 @@ export function clearImagePreviews(context: common.UIAbilityContext, hub: string
   try { names = fileIo.listFileSync(directory); } catch (error) {
     if ((error as BusinessError).code === 13900002) return; throw error as Error;
   }
-  for (const name of names) if (isAttachmentCopyName(name)) fileIo.unlinkSync(directory + '/' + name);
+  for (const name of names) {
+    if (isAttachmentCopyName(name) || isMessageThumbnailName(name) || (name.endsWith('.part') && isMessageThumbnailName(name.slice(0, -5)))) fileIo.unlinkSync(directory + '/' + name);
+  }
   fileIo.rmdirSync(directory);
 }
 /** System preview supplies its own image viewing and zoom gestures. Cache copies are scoped to the paired Hub. */

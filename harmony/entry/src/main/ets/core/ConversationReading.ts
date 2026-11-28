@@ -36,3 +36,9 @@ export function parseReadingAnchor(value: string): ReadingAnchor {
   return { id: '', offset: 0, atEnd: true };
 }
 export function readingAnchorIndex(ids: string[], anchor: ReadingAnchor): number { return anchor.id ? ids.indexOf(anchor.id) : -1; }
+
+export interface RelatedReadingPosition extends ReadingAnchor {
+  openProcesses: string[];
+  expandedTools: string[];
+  closedSoloGroups: string[];
+}

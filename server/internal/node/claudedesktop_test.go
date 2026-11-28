@@ -532,3 +532,31 @@ func TestDesktopSessionDeletedInTheAppLeavesAtOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestOfflineClaudeKeepsReadableSubtasks(t *testing.T) {
+	const parent = "dddddddd-0000-4000-8000-000000000001"
+	n, home := testNode(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	dir := filepath.Join(home, ".claude", "projects", "-src-app")
+	subs := filepath.Join(dir, parent, "subagents")
+	if err := os.MkdirAll(subs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeEntrypointTranscript(t, dir, parent, "claude-desktop-3p", time.Minute)
+	first, _ := useDesktopDirs(t)
+	writeDesktopEntry(t, first, "main", parent, false, nil, "")
+	for name, data := range map[string]string{
+		"agent-review.meta.json": `{"agentType":"Explore","finished":true}`,
+		"agent-review.jsonl":     `{"type":"user","isSidechain":true}` + "\n",
+	} {
+		if err := os.WriteFile(filepath.Join(subs, name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, s := range n.scanOffline() {
+		if s.SessionID == parent && len(s.Subagents) == 1 && s.Subagents[0].SessionID == parent+"@review" && !s.Subagents[0].Running {
+			return
+		}
+	}
+	t.Fatal("offline Claude session lost its subtask transcript")
+}

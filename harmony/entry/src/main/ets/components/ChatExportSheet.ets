@@ -1,3 +1,4 @@
+import type { WorkInspectionStep, TranscriptItem } from '../core/Domain';
 import { common } from '@kit.AbilityKit';
 import { uniformTypeDescriptor } from '@kit.ArkData';
 import { util } from '@kit.ArkTS';
@@ -37,12 +38,22 @@ export struct ChatExportSheet {
     return this.model.selected.title || tr('conversation');
   }
 
+  private workText(step: WorkInspectionStep): string {
+    if (step.kind === 'narration') return step.item.text || '';
+    if (step.kind === 'fold') return tr('work_summary') + ' · ' + (step.toolCount + step.thoughtCount);
+    const use = Wire.record(JSON.parse(JSON.stringify(step.use)) as Object);
+    const name = Wire.text(use, 'tool', Wire.text(use, 'name', tr('work_summary')));
+    const input = Wire.object(use, 'input');
+    return [name, Object.keys(input).length ? JSON.stringify(input, null, 2) : step.use.text || '',
+      step.results.map((item: TranscriptItem) => item.text || '').join('\n')].filter((value: string) => !!value).join('\n');
+  }
+
   @Computed get exportInputs(): ChatExportMessageInput[] {
     return this.model.messages.map((msg: ChatMessage): ChatExportMessageInput => ({
       id: msg.id,
       role: msg.role,
       text: msg.text,
-      work: msg.work,
+      work: msg.work?.inspectionSteps.map((step: WorkInspectionStep) => this.workText(step)).filter((text: string) => !!text).join('\n\n'),
       toolCount: msg.toolCount,
       thoughtCount: msg.thoughtCount,
       at: msg.at

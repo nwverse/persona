@@ -5,10 +5,24 @@ import { accessibility } from '@kit.AccessibilityKit';
 import { classifyFoldPosture, widthClassFromBreakpoint } from '../core/FoldPosture';
 import type { FoldPostureKind } from '../core/FoldPosture';
 
+class ViewerSystemBars {
+  layoutFull: boolean;
+  status: boolean;
+  indicator: boolean;
+  constructor(win: window.Window) {
+    const properties = win.getWindowProperties();
+    this.layoutFull = properties.isLayoutFullScreen;
+    this.status = !properties.isFullScreen;
+    this.indicator = !this.layoutFull || win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height > 0;
+  }
+}
+
 /** Native application configuration, shared by workspace and detached views. */
 @ObservedV2
 export class NativeEnvironment {
   @Trace foreground: boolean = true;
+  private watchingMotion: boolean = false;
+  private motionChanged: (value: boolean) => void = (value: boolean): void => { this.observedMotion = value; };
   @Trace dark: boolean = false;
   @Trace fontScale: number = 1;
   @Trace safeBottomPx: number = 0;
@@ -26,6 +40,9 @@ export class NativeEnvironment {
   private lastHeightVp: number = 0;
   private lastWidthBreakpoint: number = -1;
   private windowRef: window.Window | undefined;
+  private viewerBars: ViewerSystemBars | undefined;
+  private viewerRevision: number = 0;
+  private barWork: Promise<void> = Promise.resolve();
   private keyboardChanged: ((height: number) => void) | undefined;
   private sizeChanged: (size: window.Size) => void = (_size: window.Size): void => this.refreshWindow();
   private rectChanged: (event: window.RectChangeOptions) => void = (_event: window.RectChangeOptions): void => this.refreshWindow();
@@ -33,12 +50,44 @@ export class NativeEnvironment {
   private foldStatusListener: ((status: display.FoldStatus) => void) | undefined;
   private foldModeListener: ((mode: display.FoldDisplayMode) => void) | undefined;
 
-  get reduceMotion(): boolean {
-    try { return accessibility.isAnimationReduceEnabledSync(); } catch (_) { return false; }
+  viewingOrientation(): window.Orientation {
+    const rect = this.windowRef?.getWindowProperties().windowRect;
+    return rect && rect.width > rect.height ? window.Orientation.LANDSCAPE : window.Orientation.PORTRAIT;
   }
 
+  setComputerImmersive(shown: boolean): void {
+    const win = this.windowRef;
+    if (!win) return;
+    if (shown && !this.viewerBars) {
+      try { this.viewerBars = new ViewerSystemBars(win); } catch (_) { return; }
+    }
+    const previous = this.viewerBars;
+    if (!previous) return;
+    const revision = ++this.viewerRevision;
+    this.barWork = this.barWork.then(async (): Promise<void> => {
+      if (this.windowRef !== win || this.viewerRevision !== revision) return;
+      await win.setWindowLayoutFullScreen(shown || previous.layoutFull).catch(() => {});
+      if (this.windowRef !== win || this.viewerRevision !== revision) return;
+      await Promise.all([
+        win.setSpecificSystemBarEnabled('status', !shown && previous.status, false).catch(() => {}),
+        win.setSpecificSystemBarEnabled('navigationIndicator', !shown && previous.indicator, false).catch(() => {})
+      ]);
+      if (!shown && this.viewerRevision === revision) this.viewerBars = undefined;
+    }).catch(() => {});
+  }
+
+  @Trace private observedMotion: boolean | undefined = undefined;
+  get reduceMotion(): boolean {
+    if (this.observedMotion !== undefined) return this.observedMotion;
+    try { return accessibility.isAnimationReduceEnabledSync(); } catch (_) { return false; }
+  }
   bindWindow(value: window.Window): void {
     this.unbindWindow(); this.windowRef = value;
+    try {
+      this.observedMotion = accessibility.isAnimationReduceEnabledSync();
+      accessibility.onAnimationReduceStateChange(this.motionChanged);
+      this.watchingMotion = true;
+    } catch (_) { /* Older system versions use the native animation scale. */ }
     value.on('windowSizeChange', this.sizeChanged);
     value.on('windowRectChange', this.rectChanged);
     value.on('avoidAreaChange', this.avoidChanged);
@@ -49,6 +98,12 @@ export class NativeEnvironment {
     this.refreshFoldCapability();
   }
   unbindWindow(): void {
+    if (this.watchingMotion) {
+      try { accessibility.offAnimationReduceStateChange(this.motionChanged); } catch (_) {}
+      this.watchingMotion = false; this.observedMotion = undefined;
+    }
+    this.viewerRevision++;
+    this.viewerBars = undefined;
     const value = this.windowRef, keyboard = this.keyboardChanged; this.windowRef = undefined; this.keyboardChanged = undefined;
     this.keyboardHeightPx = 0; this.isFullScreen = false; this.windowHeightPx = 0;
     this.unbindFoldListeners();

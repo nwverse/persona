@@ -2,7 +2,7 @@
   "color": [
     {
       "name": "persona_inline_code_ink",
-      "value": "#C7C7CC"
+      "value": "#E6FFFFFF"
     },
     {
       "name": "persona_switcher_surface",
@@ -339,6 +339,62 @@
     {
       "name": "persona_hero_shadow",
       "value": "#4D000000"
+    },
+    {
+      "name": "persona_plan_surface",
+      "value": "#191919"
+    },
+    {
+      "name": "persona_plan_border",
+      "value": "#222222"
+    },
+    {
+      "name": "persona_plan_track",
+      "value": "#393939"
+    },
+    {
+      "name": "persona_plan_arc",
+      "value": "#A0A0A0"
+    },
+    {
+      "name": "persona_plan_secondary",
+      "value": "#9C9C9C"
+    },
+    {
+      "name": "persona_plan_current",
+      "value": "#EFEFEF"
+    },
+    {
+      "name": "persona_progress_text",
+      "value": "#BFC6CE"
+    },
+    {
+      "name": "persona_reference",
+      "value": "#AECBE0"
+    },
+    {
+      "name": "persona_activity",
+      "value": "#A7AAB5"
+    },
+    {
+      "name": "persona_diff_added_background",
+      "value": "#1B3529"
+    },
+    {
+      "name": "persona_diff_removed_background",
+      "value": "#3D2629"
+    },
+    {
+      "name": "persona_code_keyword",
+      "value": "#C4ADFF"
+    },
+    {
+      "name": "persona_code_string",
+      "value": "#88D8B5"
+    },
+    {
+      "name": "persona_code_literal",
+      "value": "#F0B27B"
     }
   ]
 }

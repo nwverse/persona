@@ -9491,6 +9491,1394 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "Knowledge Page"
+    },
+    {
+      "name": "computer_screen_show_keys",
+      "value": "Open Mac keyboard"
+    },
+    {
+      "name": "computer_screen_hide_keys",
+      "value": "Hide Mac keyboard"
+    },
+    {
+      "name": "computer_screen_landscape",
+      "value": "View in landscape"
+    },
+    {
+      "name": "computer_screen_portrait",
+      "value": "View in portrait"
+    },
+    {
+      "name": "computer_screen_fullscreen",
+      "value": "Full screen"
+    },
+    {
+      "name": "computer_screen_exit_fullscreen",
+      "value": "Exit full screen"
+    },
+    {
+      "name": "computer_screen_fit",
+      "value": "Fit to screen"
+    },
+    {
+      "name": "computer_screen_control_short",
+      "value": "Control"
+    },
+    {
+      "name": "computer_screen_stop_short",
+      "value": "Stop"
+    },
+    {
+      "name": "computer_screen_main_display",
+      "value": "Main display"
+    },
+    {
+      "name": "computer_screen_display",
+      "value": "Display"
+    },
+    {
+      "name": "computer_screen_mac_sign_in",
+      "value": "Sign in with your macOS account"
+    },
+    {
+      "name": "computer_screen_controlling",
+      "value": "Controlling"
+    },
+    {
+      "name": "computer_screen_account_hint",
+      "value": "Account name on this Mac"
+    },
+    {
+      "name": "computer_screen_password_hint",
+      "value": "Password for this account"
+    },
+    {
+      "name": "computer_screen_remember",
+      "value": "Remember on this phone"
+    },
+    {
+      "name": "computer_screen_remember_hint",
+      "value": "Connect automatically next time you view this Mac."
+    },
+    {
+      "name": "computer_screen_forget_login",
+      "value": "Forget login"
+    },
+    {
+      "name": "computer_screen_saved_rejected",
+      "value": "The Mac declined the saved login. Enter your current account and password."
+    },
+    {
+      "name": "computer_screen_store_unavailable",
+      "value": "Saved login is unavailable. You can still sign in."
+    },
+    {
+      "name": "computer_screen_save_failed",
+      "value": "Connected. The login could not be saved on this phone."
+    },
+    {
+      "name": "computer_screen_forget_failed",
+      "value": "Couldn’t remove the saved login. Try again."
+    },
+    {
+      "name": "computer_screen_authenticating",
+      "value": "Verifying your Mac account…"
+    },
+    {
+      "name": "computer_screen_waiting_frame",
+      "value": "Waiting for the first screen image…"
+    },
+    {
+      "name": "computer_screen_auth_timeout",
+      "value": "The Mac didn’t finish signing you in. Connect again to retry."
+    },
+    {
+      "name": "computer_screen_frame_failed",
+      "value": "The screen image could not be displayed. Connect again to retry."
+    },
+    {
+      "name": "computer_screen_frame_timeout",
+      "value": "The Mac didn’t send a screen image. Connect again to retry."
+    },
+    {
+      "name": "computer_screen_shortcut_keys",
+      "value": "Mac shortcut keys"
+    },
+    {
+      "name": "computer_screen_key_escape",
+      "value": "Esc, cancel or dismiss"
+    },
+    {
+      "name": "computer_screen_key_tab",
+      "value": "Tab, move to the next field"
+    },
+    {
+      "name": "computer_screen_key_left",
+      "value": "Left arrow, move left"
+    },
+    {
+      "name": "computer_screen_key_up",
+      "value": "Up arrow, move up"
+    },
+    {
+      "name": "computer_screen_key_down",
+      "value": "Down arrow, move down"
+    },
+    {
+      "name": "computer_screen_key_right",
+      "value": "Right arrow, move right"
+    },
+    {
+      "name": "computer_screen_key_return",
+      "value": "Return, confirm or start a new line"
+    },
+    {
+      "name": "computer_screen_keyboard_unavailable",
+      "value": "Couldn’t open the keyboard. Tap the keyboard button to try again."
+    },
+    {
+      "name": "computer_screen_input_failed",
+      "value": "Some input didn’t reach the Mac. Check the remote field before typing it again."
+    },
+    {
+      "name": "browser_qr_access",
+      "value": "This browser will have full access to your Hub. Continue only if you started this sign-in."
+    },
+    {
+      "name": "browser_qr_ask",
+      "value": "Allow this browser to sign in?"
+    },
+    {
+      "name": "browser_qr_cancel",
+      "value": "Cancel sign-in"
+    },
+    {
+      "name": "browser_qr_checking",
+      "value": "Checking the sign-in request…"
+    },
+    {
+      "name": "browser_qr_denied",
+      "value": "Sign-in declined"
+    },
+    {
+      "name": "browser_qr_done",
+      "value": "Done"
+    },
+    {
+      "name": "browser_qr_ended",
+      "value": "This request has ended."
+    },
+    {
+      "name": "browser_qr_enter",
+      "value": "Enter this number in your browser"
+    },
+    {
+      "name": "browser_qr_expired",
+      "value": "This code has expired"
+    },
+    {
+      "name": "browser_qr_failed",
+      "value": "Couldn’t verify this sign-in"
+    },
+    {
+      "name": "browser_qr_internet",
+      "value": "Internet"
+    },
+    {
+      "name": "browser_qr_invalid",
+      "value": "Unrecognized sign-in code"
+    },
+    {
+      "name": "browser_qr_lan",
+      "value": "Local network"
+    },
+    {
+      "name": "browser_qr_manage",
+      "value": "You can revoke this browser’s access at any time in Devices."
+    },
+    {
+      "name": "browser_qr_number",
+      "value": "Keep this number to yourself. An incorrect entry cancels this sign-in."
+    },
+    {
+      "name": "browser_qr_other_hub",
+      "value": "This code belongs to another Hub"
+    },
+    {
+      "name": "browser_qr_refresh",
+      "value": "Refresh the QR code in your browser and scan again."
+    },
+    {
+      "name": "browser_qr_remote_access",
+      "value": "This request came from the internet. Allow full access to your Hub only if you started this sign-in."
+    },
+    {
+      "name": "browser_qr_scan",
+      "value": "Scan browser sign-in code"
+    },
+    {
+      "name": "browser_qr_scan_web",
+      "value": "Open the Persona sign-in page in your browser and scan its QR code."
+    },
+    {
+      "name": "browser_qr_success",
+      "value": "Browser signed in"
+    },
+    {
+      "name": "browser_qr_switch",
+      "value": "Switch to the Hub shown in your browser, then scan again."
+    },
+    {
+      "name": "browser_qr_title",
+      "value": "Browser sign-in"
+    },
+    {
+      "name": "browser_qr_unknown",
+      "value": "Unknown network"
+    },
+    {
+      "name": "browser_qr_voided",
+      "value": "The number didn’t match"
+    },
+    {
+      "name": "browser_qr_waiting",
+      "value": "Waiting for the browser…"
+    },
+    {
+      "name": "device_kind_browser",
+      "value": "Browser"
+    },
+    {
+      "name": "device_kind_link",
+      "value": "Computer link"
+    },
+    {
+      "name": "device_kind_other",
+      "value": "Other device"
+    },
+    {
+      "name": "device_kind_phone",
+      "value": "Phone"
+    },
+    {
+      "name": "device_kind_watch",
+      "value": "Watch"
+    },
+    {
+      "name": "devices",
+      "value": "Devices"
+    },
+    {
+      "name": "devices_added",
+      "value": "Added"
+    },
+    {
+      "name": "devices_demo",
+      "value": "Pair with a Hub to see signed-in devices."
+    },
+    {
+      "name": "devices_empty",
+      "value": "No signed-in devices."
+    },
+    {
+      "name": "devices_last_used",
+      "value": "Last used"
+    },
+    {
+      "name": "devices_load_failed",
+      "value": "Could not load the device list. Refresh to try again."
+    },
+    {
+      "name": "devices_no_history",
+      "value": "No revoked devices."
+    },
+    {
+      "name": "devices_no_match",
+      "value": "No matching devices."
+    },
+    {
+      "name": "devices_revoke",
+      "value": "Revoke"
+    },
+    {
+      "name": "devices_revoke_failed",
+      "value": "The device still has access. Refresh and try again."
+    },
+    {
+      "name": "devices_revoke_note",
+      "value": "This device will lose access to the Hub. Pair it again to reconnect."
+    },
+    {
+      "name": "devices_revoke_self",
+      "value": "This phone will disconnect from the Hub and must be paired again."
+    },
+    {
+      "name": "devices_revoke_unpair",
+      "value": "Revoke and unpair"
+    },
+    {
+      "name": "devices_revoked",
+      "value": "Revoked"
+    },
+    {
+      "name": "devices_revoked_at",
+      "value": "Revoked"
+    },
+    {
+      "name": "devices_search",
+      "value": "Search by name or device type"
+    },
+    {
+      "name": "devices_signed_in",
+      "value": "Signed in"
+    },
+    {
+      "name": "devices_this",
+      "value": "This device"
+    },
+    {
+      "name": "hub_unreachable",
+      "value": "Couldn’t reach the Hub. Check that it is running and that this phone can reach its address."
+    },
+    {
+      "name": "hub_tour_title",
+      "value": "Persona walkthrough"
+    },
+    {
+      "name": "hub_tour_play",
+      "value": "Play walkthrough"
+    },
+    {
+      "name": "hub_tour_pause",
+      "value": "Pause"
+    },
+    {
+      "name": "hub_tour_try",
+      "value": "Try the interactive demo"
+    },
+    {
+      "name": "hub_tour_note",
+      "value": "12-second silent tour of the machine list, agent details and pairing approval."
+    },
+    {
+      "name": "hub_tour_error",
+      "value": "The video could not play. You can still explore the interactive demo."
+    },
+    {
+      "name": "workspace_local_name",
+      "value": "Name on this phone. Leave blank to use the Hub name."
+    },
+    {
+      "name": "machine_rename",
+      "value": "Rename Computer"
+    },
+    {
+      "name": "machine_rename_hint",
+      "value": "Visible to devices on this Hub. Leave blank to use the computer ID."
+    },
+    {
+      "name": "machine_name_invalid",
+      "value": "Use up to 40 characters without control characters."
+    },
+    {
+      "name": "machine_rename_forbidden",
+      "value": "This device does not have permission to rename computers."
+    },
+    {
+      "name": "workspace_disconnected",
+      "value": "Not connected"
+    },
+    {
+      "name": "workspace_pair_again",
+      "value": "Pairing required"
+    },
+    {
+      "name": "workspace_pair_action",
+      "value": "Pair Again"
+    },
+    {
+      "name": "agent_no_online_machine",
+      "value": "No online computer"
+    },
+    {
+      "name": "agent_refresh_models",
+      "value": "Refresh models"
+    },
+    {
+      "name": "agent_custom_model",
+      "value": "Enter model ID…"
+    },
+    {
+      "name": "agent_codex_desktop_model",
+      "value": "Selected in Codex App"
+    },
+    {
+      "name": "agent_model_id_invalid",
+      "value": "Enter a valid model ID (up to 256 characters)."
+    },
+    {
+      "name": "agent_default_model",
+      "value": "Agent default"
+    },
+    {
+      "name": "agent_locked_model",
+      "value": "Set by launcher"
+    },
+    {
+      "name": "agent_models_unavailable",
+      "value": "Model list unavailable. You can start with the default."
+    },
+    {
+      "name": "agent_default_folder",
+      "value": "Computer default folder"
+    },
+    {
+      "name": "agent_first_message",
+      "value": "First message"
+    },
+    {
+      "name": "agent_message_optional",
+      "value": "Write a message, or send it after starting"
+    },
+    {
+      "name": "agent_resume_session",
+      "value": "Take over session"
+    },
+    {
+      "name": "agent_continue_session",
+      "value": "Continue in a new session"
+    },
+    {
+      "name": "agent_confirm_resume",
+      "value": "Taking over will stop the turn running on the computer."
+    },
+    {
+      "name": "agent_confirm_continue",
+      "value": "Start a new Codex session on this computer with the previous context provided by Codex?"
+    },
+    {
+      "name": "agent_new_session",
+      "value": "New session"
+    },
+    {
+      "name": "agent_machine_default",
+      "value": "Use computer default"
+    },
+    {
+      "name": "agent_launchers_unavailable",
+      "value": "Could not load launchers. Retry or enter a launcher name."
+    },
+    {
+      "name": "turn_process",
+      "value": "Execution process"
+    },
+    {
+      "name": "turn_elapsed_hours",
+      "value": "Worked for {h}h {m}m"
+    },
+    {
+      "name": "turn_elapsed_minutes",
+      "value": "Worked for {m}m {s}s"
+    },
+    {
+      "name": "turn_elapsed_seconds",
+      "value": "Worked for {s}s"
+    },
+    {
+      "name": "turn_elapsed_short",
+      "value": "Worked for <1s"
+    },
+    {
+      "name": "ev_action_mcp",
+      "value": "Extension tool"
+    },
+    {
+      "name": "ev_action_skill",
+      "value": "Run skill"
+    },
+    {
+      "name": "ev_action_monitor",
+      "value": "Monitor command"
+    },
+    {
+      "name": "ev_action_task",
+      "value": "Manage task"
+    },
+    {
+      "name": "ev_sleep",
+      "value": "Pause"
+    },
+    {
+      "name": "ev_wait_agent",
+      "value": "Wait for agents"
+    },
+    {
+      "name": "ev_child_started",
+      "value": "Subagent started"
+    },
+    {
+      "name": "ev_child_contacted",
+      "value": "Subagent interaction"
+    },
+    {
+      "name": "ev_child_ended",
+      "value": "Subagent run ended"
+    },
+    {
+      "name": "ev_child_failed",
+      "value": "Subagent failed"
+    },
+    {
+      "name": "ev_child_stopped",
+      "value": "Subagent stopped"
+    },
+    {
+      "name": "ev_child_waiting",
+      "value": "Subagent awaiting approval"
+    },
+    {
+      "name": "ev_children",
+      "value": "Subagents: {n}"
+    },
+    {
+      "name": "ev_children_ended",
+      "value": "Runs ended: {n}"
+    },
+    {
+      "name": "ev_copy_code",
+      "value": "Copy code"
+    },
+    {
+      "name": "ev_code_copied",
+      "value": "Code copied"
+    },
+    {
+      "name": "ev_code_copy_failed",
+      "value": "Could not copy code"
+    },
+    {
+      "name": "ev_wrap",
+      "value": "Wrap lines"
+    },
+    {
+      "name": "ev_no_wrap",
+      "value": "Unwrap"
+    },
+    {
+      "name": "ev_action_shell",
+      "value": "Run command"
+    },
+    {
+      "name": "ev_action_read",
+      "value": "Read file"
+    },
+    {
+      "name": "ev_action_edit",
+      "value": "Edit file"
+    },
+    {
+      "name": "ev_action_search",
+      "value": "Search"
+    },
+    {
+      "name": "ev_action_fetch",
+      "value": "Open web page"
+    },
+    {
+      "name": "ev_action_agent",
+      "value": "Subagent activity"
+    },
+    {
+      "name": "ev_action_wait",
+      "value": "Wait"
+    },
+    {
+      "name": "ev_action_plan",
+      "value": "Update plan"
+    },
+    {
+      "name": "ev_action_question",
+      "value": "Ask a question"
+    },
+    {
+      "name": "ev_peer",
+      "value": "From another conversation"
+    },
+    {
+      "name": "ev_patrol",
+      "value": "Scheduled check"
+    },
+    {
+      "name": "ev_followup",
+      "value": "Follow-up"
+    },
+    {
+      "name": "ev_supervision",
+      "value": "Supervision"
+    },
+    {
+      "name": "ev_scheduled",
+      "value": "Scheduled task"
+    },
+    {
+      "name": "ev_meeting",
+      "value": "Meeting input"
+    },
+    {
+      "name": "ev_external",
+      "value": "External input"
+    },
+    {
+      "name": "ev_system",
+      "value": "System message"
+    },
+    {
+      "name": "ev_queued",
+      "value": "Queued during this turn"
+    },
+    {
+      "name": "ev_agent",
+      "value": "Subagent"
+    },
+    {
+      "name": "ev_task",
+      "value": "Background task"
+    },
+    {
+      "name": "ev_background_command",
+      "value": "Background command"
+    },
+    {
+      "name": "ev_monitor",
+      "value": "Monitor"
+    },
+    {
+      "name": "ev_workflow",
+      "value": "Workflow"
+    },
+    {
+      "name": "ev_stopped",
+      "value": "Stopped"
+    },
+    {
+      "name": "ev_awaiting",
+      "value": "Awaiting approval"
+    },
+    {
+      "name": "ev_update",
+      "value": "Update"
+    },
+    {
+      "name": "ev_ended",
+      "value": "Ended"
+    },
+    {
+      "name": "ev_started",
+      "value": "Started"
+    },
+    {
+      "name": "ev_contacted",
+      "value": "Interaction recorded"
+    },
+    {
+      "name": "ev_pending",
+      "value": "Pending"
+    },
+    {
+      "name": "ev_recap",
+      "value": "Conversation recap"
+    },
+    {
+      "name": "ev_elapsed",
+      "value": "Turn duration"
+    },
+    {
+      "name": "ev_visualization",
+      "value": "Visualization attachment"
+    },
+    {
+      "name": "ev_model_fallback",
+      "value": "Model fallback"
+    },
+    {
+      "name": "ev_model_refusal",
+      "value": "Model declined"
+    },
+    {
+      "name": "ev_compaction",
+      "value": "Context compacted"
+    },
+    {
+      "name": "ev_compaction_auto",
+      "value": "Context compacted automatically"
+    },
+    {
+      "name": "ev_compaction_manual",
+      "value": "Context compacted manually"
+    },
+    {
+      "name": "ev_compaction_idle",
+      "value": "Context compacted while idle"
+    },
+    {
+      "name": "ev_tokens_before",
+      "value": "{n} tokens before compaction"
+    },
+    {
+      "name": "ev_exit",
+      "value": "Exit code {n}"
+    },
+    {
+      "name": "ev_wake",
+      "value": "Background wake-up"
+    },
+    {
+      "name": "ev_action_required",
+      "value": "Action needed"
+    },
+    {
+      "name": "ev_session_closed",
+      "value": "Conversation cannot continue"
+    },
+    {
+      "name": "ev_no_output",
+      "value": "Turn ended without output"
+    },
+    {
+      "name": "ev_turn_error",
+      "value": "Turn ended with an error"
+    },
+    {
+      "name": "ev_service_error",
+      "value": "Model service error"
+    },
+    {
+      "name": "ev_limit",
+      "value": "Usage limit reached"
+    },
+    {
+      "name": "ev_reset",
+      "value": "Resets {time}"
+    },
+    {
+      "name": "ev_will_resume",
+      "value": "Scheduled to resume"
+    },
+    {
+      "name": "ev_unchanged",
+      "value": "Unchanged since last read"
+    },
+    {
+      "name": "ev_line_range",
+      "value": "Lines {first}–{last}"
+    },
+    {
+      "name": "ev_result_n",
+      "value": "Result {n}"
+    },
+    {
+      "name": "ev_command",
+      "value": "Command"
+    },
+    {
+      "name": "ev_files",
+      "value": "Files"
+    },
+    {
+      "name": "ev_proposed_content",
+      "value": "Requested file content"
+    },
+    {
+      "name": "ev_proposed_diff",
+      "value": "Requested diff"
+    },
+    {
+      "name": "ev_replace_before",
+      "value": "Text to replace"
+    },
+    {
+      "name": "ev_replace_after",
+      "value": "Replacement text"
+    },
+    {
+      "name": "ev_patch",
+      "value": "Changes"
+    },
+    {
+      "name": "ev_patch_cut",
+      "value": "Partial diff"
+    },
+    {
+      "name": "ev_patch_excerpt",
+      "value": "The session recorded part of this diff."
+    },
+    {
+      "name": "ev_query",
+      "value": "Query"
+    },
+    {
+      "name": "ev_address",
+      "value": "Address"
+    },
+    {
+      "name": "ev_git",
+      "value": "Git result"
+    },
+    {
+      "name": "ev_answers",
+      "value": "Recorded answers"
+    },
+    {
+      "name": "ev_output_excerpt",
+      "value": "Output excerpt"
+    },
+    {
+      "name": "ev_output_excerpt_note",
+      "value": "The node returned an excerpt of this output."
+    },
+    {
+      "name": "ev_output_tail",
+      "value": "Last lines of output"
+    },
+    {
+      "name": "ev_output_file",
+      "value": "Saved output"
+    },
+    {
+      "name": "ev_less",
+      "value": "Show less"
+    },
+    {
+      "name": "ev_more",
+      "value": "Show remaining text"
+    },
+    {
+      "name": "work_progress_calls",
+      "value": "{n}/{total} returned"
+    },
+    {
+      "name": "next_step_commit",
+      "value": "Commit changes"
+    },
+    {
+      "name": "next_step_create_pr",
+      "value": "Create pull request"
+    },
+    {
+      "name": "next_step_merge",
+      "value": "Merge changes"
+    },
+    {
+      "name": "next_step_fix_ci",
+      "value": "Fix CI"
+    },
+    {
+      "name": "next_step_address_comments",
+      "value": "Address comments"
+    },
+    {
+      "name": "next_step_resolve_conflicts",
+      "value": "Resolve conflicts"
+    },
+    {
+      "name": "next_step_verify",
+      "value": "Verify changes"
+    },
+    {
+      "name": "next_step_archive",
+      "value": "Archive chat"
+    },
+    {
+      "name": "chat_model_change",
+      "value": "Model changed from {from} to {to}"
+    },
+    {
+      "name": "next_step_context",
+      "value": "Why this step?"
+    },
+    {
+      "name": "next_step_send",
+      "value": "Send this reply"
+    },
+    {
+      "name": "chat_execution_plan",
+      "value": "Execution plan"
+    },
+    {
+      "name": "plan_done_count",
+      "value": "{n}/{total} done"
+    },
+    {
+      "name": "plan_step_pending",
+      "value": "Pending"
+    },
+    {
+      "name": "plan_step_cancelled",
+      "value": "Cancelled"
+    },
+    {
+      "name": "plan_step_skipped",
+      "value": "Skipped"
+    },
+    {
+      "name": "plan_step_unknown",
+      "value": "Unreported"
+    },
+    {
+      "name": "plan_all_done",
+      "value": "Plan complete"
+    },
+    {
+      "name": "plan_not_started",
+      "value": "Waiting to start"
+    },
+    {
+      "name": "plan_no_active_step",
+      "value": "No step in progress"
+    },
+    {
+      "name": "plan_view_steps",
+      "value": "View steps"
+    },
+    {
+      "name": "plan_loading_steps",
+      "value": "Loading plan steps…"
+    },
+    {
+      "name": "plan_steps_unavailable",
+      "value": "The full steps are unavailable in this history."
+    },
+    {
+      "name": "work_progress_running",
+      "value": "Running"
+    },
+    {
+      "name": "activity_running_shell",
+      "value": "Running command"
+    },
+    {
+      "name": "activity_running_script",
+      "value": "Running script"
+    },
+    {
+      "name": "activity_failed_count",
+      "value": "%d failed"
+    },
+    {
+      "name": "activity_ran_command",
+      "value": "Ran {command}"
+    },
+    {
+      "name": "activity_detail_read",
+      "value": "Read"
+    },
+    {
+      "name": "activity_detail_image",
+      "value": "Viewed"
+    },
+    {
+      "name": "activity_search_in",
+      "value": "Searched {path} for"
+    },
+    {
+      "name": "activity_separator",
+      "value": ", "
+    },
+    {
+      "name": "activity_shell_one",
+      "value": "Ran 1 command"
+    },
+    {
+      "name": "activity_shell_many",
+      "value": "Ran {n} commands"
+    },
+    {
+      "name": "activity_read_one",
+      "value": "Read 1 file"
+    },
+    {
+      "name": "activity_read_many",
+      "value": "Read {n} files"
+    },
+    {
+      "name": "activity_edit_one",
+      "value": "Edited 1 file"
+    },
+    {
+      "name": "activity_edit_many",
+      "value": "Edited {n} files"
+    },
+    {
+      "name": "activity_search_one",
+      "value": "Ran 1 search"
+    },
+    {
+      "name": "activity_search_many",
+      "value": "Ran {n} searches"
+    },
+    {
+      "name": "activity_image_one",
+      "value": "Viewed 1 image"
+    },
+    {
+      "name": "activity_image_many",
+      "value": "Viewed {n} images"
+    },
+    {
+      "name": "activity_fetch_one",
+      "value": "Fetched 1 page"
+    },
+    {
+      "name": "activity_fetch_many",
+      "value": "Fetched {n} pages"
+    },
+    {
+      "name": "activity_other_one",
+      "value": "Performed 1 action"
+    },
+    {
+      "name": "activity_other_many",
+      "value": "Performed {n} actions"
+    },
+    {
+      "name": "user_passage_more",
+      "value": "Show more"
+    },
+    {
+      "name": "user_passage_less",
+      "value": "Show less"
+    },
+    {
+      "name": "activity_total_calls",
+      "value": "{n} tool calls"
+    },
+    {
+      "name": "work_update_summary",
+      "value": "Update activity summary"
+    },
+    {
+      "name": "work_failure_count",
+      "value": "{n} tool calls failed"
+    },
+    {
+      "name": "ev_browser",
+      "value": "Browser"
+    },
+    {
+      "name": "work_tool_failed",
+      "value": "Failed"
+    },
+    {
+      "name": "work_arguments",
+      "value": "Input"
+    },
+    {
+      "name": "tool_inspect_result",
+      "value": "Result"
+    },
+    {
+      "name": "tool_inspect_output",
+      "value": "Output"
+    },
+    {
+      "name": "tool_inspect_changes",
+      "value": "Changes"
+    },
+    {
+      "name": "tool_inspect_input",
+      "value": "Input"
+    },
+    {
+      "name": "tool_inspect_returned",
+      "value": "Returned"
+    },
+    {
+      "name": "tool_inspect_empty",
+      "value": "No text output was recorded for this call."
+    },
+    {
+      "name": "tool_inspect_more",
+      "value": "Show more"
+    },
+    {
+      "name": "tool_inspect_copy",
+      "value": "Copy {part}"
+    },
+    {
+      "name": "tool_inspect_error",
+      "value": "Error output"
+    },
+    {
+      "name": "work_output",
+      "value": "Output"
+    },
+    {
+      "name": "work_notice",
+      "value": "Notice"
+    },
+    {
+      "name": "work_expanded",
+      "value": "Expanded"
+    },
+    {
+      "name": "work_collapsed",
+      "value": "Collapsed"
+    },
+    {
+      "name": "work_load_steps",
+      "value": "Load steps"
+    },
+    {
+      "name": "work_no_result",
+      "value": "No result recorded"
+    },
+    {
+      "name": "work_timed_out",
+      "value": "Timed out"
+    },
+    {
+      "name": "work_denied",
+      "value": "Denied"
+    },
+    {
+      "name": "work_blocked",
+      "value": "Blocked"
+    },
+    {
+      "name": "work_interrupted",
+      "value": "Interrupted"
+    },
+    {
+      "name": "work_no_match",
+      "value": "No matches"
+    },
+    {
+      "name": "work_background",
+      "value": "Running in background"
+    },
+    {
+      "name": "claude_start_needs_input",
+      "value": "Claude wants to start a session"
+    },
+    {
+      "name": "claude_desktop_needs_input",
+      "value": "Claude needs your input"
+    },
+    {
+      "name": "claude_desktop_view_request",
+      "value": "View computer screen"
+    },
+    {
+      "name": "claude_desktop_worktree_branch",
+      "value": "Worktree branch · {branch}"
+    },
+    {
+      "name": "claude_desktop_handle_on_computer",
+      "value": "Review the request in Claude on this computer."
+    },
+    {
+      "name": "work_live_active",
+      "value": "Working"
+    },
+    {
+      "name": "work_live_reconnecting",
+      "value": "Reconnecting"
+    },
+    {
+      "name": "work_live_compacting",
+      "value": "Compacting context"
+    },
+    {
+      "name": "composer_speed",
+      "value": "Speed"
+    },
+    {
+      "name": "chat_show_sent_time",
+      "value": "Show send time"
+    },
+    {
+      "name": "chat_hide_sent_time",
+      "value": "Hide send time"
+    },
+    {
+      "name": "chat_context_used",
+      "value": "Context {percent}%"
+    },
+    {
+      "name": "chat_jump_to_latest",
+      "value": "Jump to latest"
+    },
+    {
+      "name": "chat_new_messages",
+      "value": "New messages"
+    },
+    {
+      "name": "chat_photo_previous",
+      "value": "Previous image"
+    },
+    {
+      "name": "chat_photo_next",
+      "value": "Next image"
+    },
+    {
+      "name": "chat_photo_offline",
+      "value": "Connect to load photo"
+    },
+    {
+      "name": "chat_context_tokens",
+      "value": "{used} / {window} tokens used · {left}% remaining"
+    },
+    {
+      "name": "hub_sync_too_large",
+      "value": "The Hub sent more data than this device can sync in one message. Retry when the list changes."
+    },
+    {
+      "name": "workspace_pair_hint",
+      "value": "Open Workspace and pair this Hub again to see its computers."
+    },
+    {
+      "name": "agent_subagents_running",
+      "value": "Subagents running: {count}"
+    },
+    {
+      "name": "agent_preview_first_message",
+      "value": "Waiting for its first message"
+    },
+    {
+      "name": "agent_preview_blocked_on",
+      "value": "Blocked on: {waiting}"
+    },
+    {
+      "name": "agent_preview_blocked",
+      "value": "Blocked"
+    },
+    {
+      "name": "agent_preview_not_done_missing",
+      "value": "Not done: {missing}"
+    },
+    {
+      "name": "agent_preview_not_done",
+      "value": "Not done"
+    },
+    {
+      "name": "agent_preview_reported_done",
+      "value": "Reported done"
+    },
+    {
+      "name": "agent_preview_merged_checked",
+      "value": "merged ✓"
+    },
+    {
+      "name": "agent_preview_deployed_checked",
+      "value": "deployed ✓"
+    },
+    {
+      "name": "agent_preview_not_merged",
+      "value": "not merged"
+    },
+    {
+      "name": "agent_preview_not_deployed",
+      "value": "not deployed"
+    },
+    {
+      "name": "agent_preview_merged",
+      "value": "merged"
+    },
+    {
+      "name": "agent_preview_deployed",
+      "value": "deployed"
+    },
+    {
+      "name": "agent_preview_claim_merged_false",
+      "value": "✗ says merged, isn't"
+    },
+    {
+      "name": "agent_preview_claim_deployed_false",
+      "value": "✗ says deployed, isn't"
+    },
+    {
+      "name": "agent_preview_retrying_now",
+      "value": "retrying now"
+    },
+    {
+      "name": "agent_preview_waking_now",
+      "value": "waking now"
+    },
+    {
+      "name": "agent_preview_retrying_in",
+      "value": "retrying in {time}"
+    },
+    {
+      "name": "agent_preview_waking_in",
+      "value": "waking in {time}"
+    },
+    {
+      "name": "agent_preview_minutes",
+      "value": "{minutes} min"
+    },
+    {
+      "name": "agent_preview_hours",
+      "value": "{hours} hr"
+    },
+    {
+      "name": "agent_preview_hours_minutes",
+      "value": "{hours} hr {minutes} min"
+    },
+    {
+      "name": "agent_preview_line_when",
+      "value": "{line} ({when})"
+    },
+    {
+      "name": "relation_transcript_notice",
+      "value": "Read-only subtask transcript · Managed by the main chat"
+    },
+    {
+      "name": "relation_side",
+      "value": "Side chats"
+    },
+    {
+      "name": "relation_task",
+      "value": "Subtasks"
+    },
+    {
+      "name": "relation_root",
+      "value": "Main chat"
+    },
+    {
+      "name": "relation_chats",
+      "value": "Related chats"
+    },
+    {
+      "name": "relation_side_count",
+      "value": "Side chats: {n}"
+    },
+    {
+      "name": "relation_task_count",
+      "value": "Subtasks: {n}"
+    },
+    {
+      "name": "relation_needs_count",
+      "value": "{n} need input"
+    },
+    {
+      "name": "relation_running_count",
+      "value": "{n} running"
+    },
+    {
+      "name": "plan_before_last_message",
+      "value": "Plan from before your last message"
+    },
+    {
+      "name": "chat_history_failed",
+      "value": "Couldn't load. Tap to retry"
+    },
+    {
+      "name": "agent_default_effort",
+      "value": "Agent default"
+    },
+    {
+      "name": "minimal",
+      "value": "Minimal"
     }
   ]
 }

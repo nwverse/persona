@@ -260,7 +260,8 @@ func (n *Node) scanOffline() []proto.Session {
 		s := proto.Session{
 			SessionID: id, Title: title, Cwd: cwd, Status: proto.StatusOffline, Model: n.shownModel(id, m.model),
 			Agent: "claude", AgentSurface: m.surface,
-			LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
+			Subagents: subagentsIn(id, filepath.Join(strings.TrimSuffix(c.path, ".jsonl"), "subagents")),
+			LastText:  snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		n.setSessionContext(&s, m)

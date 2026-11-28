@@ -5,7 +5,7 @@ import test from 'node:test';
 
 registerHooks({
   resolve(spec, ctx, next) {
-    if ((spec === '../core/PhoneSearchExcerpt' || spec === '../core/SessionNaming') && ctx.parentURL?.endsWith('.ets'))
+    if ((spec === '../core/PhoneSearchExcerpt' || spec === '../core/ModelLabel' || spec === '../core/SessionNaming') && ctx.parentURL?.endsWith('.ets'))
       return {url:new URL(spec+'.ts',ctx.parentURL).href,shortCircuit:true};
     if (spec.startsWith('.') && ctx.parentURL?.endsWith('.ets'))
       return {url:new URL(spec+'.ets',ctx.parentURL).href,shortCircuit:true};
@@ -869,4 +869,16 @@ test('clearing a compact settings query keeps the field active and dismissing st
   assert.doesNotMatch(clear,/onDismissSearch/);
   assert.match(source,/this\.field\.stopEditing\(\); this\.onDismissSearch\(\); \}\)\.id\('settings.close'\)/);
   assert.match(source,/style:this.showDismissSearch \? CancelButtonStyle.INVISIBLE : CancelButtonStyle.INPUT/);
+});
+
+test('the Codex start catalog refreshes just its owner and describes the selected model version',async()=>{
+  const paths=[];
+  const owner=makeOwner(async path=>{paths.push(path);return {agent:'codex',models:[
+    {id:'sol',name:'GPT',description:'GPT 6.2 Sol',efforts:['high']},
+    {id:'astra',name:'GPT',description:'GPT 6.2 Astra',efforts:['low']}]};});
+  const c=new AgentLaunchChoices();await c.loadModels(owner,'machine','codex',true);
+  assert.deepEqual(paths,['/api/v1/machines/machine/launchers/codex/models?purpose=agent.new&refresh=1']);
+  assert.deepEqual(c.models.map(choice=>choice.title),['GPT 6.2 Sol','GPT 6.2 Astra']);
+  c.updateEfforts('astra');assert.deepEqual(c.effortNames,['low']);
+  assert.equal(c.modelPresentation('sol','',{},true,key=>key).title,'GPT 6.2 Sol');
 });

@@ -29,7 +29,7 @@ registerHooks({
       return { url: new URL('./Wire.ets', context.parentURL).href, shortCircuit: true };
     if (context.parentURL?.includes('/entry/src/main/ets/')) {
       const resolved = new URL(specifier, context.parentURL);
-      if (['/Wire','/AgentActivityGroups','/AgentRepositoryPlace','/MachineDashboard','/InteractionDecision'].some(name=>resolved.pathname.endsWith(name))) resolved.pathname += '.ets';
+      if (['/SessionRelations','/Wire','/AgentActivityGroups','/AgentRepositoryPlace','/MachineDashboard','/InteractionDecision'].some(name=>resolved.pathname.endsWith(name))) resolved.pathname += '.ets';
       else if (!/\.[a-z]+$/i.test(resolved.pathname)) resolved.pathname += '.ts';
       return { url: resolved.href, shortCircuit: true };
     }
@@ -46,6 +46,7 @@ registerHooks({
   }
 });
 
+const { SessionArchive } = await import('../entry/src/main/ets/models/SessionArchive.ets');
 const { AgentWorkspace } = await import('../entry/src/main/ets/models/AgentWorkspace.ets');
 const { ResourceRow, Wire } = await import('../entry/src/main/ets/models/Wire.ets');
 
@@ -89,7 +90,7 @@ function clientFixture(options = {}) {
     }
   };
   const client = {
-    connected: true, demo: false, sessionsReady: true, profile: { manager: state.manager }, features: [],
+    connected: true, demo: false, sessionsReady: true, archives: new SessionArchive(), profile: { manager: state.manager }, features: [],
     sessions: options.sessions || [agent('s1', {manager: state.manager})], machines: options.machines || [machine('m1', 'personal', state.manager)],
     selected: new ResourceRow(),
     repo() { return repo; },
@@ -786,6 +787,49 @@ test('a retired pin completion cannot release the busy lock of a new list operat
  releases[1]();assert.equal(await fresh,true);assert.equal(workspace.busy,false);assert.equal(state.calls.filter(c=>c.method==='PUT').length,1);
 });
 
+test('machine idle rows expand, survive a directory update, and collapse again', async () => {
+  const {workspace,client} = await opened({sessions:[agent('busy'),agent('quiet',{state:'idle',status:'idle'})]});
+  workspace.setGroupingMode('machine');
+  const group = workspace.groups.find(item => item.id.startsWith('machine/'));
+  assert.deepEqual(group.rows.map(item => item.id), ['busy']);
+  workspace.toggleIdleRows(group.id);
+  workspace.update(client);
+  assert.equal(workspace.idleRowsExpanded(group.id),true);
+  assert.deepEqual(workspace.visibleRows().map(item=>item.id).sort(),['busy','quiet']);
+  workspace.toggleIdleRows(group.id);
+  assert.deepEqual(workspace.visibleRows().map(item=>item.id),['busy']);
+});
+
+test('Needs you sits above computers and spaces, even when their folds hide the row, and counts match', async () => {
+  const asking = agent('asking', { state: 'needs_you', status: 'needs_you', machine_id: 'm2' });
+  const { workspace } = await opened({ sessions: [agent('busy'), asking, agent('quiet', { state: 'idle', status: 'idle' })],
+    machines: [machine('m1'), machine('m2')] });
+  assert.equal(workspace.groups.filter(group => group.id === 'state/needs').length, 1);
+  assert.equal(workspace.counts.needsYou, 1);
+  assert.equal(workspace.counts.working, 1);
+  workspace.setGroupingMode('machine');
+  const folded = workspace.groups.find((group) => group.id === 'machine/work|m2');
+  workspace.toggleFold(folded.id);
+  const needs = workspace.groups[0];
+  assert.equal(needs.id, 'state/needs');
+  assert.deepEqual(needs.rows.map((row) => row.id), ['asking']);
+  const machineGroup = workspace.groups.find((group) => group.id === 'machine/work|m2');
+  assert.equal(machineGroup.folded, true);
+  assert.equal(machineGroup.rows.length, 0);
+  assert.equal(machineGroup.stateCounts.needs_you, 1, 'the folded computer still says what it hides');
+  assert.deepEqual(workspace.groups.find((group) => group.id === 'machine/work|m1').stateCounts, { working: 1, idle: 1 });
+  assert.equal(workspace.counts.needsYou, needs.rows.length, 'the chip and the section show one number');
+  assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['busy', 'asking'], 'each row once');
+  workspace.setGroupingMode('space');
+  assert.equal(workspace.groups[0].id, 'state/needs');
+  workspace.setQuickFilter('working');
+  assert.ok(!workspace.groups.some((group) => group.id === 'state/needs'), 'another quick filter shows only its own rows');
+  assert.equal(workspace.counts.needsYou, 1, 'chip counts are taken before the filter narrows the list');
+  workspace.setQuickFilter('all');
+  workspace.setSearch('busy');
+  assert.ok(!workspace.groups.some((group) => group.id === 'state/needs'), 'search results stand alone, as iOS');
+});
+
 test('a Projects query uses the same real Hub and machine source inventory without changing the current Agents view', async () => {
   const input=(group,id,pane,title)=>{const row=agent(id,{title,pane_id:pane,manager:'work',cwd:'/other',state:'idle'});row.group=group;return row;};
   const one=input('one','shared','w:p1','weather'), two=input('two','shared','botmux:p1','weather');
@@ -919,4 +963,194 @@ test('a Projects search uses one decision snapshot for its query count, grouped 
   const last=page.searchCards;
   queue.clear();await queue.reload(root);
   assert.equal(page.searchCards,last,'an owner change or a closed page releases its snapshot subscription');
+});
+
+test('related chats fold by actual parent and open directly during local search or Needs You',async()=>{
+  const main=agent('main',{state:'idle'}), side=agent('side',{title:'Branch discussion',parent_agent_id:'main',state:'needs_you'}),
+    codex=agent('delegate',{title:'Review snapshots',parent_session_id:'side',root_session_id:'main',is_subagent:true}),
+    orphan=agent('orphan',{title:'Branch discussion',parent_agent_id:'elsewhere'}),
+    embedded=agent('review',{subagents:[{id:'local',session_id:'review@local',description:'Inspect byte length',running:true}]});
+  const {workspace}=await opened({sessions:[main,side,codex,orphan,embedded]});
+  const ids=()=>workspace.visibleRows().map(row=>row.id);
+  assert.ok(ids().includes('main') && ids().includes('orphan'));
+  assert.ok(!ids().includes('side') && !ids().includes('delegate'));
+  assert.equal(workspace.relations.root(codex).id,'main');
+  workspace.toggleFamily(main);
+  assert.deepEqual(new Set(ids().slice(ids().indexOf('main')+1,ids().indexOf('main')+3)),new Set(['side','delegate']));
+  workspace.toggleFamily(main); assert.ok(!ids().includes('side'));
+  workspace.setQuickFilter('needsYou');assert.deepEqual(ids(),['side']);
+  workspace.setQuickFilter('all');workspace.setSearch('snapshots');assert.deepEqual(ids(),['delegate']);
+  workspace.setSearch('byte length');assert.deepEqual(ids(),['review@local']);
+  const child=workspace.visibleRows()[0]; assert.equal(child.data().read_only,true); assert.equal(workspace.relations.root(child).id,'review');
+});
+test('relations isolate machines, Hubs and managers and keep cycles and unrelated forks independent',async()=>{
+  const {SessionRelations}=await import('../entry/src/main/ets/models/SessionRelations.ets');
+  const rows=[agent('root'),agent('foreign',{parent_session_id:'root',machine_id:'other'}),agent('otherOwner',{parent_session_id:'root',manager:'different'}),
+    agent('side',{parent_agent_id:'root'}),agent('a',{parent_session_id:'b'}),agent('b',{parent_session_id:'a'}),agent('fork',{forked_from_id:'root'}),
+    agent('waiting',{asking_parent_session_id:'root',state:'needs_you'})];
+  rows[3].group='hub-two';
+  const graph=new SessionRelations(rows);
+  assert.deepEqual(graph.children(rows[0]).map(r=>r.id),['waiting']);
+  for(const r of rows.slice(1,7)) assert.equal(graph.root(r),undefined);
+});
+
+test('Claude workflow transcripts are searchable, read-only and deduplicated against ordinary agents and full sessions', async () => {
+  const parent = agent('main', {
+    subagents: [{id:'regular', session_id:'main@regular', description:'Regular child', running:false}],
+    workflows: [{run_id:'wf_one', agents:[
+      {id:'review', session_id:'main@review', label:'Review schema', status:'running'},
+      {id:'regular', session_id:'main@regular', label:'Duplicate child'},
+      {id:'full', session_id:'main@full', label:'Duplicate full row'},
+      {id:'other', session_id:'elsewhere@other', label:'Unrelated record'}
+    ]}]
+  });
+  const full = agent('main@full', {parent_session_id:'main', title:'Registered child'});
+  const {workspace} = await opened({sessions:[parent, full]});
+  const children = workspace.relations.children(parent);
+  assert.deepEqual(children.map(row => row.id).sort(), ['main@full','main@regular','main@review']);
+  assert.equal(children.find(row => row.id === full.id), full);
+  workspace.setSearch('Review schema');
+  const [review] = workspace.visibleRows();
+  assert.equal(review.id, 'main@review');
+  assert.equal(review.state, 'working');
+  assert.equal(review.data().read_only, true);
+  assert.deepEqual(review.data().capabilities, {read:true});
+  assert.equal(workspace.relations.root(review).id, 'main');
+});
+
+test('offline search results retain their real state and respect machine, quick and readability filters', async () => {
+  const main = agent('main');
+  const old = {parent_agent_id:'main', title:'Find offline transcript', state:'offline', status:'offline'};
+  const side = agent('side', {...old, capabilities:{read:true}});
+  const {workspace} = await opened({sessions:[main, side, agent('other', {...old, machine_id:'m2'}),
+    agent('denied', {...old, capabilities:{read:false}}), agent('hidden', {...old, hidden_by_directory:true})],
+    machines:[machine('m1'),machine('m2')]});
+  workspace.toggleFamily(main);
+  assert.ok(workspace.visibleRows().includes(side));
+  await workspace.setMachineFilter('m1');
+  workspace.setSearch('Find offline transcript');
+  for (const grouping of ['state','machine','space']) {
+    workspace.setGroupingMode(grouping);
+    assert.deepEqual(workspace.visibleRows().map(row => [row.id,row.state]), [['side','offline']]);
+    workspace.selectRow(side);
+    assert.equal(workspace.isSelected(side), true);
+  }
+  workspace.setQuickFilter('needsYou');
+  assert.equal(workspace.visibleRows().length, 0);
+  workspace.setQuickFilter('all');
+  assert.equal(await workspace.togglePin(side), true);
+  assert.deepEqual(workspace.visibleRows().map(row => row.id), ['side']);
+});
+
+test('pinned children have one direct entry, and unpinning puts them back under their main chat', async () => {
+  const main = agent('main'), side = agent('side',{parent_agent_id:'main'}), task = agent('task',{parent_session_id:'main'});
+  const {workspace,client} = await opened({sessions:[main,side,task]});
+  workspace.toggleFamily(main);
+  workspace.update(client, true);
+  assert.equal(await workspace.togglePin(side), true);
+  const pinned = () => workspace.groups.find(group => group.id === 'pinned')?.rows.map(row => row.id);
+  assert.deepEqual(pinned(), ['side']);
+  assert.deepEqual(workspace.foldedChildren(main).map(row => row.id), ['task']);
+  assert.equal(workspace.visibleRows().filter(row => row.id === 'side').length, 1);
+  workspace.toggleFamily(main);
+  assert.ok(workspace.visibleRows().includes(side));
+  assert.equal(await workspace.togglePin(side), true);
+  assert.equal(pinned(), undefined);
+  assert.ok(!workspace.visibleRows().includes(side));
+  workspace.toggleFamily(main);
+  assert.ok(workspace.visibleRows().includes(side));
+});
+
+test('cached child activity follows the connection of its own Hub and machine', async () => {
+  const makeParent = (group,manager) => {
+    const row = agent('main',{manager, state:'idle', status:'idle', workflows:[
+      {agents:[{id:'worker',session_id:'main@worker',label:'Cached worker',running:true}]}
+    ]});
+    row.group = group;
+    return row;
+  };
+  const disconnected = makeParent('hub-a','one'), online = makeParent('hub-b','two');
+  const {client,workspace} = await opened({sessions:[disconnected,online]});
+  const a = clientFixture().client, b = clientFixture().client;
+  a.profile.id = 'hub-a'; a.profile.manager = 'one'; a.connected = false;
+  b.profile.id = 'hub-b'; b.profile.manager = 'two';
+  client.directoryOwners = () => [a,b];
+  client.directoryOwnerFor = row => row.group === 'hub-a' ? a : b;
+  workspace.setQuickFilter('working');
+  assert.deepEqual(workspace.visibleRows().map(row => row.group), ['hub-b']);
+  assert.equal(workspace.relations.find(disconnected).state, 'offline');
+  assert.equal(workspace.relations.children(disconnected)[0].state, 'offline');
+  a.connected = true;
+  a.machines = [ResourceRow.from({id:'m1',manager:'one',online:false},'machine')];
+  workspace.update(client);
+  assert.deepEqual(workspace.visibleRows().map(row => row.group), ['hub-b']);
+  a.machines = [machine('m1','personal','one')];
+  workspace.update(client);
+  assert.deepEqual(workspace.visibleRows().map(row => row.group).sort(), ['hub-a','hub-b']);
+});
+
+test('every path into a parent cycle stays standalone in any directory order', async () => {
+  const {SessionRelations} = await import('../entry/src/main/ets/models/SessionRelations.ets');
+  const a=agent('a',{parent_session_id:'b'}), b=agent('b',{parent_session_id:'a'});
+  const viaA=agent('via-a',{parent_agent_id:'a'}), viaB=agent('via-b',{parent_session_id:'b'});
+  const leaf=agent('leaf',{parent_session_id:'via-a'});
+  for (const rows of [[a,b,viaA,viaB,leaf],[leaf,viaB,a,viaA,b],[viaA,a,b,leaf,viaB]]) {
+    const graph=new SessionRelations(rows);
+    for(const row of rows) { assert.equal(graph.root(row),undefined); assert.deepEqual(graph.children(row),[]); }
+  }
+});
+
+test('history list publishes the exact owner archive used to navigate an archived family', async () => {
+  const main=agent('arch-main',{archived:true,state:'offline',status:'offline'});
+  const task=agent('arch-task',{archived:true,state:'offline',status:'offline',parent_session_id:'arch-main'});
+  const {client,workspace}=await opened({sessions:[],history:[main,task]});
+  client.features=['agent_session_archives'];
+  await workspace.setHistory(true);
+  workspace.toggleFold('state/idle');
+  const listed = workspace.visibleRows()[0];
+  assert.equal(listed.id, main.id);
+  const {sessionRelations}=await import('../entry/src/main/ets/models/SessionRelations.ets');
+  const detail=sessionRelations(client.archives.rows);
+  const [child]=detail.children(listed);
+  assert.equal(child.id, task.id);
+  assert.equal(detail.root(child).key(), listed.key());
+  assert.equal(client.sessions.length, 0);
+});
+
+test('archive refresh merges machines without reviving stale or foreign rows', async () => {
+  const archive=new SessionArchive();
+  const entry=(session_id,machine_id) => ({session_id,machine_id,archived:true,manager:'work'});
+  let finishAll;
+  const pending=archive.read(() => new Promise(resolve => {finishAll=resolve;}),'hub','work','',()=>true);
+  await archive.read(async()=>({sessions:[entry('new','m1'),entry('wrong-machine','m2'),{...entry('foreign','m1'),manager:'other'}]}),
+    'hub','work','m1',()=>true);
+  finishAll({sessions:[entry('stale','m1'),entry('second','m2')]});
+  await pending;
+  assert.deepEqual(archive.rows.map(row => row.id).sort(), ['new','second']);
+  await archive.read(async()=>({sessions:[]}),'hub','work','m1',()=>false);
+  assert.deepEqual(archive.rows.map(row => row.id).sort(), ['new','second']);
+  await archive.read(async()=>({sessions:[]}),'hub','work','m1',()=>true);
+  assert.deepEqual(archive.rows.map(row => row.id), ['second']);
+});
+
+test('a folded side chat that needs you puts its parent in Needs you, the header counts and the chip, once', async () => {
+  const main = agent('main', { state: 'idle', status: 'idle', machine_id: 'm2' });
+  const side = agent('side', { title: 'Branch discussion', parent_agent_id: 'main', state: 'needs_you', status: 'needs_you', machine_id: 'm2' });
+  const { workspace } = await opened({ sessions: [agent('busy'), main, side], machines: [machine('m1'), machine('m2')] });
+  assert.equal(workspace.familyState(main), 'needs_you');
+  assert.equal(workspace.counts.needsYou, 1, 'one family, one number');
+  assert.deepEqual(workspace.groups.find((group) => group.id === 'state/needs').rows.map((row) => row.id), ['main']);
+  workspace.setGroupingMode('machine');
+  const computer = workspace.groups.find((group) => group.id === 'machine/work|m2');
+  workspace.toggleFold(computer.id);
+  const needs = workspace.groups[0];
+  assert.equal(needs.id, 'state/needs');
+  assert.deepEqual(needs.rows.map((row) => row.id), ['main'], 'the parent row, never the folded child as well');
+  assert.equal(workspace.counts.needsYou, needs.rows.length);
+  assert.equal(workspace.groups.find((group) => group.id === 'machine/work|m2').stateCounts.needs_you, 1);
+  workspace.toggleFamily(main);
+  assert.deepEqual(workspace.displayRows(needs).map((row) => row.id), ['main'], 'an opened family does not open inside Needs you');
+  workspace.setQuickFilter('needsYou');
+  assert.equal(workspace.familyState(main), 'idle', 'without folding the child is its own row');
+  assert.deepEqual(workspace.groups[0].rows.map((row) => row.id), ['side']);
 });

@@ -2,7 +2,7 @@
   "color": [
     {
       "name": "persona_inline_code_ink",
-      "value": "#48484A"
+      "value": "#E6000000"
     },
     {
       "name": "persona_switcher_surface",
@@ -339,6 +339,66 @@
     {
       "name": "persona_hero_shadow",
       "value": "#14000000"
+    },
+    {
+      "name": "persona_plan_surface",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "persona_plan_border",
+      "value": "#E4E4E4"
+    },
+    {
+      "name": "persona_plan_track",
+      "value": "#EBEBEB"
+    },
+    {
+      "name": "persona_plan_arc",
+      "value": "#909090"
+    },
+    {
+      "name": "persona_plan_secondary",
+      "value": "#656565"
+    },
+    {
+      "name": "persona_plan_current",
+      "value": "#191919"
+    },
+    {
+      "name": "persona_brand_claude",
+      "value": "#D97757"
+    },
+    {
+      "name": "persona_progress_text",
+      "value": "#49535F"
+    },
+    {
+      "name": "persona_reference",
+      "value": "#456681"
+    },
+    {
+      "name": "persona_activity",
+      "value": "#6B6F7B"
+    },
+    {
+      "name": "persona_diff_added_background",
+      "value": "#EAF4ED"
+    },
+    {
+      "name": "persona_diff_removed_background",
+      "value": "#FBEDEC"
+    },
+    {
+      "name": "persona_code_keyword",
+      "value": "#5A41A2"
+    },
+    {
+      "name": "persona_code_string",
+      "value": "#126554"
+    },
+    {
+      "name": "persona_code_literal",
+      "value": "#934B10"
     }
   ]
 }

@@ -548,6 +548,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	n.listRows.Store(int32(max(peak, len(out))))
 	// Terminal-owned Codex parents were already seen before history was added: over the whole list, before any row goes.
+	n.linkCodexSides(out)
 	resolveCodexHierarchy(out)
 	// A conversation that moved between Claude Code and Codex is one row, the session running it now: the sessions it
 	// ran in before are left out (engine_switch.go).

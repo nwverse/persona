@@ -1,10 +1,10 @@
 import { RFBARDReply, RFBAuth, RFBCredentials } from './RFBAuth';
-import { RFBFramebuffer } from './RFBFramebuffer';
+import { RFBFramebuffer, RFBRegion } from './RFBFramebuffer';
 import { RFBZRLE } from './RFBZRLE';
 import { util } from '@kit.ArkTS';
 
 const MAX_READ_BYTES: number = 72 * 1024 * 1024;
-const MAX_QUEUED_BYTES: number = 8 * 1024 * 1024;
+const INITIAL_QUEUE_LIMIT: number = 8 * 1024 * 1024;
 const MAX_INFLATED_BYTES: number = 72 * 1024 * 1024;
 const MAX_RECTS: number = 4096;
 const MAX_TEXT_BYTES: number = 1024 * 1024;
@@ -12,7 +12,7 @@ const MAX_REASON_BYTES: number = 4096;
 const MAX_SCREENS: number = 64;
 
 export interface RFBTransport {
-  sendBinary(bytes: ArrayBuffer): boolean;
+  sendBinary(bytes: ArrayBuffer, replaceQueuedMotion?: boolean): boolean;
   close(): void;
 }
 
@@ -51,49 +51,69 @@ class RFBIssue extends Error {
 
 /** Buffers WebSocket messages as one ordered TCP byte stream, consuming large RFB payloads incrementally. */
 class RFBReader {
-  private chunks: Uint8Array[] = [];
-  private firstOffset: number = 0;
-  private queuedBytes: number = 0;
+  private buffer = new Uint8Array(4096);
+  private first: number = 0;
+  private queued: number = 0;
+  private limit: number = INITIAL_QUEUE_LIMIT;
   private waiter: (() => void) | undefined;
   private closed: boolean = false;
 
+  desktopSize(w: number, h: number): void {
+    // A relay can deliver one whole update while the previous rectangle is decoding.
+    this.limit = Math.min(MAX_READ_BYTES, Math.max(INITIAL_QUEUE_LIMIT, w * h * 4 + 65536));
+  }
+
   push(input: ArrayBuffer): void {
-    if (this.closed) return;
-    if (input.byteLength === 0) return;
-    if (input.byteLength > 1024 * 1024 || this.queuedBytes + input.byteLength > MAX_QUEUED_BYTES) throw new RFBIssue('rfb_input_limit');
-    const copy = new Uint8Array(input.byteLength);
-    copy.set(new Uint8Array(input));
-    this.chunks.push(copy);
-    this.queuedBytes += copy.length;
-    const wake: (() => void) | undefined = this.waiter;
+    if (this.closed || !input.byteLength) return;
+    const size = this.queued + input.byteLength;
+    if (input.byteLength > 1024 * 1024 || size > this.limit) throw new RFBIssue('unsupported', 'rfb_input_limit');
+    if (size > this.buffer.length) {
+      const next = new Uint8Array(Math.min(this.limit, Math.max(size, this.buffer.length * 2)));
+      this.copyTo(next, 0, this.queued);
+      this.first = 0;
+      this.buffer = next;
+    }
+    const bytes = new Uint8Array(input);
+    const end = (this.first + this.queued) % this.buffer.length;
+    const take = Math.min(bytes.length, this.buffer.length - end);
+    this.buffer.set(bytes.subarray(0, take), end);
+    if (take < bytes.length) this.buffer.set(bytes.subarray(take));
+    this.queued = size;
+    const wake = this.waiter;
     this.waiter = undefined;
     wake?.();
   }
 
+  private copyTo(dst: Uint8Array, offset: number, length: number): void {
+    const take = Math.min(length, this.buffer.length - this.first);
+    dst.set(this.buffer.subarray(this.first, this.first + take), offset);
+    if (take < length) dst.set(this.buffer.subarray(0, length - take), offset + take);
+  }
+
   close(): void {
     this.closed = true;
-    const wake: (() => void) | undefined = this.waiter;
+    this.queued = 0;
+    this.buffer = new Uint8Array(0);
+    const wake = this.waiter;
     this.waiter = undefined;
     wake?.();
   }
 
   async bytes(length: number): Promise<Uint8Array> {
-    if (!Number.isInteger(length) || length < 0 || length > MAX_READ_BYTES) throw new RFBIssue('rfb_input_limit');
+    if (!Number.isInteger(length) || length < 0 || length > MAX_READ_BYTES) throw new RFBIssue('unsupported', 'rfb_input_limit');
     const output = new Uint8Array(length);
-    let written: number = 0;
+    let written = 0;
     while (written < length) {
-      while (this.chunks.length === 0) {
-        if (this.closed) throw new RFBIssue('rfb_connection_lost');
+      if (this.closed) throw new RFBIssue('connection_lost');
+      if (!this.queued) {
         await new Promise<void>((resolve) => { this.waiter = resolve; });
+        continue;
       }
-      const chunk: Uint8Array = this.chunks[0];
-      const available: number = chunk.length - this.firstOffset;
-      const take: number = Math.min(available, length - written);
-      output.set(chunk.subarray(this.firstOffset, this.firstOffset + take), written);
+      const take = Math.min(this.queued, length - written);
+      this.copyTo(output, written, take);
+      this.first = (this.first + take) % this.buffer.length;
+      this.queued -= take;
       written += take;
-      this.firstOffset += take;
-      this.queuedBytes -= take;
-      if (this.firstOffset === chunk.length) { this.chunks.shift(); this.firstOffset = 0; }
     }
     return output;
   }
@@ -161,6 +181,14 @@ export class RFBClient {
   onClipboard: (text: string) => void = (_text: string) => {};
   onResize: (width: number, height: number) => void = (_width: number, _height: number) => {};
   onScreens: (screens: RFBScreenInfo[]) => void = (_screens: RFBScreenInfo[]) => {};
+  chooseView: (width: number, height: number, screens: RFBScreenInfo[]) => RFBRegion | undefined = () => undefined;
+  decodePatch: ((bytes: Uint8Array, rect: RFBRegion, crop: RFBRegion, width: number, height: number) => Promise<ArrayBuffer>) | undefined;
+  private viewRevision: number = 0;
+  private readingUpdate: boolean = false;
+  private copyEncoding: boolean | undefined;
+  private needsFullUpdate: boolean = false;
+  private holdingUpdates: boolean = false;
+  private pendingIncremental: boolean | undefined;
   onCursor: (cursor: RFBCursor) => void = (_cursor: RFBCursor) => {};
   serverName: string = '';
 
@@ -200,14 +228,27 @@ export class RFBClient {
     return this.sendRequest(false);
   }
 
+  selectView(view: RFBRegion): boolean {
+    if (!this.active || !this.live) return false;
+    if (!this.framebuffer.resize(this.framebuffer.width, this.framebuffer.height, view)) return true;
+    this.viewRevision++;
+    if (!this.setEncodings()) return false;
+    if (this.readingUpdate) {
+      this.needsFullUpdate = true;
+      return true;
+    }
+    return this.sendRequest(false);
+  }
+
   pointer(x: number, y: number, buttons: number): boolean {
     if (!this.inputAllowed() || !Number.isInteger(x) || !Number.isInteger(y)) return false;
     const safeX: number = Math.min(this.framebuffer.width - 1, Math.max(0, x));
     const safeY: number = Math.min(this.framebuffer.height - 1, Math.max(0, y));
+    const motion = this.pointerButtons === (buttons & 31);
     this.pointerX = safeX; this.pointerY = safeY;
     this.pointerButtons = buttons & 31;
     const packet = new Uint8Array([5, this.pointerButtons, (safeX >>> 8) & 255, safeX & 255, (safeY >>> 8) & 255, safeY & 255]);
-    return this.send(packet);
+    return this.send(packet, motion);
   }
 
   wheel(x:number,y:number,notches:number):boolean {
@@ -280,7 +321,10 @@ export class RFBClient {
       await this.handshake();
       while (this.active) {
         const message: number = await this.reader.u8();
-        if (message === 0) await this.update();
+        if (message === 0) {
+          this.readingUpdate = true;
+          try { await this.update(); } finally { this.readingUpdate = false; }
+        }
         else if (message === 1) await this.colorMap();
         else if (message === 2) { /* bell */ }
         else if (message === 3) await this.serverClipboard();
@@ -323,18 +367,27 @@ export class RFBClient {
     const nameLength: number = await this.reader.u32();
     if (nameLength > MAX_REASON_BYTES) throw new RFBIssue('unsupported', 'rfb_name_limit');
     this.serverName = util.TextDecoder.create('utf-8').decodeToString(await this.reader.bytes(nameLength));
-    this.framebuffer.resize(width, height);
+    this.reader.desktopSize(width, height);
+    this.framebuffer.resize(width, height, this.chooseView(width, height, []));
     const pixelFormat = new Uint8Array([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]);
     if (!this.send(pixelFormat)) throw new RFBIssue('connection_lost');
-    const encodings: number[] = [16, 1, 0, -223, -308, -224];
+    if (!this.setEncodings()) throw new RFBIssue('connection_lost');
+    this.live = true;
+    this.onState('live', '', '');
+    if (!this.sendRequest(false)) throw new RFBIssue('connection_lost');
+  }
+
+  private setEncodings(): boolean {
+    // CopyRect may refer to pixels on another display, outside a cropped or sampled backing store.
+    const copy = this.framebuffer.canCopy();
+    if (this.copyEncoding === copy) return true;
+    this.copyEncoding = copy;
+    const encodings: number[] = copy ? [16, 1, 0, -223, -308, -224] : [16, 0, -223, -308, -224];
     const setEncodings: Uint8Array = new Uint8Array(4 + encodings.length * 4);
     setEncodings[0] = 2; setEncodings[1] = 0;
     setEncodings[2] = 0; setEncodings[3] = encodings.length;
     for (let index: number = 0; index < encodings.length; index++) setEncodings.set(numberBytes(encodings[index] >>> 0, 4), 4 + index * 4);
-    if (!this.send(setEncodings)) throw new RFBIssue('connection_lost');
-    this.live = true;
-    this.onState('live', '', '');
-    if (!this.sendRequest(false)) throw new RFBIssue('connection_lost');
+    return this.send(setEncodings);
   }
 
   private async ard(): Promise<void> {
@@ -392,17 +445,33 @@ export class RFBClient {
 
   private request(incremental: boolean): boolean {
     if (this.framebuffer.width < 1 || this.framebuffer.height < 1) return false;
-    const width: number = this.framebuffer.width, height: number = this.framebuffer.height;
-    return this.send(new Uint8Array([3, incremental ? 1 : 0, 0, 0, 0, 0, (width >>> 8) & 255, width & 255, (height >>> 8) & 255, height & 255]));
+    // macOS can leave partial update requests pending indefinitely. Crop in the local backing store.
+    const w = this.framebuffer.width, h = this.framebuffer.height;
+    return this.send(new Uint8Array([3, incremental ? 1 : 0, 0, 0, 0, 0, w >>> 8, w & 255, h >>> 8, h & 255]));
   }
 
-  private sendRequest(incremental: boolean): boolean { return this.request(incremental); }
+  holdUpdates(held: boolean): void {
+    if (!this.live || this.holdingUpdates === held) return;
+    this.holdingUpdates = held;
+    if (!held && this.pendingIncremental !== undefined) {
+      const incremental = this.pendingIncremental;
+      this.pendingIncremental = undefined;
+      if (!this.request(incremental)) this.fail(new RFBIssue('connection_lost'));
+    }
+  }
+
+  private sendRequest(incremental: boolean): boolean {
+    if (!this.holdingUpdates) return this.request(incremental);
+    if (this.pendingIncremental !== false) this.pendingIncremental = incremental;
+    return true;
+  }
 
   private async update(): Promise<void> {
     await this.reader.bytes(1);
     const count: number = await this.reader.u16();
     if (count !== 65535 && count > MAX_RECTS) throw new RFBIssue('unsupported', 'rfb_rect_limit');
     let changed: boolean = false;
+    let revision: number = this.viewRevision;
     for (let index: number = 0; index < count; index++) {
       const x: number = await this.reader.u16();
       const y: number = await this.reader.u16();
@@ -412,21 +481,16 @@ export class RFBClient {
       if (encoding === -224) break;
       if (index >= MAX_RECTS) throw new RFBIssue('unsupported', 'rfb_rect_limit');
       if (encoding === -223) {
-        if (!RFBFramebuffer.validSize(width, height)) throw new RFBIssue('unsupported', 'rfb_size_limit');
-        this.framebuffer.resize(width, height);
-        this.onResize(width, height);
-        changed = true;
+        this.layoutChanged(width, height, []);
+        changed = false;
+        revision = this.viewRevision;
         continue;
       }
       if (encoding === -308) {
         const screens: RFBScreenInfo[] = await this.extendedScreens(x, y);
         if (y === 0) {
-          if (!RFBFramebuffer.validSize(width, height)) throw new RFBIssue('unsupported', 'rfb_size_limit');
-          if (width !== this.framebuffer.width || height !== this.framebuffer.height) {
-            this.framebuffer.resize(width, height);
-            this.onResize(width, height);
-            changed = true;
-          }
+          this.layoutChanged(width, height, screens);
+          if (revision !== this.viewRevision) { changed = false; revision = this.viewRevision; }
           this.onScreens(screens);
         }
         continue;
@@ -437,26 +501,54 @@ export class RFBClient {
       }
       this.framebuffer.requireRect(x, y, width, height);
       if (encoding === 0) {
-        const size: number = width * height * 4;
-        if (size > RFBFramebuffer.maxBytes) throw new RFBIssue('unsupported', 'rfb_rect_limit');
-        this.framebuffer.raw(x, y, width, height, await this.reader.bytes(size));
+        const rowsPerRead: number = Math.max(1, Math.floor((1024 * 1024) / (width * 4)));
+        for (let row: number = 0; row < height; row += rowsPerRead) {
+          const rows: number = Math.min(height - row, rowsPerRead);
+          this.framebuffer.raw(x, y + row, width, rows, await this.reader.bytes(width * rows * 4));
+        }
       } else if (encoding === 1) {
         const sourceX: number = await this.reader.u16();
         const sourceY: number = await this.reader.u16();
+        if (!this.framebuffer.canCopy()) { this.needsFullUpdate = true; continue; }
         this.framebuffer.copy(x, y, width, height, sourceX, sourceY);
       } else if (encoding === 16) {
         const compressedLength: number = await this.reader.u32();
-        if (compressedLength < 1 || compressedLength > 1024 * 1024) throw new RFBIssue('unsupported', 'rfb_rect_limit');
+        if (compressedLength < 1 || compressedLength > RFBZRLE.maxCompressedBytes) throw new RFBIssue('unsupported', 'rfb_zrle_limit');
         const pixels: number = width * height;
         const tiles: number = Math.ceil(width / 64) * Math.ceil(height / 64);
         const outputLimit: number = Math.min(MAX_INFLATED_BYTES, pixels * 4 + tiles * 384 + 1024);
         const inflated: Uint8Array = await this.zrle.inflate(await this.reader.bytes(compressedLength), outputLimit);
-        this.framebuffer.drawZRLE(inflated, x, y, width, height);
+        if (!this.framebuffer.intersects(x, y, width, height)) continue;
+        if (this.decodePatch && this.framebuffer.step === 1 && pixels >= 256 * 1024 && inflated.length >= 24 * 1024) {
+          const fb = this.framebuffer, generation = fb.revision, view = fb.view;
+          const left = Math.max(x, view.x), top = Math.max(y, view.y);
+          const crop = new RFBRegion(left, top, Math.min(x + width, view.x + view.width) - left,
+            Math.min(y + height, view.y + view.height) - top);
+          const patch = await this.decodePatch(inflated, new RFBRegion(x, y, width, height), crop, fb.width, fb.height);
+          if (!this.active) return;
+          if (generation !== fb.revision) { this.needsFullUpdate = true; continue; }
+          fb.applyDecoded(crop, new Uint8Array(patch));
+        } else this.framebuffer.drawZRLE(inflated, x, y, width, height);
       } else throw new RFBIssue('unsupported', 'rfb_encoding');
-      changed = true;
+      if (this.framebuffer.intersects(x, y, width, height)) {
+        this.framebuffer.changed(x, y, width, height);
+        changed = true;
+      }
     }
-    if (changed) this.onFrame(this.framebuffer);
-    if (this.active && !this.sendRequest(true)) throw new RFBIssue('connection_lost');
+    if (changed && revision === this.viewRevision) this.onFrame(this.framebuffer);
+    const incremental: boolean = !this.needsFullUpdate;
+    this.needsFullUpdate = false;
+    if (this.active && !this.sendRequest(incremental)) throw new RFBIssue('connection_lost');
+  }
+
+  private layoutChanged(width: number, height: number, screens: RFBScreenInfo[]): void {
+    if (!RFBFramebuffer.validSize(width, height)) throw new RFBIssue('unsupported', 'rfb_size_limit');
+    this.reader.desktopSize(width, height);
+    if (!this.framebuffer.resize(width, height, this.chooseView(width, height, screens))) return;
+    this.viewRevision++;
+    this.needsFullUpdate = true;
+    this.onResize(width, height);
+    if (!this.setEncodings()) throw new RFBIssue('connection_lost');
   }
 
   private async extendedScreens(_reason: number, _status: number): Promise<RFBScreenInfo[]> {
@@ -509,9 +601,9 @@ export class RFBClient {
 
   private inputAllowed(): boolean { return this.active && this.started && this.canControl(); }
 
-  private send(bytes: Uint8Array): boolean {
+  private send(bytes: Uint8Array, replaceQueuedMotion: boolean = false): boolean {
     if (!this.active) return false;
-    return this.transport.sendBinary(arrayBuffer(bytes));
+    return this.transport.sendBinary(arrayBuffer(bytes), replaceQueuedMotion);
   }
 
   private fail(error: Error): void {

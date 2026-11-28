@@ -18,6 +18,7 @@ import { PhoneSessionHeading } from '../components/PhoneSessionHeading';
 import { AgentReadingBar } from '../components/AgentReadingBar';
 import { AgentReadingHeader } from '../models/AgentReadingHeader';
 import { SessionSpace, SessionSpaceTab, sessionSpace, worktreeForSessionSpace } from '../models/SessionSpace';
+import { HubDemoVideo } from '../components/HubDemoVideo';
 import { PhoneFirstRun } from '../components/PhoneFirstRun';
 import { PhonePairingForm } from '../components/PhonePairingForm';
 import { PairingSshForm } from '../components/PairingSshForm';
@@ -70,15 +71,14 @@ import type { StarredSnapshot } from '../core/StarredMessages';
 import { starredStore } from '../models/StarredStore';
 import { LinkReader } from '../components/LinkReader';
 import { readerLink, readerHost } from '../platform/ReaderLink';
-import { common } from '@kit.AbilityKit';
+import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { DevicePage } from '../components/DevicePage';
 import { deviceFeatures } from '../models/DeviceFeatures';
 import { SessionTools } from '../components/SessionTools';
 import { SessionWorkspace } from '../models/SessionWorkspace';
 import { sessionModeAvailable } from '../models/SessionModes';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial } from '@kit.ArkUI';
-import { ConfigurationConstant } from '@kit.AbilityKit';
+import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial, window, IconTypeV2 } from '@kit.ArkUI';
 import { ClientModel, client } from '../models/ClientModel';
 import { ResourceRow, HubProfile, Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
@@ -89,16 +89,17 @@ import { InteractionHistoryPage } from '../components/InteractionHistoryPage';
 import { InboxWorkspacePage } from '../components/InboxWorkspacePage';
 import { inboxTier } from '../models/InboxWorkspace';
 import { ResourcePage } from '../components/ResourcePage';
+import { SignedInDevicesPage } from '../components/SignedInDevicesPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { SshSettingsPage } from '../components/SshSettingsPage';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
 import { nativeLookTheme } from '../design/LookTheme';
 import { deviceLookInterfaceTint, deviceLookSelectedFilterInk, deviceLookSurface, usesSystemStyleColors } from '../core/DeviceLook';
 import { phoneInterfaceStyleID } from '../core/PhoneInterfaceStyle';
-import { IconTypeV2 } from '@kit.ArkUI';
 import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
 import { Symbols } from '../design/Symbols';
+import type { RelatedReadingPosition } from '../core/ConversationReading';
 import { ButtonStyles } from '../design/Controls';
 import { AgentWorkspace } from '../models/AgentWorkspace';
 import { AgentTaskGrouping } from '../models/AgentTaskGrouping';
@@ -253,6 +254,10 @@ struct Index {
   private directionPermissionsTarget:string='';
   private pairingSettingsOwner:string='';
   @Local activeChild: string = '';
+  @Local fullscreenComputer: string = '';
+  @Local computerOrientation: window.Orientation = window.Orientation.AUTO_ROTATION_RESTRICTED;
+  @Local computerReturnOrientation: window.Orientation | undefined = undefined;
+  private computerExitTimer: number = -1;
   @Local tool: number = 0;
   private titleMaterial: uiMaterial.Material = uiMaterial.isImmersiveMaterialSupported() ? new uiMaterial.ImmersiveMaterial({ style: uiMaterial.ImmersiveStyle.THIN }) : uiMaterial.Material.empty;
   @Local projectRootRevision: number = 0;
@@ -1522,9 +1527,10 @@ struct Index {
     this.showSheet = true;
   }
   private compactPairing(): boolean { return this.sheetKind === 'connect' && !this.wide(); }
-  private sheetTitle(): string { return tr(this.sheetKind === 'hub' ? 'hub' : this.sheetKind === 'newagent' ? 'new_agent' : 'welcome'); }
+  private sheetTitle(): string { return tr(this.sheetKind === 'tour' ? 'hub_tour_title' : this.sheetKind === 'hub' ? 'hub' : this.sheetKind === 'newagent' ? 'new_agent' : 'welcome'); }
   @Builder sheetContent() {
-    if (this.sheetKind === 'hub') this.workspaceSheet()
+    if (this.sheetKind === 'tour') HubDemoVideo({ onDemo: () => { this.showSheet = false; this.model.useDemo(); } })
+    else if (this.sheetKind === 'hub') this.workspaceSheet()
     else if (this.sheetKind === 'newagent') this.newAgentForm()
     else if (this.compactPairing() && this.editingPairSsh) {
       PairingSshForm({ draft: this.pairSsh, hubAddress: this.address, onDone: () => { this.editingPairSsh = false; },
@@ -1606,7 +1612,7 @@ struct Index {
     this.bindDeviceOwner(this.model);
     this.applications.bind(this.model); this.applications.refresh();
   }
-  aboutToDisappear(): void { this.clearPairTransport(); phonePasswordLogin.cancel(); if (this.assistantStatusTimer !== -1) clearInterval(this.assistantStatusTimer); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
+  aboutToDisappear(): void { this.finishComputerFullscreen(); this.clearPairTransport(); phonePasswordLogin.cancel(); if (this.assistantStatusTimer !== -1) clearInterval(this.assistantStatusTimer); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
   @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
     this.applications.bind(this.model); this.applications.connectionChanged();
   }
@@ -1791,13 +1797,42 @@ struct Index {
   private openRow(row: ResourceRow, root: boolean = true): void {
     const name = NavigationContext.destination(row);
     this.chatReady = false; this.detailRoute = '';
-    if (row.kind === 'session') { this.stack.clear(); this.tool = 0; }
+    if (row.kind === 'session') { this.relatedAnchors.clear(); this.stack.clear(); this.tool = 0; }
     this.stack.pushPath({ name: name, param: JSON.stringify(this.routeTarget(row, root || !this.stack.size())) }); this.savePath();
+  }
+  private async openMachineChat(param: Object, agent: ResourceRow, name: string = 'settings'): Promise<void> {
+    const source = this.childKey(name, param), machine = name === 'machine_settings' || name === 'machine_agents' ? this.routeRow(param) : NavigationContext.from(name, param as string).row;
+    const stack = this.stack, top = stack.size() - 1;
+    if (this.activeChild !== source || top < 0 || stack.getParamByIndex(top) !== param ||
+      agent.kind !== 'session' || agent.machine !== machine.id || (agent.group && machine.group && agent.group !== machine.group) ||
+      (agent.manager && machine.manager && agent.manager !== machine.manager)) return;
+    const root = this.model, generation = root.connectionGeneration(), scope = root.scope(), intent = ++this.navigationIntent;
+    const current = (): boolean => this.activeChild === source && this.stack === stack && stack.size() === top + 1 &&
+      stack.getParamByIndex(top) === param && this.navigationIntent === intent && root.owns(generation, scope);
+    try {
+      const view = await root.viewFor(machine);
+      const viewGeneration = view.connectionGeneration(), viewScope = view.scope(), pairing = view.pairingRevision();
+      const admitted = (): boolean => current() && view.owns(viewGeneration, viewScope) && view.pairingRevision() === pairing;
+      if (!admitted() || (agent.group && agent.group !== view.profile.id) || (agent.manager && agent.manager !== view.profile.manager)) return;
+      const session = view.sessions.find((row: ResourceRow) => row.kind === 'session' && row.machine === machine.id &&
+        row.id === agent.id && (row.session || row.id) === (agent.session || agent.id) &&
+        (!row.group || row.group === view.profile.id) && (!row.manager || row.manager === view.profile.manager));
+      if (!session) { this.getUIContext().getPromptAction().showToast({ message: tr('request_updated') }); return; }
+      const target = this.routeTarget(session, false);
+      target.group = view.profile.id; target.manager = view.profile.manager;
+      if (view.selected.key() !== target.key() || view.draftLoading) await view.select(target, false, admitted);
+      if (!admitted() || view.selected.key() !== target.key() || view.draftLoading) return;
+      const next = JSON.stringify(target);
+      if (this.detailModel !== view) this.detailModel.hideConversation();
+      this.detailModel = view;
+      this.markDetailReady(this.childKey('session', next));
+      stack.pushPath({ name: 'session', param: next }); this.savePath();
+    } catch (error) { if (current()) root.reportError(error as Error); }
   }
   private async openLinkedResource(row: ResourceRow, beforePush?: (destination:string) => boolean): Promise<void> {
     const generation = this.model.connectionGeneration(), scope = this.model.scope(), source = this.activeChild;
     try {
-      if (!['inbox', 'todo', 'knowledge', 'file', 'todo_source', 'todo_thread'].includes(row.kind)) await this.model.viewFor(row);
+      if (!['inbox', 'todo', 'knowledge', 'file', 'todo_source', 'todo_thread'].includes(row.kind)) await this.model.viewFor(row, row.kind === 'session');
       if (!this.model.owns(generation, scope) || this.activeChild !== source) return;
       const target = this.routeTarget(row, false), name = NavigationContext.destination(target), data = target.data();
       if (beforePush && !beforePush(name)) return;
@@ -1808,6 +1843,25 @@ struct Index {
       if (handoff) this.pendingInboxHandoff = this.childKey(name, param);
       this.stack.pushPath({ name: name, param: param }); this.savePath();
     } catch (error) { if (this.model.owns(generation, scope) && this.activeChild === source) this.model.reportError(error as Error); }
+  }
+  private relatedAnchors = new Map<string,RelatedReadingPosition>();
+  private takeRelatedAnchor(name: string, param: Object): RelatedReadingPosition | undefined {
+    const key = this.childKey(name,param), anchor = this.relatedAnchors.get(key);
+    this.relatedAnchors.delete(key); return anchor;
+  }
+  private openRelated(name: string, param: Object, row: ResourceRow, anchor?: RelatedReadingPosition): void {
+    const key = this.childKey(name,param);
+    if (this.activeChild !== key || !this.targetReady(name,param)) return;
+    const current = this.detailModel.selected;
+    if (row.machine !== current.machine || row.manager !== this.detailModel.profile.manager || row.group !== this.detailModel.profile.id) return;
+    const routes = this.stack.getAllPathName();
+    for (let i=routes.length-2;i>=0;i--) {
+      if (routes[i] === 'session' && this.routeRow(this.stack.getParamByIndex(i) as string).key() === row.key()) {
+        this.stack.popToIndex(i); this.savePath(); return;
+      }
+    }
+    if (anchor) this.relatedAnchors.set(key,anchor);
+    this.openLinkedResource(row);
   }
   private openFrom(name: string, param: Object, row: ResourceRow): void {
     if (this.activeChild === this.childKey(name, param)) { if (!row.group) row.group = NavigationContext.from(name, param as string).row.group || this.model.profile.id; this.openLinkedResource(row); }
@@ -3302,7 +3356,7 @@ struct Index {
   private loadAgentModels(): void {
     const machine = this.chosenAgentMachine(), launcher = this.effectiveLauncher(), form = this.agentFormRevision, owner = this.agentModel;
     if (!launcher || !machine || !this.agentOwnsMachine(machine)) return;
-    this.launchChoices.loadModels(owner,machine.id,launcher).then(() => {
+    this.launchChoices.loadModels(owner,machine.id,launcher,Wire.text(this.chosenLauncher(),'agent_type',Wire.text(this.chosenLauncher(),'agent')) === 'codex').then(() => {
       if (form === this.agentFormRevision && owner === this.agentModel && this.chosenAgentMachine()?.key() === machine.key() &&
           this.effectiveLauncher() === launcher) this.updateAgentEfforts();
     });
@@ -3770,7 +3824,7 @@ struct Index {
     } catch (_) { /* Older nodes support entering the existing launcher name directly. */ }
   }
   private agentDraftKey(): string { return 'new-agent:' + (this.agentWorktree?.key || this.agentTodo?.id || 'standalone'); }
-  private async prepareAgent(todo?: ResourceRow, tree?: ProjectWorktree, keepForward: boolean = false, atDestination?: () => boolean): Promise<void> {
+  private async prepareAgent(todo?: ResourceRow, tree?: ProjectWorktree, keepForward: boolean = false, atDestination?: () => boolean, computer?: ResourceRow): Promise<void> {
     if (!keepForward) this.chatForward.clearNew();
     const revision = ++this.agentFormRevision, generation = this.model.connectionGeneration(), scope = this.model.scope();
     const current = (): boolean => revision === this.agentFormRevision && this.model.owns(generation,scope) && (!atDestination || atDestination());
@@ -3779,7 +3833,7 @@ struct Index {
     this.launchChoices.clear(); this.recentSetups = []; this.recentAgentDirectories = []; this.agentModelId = ''; this.agentEffort = '';
     this.machineIntent++; this.switchingAgentMachine = false; this.agentMachineKey = ''; this.agentPreset = ''; this.projectCatalog.startError = false; this.readerShown = false; this.creatingAgent = false; this.newTask = ''; this.directory = ''; this.launcher = ''; this.agentTodo = todo; this.agentWorktree = undefined; this.pickedAgentTree = '';
     try {
-      let owner = todo ? await this.model.viewFor(todo) : this.model;
+      let owner = computer ? await this.model.viewFor(computer) : todo ? await this.model.viewFor(todo) : this.model;
       if (tree) {
         const machine = this.model.directoryMachines.find((row: ResourceRow) => row.group === tree.group && row.manager === tree.manager && row.id === tree.machine);
         if (!tree.canStart || !machine || !this.agentMachineOnline(machine)) throw new Error('request_updated');
@@ -3809,6 +3863,11 @@ struct Index {
         if (m) this.agentMachineKey = this.machineKey(m);
       }
       this.sheetKind = 'newagent'; this.showSheet = true;
+      if (computer) {
+        const index = this.agentMachines().findIndex((candidate: ResourceRow) => this.sameMachine(candidate, computer));
+        if (index < 0) throw new Error('request_updated');
+        this.agentMachineKey = this.machineKey(this.agentMachines()[index]);
+      }
       const first = this.chosenAgentMachine();
       if (first && first.group && (first.group !== owner.profile.id || first.manager !== owner.profile.manager)) this.pickAgentMachine(first,true);
       else { this.loadAgentLaunchers(); this.loadRecentSetups(); }
@@ -3953,7 +4012,7 @@ struct Index {
     const keepContent = this.targetReady(name, param);
     if (!keepContent) { this.chatReady = false; this.detailRoute = ''; }
     try {
-      let row = descriptor.row; const view = await this.model.viewFor(row);
+      let row = descriptor.row; const view = await this.model.viewFor(row, name === 'session');
       if (['session', 'conversation'].includes(row.kind) && !row.machine) {
         let resolved = view.conversations.concat(view.sessions).find((item: ResourceRow) => item.id === row.id || item.session === row.session && !!row.session);
         if (!resolved && view.connected) { await view.refresh(); resolved = view.conversations.concat(view.sessions).find((item: ResourceRow) => item.id === row.id || item.session === row.session && !!row.session); }
@@ -3996,12 +4055,48 @@ struct Index {
     if (this.mainDestination(name, param) && !this.wide()) this.peerTitle(true)
     else Text(this.destinationTitleText(name, param)).height(this.headerHeight()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
       .padding({ left: this.destinationBackHidden(name, param) ? Tokens.page : 0 })
+      .margin({ start: LengthMetrics.vp(this.deviceTitleGap(name, param)) })
   }
+  private deviceTitleGap(name: string, param: Object): number {
+    if (name !== 'settings' || this.destinationBackHidden(name, param)) return 0;
+    const page = this.settingsKind(param);
+    return page === 'devices' || page === 'machines' ? Tokens.inset : 0;
+  }
+  private immersiveComputer(name: string, param: Object): boolean {
+    return name === 'computer' && this.fullscreenComputer === this.childKey(name, param);
+  }
+
+  private screenOrientation(name: string, param: Object): window.Orientation | undefined {
+    if (name !== 'computer') return undefined;
+    return this.immersiveComputer(name, param) ? this.computerOrientation : this.computerReturnOrientation;
+  }
+
+  private finishComputerFullscreen(): void {
+    if (this.computerExitTimer !== -1) clearTimeout(this.computerExitTimer);
+    this.computerExitTimer = -1;
+    this.fullscreenComputer = '';
+    this.environment.setComputerImmersive(false);
+  }
+
+  @Monitor('environment.windowWidthPx')
+  computerWindowChanged(): void {
+    if (this.computerExitTimer !== -1 && this.environment.viewingOrientation() === this.computerReturnOrientation) this.finishComputerFullscreen();
+  }
+
+  private exitComputerFullscreen(): void {
+    if (this.computerExitTimer !== -1 || this.computerReturnOrientation === undefined ||
+      this.environment.viewingOrientation() === this.computerReturnOrientation) { this.finishComputerFullscreen(); return; }
+    // Rotate back while Navigation still owns the whole window. A split destination cannot request orientation.
+    this.computerOrientation = this.computerReturnOrientation;
+    this.computerExitTimer = setTimeout((): void => this.finishComputerFullscreen(), 1000);
+  }
+
   private destinationBackHidden(name: string, param: Object): boolean {
     if (this.mainDestination(name, param) || name === 'session' && Wire.bool(this.routeRow(param).data(), 'navigation_root') && this.wide() && this.model.section === 1) return true;
     return this.wide() && this.stack.size() === 1 && this.stack.getAllPathName()[0] === name && this.stack.getParamByIndex(0) === param;
   }
   private destinationTitleText(name: string, param: Object): string {
+    if (name === 'computer') return tr('computer_screen_open');
     if (name === 'resources' && param === 'health' && !this.wide()) return tr('phone_drawer_health');
     if (name === 'machine_agents') return this.routeRow(param).title || tr('phone_machines');
     if (name === 'machine_settings') return tr('phone_machine_detail');
@@ -4023,7 +4118,9 @@ struct Index {
       if (['projects','project','project_tree','machine_projects'].includes(name)) {
         this.projectPage(name, param as string)
       } else if (name === 'session' || name === 'conversation') {
-        if (this.targetReady(name, param)) Conversation({ readingHeader:this.agentReadingHeader,headerOwner:this.activeChild===this.childKey(name,param) ? this.readingHeaderOwner : '', onOpenTriage: () => { if (this.activeChild === this.childKey(name, param)) this.openSettings('triage', true); }, liftHost:this.messageLift, forwardState:this.chatForward, onForwardOrigin:(row:ResourceRow,item:string):void => this.openPickedChat(row,item), searchPresented:this.chatSearchShown, searchHitId:this.searchHitFor(param), decisionTool:this.decisionToolFor(param), model: this.detailModel, onPlace: (kind: string) => { if (this.activeChild === this.childKey(name, param)) this.openSpace(kind); }, admission: (): boolean => this.activeChild === this.childKey(name, param) && this.targetReady(name, param), onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: this.mainDestination(name, param) || this.hideChatTitle(name, param), onOpenCard: (itemId: string, kind: string) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.openAssistantCard(itemId, kind); }, onLongDraftHeader: (floating: boolean) => {
+        if (this.targetReady(name, param)) Conversation({ onRelated:(row:ResourceRow,anchor?:RelatedReadingPosition) => this.openRelated(name,param,row,anchor), takeReturnAnchor:() => this.takeRelatedAnchor(name,param), onOpenComputer:(row:ResourceRow) => {
+          if (this.activeChild === this.childKey(name,param) && this.targetReady(name,param) && this.selectedComputer()?.key() === row.key()) this.openComputer(row);
+        }, readingHeader:this.agentReadingHeader,headerOwner:this.activeChild===this.childKey(name,param) ? this.readingHeaderOwner : '', onOpenTriage: () => { if (this.activeChild === this.childKey(name, param)) this.openSettings('triage', true); }, liftHost:this.messageLift, forwardState:this.chatForward, onForwardOrigin:(row:ResourceRow,item:string):void => this.openPickedChat(row,item), searchPresented:this.chatSearchShown, searchHitId:this.searchHitFor(param), decisionTool:this.decisionToolFor(param), model: this.detailModel, onPlace: (kind: string) => { if (this.activeChild === this.childKey(name, param)) this.openSpace(kind); }, admission: (): boolean => this.activeChild === this.childKey(name, param) && this.targetReady(name, param), onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: this.mainDestination(name, param) || this.hideChatTitle(name, param), onOpenCard: (itemId: string, kind: string) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.openAssistantCard(itemId, kind); }, onLongDraftHeader: (floating: boolean) => {
           const child = this.childKey(name, param);
           if (floating && this.activeChild === child && this.targetReady(name, param)) this.longDraftIdentity = child;
           else if (!floating && this.longDraftIdentity === child) this.longDraftIdentity = '';
@@ -4057,11 +4154,23 @@ struct Index {
           onSession:(row:ResourceRow) => this.openFrom(name,param,row)})
       } else if (name === 'machine_settings') {
         if (!this.routeRow(param).id || this.targetReady(name,param)) SettingsPage({model:this.routeRow(param).id ? this.detailModel : this.model, initialMachine:this.routeRow(param).id ? this.routeRow(param) : undefined,
-          page:'machines',active:this.activeChild === this.childKey(name,param),onComputer:(row:ResourceRow) => this.openComputer(row),
-          onChat:(row:ResourceRow) => this.openFrom(name,param,row)})
+          onNewSession:(row:ResourceRow) => { void this.prepareAgent(undefined, undefined, false, () => this.activeChild === this.childKey(name,param), row); }, page:'machines',active:this.activeChild === this.childKey(name,param),onComputer:(row:ResourceRow) => this.openComputer(row),
+          onChat:(row:ResourceRow) => { if (this.routeRow(param).id) void this.openMachineChat(param,row,name); else this.openFrom(name,param,row); }})
         else this.targetLoading(name,param)
       } else if (name === 'computer') {
-        if (this.targetReady(name, param)) ComputerScreenPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onClose: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
+        if (this.targetReady(name, param)) ComputerScreenPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param),
+          fullscreen: this.immersiveComputer(name, param), onFullscreen: (shown: boolean) => {
+            if (this.activeChild === this.childKey(name, param)) {
+              if (shown) {
+                this.computerReturnOrientation = this.environment.viewingOrientation();
+                this.environment.setComputerImmersive(true);
+                this.computerOrientation = window.Orientation.AUTO_ROTATION_RESTRICTED;
+                this.fullscreenComputer = this.childKey(name, param);
+              } else this.exitComputerFullscreen();
+            }
+          }, onRotate: (landscape: boolean) => {
+            if (this.immersiveComputer(name, param)) this.computerOrientation = landscape ? window.Orientation.LANDSCAPE : window.Orientation.PORTRAIT;
+          }, onClose: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
         else this.targetLoading(name, param)
       } else if (name === 'file') {
         if (this.targetReady(name, param)) RemoteDocumentPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })
@@ -4121,20 +4230,26 @@ struct Index {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) AdminWorkspacePage({ model: this.settingsModel(param), page: this.settingsKind(param) === 'phone_new_assistant' ? 'managers' : this.settingsKind(param), createManagerOnly:this.settingsKind(param) === 'phone_new_assistant', installingManager:NavigationContext.installingManagerFor(param as string,this.model.scope()), row: NavigationContext.from(name, param as string).scoped ? NavigationContext.from(name, param as string).row : undefined, active: this.activeChild === this.childKey(name, param), refreshRevision: this.adminRefreshRevision,
           onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onOpenMachine: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail('machines', row); } })
         else this.targetLoading(name, param)
+      } else if (name === 'settings' && this.settingsKind(param) === 'devices') {
+        SignedInDevicesPage({ model: this.model, active: this.activeChild === this.childKey(name, param) })
       } else if (name === 'settings' && this.settingsKind(param) === 'ssh') {
         SshSettingsPage({ tunnel: this.settingsModel(param).ssh, active: this.activeChild === this.childKey(name, param),
           onSaved: (): void => { const owner = this.settingsModel(param); if (this.activeChild === this.childKey(name, param)) owner.selectProfile(owner.profile, true); } })
       } else if (name === 'settings') {
-        if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) SettingsPage({ model: phoneAppearancePage(this.settingsKind(param)) || this.settingsKind(param) === 'phone_agent_layout' ? this.model : this.settingsModel(param), phoneAppearanceRoute:this.settingsKind(param).startsWith('phone_look_') ? this.settingsKind(param) : '', agentLayoutOnly:this.settingsKind(param) === 'phone_agent_layout', agentWorkspace: this.agentWorkspace, onChat: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openLinkedResource(row); }, active: this.activeChild === this.childKey(name, param), page: this.settingsKind(param) === 'phone_agent_layout' || phoneAppearancePage(this.settingsKind(param)) ? 'appearance' : this.settingsKind(param), onDetail: (page: string, row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail(page, row); }, onExtension: (extensionId: string, uiId: string, title: string) => { if (this.activeChild === this.childKey(name, param)) this.openExtension(this.settingsModel(param), extensionId, uiId, title); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } }, onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); }, onOpen: (page: string) => this.openSettings(page, NavigationContext.from(name, param as string).scoped) })
+        if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) SettingsPage({ model: phoneAppearancePage(this.settingsKind(param)) || this.settingsKind(param) === 'phone_agent_layout' ? this.model : this.settingsModel(param), onNewSession:(row:ResourceRow) => { void this.prepareAgent(undefined, undefined, false, () => this.activeChild === this.childKey(name,param), row); }, phoneAppearanceRoute:this.settingsKind(param).startsWith('phone_look_') ? this.settingsKind(param) : '', agentLayoutOnly:this.settingsKind(param) === 'phone_agent_layout', agentWorkspace: this.agentWorkspace, onChat: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openLinkedResource(row); }, active: this.activeChild === this.childKey(name, param), page: this.settingsKind(param) === 'phone_agent_layout' || phoneAppearancePage(this.settingsKind(param)) ? 'appearance' : this.settingsKind(param), onDetail: (page: string, row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail(page, row); }, onExtension: (extensionId: string, uiId: string, title: string) => { if (this.activeChild === this.childKey(name, param)) this.openExtension(this.settingsModel(param), extensionId, uiId, title); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } }, onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); }, onOpen: (page: string) => this.openSettings(page, NavigationContext.from(name, param as string).scoped) })
         else this.targetLoading(name, param)
       }
     }.title({ builder: () => this.destinationTitle(name, param), height: this.headerHeight() }, { systemMaterial: this.titleMaterial })
-      .hideTitleBar(!this.wide() || this.hideChatTitle(name, param)).hideBackButton(this.destinationBackHidden(name, param))
+      .hideTitleBar(!this.wide() || this.immersiveComputer(name, param) || this.hideChatTitle(name, param))
+      .preferredOrientation(this.screenOrientation(name, param))
+      .hideBackButton(this.destinationBackHidden(name, param))
       .backgroundColor(name === 'resources' && param === 'inbox' ? Colors.grouped : Colors.canvas)
       .menus(this.navigationMenus(name, param))
       .onShown(() => this.routeShown(name, param))
-      .onHidden(() => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'assistant') this.detailModel.watchDecisions(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
-      .onBackPressed((): boolean => { if (this.directionPermissionsVisible) {this.directionPermissionsVisible=false;return true;} if (this.messageLift.dismiss() || this.closeForwardNavigation()) return true; if (!this.spacesShown && this.returnToPhoneSettings()) return true; if (this.spacesShown) { this.spacesShown = false; return true; } if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; this.phoneBack(); return true; })
+      .onHidden(() => { if (name === 'computer' && (this.activeChild === this.childKey(name, param) || this.immersiveComputer(name, param))) {
+        this.finishComputerFullscreen(); this.computerReturnOrientation = undefined;
+      } if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'assistant') this.detailModel.watchDecisions(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
+      .onBackPressed((): boolean => { if (this.immersiveComputer(name, param)) { this.exitComputerFullscreen(); return true; } if (this.directionPermissionsVisible) {this.directionPermissionsVisible=false;return true;} if (this.messageLift.dismiss() || this.closeForwardNavigation()) return true; if (!this.spacesShown && this.returnToPhoneSettings()) return true; if (this.spacesShown) { this.spacesShown = false; return true; } if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; this.phoneBack(); return true; })
   }
   private closeForwardNavigation(): boolean {
     if (this.chatForward.isChoosing(this.detailModel)) { this.chatForward.cancelPicker(); return true; }
@@ -4247,7 +4362,7 @@ struct Index {
         Stack() {
           if (!this.wide()) PhoneFirstRun({error:this.model.error ? trError(this.model.error) : '',pendingCleanup:this.model.pendingCleanupCount>0,
             onScan:()=>this.openSheet('connect', 'scan'),
-            onManual:()=>this.openSheet('connect', 'manual'),onDemo:()=>this.model.useDemo(),onCleanup:()=>this.model.retryCleanup()})
+            onManual:()=>this.openSheet('connect', 'manual'),onDemo:()=>this.openSheet('tour'),onCleanup:()=>this.model.retryCleanup()})
           else Column() {
             Column({ space: 12 }) {
               Image($r('app.media.foreground')).width(72).height(72).objectFit(ImageFit.Contain).borderRadius(18)
@@ -4257,7 +4372,7 @@ struct Index {
               Button(tr('phone_connect_hub')).width('100%').height(48).fontSize(17).backgroundColor(Colors.action).fontColor(Colors.onAction)
                 .onClick(() => this.openSheet('connect')).id('welcome.connect')
               Button(tr('phone_local_demo')).width('100%').height(46).fontSize(16).backgroundColor(Colors.surface).fontColor(Colors.link)
-                .onClick(() => this.model.useDemo()).id('welcome.demo')
+                .onClick(() => this.openSheet('tour')).id('welcome.demo')
               if (this.model.pendingCleanupCount > 0) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry_cleanup')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry_cleanup', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry_cleanup')).bindTips(tr('retry_cleanup')).onClick(() => this.model.retryCleanup())
             }.width('100%').constraintSize({ maxWidth: 440 }).alignItems(HorizontalAlign.Center)
           }.justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center).width('100%').height('100%').padding({left:32,right:32}).backgroundColor(Colors.grouped)
@@ -4270,7 +4385,7 @@ struct Index {
             .hideBackButton(true).hideTitleBar(this.rail() || !this.wide()).menus([])
             .backgroundColor(Colors.canvas)
             .toolbarConfiguration([])
-            .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
+            .hideNavBar(!!this.fullscreenComputer).mode(this.wide() && !this.fullscreenComputer ? NavigationMode.Split : NavigationMode.Stack)
             .navBarWidth(this.rail() ? Tokens.collapsed : this.foldLayout.masterWidth)
             .navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [this.foldLayout.masterMin, this.foldLayout.masterMax])
             .minContentWidth(this.foldLayout.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)

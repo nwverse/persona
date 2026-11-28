@@ -281,6 +281,7 @@ export class HubTransport {
   private fragmentParts: Uint8Array[] = [];
   private fragmentSize: number = 0;
   private sendQueue: Promise<void> = Promise.resolve();
+  private replaceablePayload: Uint8Array | undefined;
 
   private readonly access: HubAccess | undefined;
   private readonly credentialOrigin: string;
@@ -342,7 +343,7 @@ export class HubTransport {
 
   hello(features: string[]): boolean {
     const identity = JSON.parse(JSON.stringify(this.clientMetadata())) as Record<string, Object>;
-    identity['type'] = 'client_hello'; identity['features'] = features.concat([AGENT_MESSAGE_HOLD]); identity['locale'] = clientLocale(i18n.getSystemLanguage());
+    identity['type'] = 'client_hello'; identity['features'] = features.concat([AGENT_MESSAGE_HOLD, 'session_live', 'session_live_tools']); identity['locale'] = clientLocale(i18n.getSystemLanguage());
     return this.send(JSON.stringify(identity));
   }
   private authHeaders(includeManager:boolean = true): Record<string, string> {
@@ -390,7 +391,7 @@ export class HubTransport {
     }
   }
 
-  private async requestData(path: string, method: string, body: rcp.RequestContent | undefined, contentType: string, limit: number, opId: string, acceptTransfer: boolean = false): Promise<BytesResponse> {
+  private async requestData(path: string, method: string, body: rcp.RequestContent | undefined, contentType: string, limit: number, opId: string, acceptTransfer: boolean = false, transferTimeout: number = REQUEST_TIMEOUT_MS): Promise<BytesResponse> {
     const generation = this.generation; this.assertLive(generation);
     const verb = method.toUpperCase();
     if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(verb)) throw new Error('invalid_method');
@@ -407,7 +408,7 @@ export class HubTransport {
     // Git pull allows the Hub 90 seconds, and checkout creation/removal may wait longer on its host.
     const worktreeRequest = verb === 'POST' && /^\/api\/v1\/machines\/[^/]+\/worktree\/(create|delete|add|remove)$/.test(path);
     const pullRequest = verb === 'POST' && /^\/api\/v1\/machines\/[^/]+\/git\/pull$/.test(path);
-    const responseTimeout = worktreeRequest ? 165000 : pullRequest ? 100000 : REQUEST_TIMEOUT_MS;
+    const responseTimeout = worktreeRequest ? 165000 : pullRequest ? 100000 : transferTimeout;
     request.configuration = { transfer: { autoRedirect: false, timeout: { connectMs: REQUEST_TIMEOUT_MS, transferMs: responseTimeout, inactivityMs: responseTimeout } },
       security: { remoteValidation: this.pin ? (context: rcp.ValidationContext) => this.validateContextPin(context) : 'system' } };
     if (this.proxy) request.configuration.proxy = { url: 'http://' + this.proxy.host + ':' + this.proxy.port,
@@ -452,12 +453,12 @@ export class HubTransport {
     } finally { this.requests.delete(session); try { session.close(); } catch (_) {} }
   }
 
-  async request(path: string, method: string = 'GET', body: string = '', opId: string = '', messageRequestBytes: number = MAX_HTTP_BYTES): Promise<string> {
+  async request(path: string, method: string = 'GET', body: string = '', opId: string = '', messageRequestBytes: number = MAX_HTTP_BYTES, transferTimeout: number = REQUEST_TIMEOUT_MS): Promise<string> {
     const verb = method.toUpperCase();
     const requestLimit = isAgentMessagePost(verb, path) ? messageRequestBytes : MAX_HTTP_BYTES;
     if (utf8(body).length > requestLimit) throw new HttpFailure(0, 'request_too_large');
     const responseLimit = verb === 'GET' && path.split('?')[0] === '/api/v1/sessions' ? MAX_HUB_EVENT_BYTES : MAX_HTTP_BYTES;
-    const response = await this.requestData(path, method, body || undefined, 'application/json', responseLimit, opId);
+    const response = await this.requestData(path, method, body || undefined, 'application/json', responseLimit, opId, false, transferTimeout);
     try { return utf8String(new Uint8Array(response.data), true); }
     catch (_) { throw new HttpFailure(0, 'response_invalid', !['GET', 'HEAD'].includes(verb)); }
   }
@@ -500,11 +501,13 @@ export class HubTransport {
     const generation = this.generation;
     this.connectionStage = 'open_socket';
     try {
-      const requestPath = routePath(this.endpoint, this.streamPath);
+      const path = this.streamPath === '/api/v1/ws' ? this.streamPath + '?features=sessions_list' : this.streamPath;
+      const requestPath = routePath(this.endpoint, path);
       const cancelled = new Promise<void>((_, reject) => { this.openReject = reject; });
       const open = this.endpoint.scheme === 'https' ? this.connectSecure(requestPath, generation) : this.connectPlain(requestPath, generation);
       await Promise.race([open, cancelled]);
       this.assertLive(generation);
+      this.connectionStage = 'connected';
       this.stateCallback?.('ready');
     } catch (error) {
       const fields = error as Object as Record<string, Object>; const code = fields ? fields['code'] : undefined;
@@ -825,15 +828,23 @@ export class HubTransport {
     throw new Error('connection_closed');
   }
 
-  private enqueueFrame(opcode: number, payload: Uint8Array): Promise<void> {
+  private enqueueFrame(opcode: number, payload: Uint8Array, replaceQueuedMotion: boolean = false): Promise<void> {
     const limit=this.outgoingLimit(opcode);
     if (payload.length > limit || this.closed || this.closing && opcode !== 8) return Promise.reject(new Error('connection_closed'));
+    // Only consecutive, unsent RFB moves opt in. Any key, button transition, or other frame ends the replacement window.
+    if (replaceQueuedMotion && this.replaceablePayload?.length === payload.length) {
+      this.replaceablePayload.set(payload);
+      return Promise.resolve();
+    }
+    this.replaceablePayload = undefined;
     if (this.queuedFrames >= 64 || this.queuedBytes + payload.length > Math.max(MAX_FRAME_BYTES*2,limit)) { this.failSocket(new Error('send_queue_full')); return Promise.reject(new Error('send_queue_full')); }
     const tls = this.tlsSocket, tcp = this.tcpSocket, copied = payload.slice(), generation = this.generation;
+    if (replaceQueuedMotion) this.replaceablePayload = copied;
     this.queuedFrames++; this.queuedBytes += copied.length;
     const send = async (): Promise<void> => {
       if (this.closed || this.closing && opcode !== 8 || this.proxy && !this.proxy.isCurrent()) throw new Error('connection_closed');
       const random = await cryptoFramework.createRandom().generateRandom(4);
+      if (this.replaceablePayload === copied) this.replaceablePayload = undefined;
       if (this.closed || this.streamNetwork && !this.streamNetwork.current() && opcode!==8 || this.closing && opcode !== 8 || generation !== this.generation || tls !== this.tlsSocket || tcp !== this.tcpSocket || this.proxy && !this.proxy.isCurrent()) throw new Error('connection_closed');
       const mask = random.data;
       const maskBit = 0x80;
@@ -871,9 +882,9 @@ export class HubTransport {
     await this.enqueueFrame(2,new Uint8Array(payload));
   }
 
-  sendBinary(payload: ArrayBuffer): boolean {
+  sendBinary(payload: ArrayBuffer, replaceQueuedMotion: boolean = false): boolean {
     if (!this.upgraded || this.closed || this.closing || payload.byteLength > MAX_FRAME_BYTES || this.proxy && !this.proxy.isCurrent()) return false;
-    this.enqueueFrame(2, new Uint8Array(payload)).catch(() => { if (!this.closing) this.failSocket(new Error('socket_write_failed')); });
+    this.enqueueFrame(2, new Uint8Array(payload), replaceQueuedMotion).catch(() => { if (!this.closing) this.failSocket(new Error('socket_write_failed')); });
     return !this.closed;
   }
 
@@ -893,6 +904,7 @@ export class HubTransport {
 
   private failSocket(_error: Error, state: string = 'offline'): void {
     if (this.closed) return;
+    this.replaceablePayload = undefined;
     const fields = _error as Object as Record<string, Object>, code = fields ? fields['code'] : undefined;
     const diagnostic = /^[a-z_0-9]{1,64}$/.test(_error.message || '') ? _error.message : typeof code === 'number' ? 'native_' + code : 'socket_failed';
     if (state !== 'closed') hilog.error(0x0000, 'PersonaNet', '%{public}s:%{public}s', this.connectionStage, diagnostic);

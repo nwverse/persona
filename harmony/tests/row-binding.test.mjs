@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
+import { workRowExcerpt, workToolStatus } from '../entry/src/main/ets/core/WorkPresentation.ts';
+import { AssistantMessagePart, assistantMessageParts } from '../entry/src/main/ets/core/AssistantCardText.ts';
 
 const source = readFileSync(new URL('../entry/src/main/ets/models/RowBinding.ets', import.meta.url), 'utf8');
 const executable = stripTypeScriptTypes(source.replace(/@ObservedV2\s*/g, '').replace(/@Trace\s*/g, '').replace(/\bexport\s+/g, ''));
@@ -72,10 +74,10 @@ test('owner or scope changes create fresh wrappers', () => {
   assert.notEqual(newScope[0].key, newOwner[0].key);
 });
 
-function pageMethods(file, names) {
+function pageMethods(file, names, helpers = {}) {
   const source = readFileSync(new URL('../entry/src/main/ets/components/' + file + '.ets', import.meta.url), 'utf8');
   const methods = names.map(name => {
-    const start = source.indexOf('  private ' + name + '('); assert.ok(start >= 0, name);
+    const start = source.indexOf(name + '(): '); assert.ok(start >= 0, name);
     const body = source.indexOf('{', start); let depth = 1, quote = '', escaped = false, end = body + 1;
     for (; end < source.length && depth; end++) {
       const char = source[end];
@@ -86,8 +88,10 @@ function pageMethods(file, names) {
     assert.equal(depth, 0, name); return source.slice(start, end);
   }).join('\n');
   const code = stripTypeScriptTypes('class NativeRows {\n' + methods + '\n}');
-  return new Function('reconcileBoundRows', 'Wire', code + '\nreturn new NativeRows();')(reconcileBoundRows,
-    { text: (row, key) => typeof row[key] === 'string' ? row[key] : '', rows: (row, key) => row[key] || [] });
+  const wire = { text: (row, key) => typeof row[key] === 'string' ? row[key] : '', rows: (row, key) => row[key] || [],
+    payload: (keys, values) => Object.fromEntries(keys.map((key, index) => [key, values[index]])) };
+  return new Function('reconcileBoundRows', 'Wire', ...Object.keys(helpers), code + '\nreturn new NativeRows();')(
+    reconcileBoundRows, wire, ...Object.values(helpers));
 }
 const model = () => ({ profile: { id: 'hub', manager: 'work' }, scope: () => 'hub/work', selected: { key: () => 'agent' } });
 
@@ -134,4 +138,203 @@ test('the generic native resource list keeps a retained row current through refr
   page.model.resourceRows = [{ key: () => 'a', title: 'Renamed', detail: 'Updated' }]; page.syncRows();
   assert.equal(page.rowBindings[0], row); assert.equal(row.value.detail, 'Updated');
   page.search = 'missing'; page.syncRows(); assert.deepEqual(page.rowBindings, []);
+});
+
+test('streamed Persona text reaches the same rendered paragraph and a new source gets a fresh binding', () => {
+  const page = pageMethods('AssistantMessage', ['syncSource'], {
+    AssistantMessagePart, assistantMessageParts, parseAssistantViewBlocks: () => [], tr: key => key,
+  });
+  page.model = { target: () => 'chat', selected: { id: 'chat', kind: 'conversation' }, profile: { manager: '' } };
+  page.parts = [];
+  page.message = { itemId: 'reply', role: 'assistant', ownerTarget: 'chat', text: 'First sentence.' };
+  page.syncSource();
+  const paragraph = page.parts[0];
+  page.message = { ...page.message, text: 'First sentence. Final sentence.' };
+  page.syncSource();
+  assert.equal(page.parts[0], paragraph);
+  assert.equal(paragraph.value.text, page.message.text);
+  page.message = { ...page.message, itemId: 'other' };
+  page.syncSource();
+  assert.notEqual(page.parts[0].key, paragraph.key);
+});
+
+function workGroup() {
+  return pageMethods('ConversationWork', ['syncSteps','stopDisclosure','finishDisclosure','moveDisclosure','disclosurePreferenceChanged']);
+}
+
+test('an open work step receives its result in place and retires when the same ID belongs to another chat', () => {
+  const page = workGroup();
+  page.expanded = true; page.ownerTarget = 'A'; page.steps = [];
+  page.work = { workKey: 'w', inspectionSteps: [{ id: 'call', kind: 'tool', use: { tool_name: 'Bash' }, reports: [], images: [], result: null }] };
+  page.syncSteps();
+  const tool = page.steps[0];
+  const renderer = pageMethods('ConversationWork', ['get step']); renderer.binding = tool;
+  page.work = { ...page.work, inspectionSteps: [{ id: 'call', kind: 'tool', use: { tool_name: 'Bash' }, reports: [], images: [], result: { text: '8 passed' } }] };
+  page.syncSteps();
+  assert.equal(page.steps[0], tool);
+  assert.equal(renderer.step.result.text, '8 passed');
+  page.ownerTarget = 'B';
+  page.syncSteps();
+  assert.notEqual(page.steps[0].key, tool.key);
+});
+
+test('a folded group has no child bindings and opens each call and its latest diagnostic once', () => {
+  const page = workGroup();
+  const pending = { id:'call', kind:'tool', use:{tool_name:'Bash'}, results:[], images:[], reports:[] };
+  const other = { ...pending, id:'other' };
+  Object.assign(page, { ownerTarget:'chat', expanded:false, steps:[], work:{workKey:'turn',running:true,inspectionSteps:[pending,other]} });
+  page.syncSteps(); assert.deepEqual(page.steps, []);
+  const result = { id:'receipt', text:'test failed', outcome:{ status:'failed', exit_code:1 } };
+  const failed = { ...pending, result, results:[result] };
+  page.work = { ...page.work, inspectionSteps:[failed,other] };
+  page.syncSteps(); assert.deepEqual(page.steps, []);
+  page.expanded = true; page.syncSteps();
+  assert.deepEqual(page.steps.map(row => row.value.id), ['call','other']);
+  const row = pageMethods('ConversationWork', ['get step','get status','get shortOutput'], { workRowExcerpt, workToolStatus });
+  Object.assign(row, { binding:page.steps[0], live:true, showLogPreview:true });
+  assert.equal(row.shortOutput, 'test failed');
+  page.work = { ...page.work, inspectionSteps:[{ ...failed, result:{ ...result, text:'final diagnostic' } },other] };
+  page.syncSteps(); assert.equal(row.binding, page.steps[0]); assert.equal(row.shortOutput, 'final diagnostic');
+  page.expanded = false; page.syncSteps(); assert.deepEqual(page.steps, []);
+});
+
+test('tool disclosure reverses from its current height and discards cold or reduced-motion transitions', () => {
+  const page = workGroup();
+  const animations = [];
+  page.getUIContext = () => ({ createAnimator: options => {
+    const animator = { options, play() {}, cancel() { this.cancelled = true; }, setExpectedFrameRateRange() {} };
+    animations.push(animator); return animator;
+  } });
+  const call = { id:'call', kind:'tool', use:{ tool_name:'Read' } };
+  Object.assign(page, { active:true, expanded:false, reveal:0, steps:[], ownerTarget:'chat',
+    work:{ workKey:'turn', inspectionSteps:[call] }, allowDisclosureMotion:true });
+  page.syncSteps();
+  const toggle = open => { page.userToggled = true; page.expanded = open; page.syncSteps(); };
+  toggle(true);
+  const opening = animations.at(-1), retained = page.steps[0];
+  assert.equal(opening.options.begin, 0); assert.equal(opening.options.end, 1);
+  opening.onFrame(0.6);
+  page.work = { ...page.work, inspectionSteps:[{ ...call, result:{text:'new output'} }] }; page.syncSteps();
+  assert.equal(page.steps[0], retained); assert.equal(animations.length, 1);
+  toggle(false);
+  const closing = animations.at(-1);
+  assert.equal(opening.cancelled, true); assert.equal(closing.options.begin, 0.6); assert.equal(closing.options.end, 0);
+  opening.onFrame(1); opening.onFinish(); assert.equal(page.reveal, 0.6);
+  closing.onFrame(0.25); assert.equal(page.steps[0], retained);
+  toggle(true);
+  assert.equal(closing.cancelled, true); assert.equal(animations.at(-1).options.begin, 0.25);
+  closing.onFinish(); animations.at(-1).onFinish(); assert.equal(page.reveal, 1); assert.equal(page.steps[0], retained);
+  toggle(false); const last = animations.at(-1);
+  page.allowDisclosureMotion = false; page.disclosurePreferenceChanged();
+  assert.equal(last.cancelled, true); assert.equal(page.reveal, 0); assert.deepEqual(page.steps, []);
+  toggle(true); assert.equal(page.reveal, 1); assert.equal(animations.length, 4);
+  page.allowDisclosureMotion = true; toggle(false);
+  page.ownerTarget = 'another chat'; page.syncSteps(); assert.deepEqual(page.steps, []); assert.equal(page.reveal, 0);
+});
+
+test('only a visible running activity with a recorded start owns an elapsed clock', () => {
+  const timers = new Set();
+  const helpers = {setInterval:fn=>{timers.add(fn); return fn;}, clearInterval:fn=>timers.delete(fn),
+    Date:{now:()=>11000}, recordedDuration:ms=>String(ms)};
+  const row = pageMethods('ConversationWork',['syncClock','stopClock','get elapsed'],helpers);
+  Object.assign(row,{clockTimer:-1,visible:true,active:true,group:{active:1,startedAt:0},now:0});
+  row.syncClock();
+  assert.deepEqual([timers.size,row.elapsed],[0,'']);
+  row.group.startedAt=6000; row.syncClock();row.syncClock();
+  assert.deepEqual([timers.size,row.elapsed],[1,'5000']);
+  row.visible=false;row.syncClock();
+  assert.equal(timers.size,0);
+  row.group.active=0;
+  assert.equal(row.elapsed,'');
+});
+
+
+test('title sheen owns one animator only while visible and enabled', () => {
+  const created=[];
+  const row=pageMethods('RunningToolTitle',['syncSweep','stopSweep','aboutToDisappear']);
+  row.getUIContext=()=>({createAnimator:()=>{
+    const animator={play(){this.playing=true;},cancel(){this.playing=false;},setExpectedFrameRateRange(){}};
+    created.push(animator); return animator;
+  }});
+  Object.assign(row,{animate:true,visible:false,highlightPosition:-1});
+  row.syncSweep();
+  assert.equal(created.length,0);
+  row.visible=true;row.syncSweep();row.syncSweep();
+  assert.equal(created.length,1);assert.equal(created[0].playing,true);
+  created[0].onFrame(0.5);assert.equal(row.highlightPosition,0.5);
+  row.animate=false;row.syncSweep();created[0].onFrame(0.7);
+  assert.equal(created[0].playing,false);assert.equal(row.highlightPosition,-1);
+  row.animate=true;row.syncSweep();row.visible=false;row.syncSweep();
+  assert.equal(created[1].playing,false);
+  row.visible=true;row.syncSweep();row.aboutToDisappear();
+  assert.equal(created[2].playing,false);
+});
+
+test('an open native tool sheet follows a late receipt and releases its selection on navigation or removal', () => {
+  const pending = { kind:'tool', id:'use' };
+  const returned = { ...pending, result:{ text:'8 passed' } };
+  const page = pageMethods('ConversationWork', ['syncInspector','dismissInspector']);
+  function open() {
+    const binding = new BoundRow(pending.id, { step:pending, live:true });
+    Object.assign(page, { selection:binding, detailOpen:true, active:true, expanded:true, ownerTarget:'chat',
+      work:{ workKey:'turn', running:true, inspectionSteps:[pending] }, detailOwner:JSON.stringify(['chat','turn']) });
+    return binding;
+  }
+  const binding = open();
+  page.work = { ...page.work, running:false, inspectionSteps:[returned] };
+  page.syncInspector();
+  assert.equal(page.detailOpen, true);
+  assert.equal(page.selection, binding);
+  assert.deepEqual(binding.value, { step:returned, live:false });
+  for (const change of [() => { page.expanded = false; }, () => { page.active = false; }, () => { page.ownerTarget = 'another'; },
+    () => { page.work.workKey = 'other turn'; }, () => { page.work.inspectionSteps = []; }]) {
+    open(); change(); page.syncInspector();
+    assert.equal(page.detailOpen, false);
+    assert.equal(page.selection, undefined);
+  }
+});
+
+test('only visible, running calls with an alternate icon play their own frame sequence', () => {
+  const nativeEnvironment = { reduceMotion:false };
+  const sheets = { command:{ frames:100, duration:1667 }, read:{ frames:36, duration:600 } };
+  const icon = pageMethods('../design/ToolGlyph',
+    ['get sheet','get motionEnabled','syncMotion','stopMotion','aboutToDisappear'], { nativeEnvironment, sheets });
+  const animations = [];
+  icon.getUIContext = () => ({ createAnimator: options => {
+    const animation = { options, play() {}, cancel() { this.cancelled = true; }, setExpectedFrameRateRange() {} };
+    animations.push(animation);
+    return animation;
+  } });
+  Object.assign(icon, { running:true, visible:false, motion:'command', frame:0 });
+  icon.syncMotion();
+  assert.equal(animations.length, 0);
+  icon.visible = true; icon.syncMotion(); icon.syncMotion();
+  const terminal = animations[0];
+  assert.equal(animations.length, 1);
+  assert.equal(terminal.options.duration, 1667);
+  terminal.onFrame(0.41); assert.equal(icon.frame, 41);
+  terminal.onFrame(1); assert.equal(icon.frame, 99);
+  icon.motion = 'read'; icon.syncMotion();
+  assert.equal(terminal.cancelled, true);
+  assert.equal(animations.at(-1).options.duration, 600);
+  terminal.onFrame(0.5); assert.equal(icon.frame, 0);
+  animations.at(-1).onFrame(0.5); assert.equal(icon.frame, 18);
+  for (const stop of [() => { icon.running = false; }, () => { nativeEnvironment.reduceMotion = true; },
+    () => { icon.visible = false; }, () => { icon.motion = undefined; }]) {
+    const current = animations.at(-1);
+    stop(); icon.syncMotion();
+    assert.equal(current.cancelled, true);
+    current.onFrame(0.4); assert.equal(icon.frame, 0);
+    icon.running = true; icon.visible = true; nativeEnvironment.reduceMotion = false; icon.motion = 'read'; icon.syncMotion();
+  }
+  icon.motion = undefined; icon.syncMotion();
+  const pulse = animations.at(-1);
+  assert.equal(pulse.options.duration,1200);
+  pulse.onFrame(0.5);assert.ok(icon.strength < 0.6,'fallback animates the original tool glyph');
+  icon.visible=false;icon.syncMotion();assert.equal(icon.strength,1);
+  icon.motion = 'read'; icon.visible = true; icon.syncMotion();
+  const last = animations.at(-1);
+  icon.aboutToDisappear(); last.onFrame(0.41);
+  assert.equal(last.cancelled, true);
+  assert.equal(icon.frame, 0);
 });
