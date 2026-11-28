@@ -8,9 +8,9 @@ export function Empty({ icon, title, detail, action }: { icon: IconName; title: 
       <span className="mb-1 flex size-10 items-center justify-center rounded-full bg-field text-ink-3">
         <Icon name={icon} size={18} />
       </span>
-      <div className="text-[13.5px] font-medium text-ink">{title}</div>
+      <div className="text-sm font-medium text-ink">{title}</div>
       {/* words wrap between words; only a string too long for a line on its own (a path, an id) breaks inside it */}
-      {detail && <div className="max-w-80 text-[12px] leading-relaxed [overflow-wrap:anywhere] text-ink-3">{detail}</div>}
+      {detail && <div className="max-w-80 text-xs leading-relaxed [overflow-wrap:anywhere] text-ink-3">{detail}</div>}
       {action && <div className="mt-2">{action}</div>}
     </div>
   );
