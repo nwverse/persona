@@ -447,23 +447,34 @@ fi`
 
 func claudeExecutable() (string, error) { return agentExecutable("claude") }
 
-// A managed model probe can skip the user's rc file when Claude and its interpreter are already available.
-// Otherwise run the original shell command so it gets the launcher and PATH established by the user's setup.
-func canProbeManagedClaudeDirectly() bool {
+func canProbeManagedClaudeDirectly() bool { return canProbeManagedDirectly("claude") }
+
+func canProbeManagedCodexDirectly() bool { return canProbeManagedDirectly("codex") }
+
+func managedProbeExecutable(agent string) string {
+	path := agentExecutableOnDisk(agent)
+	if path == "" && agent == "codex" {
+		return bundledCodexCLI()
+	}
+	return path
+}
+
+// A managed model probe can skip the user's rc file when its CLI and interpreter are already available.
+func canProbeManagedDirectly(agent string) bool {
 	if runtime.GOOS == "windows" {
 		return true // keep the Windows executable and wrapper handling in Launch
 	}
-	claude := agentExecutableOnDisk("claude")
-	if claude == "" {
+	exe := managedProbeExecutable(agent)
+	if exe == "" {
 		return false
 	}
-	dir, needsNode := launcherNodeDir(claude)
+	dir, needsNode := launcherNodeDir(exe)
 	if dir != "" {
 		return true
 	}
 	if !needsNode {
 		// An arbitrary wrapper may depend on tools added by the user's shell.
-		return nativeExecutable(claude)
+		return nativeExecutable(exe)
 	}
 	_, err := exec.LookPath("node")
 	return err == nil
@@ -484,6 +495,7 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		Clear  []string `json:"clear"` // what to drop from the shell's env first (envClearFor)
 		Args   []string `json:"args"`
 		Error  string   `json:"error"`
+		Config string   `json:"config_fingerprint"`
 		// the provider's models that take no thinking level: Effort is not passed when the session runs one
 		// (launchEffort); and its models' reported reply limits, for the limit of the model the session runs
 		// (sessionOutput). An older node sends neither: Effort and Env as before.
@@ -510,9 +522,16 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 	if agent == "" {
 		agent = "claude"
 	}
-	exe, err := agentExecutable(agent)
-	if err != nil {
-		return fmt.Errorf("personad launch: %w", err)
+	var exe string
+	if os.Getenv(managedModelProbeEnv) == "1" {
+		// Prefer the probe's on-disk CLI before agentExecutable would look in the user's shell.
+		exe = managedProbeExecutable(agent)
+	}
+	if exe == "" {
+		exe, err = agentExecutable(agent)
+		if err != nil {
+			return fmt.Errorf("personad launch: %w", err)
+		}
 	}
 	var env []string
 	if agent == "claude" {
@@ -560,6 +579,10 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		catalog = ""
 	}
 	argv := launchArgv(agent, args, resp.Args, launchEffort(resp.Effort, resp.NoEffort, sessionModel(args, resp.Args, resp.Env)), resp.Model, resp.Env, catalog)
+	if agent == "claude" && resp.Config != "" && os.Getenv("PERSONA_ASSISTANT") != "1" {
+		stamp := managedLaunchStamp(name, resp.Config, settingsArg(argv), filepath.Dir(nodeclient.SocketPath()))
+		env = append(withoutEnv(env, []string{managedLaunchConfigEnv}), managedLaunchConfigEnv+"="+stamp)
+	}
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
 		argv = codexBypassArgs(argv)
 	}
@@ -838,7 +861,7 @@ func launchExec(agent, exe string, argv, env []string) (string, []string, []stri
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "personad launch: "+format+"\n", a...) }
 	command := append([]string{exe}, rest...)
-	if agent == "claude" && os.Getenv(managedModelProbeEnv) == "1" {
+	if (agent == "claude" || agent == "codex") && os.Getenv(managedModelProbeEnv) == "1" {
 		if dir, _ := launcherNodeDir(exe); dir != "" {
 			// Only the probe needs this interpreter. Keep the child environment's PATH order for every other command.
 			exe = filepath.Join(dir, "node")
@@ -861,19 +884,23 @@ func (n *Node) launcherEnv(name string) map[string]any {
 	}
 	if l.Withheld {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := n.ensureManaged(ctx, name)
+		var err error
+		l, err = n.readyManagedLauncher(ctx, name)
 		cancel()
 		if err != nil {
 			return map[string]any{"error": err.Error()}
 		}
-		if l, _ = n.managedLauncher(name); l.Withheld {
-			return map[string]any{"error": errManagerAway(name).Error()}
-		}
+	}
+	if l.Name == "" { // removed from the catalog while its settings were being fetched
+		return map[string]any{"error": "no managed launcher " + name + " on this computer"}
 	}
 	if strings.TrimSpace(l.Headers) != "" && !l.CustomHeadersSupported() {
 		return map[string]any{"error": "custom_headers_unsupported: this runtime cannot send provider headers on the selected model path; clear them in Settings › Model Providers"}
 	}
 	out := map[string]any{"env": managedEnv(l), "clear": envClearFor(l), "args": l.Args, "agent": l.AgentType(), "model": l.Model}
+	if l.AgentType() == "claude" {
+		out["config_fingerprint"] = managedClaudeFingerprint(l)
+	}
 	if effort := launcherDefaultEffort(l); effort != "" {
 		out["effort"] = effort
 		if ids := noEffortModels(l); len(ids) > 0 { // the models it is not passed for (launchEffort)

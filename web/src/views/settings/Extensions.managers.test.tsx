@@ -138,7 +138,7 @@ describe("another manager's extension page", () => {
     expect(onOpen).toHaveBeenLastCalledWith("example-wechat@m-1");
   });
 
-  it("keeps default extension requests unscoped and stamps its external source bindings with the default owner", async () => {
+  it("names the default on trust reads and stamps its external source bindings with the default owner", async () => {
     setRoster(ROSTER);
     await import("../../features/external-sources/ExternalSourceSettings");
     act(() => root.render(<Extensions open="example-wechat" onOpen={() => {}} onChannel={() => {}} onConnector={() => {}} />));
@@ -151,7 +151,10 @@ describe("another manager's extension page", () => {
     expect(calls.some((c) => c.url.includes("/external-source-bindings/summary") && c.header === null)).toBe(true);
     expect(calls.some((c) => c.url.includes("/assistant/external-source-policies") && c.header === null)).toBe(true);
     expect(calls.some((c) => c.url.endsWith("/assistant/leaders") && c.header === null)).toBe(true);
-    expect(calls.filter((c) => !c.url.endsWith("/managers")).every((c) => c.header === null)).toBe(true);
+    expect(calls.filter((c) => c.url.endsWith("/assistant/extension-trust")).map((c) => c.header)).toEqual(["assistant"]);
+    const detail = calls.find((c) => /example-wechat\/-\/\?entry_lists=1$/.test(c.url));
+    expect(detail?.header).toBe("assistant");
+    expect(calls.filter((c) => c !== detail && !c.url.endsWith("/managers") && !c.url.endsWith("/assistant/extension-trust")).every((c) => !c.header)).toBe(true);
   });
 
   it("pins the default assistant on external-source reads even when another assistant is chosen", async () => {
@@ -235,6 +238,7 @@ describe("another manager's connector and channel pages", () => {
   it("reads another manager's channel with its name", async () => {
     setRoster(ROSTER);
     act(() => root.render(<ChannelPage id="wechat" manager="m-1" onBack={() => {}} onSettings={() => {}} />));
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     expect(calls.find((c) => c.url.endsWith("/channels/wechat"))?.header).toBe("m-1");
   });
@@ -250,6 +254,7 @@ describe("a page opened by an address that names no assistant, or another one", 
     expect(host.textContent).not.toContain("home@example.com");
     expect(managerHeaderFor("/connectors/wechat/settings")).toBe("m-1");
     act(() => root.render(<ChannelPage id="wechat" onBack={() => {}} onSettings={() => {}} />));
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     expect(calls.find((c) => c.url.endsWith("/channels/wechat"))?.header).toBe("m-1");
   });

@@ -5,6 +5,8 @@ import (
 	"math"
 	"slices"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // Claude Code's effort levels and permission modes (node/modes.go sets them; the hub checks a scheduled task's).
@@ -119,6 +121,16 @@ const (
 	// (#1917, interrupted.go in the node).
 	StatusInterrupted = "interrupted"
 )
+
+// LauncherRefreshSendWait leaves time for a terminal Claude send to check the provider, quit and resume the
+// conversation in place before typing. The node bounds preparation and the restart separately.
+const LauncherRefreshSendWait = 4 * time.Minute
+
+// CanRefreshTerminalLauncher identifies sends that may need the longer wait. Only the node knows which process
+// and launcher configuration are actually in the pane.
+func (s *Session) CanRefreshTerminalLauncher() bool {
+	return s.PaneID != "" && !s.Assistant && s.SourceKind == "" && (s.Agent == "claude" || s.Agent == "")
+}
 
 // Unified agent states (docs/protocol/agent-states.md).
 const (
@@ -764,6 +776,11 @@ type ModelPick struct {
 	Launcher string `json:"launcher"`
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
+	// Runtime and Channel are the pick's two other dimensions (docs/assistant/execution-spec.md): the engine and the
+	// connection the launcher alias stands for. A newer client may send them without a launcher; the hub then finds
+	// the alias, and an older client keeps reading the launcher.
+	Runtime string `json:"runtime,omitempty"`
+	Channel string `json:"channel,omitempty"`
 }
 
 // UndeliveredMessage is one of Session.Undelivered: an owner's message its manager keeps after it could not go in.
@@ -783,6 +800,20 @@ type UndeliveredMessage struct {
 	// that computer's name. Error is then the whole line to show under the bubble ("Will send when … is back"), and
 	// Retry / Delete go to the session's held routes (POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry, DELETE …).
 	Computer string `json:"computer,omitempty"`
+	// Reason is set on an input of a logical conversation's delivery queue (assistant/logical_undelivered.go,
+	// docs/operations/logical-input-reconciliation.md "Delivery deadline"): why it has not gone in yet. Empty on the
+	// kept and held messages above, which say it in Error alone. Error is still the line in the owner's language.
+	Reason UndeliveredReason `json:"reason,omitempty"`
+	// Since is when the current wait began: the attempt's dispatch for awaiting_receipt, the queueing otherwise, the
+	// expiry for receipt_expired.
+	Since time.Time `json:"since,omitzero"`
+	// Deadline is when an awaiting_receipt attempt stops waiting for its receipt and expires (nothing is sent twice).
+	Deadline time.Time `json:"deadline,omitzero"`
+	// Ahead is how many inputs wait before this one; Behind how many wait after the one awaiting its receipt.
+	Ahead  int `json:"ahead,omitempty"`
+	Behind int `json:"behind,omitempty"`
+	// BlockedBy is the client_msg_id of the input a queued one waits behind (the one awaiting its receipt).
+	BlockedBy wireids.ClientMsgID `json:"blocked_by,omitempty"`
 }
 
 // UndeliveredMessage states.
@@ -790,6 +821,31 @@ const (
 	UndeliveredWaiting = "waiting"
 	UndeliveredFailed  = "failed"
 )
+
+// UndeliveredReason is UndeliveredMessage.Reason: a closed set.
+type UndeliveredReason string
+
+const (
+	// UndeliveredAwaitingReceipt: it was dispatched and its receipt is not in yet. Waiting, until Deadline.
+	UndeliveredAwaitingReceipt UndeliveredReason = "awaiting_receipt"
+	// UndeliveredBehindUnconfirmed: queued behind an input awaiting its receipt (BlockedBy). Waiting.
+	UndeliveredBehindUnconfirmed UndeliveredReason = "behind_unconfirmed"
+	// UndeliveredSwitchPending: queued while the conversation moves to another engine. Waiting.
+	UndeliveredSwitchPending UndeliveredReason = "switch_pending"
+	// UndeliveredQueued: queued and about to go in. Waiting.
+	UndeliveredQueued UndeliveredReason = "queued"
+	// UndeliveredReceiptExpired: no receipt came by its deadline; it left the queue and later input went on. Failed:
+	// it may have gone in, so the owner looks and picks Retry (sent once more, last in the queue) or Delete.
+	UndeliveredReceiptExpired UndeliveredReason = "receipt_expired"
+)
+
+func (r UndeliveredReason) Valid() bool {
+	switch r {
+	case UndeliveredAwaitingReceipt, UndeliveredBehindUnconfirmed, UndeliveredSwitchPending, UndeliveredQueued, UndeliveredReceiptExpired:
+		return true
+	}
+	return false
+}
 
 // QueueEdit is the answer to POST /api/v1/sessions/{mid}/{sid}/queue in a Persona conversation (node session.queue.edit,
 // docs/protocol/protocol.md): the messages that were queued before the edit, in order, and their photos for the composer

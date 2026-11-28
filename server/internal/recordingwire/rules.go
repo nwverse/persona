@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path"
 	"slices"
 	"sort"
 	"strconv"
@@ -38,6 +39,10 @@ const (
 	KindRecording = "recordings"
 	KindMeeting   = "meetings"
 	KindEvent     = "events"
+	// DirAudio is the subdirectory under DirAttachments holding a hub-mode
+	// meeting's ephemeral audio (recordings/<id>/attachments/audio/); backups
+	// omit it so audio never outlives post-minutes deletion.
+	DirAudio = "audio"
 	// The day recap's files next to a day recording's meta.json.
 	RecapFile      = "recap.json"
 	RecapMarkdown  = "recap.md"
@@ -45,6 +50,19 @@ const (
 	// AITitleMinutes is Recording.AITitleFrom of a title the minutes gave.
 	AITitleMinutes = "minutes"
 )
+
+// IsMeetingAudioPath reports whether kbRelPath (slash-separated, relative to a
+// knowledge-base root) is a recording's ephemeral hub-transcribed audio
+// directory or a path inside it: recordings/<id>/attachments/audio[/...].
+func IsMeetingAudioPath(kbRelPath string) bool {
+	clean := path.Clean(strings.TrimPrefix(kbRelPath, "/"))
+	parts := strings.Split(clean, "/")
+	return len(parts) >= 4 &&
+		parts[0] == KindRecording &&
+		parts[1] != "" && parts[1] != "." && parts[1] != ".." &&
+		parts[2] == string(DirAttachments) &&
+		parts[3] == DirAudio
+}
 
 func ClockAt(start time.Time, sec float64, zone *time.Location) string {
 	return start.Add(time.Duration(sec * float64(time.Second))).In(zone).Format("15:04:05")
@@ -424,6 +442,9 @@ func MeetingParts(before, after Meeting) []string {
 	}
 	if !same(transcriptionShown(before.Transcription), transcriptionShown(after.Transcription)) {
 		out = append(out, PartTranscription)
+	}
+	if !same(before.Speakers, after.Speakers) {
+		out = append(out, PartSpeakers)
 	}
 	return out
 }

@@ -160,7 +160,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			// Only a runtime still connected owns it: one that listed it and left (its omp exited) does not keep the
 			// session from its file.
 			if h, _, _ := n.runtimes.belongs(resume); h != nil {
-				return nil, refusal("runtime_session", "这个会话属于另一个工具（例如 Orca 的原生对话），请在那里继续，这次没有启动。", nil)
+				return nil, refusal("runtime_session", i18n.T(i18n.From(ctx), "rpc-errors.runtime_session"), nil)
 			}
 			if n.startKind(ctx) == proto.EngineOrca {
 				return nil, orcaResumeRefusal(ctx)
@@ -242,7 +242,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			return nil, r
 		}
 		if _, _, known := n.runtimes.belongs(resume); known { // an Orca native chat and the like: its runtime's, not a terminal's
-			return nil, refusal("runtime_session", "这个会话属于另一个工具（例如 Orca 的原生对话），请在那里继续，这次没有启动。", nil)
+			return nil, refusal("runtime_session", i18n.T(i18n.From(ctx), "rpc-errors.runtime_session"), nil)
 		}
 		// An id this computer has no transcript, record or start of is not one to resume, as `claude --resume` would
 		// say: started under it, a new conversation would be listed under the id of another, which the manager tells
@@ -333,6 +333,16 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if id == "" {
 		id = newUUID()
 	}
+	// A resume can arrive without a launcher in its RPC params. Resolve the provider before writing settings, which
+	// override parts of the environment personad launch will supply.
+	managed, err := n.readyManagedLauncher(ctx, launcher)
+	if err != nil {
+		return nil, err
+	}
+	managedRestart, _ := ctx.Value(managedRestartKey{}).(bool)
+	if managedRestart && (managed.Name == "" || managed.AgentType() != "claude") {
+		return nil, refusal(notDelivered, "The managed Claude provider is no longer available to resume this conversation.", nil)
+	}
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
 	if execution.Source.Role == "" {
@@ -361,7 +371,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		}
 	}
 	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.
-	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: modelArg, Effort: effort,
+	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: modelArg, Effort: effort, managed: managedRestart,
 		Plugins: n.claudeLoadsPlugins(ctx), TaskInstructionFile: instructionFile}
 	if backend := backendLaunchFrom(ctx); backend != nil && mode != "plan" {
 		for _, repo := range backend.executor.journal.Repositories {
@@ -738,21 +748,27 @@ func (n *Node) workspaceFor(ctx context.Context, launch host.Launcher, cwd strin
 		startErr = n.ensureHerdr(ctx, "start or resume a session") // herdrstart.go
 	}
 	wss, err := launch.Spaces(ctx)
+	if _, orca := launch.(*orcaHost); orca && err != nil && orcaUnreachable(err) {
+		return "", orcaMissing(err) // Orca's words, not herdr's (orcaengine.go)
+	}
 	if err != nil {
 		// Nothing was started or typed: say so, and what to do, instead of herdr's own words (the app showed
 		// "herdr workspace list: exec: \"herdr\": executable file not found").
-		name := n.defaultEngineName()
+		// The hub words it in the reader's language by its engine and reason (apierr's engineMissingKeys, #17057).
+		name, kind := n.defaultEngineName(), n.defaultKind()
 		if k := n.startKind(ctx); proto.EngineNames[k] != "" && k != n.defaultKind() {
-			name = proto.EngineNames[k] // a start that named its host
+			name, kind = proto.EngineNames[k], k // a start that named its host
 		}
-		msg := fmt.Sprintf("这台电脑上的 %s 没在运行（或没装），不能在这里新开或接着会话，这次没有发送。"+
-			"要从手机接着电脑上开着的会话，在那边继续；要从手机新开，先在这台电脑上装好并打开 %s。", name, name)
+		reason := engineUnavailable
 		if startErr != nil && !errors.Is(startErr, errHerdrNotInstalled) {
-			msg = fmt.Sprintf("这台电脑上的 %s 没在运行，自动启动也没成功，不能在这里新开或接着会话，这次没有发送。"+
-				"请在这台电脑上打开 %s 再试；原因见详情。", name, name)
+			reason = engineStartFailed
 		}
-		return "", refusal(engineMissing, msg,
-			map[string]any{"detail": herdrMissingDetail(err, startErr)})
+		detail := name + ": " + err.Error()
+		if _, ok := launch.(*herdrHost); ok {
+			detail = herdrMissingDetail(err, startErr)
+		}
+		return "", refusal(engineMissing, i18n.T(i18n.From(ctx), "rpc-errors.engine_"+reason, i18n.Args{"engine": name}),
+			map[string]any{"detail": detail, "engine": kind, "reason": reason})
 	}
 	base := filepath.Base(cwd)
 	for _, w := range wss {
@@ -833,7 +849,7 @@ func (n *Node) closeWithCauseChecked(ctx context.Context, id string, cause proto
 		if mine {
 			return n.closeAfterExit(ctx, id, st, before)
 		}
-		return fmt.Errorf("这个 Agent 不在这台电脑的终端里运行，没法从手机关闭")
+		return failure("close_not_in_terminal", i18n.T(i18n.From(ctx), "rpc-errors.close_not_in_terminal"), nil)
 	}
 	org, ref, err := paneCap[host.Organizer](n, a.PaneID) // a host that cannot close it is not interrupted first
 	if err != nil {
