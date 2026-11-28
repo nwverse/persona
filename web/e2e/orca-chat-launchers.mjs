@@ -4,7 +4,7 @@
 // --without (the fake hub run without MOCK_ORCA_CHAT_LAUNCHERS) it checks the panel has no such group: a computer
 // without Orca sees no new entries.
 //
-//   MOCK_ORCA_CHAT_LAUNCHERS=1 PORT=18741 python3 scripts/mock/mock_hub.py &
+//   MOCK_ORCA_CHAT_LAUNCHERS=1 PORT=18741 python3 scripts/mock/mock_hub.py &   (scripts/mock/orca_chat_launchers_mock.py)
 //   (cd web && PERSONA_HUB_URL=http://127.0.0.1:18741 npx vite --port 5201 --strictPort &)
 //   node web/e2e/orca-chat-launchers.mjs http://127.0.0.1:5201 [--without] [--shots <dir>] [--channel chrome | --executable <browser>]
 //
