@@ -59,7 +59,9 @@ import {
   type LarkGatewaySummary,
 } from "./integrations/catalog";
 import { capabilityLabel, projectedCatalogItem, projectedResource, projectionSourceErrors } from "./integrations/projectedCatalog";
-import { editableSection, IntegrationReadProblem, projectedIntegrationTarget, projectedSections, ProjectionDetailIssues, type ProjectedDetail } from "./integrations/projectedDetail";
+import { editableSection, IntegrationReadProblem, projectedIntegrationTarget, projectedSections, type ProjectedDetail } from "./integrations/projectedDetail";
+import { IntegrationDetailShell, originBadgeLabel } from "./integrations/DetailShell";
+import { integrationResourceKey } from "./integrations/model";
 import { useIntegrationCatalogProjection, useIntegrationDetailProjection, useIntegrationProjectionMode, useProjectedMarkets } from "./integrations/useIntegrationProjection";
 
 const IntegrationDetail = lazyPage(() => import("./IntegrationDetail").then((m) => m.IntegrationDetail));
@@ -166,13 +168,14 @@ function SubscriptionAlertBadge({ alert }: { alert: IntegrationSubscriptionAlert
   );
 }
 
-/** Detail pane for a standalone push source (or single source deep link), backed by lazy SourcesUI. */
+/** Detail pane for a standalone push source (or single source deep link), composed through IntegrationDetailShell. */
 function PushSourceDetailPane({
   state,
   item,
   manager,
   onBack,
   backLabel,
+  onSwitchAssistant,
   reloadKey,
   onReload,
   projection,
@@ -183,6 +186,7 @@ function PushSourceDetailPane({
   manager?: string;
   onBack?: () => void;
   backLabel?: string;
+  onSwitchAssistant?: () => void;
   reloadKey: number;
   onReload: () => void;
   projection?: ProjectedDetail;
@@ -192,50 +196,47 @@ function PushSourceDetailPane({
   const source = projectedSections(projection, "inbox_and_sync").find(({ ref }) =>
     (ref.kind === "push_source" || ref.kind === "subscription") && ref.id === resourceId);
   const readOnly = source && !editableSection(source);
-  return (
-    <div data-integration-detail={item?.id ?? "source"} data-integration-kind="source">
-      <div className="mb-3 flex items-center gap-2">
-        {onBack && (
-          <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
-            {backLabel ?? t("settings-integrations.back")}
-          </Button>
-        )}
-        <OwnerMark manager={manager} />
-        <span className="flex-1" />
-        <IconButton icon="retry" label={t("settings-integrations.refresh")} onClick={onReload} />
-      </div>
+  const resourceKind = projection?.detail.item.ref.kind === "subscription" || item?.ref?.kind === "subscription"
+    ? "subscription"
+    : "push_source";
+  const resolvedId = projection?.detail.item.ref.id ?? item?.id ?? resourceId ?? state;
+  const resourceKey = integrationResourceKey(manager, resourceKind, resolvedId);
 
-      {item && (
-        <section className="mb-6 overflow-hidden rounded-card bg-surface shadow-card">
-          <div className="flex items-center gap-3 px-4 py-3.5">
-            <ItemMark item={item} />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-2">
-                <h1 className="truncate text-card-title font-semibold text-ink">{item.name}</h1>
-                <Pill>{t(item.ref?.kind === "subscription" ? "subscriptions.row" : "settings-integrations.push_source_badge")}</Pill>
-              </div>
-              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-label text-ink-3">
-                <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT_CLASS[item.tone])} />
-                <span className="truncate">{item.statusText}</span>
-              </div>
-            </div>
-          </div>
-          {item.description && (
-            <div className="border-t border-line px-4 py-3">
-              <p className="text-meta leading-relaxed text-ink-2">{item.description}</p>
-            </div>
-          )}
-        </section>
-      )}
-
-      <ProjectionDetailIssues projection={projection} />
+  const sourceContent = (
+    <>
       {readOnly && <Group><SettingsHint>{t("settings-integrations.projection_read_only")}</SettingsHint></Group>}
       {(!projection || (source && editableSection(source))) && (
         <Suspense fallback={<Loading />}>
           <LazySourcesUI key={`${manager ?? ""}:${state}:${reloadKey}`} title={title} state={state} manager={manager} />
         </Suspense>
       )}
-    </div>
+    </>
+  );
+
+  return (
+    <IntegrationDetailShell
+      id={item?.id ?? "source"}
+      kind="source"
+      resourceKey={resourceKey}
+      manager={manager}
+      onBack={onBack}
+      backLabel={backLabel}
+      onSwitchAssistant={onSwitchAssistant}
+      onRefresh={onReload}
+      hideHeaderCard={!item}
+      mark={item ? <ItemMark item={item} /> : undefined}
+      title={item?.name}
+      badge={item ? originBadgeLabel(item.origin, "source", { subscription: item.ref?.kind === "subscription" }) : undefined}
+      status={item ? (
+        <>
+          <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT_CLASS[item.tone])} />
+          <span className="truncate">{item.statusText}</span>
+        </>
+      ) : undefined}
+      headerBody={item?.description ? <p className="text-meta leading-relaxed text-ink-2">{item.description}</p> : undefined}
+      projection={projection}
+      slots={{ inbox: sourceContent }}
+    />
   );
 }
 
@@ -959,6 +960,14 @@ function IntegrationsForManager({
   const waitForProjection = showDetail && !legacy && !projection && (mode.mode !== "projection" || !!requested);
   const pendingBack = detailBack ?? (detailError && !headerBack ? onBack : undefined);
 
+  const detailOwner = projection?.detail.item.ref.manager ?? owner;
+  const switchDetailAssistant = detailOwner && detailOwner !== current
+    ? () => {
+        chooseManager(otherManager(detailOwner) ?? null);
+        onOpen({ scope: integrationScope(), view: { kind: "list" }, filter }, "root");
+      }
+    : undefined;
+
   const detailPane = waitForProjection ? (
     <>
       {pendingBack && (
@@ -974,9 +983,10 @@ function IntegrationsForManager({
       <PushSourceDetailPane
         state={sourceDetailState}
         item={resolvedSourceItem}
-        manager={projection?.detail.item.ref.manager ?? owner}
+        manager={detailOwner}
         onBack={detailBack}
         backLabel={pushSourceBackLabel}
+        onSwitchAssistant={switchDetailAssistant}
         reloadKey={sourcesReload}
         onReload={() => {
           if (projection) reloadDetail();
@@ -990,12 +1000,13 @@ function IntegrationsForManager({
     <Suspense fallback={<Loading />}>
       {detailProblem}
       <IntegrationDetail
-        target={{ ...resolvedTarget, manager: projection?.detail.item.ref.manager ?? owner }}
+        target={{ ...resolvedTarget, manager: detailOwner }}
         projection={projection}
         prefill={prefill}
         integrationsV2={true}
         onBack={detailBack}
         onUnavailableBack={headerBack ? undefined : onBack}
+        onSwitchAssistant={switchDetailAssistant}
         onUninstalled={onBack}
         onPage={(id, ui, manager) => go({ kind: "page", id, ui }, manager)}
         onUpgrade={(market, id, manager) => go({ kind: "item", market, id }, manager)}
