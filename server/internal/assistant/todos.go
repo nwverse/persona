@@ -1066,6 +1066,7 @@ func (s *Service) todoRoutes() {
 	s.taskWorkspaceRoutes()
 	s.taskReviewDismissalRoutes()
 	s.todoDecisionRoutes()
+	s.todoUsageRoutes()
 	s.outsideDecisionRoutes()
 	s.todoThreadRoutes()
 	s.todoSeenRoutes()

@@ -48,6 +48,8 @@ type Node struct {
 	segmentStarts segmentStarts
 	segmentInputs segmentInputs
 	runtimeUsage  runtimeUsageReports
+	// sessionUsageCache keeps the files usage.sessions read (session_usage.go).
+	sessionUsageCache sessionUsageCache
 	// usageDirs resolves the directories the usage names, while this connection's manager keeps them (usage_dirs.go).
 	usageDirs usageDirsOn
 

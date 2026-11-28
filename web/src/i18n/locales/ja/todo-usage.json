@@ -1,0 +1,16 @@
+{
+  "card": "{tokens} トークン · 約 {usd}（公開価格での概算）",
+  "section": "使用量",
+  "total": "{tokens} トークン",
+  "estimate": "約 {usd}（概算）",
+  "amount": "{tokens} · 約 {usd}",
+  "kinds": "入力 {input} · キャッシュ書き込み {write} · キャッシュ読み取り {read} · 出力 {output}",
+  "session": "セッション",
+  "subagent": "サブエージェント",
+  "no_records": "そのコンピューターに使用量の記録が見つかりません",
+  "stale": "コンピューターがオフライン：前回の数値を表示しています",
+  "price_catalog": "100 万あたり ${input} / ${write} / ${read} / ${output}、公開価格",
+  "price_default": "100 万あたり ${input} / ${write} / ${read} / ${output}、既定の単価",
+  "price_override": "100 万あたり ${input} / ${write} / ${read} / ${output}、設定した価格",
+  "estimate_note": "公開価格での概算です（100 万トークンあたりの入力 / キャッシュ書き込み / キャッシュ読み取り / 出力）。ゲートウェイの実際の請求額とは異なる場合があります。"
+}

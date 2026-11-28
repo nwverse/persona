@@ -119,6 +119,8 @@ type Service struct {
 	inboxExt inboxExtensionCache
 	// extTr are the extensions' transcription jobs running now (extension_transcribe.go).
 	extTr extTranscriptions
+	// todoUsage keeps the sessions' token usage for the to-dos' usage and cost (todo_usage.go).
+	todoUsage todoUsageBook
 	// id is Options.ID: the manager this assistant is.
 	id               string
 	repositoriesMu   sync.Mutex
