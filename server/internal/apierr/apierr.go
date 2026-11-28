@@ -310,6 +310,8 @@ func LocalizeErrorJSON(l i18n.Lang, body []byte) []byte {
 			}
 		case "dialog_open":
 			key = "rpc-errors.dialog_open"
+		case "engine_missing":
+			key, args = engineMissingWords(m)
 		case "delivery_unknown":
 			key = "rpc-errors.in_doubt"
 			if reason, _ := m["reason"].(string); reason == "guide_retry_refused" {
@@ -517,6 +519,27 @@ var openElsewhereKeys = map[string]string{
 	"agents_list": "rpc-errors.open_elsewhere_agents_list",
 }
 
+// engineMissingKeys word the node's engine_missing refusal by why its engine could not take the start (data reason,
+// node/orcaengine.go orcaMissing, #17037), naming the engine (data engine). One without both (an older node, a
+// refusal about the machine's whole engine set) keeps its words.
+var engineMissingKeys = map[string]string{
+	"not_running":   "rpc-errors.engine_not_running",
+	"not_installed": "rpc-errors.engine_not_installed",
+	"incompatible":  "rpc-errors.engine_incompatible",
+}
+
+// engineMissingWords is the key and arguments of an engine_missing refusal whose data says which engine and why
+// (engineMissingKeys); "" for one that does not.
+func engineMissingWords(data map[string]any) (string, i18n.Args) {
+	engine, _ := data["engine"].(string)
+	reason, _ := data["reason"].(string)
+	name := proto.EngineNames[engine]
+	if name == "" || engineMissingKeys[reason] == "" {
+		return "", nil
+	}
+	return engineMissingKeys[reason], i18n.Args{"engine": name}
+}
+
 // notDeliveredKeys word the node's generic not_delivered refusal by reason (node/sendsafe.go deliveryRefusal);
 // specific refusals that carry their own recovery instructions (a cut dialog, a botmux probe failure, an unread box)
 // omit reason and keep their own words.
@@ -580,6 +603,11 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	if code == "open_elsewhere" {
 		where, _ := body["where"].(string)
 		key = openElsewhereKeys[where]
+	}
+	if code == "engine_missing" {
+		if k, a := engineMissingWords(body); k != "" {
+			key, args["engine"] = k, a["engine"]
+		}
 	}
 	if code == "not_running" {
 		// Only the node's refusal that names the engine (node/sendsafe.go notRunningRefusal, #17044): not_running's other

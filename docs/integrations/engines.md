@@ -116,7 +116,7 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 | Answer dialogs (permissions, options) | Yes | Yes (screen-based) | Yes (screen-based) | Yes (screen-based) | Yes (screen-based) | Yes (cards, also answerable in Paseo app) |
 | Close sessions from phone | Yes | Yes | Yes | Yes | Yes (`block.close` / `session.close_window`) | Backend supports archiving in Paseo; app button currently only for terminal sessions |
 | Create sessions from phone; Resume a stopped one from its terminal page (a message does not, #4754) | Yes | Yes (a new tab in the Herdr App space for the directory, #2532) | Yes (create; resume a stopped Claude Code, Codex, TRAE CLI or pi session in a new terminal, #17044; not omp) | Yes | Yes (`session.create` / `session.new_window` with `focus: false`) | Yes (each Paseo provider is a launcher; a message continues a Paseo session) |
-| Create a worktree from a workspace ([terminal.md](terminal.md), "23. New worktree…") | Yes (herdr 0.9 creates it; older versions fall back to git) | Yes (Persona falls back to git and opens a Herdr App space) | Yes (Orca creates it under the original workspace and owns the checkout directory) | No | No (git fallback) | Yes on the web (Paseo creates it in its own worktrees folder as a Paseo workspace, #6295, and deletes one it made, #6297; `docs/integrations/paseo.md` ("Spaces and workspaces")) |
+| Create a worktree from a workspace ([terminal.md](terminal.md), "23. New worktree…") | Yes (herdr 0.9 creates it; older versions fall back to git) | Yes (Persona falls back to git and opens a Herdr App space) | Yes (Orca creates it under the original workspace and owns the checkout directory; on the web and Android, which also rename and delete one after a preview, #17054) | No | No (git fallback) | Yes on the web (Paseo creates it in its own worktrees folder as a Paseo workspace, #6295, and deletes one it made, #6297; `docs/integrations/paseo.md` ("Spaces and workspaces")) |
 | Rename spaces / tabs | Yes | Yes (written into Herdr App's layout) | Yes (`worktree.set` display name; `terminal.rename` for tabs, the assistant's guarded tab rename and the bulk rename included, #17043; on the web also a native chat's space, #17053) | Yes | Yes (`session.set_label` / `session.set_window_label`) | Spaces (Paseo's projects) and workspace titles on the web, #6297; no tabs (backend supports session names; app button currently only for terminal sessions) |
 | Split a pane, close a whole tab ([terminal.md](terminal.md), "21. Node menus") | Yes | No | Yes (`terminal.split`, `terminal.closeTab`; an Orca without them is refused and its `abilities` say so, #17043) | No | Yes | No (no terminal) |
 | Live terminal, phone takeover | Yes | No | No | No | No | No (no terminal) |
@@ -706,13 +706,47 @@ So the node keeps no resume command or launch record for Orca panes (`holdResume
 - Continue while Orca still holds the old tab: from Orca's bundle (not checked live), Orca does not resume a provider
   session that runs in another pane it knows of, so opening the old tab afterwards should not start a second Claude on it.
 
+## When Orca is not running
+
+Audience: everyone with Orca enabled on a computer (#17037). Orca is a desktop app the user opens and quits; Persona cannot start it.
+
+- **What the node finds**: Orca's row of `node.info`'s engines has a `state` (`proto.EngineState`): `running` (its runtime answers
+  `status.get` with a protocol Persona speaks; available), `stopped` (it does not answer, but it is installed: its app is where Orca
+  itself looks for it, `/Applications/Orca.app` or `~/Applications/Orca.app`, `Orca.exe` under `%LOCALAPPDATA%\Programs\Orca` or
+  `%ProgramFiles%\Orca`, `orca-ide` in `~/.local/bin`, `/usr/local/bin`, `/usr/bin` or `/opt/Orca`, or a data directory a runtime
+  used has its `orca-runtime.json` or CLI shim: `orcart.Installed`; PATH's `orca` is not read, it is often GNOME's screen reader),
+  `incompatible` (it answers with another protocol: its `version`, and the note `node-engine.orca_incompatible` the hub words in each
+  reader's language) or `missing`. A stopped Orca keeps the version the macOS app's `Info.plist` says.
+- **Kept current**: while the node is connected it asks Orca again every 10 seconds (`orcaEngineEvery`: one `status.get` on the local
+  socket, or only a look for the metadata file when there is none) and sends `engines.changed` when Orca's row changed
+  (`node/orcaengine.go`); the manager puts the engines on the machine and the apps get it as on any change
+  (`devices/engines_changed.go`). So opening or quitting Orca reaches the engine pickers, the web's Orca worktree actions and the
+  notice below within about 10 seconds, without the node reconnecting. Older nodes send no `state` and no `engines.changed`.
+- **The notice**: the Agents list shows "Orca isn't running on <computer>" with what to do ("Open Orca on that computer…") for an
+  online computer whose engine set holds Orca, default or not, and whose node says `stopped`; never for an incompatible or missing
+  Orca, or a node too old to say (web `HerdrNotices.tsx` with `lib/engines.ts` `orcaStopped`; Android `OrcaNotice` with
+  `Engines.orcaStopped`; iOS in #17056). It has no button: Orca is opened on the computer. It needs no polling of its own. The herdr
+  notice keys on the engine set too: herdr enabled beside an Orca default still offers Start.
+- **The pickers**: an installed Orca that is not running reads "Installed, not running" (with its version), an incompatible one
+  "Not compatible · <version>" with the note under it, instead of "Not detected".
+- **A start Orca cannot take** is refused `engine_missing` naming Orca, with `engine: "orca"` and `reason` `not_running` ("Open Orca on
+  it and try again"), `not_installed` (install it, or choose another engine) or `incompatible` (update Orca and Persona); the hub words
+  it in the reader's language (`rpc-errors.engine_<reason>`), and Orca's own error is the detail, never herdr's
+  (`node/orcaengine.go` `orcaMissing`). Nothing is created or typed.
+- **Doctor and health**: `personad node doctor` has an `orca` line where Orca is installed (running is OK with its version; stopped or
+  incompatible is a warning saying what to do); a machine without Orca gets no line. The machine page's "Terminal and engine" stands on
+  herdr's line where herdr is enabled and on Orca's where Orca is, so an Orca-only computer is not reported as having its engine off
+  (web `lib/node-health.ts`, Android `NodeHealth.kt`).
+
 ## When an engine cannot be selected
 
 - **"Not detected"**: engine is not running on that computer. Start `herdr` once in a terminal; open Herdr App / Orca. After a short wait,
-  or Reconnect for that machine, detection refreshes.
+  or Reconnect for that machine, detection refreshes. An installed Orca that is closed reads "Installed, not running" instead, and
+  follows Orca opening and quitting within about 10 seconds ("When Orca is not running").
 - **"herdr + Herdr App" not detected**: both runtimes are not running (herdr started in terminal, Herdr App open with remote connected to this machine).
   If only one is used, select it directly.
-- **Orca says "This Orca version is incompatible with Persona"**: Orca / personad versions mismatch; update both.
+- **Orca says "Not compatible" with its version**: Orca / personad versions mismatch; update both (the note under it says so in the
+  reader's language).
 - **Paseo not detected**: open Paseo desktop app or run `paseo daemon start`. For a custom home, set personad `PASEO_HOME`.
   If available but a connection failure appears below, see `docs/integrations/paseo.md` ("Troubleshooting").
 - **Engine selected, no sessions**: verify Claude actually runs in that engine; ordinary-terminal / other-app sessions appear only Not running.

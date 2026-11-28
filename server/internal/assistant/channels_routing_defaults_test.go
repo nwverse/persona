@@ -62,7 +62,7 @@ func TestChannelRoutingDefaultsAcrossManagers(t *testing.T) {
 			t.Fatalf("%s: target override %+v, want %q", s.id, d.TargetOverride, override)
 		}
 		msg := channel.Message{Thread: "legacy", ChatID: "chat", TopicID: "topic"}
-		if got := s.channelThreadKey(context.Background(), "examplechat", msg); got != key {
+		if got := s.channelRoutingKeys(context.Background(), "examplechat", msg, on).primary; got != key {
 			t.Fatalf("%s: route %q, want %q", s.id, got, key)
 		}
 	}
