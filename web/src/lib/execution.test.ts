@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // The four dimensions' rules and requests (lib/execution.ts): the main chat's model + effort choices, the "Advanced /
 // route" narrowing, what a channel write sends (never the secrets it did not type), last-good, and the blocked store.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
