@@ -76,11 +76,15 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 	}
 
 	pr := t.PRURL
-	explicitLinkPR := false
-	if ciPRURL.MatchString(link) || otherReviewLink(link) {
+	explicitLinkPR := ciPRURL.MatchString(link) || otherReviewLink(link)
+	if explicitLinkPR {
 		pr = link
-		explicitLinkPR = true
-	} else {
+	}
+	repoPRs, repoIssues, referencePRs, err := s.todoLinkedDeliveryRefs(ctx, t.ID, pr)
+	if err != nil {
+		return "", err
+	}
+	if !explicitLinkPR && len(repoPRs) == 0 && len(repoIssues) == 0 {
 		replacement, noPR, err := s.reportedTaskPR(ctx, t, pr)
 		if err != nil {
 			return "", err
@@ -97,20 +101,20 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 				return "", fmt.Errorf("task %s: its delivery record changed during verification; retry the review", t.ID)
 			}
 			t, pr = current, current.PRURL
+			// Recovery can import a delivery binding or remove a stale reference.
+			repoPRs, repoIssues, referencePRs, err = s.todoLinkedDeliveryRefs(ctx, t.ID, pr)
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 
-	repoPRs, repoIssues, referencePRs, err := s.todoLinkedDeliveryRefs(ctx, t.ID)
-	if err != nil {
-		s.logf("task %s: linked repository delivery status temporarily unverifiable: %v", t.ID, err)
-		return "", fmt.Errorf("%s", i18n.T(s.lang(ctx), "assistant-reports.delivery_verification_unavailable",
-			i18n.Args{"task": t.ID, "pr": cmp.Or(pr, t.ID), "reason": fmt.Sprint(err)}))
-	}
+	legacyPR := len(repoPRs) == 0 && len(repoIssues) == 0 && !explicitLinkPR
 	prs := make([]string, 0, 1+len(repoPRs))
 	seenPR := map[string]bool{}
 	addPR := func(u string) {
 		u = strings.TrimSpace(u)
-		if u == "" || referencePRs[normalizePRKey(u)] {
+		if u == "" {
 			return
 		}
 		key := u
@@ -123,14 +127,16 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		seenPR[key] = true
 		prs = append(prs, u)
 	}
-	addPR(pr)
 	for _, u := range repoPRs {
 		addPR(u)
 	}
+	if (legacyPR || explicitLinkPR) && !referencePRs[normalizePRKey(pr)] {
+		addPR(pr)
+	}
 
 	var notes []string
-	for i, curPR := range prs {
-		allowNonPRCleanup := i == 0 && !explicitLinkPR && curPR == t.PRURL
+	for _, curPR := range prs {
+		allowNonPRCleanup := legacyPR && curPR == t.PRURL
 		var n string
 		if ciPRURL.MatchString(curPR) {
 			n, err = s.checkGitHubPRDelivery(ctx, t, curPR, gate, outcome, allowNonPRCleanup)
@@ -341,16 +347,17 @@ func (s *Service) otherHostIssueDelivery(ctx context.Context, t Todo, issueURL s
 
 // todoLinkedDeliveryRefs reads saved repository pull_request and issue links for task id. Only delivery-role links,
 // issues included (#14050), are returned for gate verification; reference links are display-only. referencePRs carries
-// their normalized keys too, so acceptance cannot re-add a reference PR from legacy stage tracking. A pull_request still
-// stored with the default delivery role that the forge can prove was opened by someone else is downgraded to reference first, so a merely
-// referenced foreign PR no longer blocks acceptance.
-func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, issues []string, referencePRs map[string]bool, err error) {
+// their normalized keys too, so acceptance cannot re-add a reference PR from legacy stage tracking. Stored delivery
+// bindings are authoritative. Storage also uses the empty role for explicit delivery, so both forms are honored.
+func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id, pr string) (prs, issues []string, referencePRs map[string]bool, err error) {
 	if _, ok := s.store().(todoRepositoryStore); !ok {
 		return nil, nil, nil, nil
 	}
 	set, err := s.savedTodoRepositories(ctx, id)
 	if err != nil {
-		return nil, nil, nil, err
+		s.logf("task %s: linked repository delivery status temporarily unverifiable: %v", id, err)
+		return nil, nil, nil, fmt.Errorf("%s", i18n.T(s.lang(ctx), "assistant-reports.delivery_verification_unavailable",
+			i18n.Args{"task": id, "pr": cmp.Or(pr, id), "reason": fmt.Sprint(err)}))
 	}
 	referencePRs = map[string]bool{}
 	seenIssue := map[string]bool{}
@@ -362,17 +369,7 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 			}
 			switch l.Kind {
 			case "pull_request":
-				role := l.Role
-				if role == "" {
-					role = repository.LinkRoleDelivery
-				}
-				if role == repository.LinkRoleDelivery && s.provenForeignPR(ctx, u) {
-					if err := s.setTodoLinkRole(ctx, id, u, repository.LinkRoleReference); err != nil {
-						s.logf("task %s: reference role for %s not saved: %v", id, u, err)
-					} else {
-						role = repository.LinkRoleReference
-					}
-				}
+				role, _ := repository.NormalizeLinkRole(l.Role)
 				if role == repository.LinkRoleReference {
 					referencePRs[normalizePRKey(u)] = true
 				} else if role == repository.LinkRoleDelivery {
@@ -393,41 +390,6 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 		}
 	}
 	return prs, issues, referencePRs, nil
-}
-
-// provenForeignPR reports whether u is a GitHub PR the forge can prove was opened by someone other than the
-// authenticated viewer. False covers every non-provable case (non-GitHub host, unconnected forge, unknown author):
-// the delivery default must stay conservative.
-func (s *Service) provenForeignPR(ctx context.Context, u string) bool {
-	m := ciPRURL.FindStringSubmatch(u)
-	if m == nil {
-		return false
-	}
-	own, ok := s.forge().(prOwnershipForge)
-	if !ok {
-		return false
-	}
-	number, _ := strconv.Atoi(m[2])
-	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	owned, known, err := own.PROwnedByViewer(cctx, m[1], number)
-	if err != nil {
-		s.logf("PR %s ownership not checked: %v", u, err)
-		return false
-	}
-	return known && !owned
-}
-
-// setTodoLinkRole rewrites the role of one saved link (by canonical URL) in a single store transaction, so a
-// concurrent edit to another link cannot be reverted. It is the supported alternative to deleting a misattributed
-// link.
-func (s *Service) setTodoLinkRole(ctx context.Context, id, canonicalURL, role string) error {
-	linksStore, ok := s.store().(todoRepositoryRoleStore)
-	if !ok {
-		return repository.Problem("store_unavailable")
-	}
-	_, err := linksStore.SetTodoRepositoryLinkRole(ctx, id, canonicalURL, role)
-	return err
 }
 
 // taskIsReadonly reports whether task t was planned as a read-only task.
