@@ -148,6 +148,9 @@ type Manager struct {
 
 	ctx context.Context
 
+	// cloud is the cloud hosts' bindings lock and start-and-reconnects (extension_cloud.go).
+	cloud cloudState
+
 	mail               Mail
 	connectors         *connector.Registry
 	larkCLIRefreshMu   sync.Mutex

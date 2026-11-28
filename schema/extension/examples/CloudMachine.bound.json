@@ -1,0 +1,82 @@
+{
+  "bound": true,
+  "binding": {
+    "machine_id": "m1",
+    "extension": "example-hosts",
+    "provider": "main",
+    "account": "lab",
+    "instance": "i-0a1b2c3d",
+    "bound_at": "2026-11-20T08:00:00Z",
+    "provider_name": "Example Hosts",
+    "vendor": "examplehosts",
+    "display_name": "build-box",
+    "state": "preempted",
+    "public_ip": "203.0.113.80",
+    "seen_at": "2026-11-27T08:00:00Z"
+  },
+  "host": {
+    "extension": "example-hosts",
+    "provider": "main",
+    "provider_name": "Example Hosts",
+    "vendor": "examplehosts",
+    "instance": {
+      "account": "lab",
+      "id": "i-0a1b2c3d",
+      "display_name": "build-box",
+      "state": "preempted",
+      "state_detail": "The vendor took this spot instance back.",
+      "region": "us-central1",
+      "zone": "us-central1-a",
+      "private_ips": [
+        "198.51.100.12"
+      ],
+      "spec": {
+        "size": "e2-standard-4",
+        "cpu": 4,
+        "memory_mb": 16384,
+        "disk_gb": 100,
+        "arch": "x86_64",
+        "os": "Debian 13"
+      },
+      "lifecycle": {
+        "spot": true
+      },
+      "console_url": "https://console.examplehosts.test/instances/i-0a1b2c3d",
+      "actions": [
+        "start",
+        "sync_ip",
+        "snapshot_list",
+        "snapshot_create",
+        "console"
+      ],
+      "observed_at": "2026-11-27T08:00:00Z"
+    },
+    "actions": [
+      {
+        "action": "start",
+        "safety": "confirm"
+      },
+      {
+        "action": "sync_ip",
+        "safety": "read"
+      },
+      {
+        "action": "snapshot_list",
+        "safety": "read"
+      },
+      {
+        "action": "snapshot_create",
+        "safety": "confirm"
+      },
+      {
+        "action": "console",
+        "safety": "read"
+      }
+    ],
+    "machine_id": "m1"
+  },
+  "recovery": {
+    "phase": "starting",
+    "started_at": "2026-11-27T08:00:05Z"
+  }
+}

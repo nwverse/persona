@@ -815,6 +815,15 @@ var Points = map[string]Point{
 		}
 		return it.ID, checkDiskOffload(it)
 	}},
+	// cloud_hosts: a provider of cloud instances and hosted servers that lists, starts, stops, restarts and snapshots
+	// them (CloudHostItem, cloud_hosts.go; the calls are cloud.schema.json's, docs/design/machine-cloud-ops.md).
+	"cloud_hosts": {Name: "cloud_hosts", Namespace: "cloud", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var it CloudHostItem
+		if err := strict(raw, &it); err != nil {
+			return "", err
+		}
+		return string(it.ID), checkCloudHost(it)
+	}},
 	"repository_providers": {Name: "repository_providers", Namespace: "repo", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
 		var p RepositoryProviderItem
 		if err := strict(raw, &p); err != nil {

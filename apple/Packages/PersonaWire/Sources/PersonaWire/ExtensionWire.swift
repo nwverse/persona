@@ -860,11 +860,12 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     public var textLookup: [ExtensionTextLookupItem]?
     public var memorySources: [ExtensionMemorySourceItem]?
     public var diskOffload: [ExtensionDiskOffloadItem]?
+    public var cloudHosts: [ExtensionCloudHostItem]?
     public var messaging: [ExtensionMessagingItem]?
     /// Extra keys stay at this object's level on the wire; declared fields always win.
     public var additionalProperties: [String: JSONValue]
 
-    public init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, speech: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, usage: [ExtensionUsageItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, trackKinds: [ExtensionTrackKindItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, routineFacts: [ExtensionRoutineFactsItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, repositoryProviders: [ExtensionRepositoryProviderItem]? = nil, textLookup: [ExtensionTextLookupItem]? = nil, memorySources: [ExtensionMemorySourceItem]? = nil, diskOffload: [ExtensionDiskOffloadItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
+    public init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, speech: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, usage: [ExtensionUsageItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, trackKinds: [ExtensionTrackKindItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, routineFacts: [ExtensionRoutineFactsItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, repositoryProviders: [ExtensionRepositoryProviderItem]? = nil, textLookup: [ExtensionTextLookupItem]? = nil, memorySources: [ExtensionMemorySourceItem]? = nil, diskOffload: [ExtensionDiskOffloadItem]? = nil, cloudHosts: [ExtensionCloudHostItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
         self.connectors = connectors
         self.voice = voice
         self.transcription = transcription
@@ -899,6 +900,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.textLookup = textLookup
         self.memorySources = memorySources
         self.diskOffload = diskOffload
+        self.cloudHosts = cloudHosts
         self.messaging = messaging
         self.additionalProperties = additionalProperties
     }
@@ -938,6 +940,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         case textLookup = "text_lookup"
         case memorySources = "memory_sources"
         case diskOffload = "disk_offload"
+        case cloudHosts = "cloud_hosts"
         case messaging
     }
 
@@ -977,13 +980,14 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.textLookup = ExtensionWireJSON.decode([ExtensionTextLookupItem].self, from: raw["text_lookup"])
         self.memorySources = ExtensionWireJSON.decode([ExtensionMemorySourceItem].self, from: raw["memory_sources"])
         self.diskOffload = ExtensionWireJSON.decode([ExtensionDiskOffloadItem].self, from: raw["disk_offload"])
+        self.cloudHosts = ExtensionWireJSON.decode([ExtensionCloudHostItem].self, from: raw["cloud_hosts"])
         self.messaging = ExtensionWireJSON.decode([ExtensionMessagingItem].self, from: raw["messaging"])
-        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "memory_sources", "disk_offload", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "memory_sources", "disk_offload", "cloud_hosts", "messaging"]
         additionalProperties = raw.filter { !known.contains($0.key) }
     }
 
     public func encode(to encoder: Encoder) throws {
-        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "memory_sources", "disk_offload", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "memory_sources", "disk_offload", "cloud_hosts", "messaging"]
         var fields = additionalProperties.filter { !known.contains($0.key) }
         if let value = connectors { fields["connectors"] = try ExtensionWireJSON.encode(value) }
         if let value = voice { fields["voice"] = try ExtensionWireJSON.encode(value) }
@@ -1019,6 +1023,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         if let value = textLookup { fields["text_lookup"] = try ExtensionWireJSON.encode(value) }
         if let value = memorySources { fields["memory_sources"] = try ExtensionWireJSON.encode(value) }
         if let value = diskOffload { fields["disk_offload"] = try ExtensionWireJSON.encode(value) }
+        if let value = cloudHosts { fields["cloud_hosts"] = try ExtensionWireJSON.encode(value) }
         if let value = messaging { fields["messaging"] = try ExtensionWireJSON.encode(value) }
         var container = encoder.singleValueContainer()
         try container.encode(fields)
@@ -1691,6 +1696,121 @@ public nonisolated struct ExtensionDiskOffloadItem: Codable, Hashable, Sendable 
         self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
         self.kinds = try? c.decodeIfPresent([String].self, forKey: .kinds)
         self.restore = try? c.decodeIfPresent(Bool.self, forKey: .restore)
+    }
+}
+
+/// A provider of cloud instances and hosted servers (docs/design/machine-cloud-ops.md): it lists the instances of the
+/// accounts the user set it up with, says how each is, and starts, stops and restarts them, reads their addresses
+/// back, snapshots them and opens their console, for the computers' page and the assistant. The manager asks the
+/// program (cloud.instances, cloud.instance, cloud.action, cloud.snapshots; cloud.schema.json), a write only after
+/// its safety gate passed. The vendor's credentials are the extension's own secrets. Needs the program to speak the
+/// protocol.
+public nonisolated struct ExtensionCloudHostItem: Codable, Hashable, Sendable {
+    public var id: ExtensionCloudProviderID
+    /// What the computers' page calls the provider (Example Cloud). Not only spaces, no control characters.
+    public var name: String
+    /// A short lowercase id of whose machines these are (aws, gcp, oci, a panel's own name): the badge beside a bound
+    /// computer. Several contributions may share one.
+    public var vendor: String
+    /// Actions of its own beside the standard ones (renew, a keep-alive probe), each id once. An instance offers one
+    /// by naming its id in custom_actions.
+    public var customActions: [ExtensionCloudCustomAction]?
+
+    public init(id: ExtensionCloudProviderID = ExtensionCloudProviderID(""), name: String = "", vendor: String = "", customActions: [ExtensionCloudCustomAction]? = nil) {
+        self.id = id
+        self.name = name
+        self.vendor = vendor
+        self.customActions = customActions
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case vendor
+        case customActions = "custom_actions"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? c.decodeIfPresent(ExtensionCloudProviderID.self, forKey: .id)) ?? ExtensionCloudProviderID("")
+        self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        self.vendor = (try? c.decodeIfPresent(String.self, forKey: .vendor)) ?? ""
+        self.customActions = try? c.decodeIfPresent([ExtensionCloudCustomAction].self, forKey: .customActions)
+    }
+}
+
+/// A provider's own action on an instance. safety is the gate the hub holds it to; confirm is what the confirmation
+/// asks, in a sentence (needed unless safety is read).
+public nonisolated struct ExtensionCloudCustomAction: Codable, Hashable, Sendable {
+    public var id: ExtensionCloudCustomActionID
+    /// The button's words (Renew). Not only spaces, no control characters.
+    public var title: String
+    public var safety: ExtensionCloudSafety
+    /// The confirmation's sentence. Not only spaces, no control characters.
+    public var confirm: String?
+
+    public init(id: ExtensionCloudCustomActionID = ExtensionCloudCustomActionID(""), title: String = "", safety: ExtensionCloudSafety = .unknown(""), confirm: String? = nil) {
+        self.id = id
+        self.title = title
+        self.safety = safety
+        self.confirm = confirm
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case safety
+        case confirm
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? c.decodeIfPresent(ExtensionCloudCustomActionID.self, forKey: .id)) ?? ExtensionCloudCustomActionID("")
+        self.title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? ""
+        self.safety = (try? c.decodeIfPresent(ExtensionCloudSafety.self, forKey: .safety)) ?? .unknown("")
+        self.confirm = try? c.decodeIfPresent(String.self, forKey: .confirm)
+    }
+}
+
+/// The gate an action on a cloud instance passes before a program hears of it: read (none: it changes nothing),
+/// confirm (a person agreed to exactly this action), destructive (a person agreed and acknowledged the instance by
+/// its id: it may lose what is unsaved).
+/// A value this app does not know decodes to .unknown with the raw value, and encodes back as it came.
+public nonisolated enum ExtensionCloudSafety: Codable, Hashable, Sendable {
+    case read
+    case confirm
+    case destructive
+    /// A value this app does not know, kept as it came.
+    case unknown(String)
+
+    public static let all: [ExtensionCloudSafety] = [.read, .confirm, .destructive]
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "read": self = .read
+        case "confirm": self = .confirm
+        case "destructive": self = .destructive
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .read: "read"
+        case .confirm: "confirm"
+        case .destructive: "destructive"
+        case .unknown(let raw): raw
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self.init(rawValue: raw)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
     }
 }
 
@@ -13191,6 +13311,1536 @@ public nonisolated struct ExtensionOffloadError: Codable, Hashable, Sendable {
         self.tool = try? c.decodeIfPresent(ExtensionOffloadTool.self, forKey: .tool)
         self.detail = try? c.decodeIfPresent(String.self, forKey: .detail)
         self.items = try? c.decodeIfPresent([ExtensionOffloadRunItem].self, forKey: .items)
+    }
+}
+
+/// A provider's own name for a set of credentials, a project or a panel login: opaque to the hub, never a secret.
+/// It encodes as the bare string.
+public nonisolated struct ExtensionCloudAccountID: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// An instance's id at its vendor: opaque to the hub, kept as given.
+/// It encodes as the bare string.
+public nonisolated struct ExtensionCloudInstanceID: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// A snapshot's id at its vendor.
+/// It encodes as the bare string.
+public nonisolated struct ExtensionCloudSnapshotID: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// One request to act, the same for its retries.
+/// It encodes as the bare string.
+public nonisolated struct ExtensionCloudRequestID: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// A computer's id at the hub.
+/// It encodes as the bare string.
+public nonisolated struct ExtensionCloudMachineID: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// A cloud_hosts contribution's id (manifest.schema.json ID).
+/// It encodes as the bare string.
+public nonisolated struct ExtensionCloudProviderID: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// A custom action's id, as the manifest declares it (manifest.schema.json ID).
+/// It encodes as the bare string.
+public nonisolated struct ExtensionCloudCustomActionID: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// One line for people, in the reader's language: why something failed or was refused.
+/// It encodes as the bare string.
+public nonisolated struct ExtensionCloudMessage: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// error.code a provider answers besides the base ErrorCode: not_found (no such instance or account, or the
+/// credentials cannot see it), not_signed_in (credentials are missing, expired or refused: the user sets them in the
+/// extension's settings), unsupported (this instance has no such action), invalid_state (the action does not apply to
+/// the state the instance is in, such as start on a running one), rate_limited (the vendor's API asks to slow down),
+/// capacity (the vendor has no capacity or quota for it now, such as a spot instance that cannot be placed), refused
+/// (the vendor said no: say why in message), failed (anything else, say why in message). The manager shows the
+/// message on one line, clipped.
+/// A value this app does not know decodes to .unknown with the raw value, and encodes back as it came.
+public nonisolated enum ExtensionCloudErrorCode: Codable, Hashable, Sendable {
+    case notFound
+    case notSignedIn
+    case unsupported
+    case invalidState
+    case rateLimited
+    case capacity
+    case refused
+    case failed
+    /// A value this app does not know, kept as it came.
+    case unknown(String)
+
+    public static let all: [ExtensionCloudErrorCode] = [.notFound, .notSignedIn, .unsupported, .invalidState, .rateLimited, .capacity, .refused, .failed]
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "not_found": self = .notFound
+        case "not_signed_in": self = .notSignedIn
+        case "unsupported": self = .unsupported
+        case "invalid_state": self = .invalidState
+        case "rate_limited": self = .rateLimited
+        case "capacity": self = .capacity
+        case "refused": self = .refused
+        case "failed": self = .failed
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .notFound: "not_found"
+        case .notSignedIn: "not_signed_in"
+        case .unsupported: "unsupported"
+        case .invalidState: "invalid_state"
+        case .rateLimited: "rate_limited"
+        case .capacity: "capacity"
+        case .refused: "refused"
+        case .failed: "failed"
+        case .unknown(let raw): raw
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self.init(rawValue: raw)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// An instance's state in the words every vendor's are mapped to: running; stopped (off, and can be started);
+/// starting; stopping; rebooting; preempted (a spot instance the vendor took back: off, and start may bring it back);
+/// terminated (gone or being deleted: nothing acts on it); unknown (the provider cannot say).
+/// A value this app does not know decodes to .unknown with the raw value, and encodes back as it came.
+public nonisolated enum ExtensionCloudInstanceState: Codable, Hashable, Sendable {
+    case running
+    case stopped
+    case starting
+    case stopping
+    case rebooting
+    case preempted
+    case terminated
+    case unknownValue
+    /// A value this app does not know, kept as it came.
+    case unknown(String)
+
+    public static let all: [ExtensionCloudInstanceState] = [.running, .stopped, .starting, .stopping, .rebooting, .preempted, .terminated, .unknownValue]
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "running": self = .running
+        case "stopped": self = .stopped
+        case "starting": self = .starting
+        case "stopping": self = .stopping
+        case "rebooting": self = .rebooting
+        case "preempted": self = .preempted
+        case "terminated": self = .terminated
+        case "unknown": self = .unknownValue
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .running: "running"
+        case .stopped: "stopped"
+        case .starting: "starting"
+        case .stopping: "stopping"
+        case .rebooting: "rebooting"
+        case .preempted: "preempted"
+        case .terminated: "terminated"
+        case .unknownValue: "unknown"
+        case .unknown(let raw): raw
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self.init(rawValue: raw)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// What can be asked of an instance. Power: start, stop (a graceful shutdown), reboot (a graceful restart),
+/// hard_reset (reset without shutting the system down), force_stop (power off without shutting it down). Operations:
+/// sync_ip (read its addresses back from the vendor now), snapshot_list (its snapshots, asked with cloud.snapshots,
+/// never cloud.action), snapshot_create, console (a link to its page or console at the vendor), custom (one of the
+/// manifest's custom_actions, named by its id). The safety level of each is the hub's (manifest.schema.json
+/// CloudSafety): sync_ip, snapshot_list and console read; start, stop, reboot and snapshot_create confirm; hard_reset
+/// and force_stop destructive; a custom action's is the manifest's.
+/// A value this app does not know decodes to .unknown with the raw value, and encodes back as it came.
+public nonisolated enum ExtensionCloudActionKind: Codable, Hashable, Sendable {
+    case start
+    case stop
+    case reboot
+    case hardReset
+    case forceStop
+    case syncIp
+    case snapshotList
+    case snapshotCreate
+    case console
+    case custom
+    /// A value this app does not know, kept as it came.
+    case unknown(String)
+
+    public static let all: [ExtensionCloudActionKind] = [.start, .stop, .reboot, .hardReset, .forceStop, .syncIp, .snapshotList, .snapshotCreate, .console, .custom]
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "start": self = .start
+        case "stop": self = .stop
+        case "reboot": self = .reboot
+        case "hard_reset": self = .hardReset
+        case "force_stop": self = .forceStop
+        case "sync_ip": self = .syncIp
+        case "snapshot_list": self = .snapshotList
+        case "snapshot_create": self = .snapshotCreate
+        case "console": self = .console
+        case "custom": self = .custom
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .start: "start"
+        case .stop: "stop"
+        case .reboot: "reboot"
+        case .hardReset: "hard_reset"
+        case .forceStop: "force_stop"
+        case .syncIp: "sync_ip"
+        case .snapshotList: "snapshot_list"
+        case .snapshotCreate: "snapshot_create"
+        case .console: "console"
+        case .custom: "custom"
+        case .unknown(let raw): raw
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self.init(rawValue: raw)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// cloud.action's answer: done (it has taken effect: instance, snapshot or url say what is there now), accepted (the
+/// vendor took the request and the instance is on its way: read its state to follow), refused (nothing happened;
+/// message says why).
+/// A value this app does not know decodes to .unknown with the raw value, and encodes back as it came.
+public nonisolated enum ExtensionCloudActionStatus: Codable, Hashable, Sendable {
+    case done
+    case accepted
+    case refused
+    /// A value this app does not know, kept as it came.
+    case unknown(String)
+
+    public static let all: [ExtensionCloudActionStatus] = [.done, .accepted, .refused]
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "done": self = .done
+        case "accepted": self = .accepted
+        case "refused": self = .refused
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .done: "done"
+        case .accepted: "accepted"
+        case .refused: "refused"
+        case .unknown(let raw): raw
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self.init(rawValue: raw)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// A snapshot: creating, ready, failed or deleting.
+/// A value this app does not know decodes to .unknown with the raw value, and encodes back as it came.
+public nonisolated enum ExtensionCloudSnapshotState: Codable, Hashable, Sendable {
+    case creating
+    case ready
+    case failed
+    case deleting
+    /// A value this app does not know, kept as it came.
+    case unknown(String)
+
+    public static let all: [ExtensionCloudSnapshotState] = [.creating, .ready, .failed, .deleting]
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "creating": self = .creating
+        case "ready": self = .ready
+        case "failed": self = .failed
+        case "deleting": self = .deleting
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .creating: "creating"
+        case .ready: "ready"
+        case .failed: "failed"
+        case .deleting: "deleting"
+        case .unknown(let raw): raw
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self.init(rawValue: raw)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// One instance of a provider: the account that holds it (the provider's own name for a set of credentials, a project
+/// or a panel login, never a secret) and its id at the vendor. Both are opaque to the hub and kept as given.
+public nonisolated struct ExtensionCloudInstanceRef: Codable, Hashable, Sendable {
+    public var account: ExtensionCloudAccountID
+    public var id: ExtensionCloudInstanceID
+
+    public init(account: ExtensionCloudAccountID = ExtensionCloudAccountID(""), id: ExtensionCloudInstanceID = ExtensionCloudInstanceID("")) {
+        self.account = account
+        self.id = id
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case account
+        case id
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.account = (try? c.decodeIfPresent(ExtensionCloudAccountID.self, forKey: .account)) ?? ExtensionCloudAccountID("")
+        self.id = (try? c.decodeIfPresent(ExtensionCloudInstanceID.self, forKey: .id)) ?? ExtensionCloudInstanceID("")
+    }
+}
+
+/// An instance's size. size is the vendor's name for it (its instance type, machine type or shape); cpu its virtual
+/// CPUs (a burstable share may be a fraction); memory_mb and disk_gb what it has.
+public nonisolated struct ExtensionCloudSpec: Codable, Hashable, Sendable {
+    public var size: String?
+    public var cpu: Double?
+    public var memoryMb: Int64?
+    public var diskGb: Int64?
+    public var arch: String?
+    public var os: String?
+
+    public init(size: String? = nil, cpu: Double? = nil, memoryMb: Int64? = nil, diskGb: Int64? = nil, arch: String? = nil, os: String? = nil) {
+        self.size = size
+        self.cpu = cpu
+        self.memoryMb = memoryMb
+        self.diskGb = diskGb
+        self.arch = arch
+        self.os = os
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case size
+        case cpu
+        case memoryMb = "memory_mb"
+        case diskGb = "disk_gb"
+        case arch
+        case os
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.size = try? c.decodeIfPresent(String.self, forKey: .size)
+        self.cpu = try? c.decodeIfPresent(Double.self, forKey: .cpu)
+        self.memoryMb = try? c.decodeIfPresent(Int64.self, forKey: .memoryMb)
+        self.diskGb = try? c.decodeIfPresent(Int64.self, forKey: .diskGb)
+        self.arch = try? c.decodeIfPresent(String.self, forKey: .arch)
+        self.os = try? c.decodeIfPresent(String.self, forKey: .os)
+    }
+}
+
+/// What ends or interrupts an instance. spot: the vendor may take it back at any time (spot, preemptible).
+/// expires_at: when what was paid for ends. renews_at: when it is charged or renewed next. keepalive_at: by when the
+/// account has to show activity to keep it (a free tier's idle rule). auto_renew: it renews by itself.
+public nonisolated struct ExtensionCloudLifecycle: Codable, Hashable, Sendable {
+    public var spot: Bool?
+    public var expiresAt: String?
+    public var renewsAt: String?
+    public var keepaliveAt: String?
+    public var autoRenew: Bool?
+
+    public init(spot: Bool? = nil, expiresAt: String? = nil, renewsAt: String? = nil, keepaliveAt: String? = nil, autoRenew: Bool? = nil) {
+        self.spot = spot
+        self.expiresAt = expiresAt
+        self.renewsAt = renewsAt
+        self.keepaliveAt = keepaliveAt
+        self.autoRenew = autoRenew
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case spot
+        case expiresAt = "expires_at"
+        case renewsAt = "renews_at"
+        case keepaliveAt = "keepalive_at"
+        case autoRenew = "auto_renew"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.spot = try? c.decodeIfPresent(Bool.self, forKey: .spot)
+        self.expiresAt = try? c.decodeIfPresent(String.self, forKey: .expiresAt)
+        self.renewsAt = try? c.decodeIfPresent(String.self, forKey: .renewsAt)
+        self.keepaliveAt = try? c.decodeIfPresent(String.self, forKey: .keepaliveAt)
+        self.autoRenew = try? c.decodeIfPresent(Bool.self, forKey: .autoRenew)
+    }
+}
+
+/// One instance as its provider reads it. account and id name it (CloudInstanceRef); display_name is what people call
+/// it. public_ips and private_ips are plain IPv4 or IPv6 addresses, the one to reach it by first. console_url is an
+/// https address of its page at the vendor, without credentials. actions are what can be asked of this instance now
+/// (never custom; snapshot_list means cloud.snapshots answers), custom_actions the manifest's custom actions that
+/// apply to it. observed_at is when the provider read it from the vendor. state_detail says more about the state in
+/// the caller's language, one line.
+public nonisolated struct ExtensionCloudInstance: Codable, Hashable, Sendable {
+    public var account: ExtensionCloudAccountID
+    public var id: ExtensionCloudInstanceID
+    public var displayName: String?
+    public var state: ExtensionCloudInstanceState
+    public var stateDetail: String?
+    public var region: String?
+    public var zone: String?
+    public var publicIps: [String]?
+    public var privateIps: [String]?
+    public var spec: ExtensionCloudSpec?
+    public var lifecycle: ExtensionCloudLifecycle?
+    public var consoleUrl: String?
+    public var actions: [ExtensionCloudActionKind]?
+    public var customActions: [ExtensionCloudCustomActionID]?
+    public var observedAt: String?
+
+    public init(account: ExtensionCloudAccountID = ExtensionCloudAccountID(""), id: ExtensionCloudInstanceID = ExtensionCloudInstanceID(""), displayName: String? = nil, state: ExtensionCloudInstanceState = .unknown(""), stateDetail: String? = nil, region: String? = nil, zone: String? = nil, publicIps: [String]? = nil, privateIps: [String]? = nil, spec: ExtensionCloudSpec? = nil, lifecycle: ExtensionCloudLifecycle? = nil, consoleUrl: String? = nil, actions: [ExtensionCloudActionKind]? = nil, customActions: [ExtensionCloudCustomActionID]? = nil, observedAt: String? = nil) {
+        self.account = account
+        self.id = id
+        self.displayName = displayName
+        self.state = state
+        self.stateDetail = stateDetail
+        self.region = region
+        self.zone = zone
+        self.publicIps = publicIps
+        self.privateIps = privateIps
+        self.spec = spec
+        self.lifecycle = lifecycle
+        self.consoleUrl = consoleUrl
+        self.actions = actions
+        self.customActions = customActions
+        self.observedAt = observedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case account
+        case id
+        case displayName = "display_name"
+        case state
+        case stateDetail = "state_detail"
+        case region
+        case zone
+        case publicIps = "public_ips"
+        case privateIps = "private_ips"
+        case spec
+        case lifecycle
+        case consoleUrl = "console_url"
+        case actions
+        case customActions = "custom_actions"
+        case observedAt = "observed_at"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.account = (try? c.decodeIfPresent(ExtensionCloudAccountID.self, forKey: .account)) ?? ExtensionCloudAccountID("")
+        self.id = (try? c.decodeIfPresent(ExtensionCloudInstanceID.self, forKey: .id)) ?? ExtensionCloudInstanceID("")
+        self.displayName = try? c.decodeIfPresent(String.self, forKey: .displayName)
+        self.state = (try? c.decodeIfPresent(ExtensionCloudInstanceState.self, forKey: .state)) ?? .unknown("")
+        self.stateDetail = try? c.decodeIfPresent(String.self, forKey: .stateDetail)
+        self.region = try? c.decodeIfPresent(String.self, forKey: .region)
+        self.zone = try? c.decodeIfPresent(String.self, forKey: .zone)
+        self.publicIps = try? c.decodeIfPresent([String].self, forKey: .publicIps)
+        self.privateIps = try? c.decodeIfPresent([String].self, forKey: .privateIps)
+        self.spec = try? c.decodeIfPresent(ExtensionCloudSpec.self, forKey: .spec)
+        self.lifecycle = try? c.decodeIfPresent(ExtensionCloudLifecycle.self, forKey: .lifecycle)
+        self.consoleUrl = try? c.decodeIfPresent(String.self, forKey: .consoleUrl)
+        self.actions = try? c.decodeIfPresent([ExtensionCloudActionKind].self, forKey: .actions)
+        self.customActions = try? c.decodeIfPresent([ExtensionCloudCustomActionID].self, forKey: .customActions)
+        self.observedAt = try? c.decodeIfPresent(String.self, forKey: .observedAt)
+    }
+}
+
+/// cloud.instances: every instance of every account the provider is set up with. refresh asks it not to answer from
+/// its own cache.
+public nonisolated struct ExtensionCloudInstancesParams: Codable, Hashable, Sendable {
+    public var contribution: String
+    public var locale: String
+    public var refresh: Bool?
+
+    public init(contribution: String = "", locale: String = "", refresh: Bool? = nil) {
+        self.contribution = contribution
+        self.locale = locale
+        self.refresh = refresh
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contribution
+        case locale
+        case refresh
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.contribution = (try? c.decodeIfPresent(String.self, forKey: .contribution)) ?? ""
+        self.locale = (try? c.decodeIfPresent(String.self, forKey: .locale)) ?? ""
+        self.refresh = try? c.decodeIfPresent(Bool.self, forKey: .refresh)
+    }
+}
+
+/// The provider's instances, at most 500. partial when the list may be incomplete (an account could not be read:
+/// detail says which, in the caller's language). instances may be left out when there are none.
+public nonisolated struct ExtensionCloudInstanceList: Codable, Hashable, Sendable {
+    public var instances: [ExtensionCloudInstance]?
+    public var partial: Bool?
+    public var detail: String?
+
+    public init(instances: [ExtensionCloudInstance]? = nil, partial: Bool? = nil, detail: String? = nil) {
+        self.instances = instances
+        self.partial = partial
+        self.detail = detail
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case instances
+        case partial
+        case detail
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.instances = try? c.decodeIfPresent([ExtensionCloudInstance].self, forKey: .instances)
+        self.partial = try? c.decodeIfPresent(Bool.self, forKey: .partial)
+        self.detail = try? c.decodeIfPresent(String.self, forKey: .detail)
+    }
+}
+
+/// cloud.instance: how one instance is now. refresh asks the vendor rather than the provider's cache. Answered with
+/// the CloudInstance of that account and id, or not_found.
+public nonisolated struct ExtensionCloudInstanceParams: Codable, Hashable, Sendable {
+    public var contribution: String
+    public var locale: String
+    public var instance: ExtensionCloudInstanceRef
+    public var refresh: Bool?
+
+    public init(contribution: String = "", locale: String = "", instance: ExtensionCloudInstanceRef = ExtensionCloudInstanceRef(), refresh: Bool? = nil) {
+        self.contribution = contribution
+        self.locale = locale
+        self.instance = instance
+        self.refresh = refresh
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contribution
+        case locale
+        case instance
+        case refresh
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.contribution = (try? c.decodeIfPresent(String.self, forKey: .contribution)) ?? ""
+        self.locale = (try? c.decodeIfPresent(String.self, forKey: .locale)) ?? ""
+        self.instance = (try? c.decodeIfPresent(ExtensionCloudInstanceRef.self, forKey: .instance)) ?? ExtensionCloudInstanceRef()
+        self.refresh = try? c.decodeIfPresent(Bool.self, forKey: .refresh)
+    }
+}
+
+/// cloud.action: act on one instance. action is never snapshot_list; custom carries the manifest's custom action id
+/// in custom. name is a new snapshot's name (snapshot_create). The gate of the action's safety level has passed
+/// before the program hears of it. request_id is the same for a retry of the same request: a program that already did
+/// it answers what it answered.
+public nonisolated struct ExtensionCloudActionParams: Codable, Hashable, Sendable {
+    public var contribution: String
+    public var locale: String
+    public var instance: ExtensionCloudInstanceRef
+    public var action: ExtensionCloudActionKind
+    public var custom: ExtensionCloudCustomActionID?
+    public var name: String?
+    public var requestId: ExtensionCloudRequestID
+
+    public init(contribution: String = "", locale: String = "", instance: ExtensionCloudInstanceRef = ExtensionCloudInstanceRef(), action: ExtensionCloudActionKind = .unknown(""), custom: ExtensionCloudCustomActionID? = nil, name: String? = nil, requestId: ExtensionCloudRequestID = ExtensionCloudRequestID("")) {
+        self.contribution = contribution
+        self.locale = locale
+        self.instance = instance
+        self.action = action
+        self.custom = custom
+        self.name = name
+        self.requestId = requestId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contribution
+        case locale
+        case instance
+        case action
+        case custom
+        case name
+        case requestId = "request_id"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.contribution = (try? c.decodeIfPresent(String.self, forKey: .contribution)) ?? ""
+        self.locale = (try? c.decodeIfPresent(String.self, forKey: .locale)) ?? ""
+        self.instance = (try? c.decodeIfPresent(ExtensionCloudInstanceRef.self, forKey: .instance)) ?? ExtensionCloudInstanceRef()
+        self.action = (try? c.decodeIfPresent(ExtensionCloudActionKind.self, forKey: .action)) ?? .unknown("")
+        self.custom = try? c.decodeIfPresent(ExtensionCloudCustomActionID.self, forKey: .custom)
+        self.name = try? c.decodeIfPresent(String.self, forKey: .name)
+        self.requestId = (try? c.decodeIfPresent(ExtensionCloudRequestID.self, forKey: .requestId)) ?? ExtensionCloudRequestID("")
+    }
+}
+
+/// One snapshot of an instance.
+public nonisolated struct ExtensionCloudSnapshot: Codable, Hashable, Sendable {
+    public var id: ExtensionCloudSnapshotID
+    public var name: String?
+    public var state: ExtensionCloudSnapshotState
+    public var createdAt: String?
+    public var sizeGb: Double?
+
+    public init(id: ExtensionCloudSnapshotID = ExtensionCloudSnapshotID(""), name: String? = nil, state: ExtensionCloudSnapshotState = .unknown(""), createdAt: String? = nil, sizeGb: Double? = nil) {
+        self.id = id
+        self.name = name
+        self.state = state
+        self.createdAt = createdAt
+        self.sizeGb = sizeGb
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case state
+        case createdAt = "created_at"
+        case sizeGb = "size_gb"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? c.decodeIfPresent(ExtensionCloudSnapshotID.self, forKey: .id)) ?? ExtensionCloudSnapshotID("")
+        self.name = try? c.decodeIfPresent(String.self, forKey: .name)
+        self.state = (try? c.decodeIfPresent(ExtensionCloudSnapshotState.self, forKey: .state)) ?? .unknown("")
+        self.createdAt = try? c.decodeIfPresent(String.self, forKey: .createdAt)
+        self.sizeGb = try? c.decodeIfPresent(Double.self, forKey: .sizeGb)
+    }
+}
+
+/// cloud.action's answer (CloudActionStatus). instance is the instance after the request when the program knows it
+/// (sync_ip always answers it); snapshot the one snapshot_create made; url what console opens: an https address,
+/// which may be signed and short-lived (expires_at). message is one line for people in the caller's language: why it
+/// was refused, or what a custom action found.
+public nonisolated struct ExtensionCloudActionResult: Codable, Hashable, Sendable {
+    public var status: ExtensionCloudActionStatus
+    public var instance: ExtensionCloudInstance?
+    public var snapshot: ExtensionCloudSnapshot?
+    public var url: String?
+    public var expiresAt: String?
+    public var message: String?
+
+    public init(status: ExtensionCloudActionStatus = .unknown(""), instance: ExtensionCloudInstance? = nil, snapshot: ExtensionCloudSnapshot? = nil, url: String? = nil, expiresAt: String? = nil, message: String? = nil) {
+        self.status = status
+        self.instance = instance
+        self.snapshot = snapshot
+        self.url = url
+        self.expiresAt = expiresAt
+        self.message = message
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case instance
+        case snapshot
+        case url
+        case expiresAt = "expires_at"
+        case message
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.status = (try? c.decodeIfPresent(ExtensionCloudActionStatus.self, forKey: .status)) ?? .unknown("")
+        self.instance = try? c.decodeIfPresent(ExtensionCloudInstance.self, forKey: .instance)
+        self.snapshot = try? c.decodeIfPresent(ExtensionCloudSnapshot.self, forKey: .snapshot)
+        self.url = try? c.decodeIfPresent(String.self, forKey: .url)
+        self.expiresAt = try? c.decodeIfPresent(String.self, forKey: .expiresAt)
+        self.message = try? c.decodeIfPresent(String.self, forKey: .message)
+    }
+}
+
+/// cloud.snapshots: one instance's snapshots, newest first. Asked only of an instance whose actions name
+/// snapshot_list.
+public nonisolated struct ExtensionCloudSnapshotsParams: Codable, Hashable, Sendable {
+    public var contribution: String
+    public var locale: String
+    public var instance: ExtensionCloudInstanceRef
+
+    public init(contribution: String = "", locale: String = "", instance: ExtensionCloudInstanceRef = ExtensionCloudInstanceRef()) {
+        self.contribution = contribution
+        self.locale = locale
+        self.instance = instance
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contribution
+        case locale
+        case instance
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.contribution = (try? c.decodeIfPresent(String.self, forKey: .contribution)) ?? ""
+        self.locale = (try? c.decodeIfPresent(String.self, forKey: .locale)) ?? ""
+        self.instance = (try? c.decodeIfPresent(ExtensionCloudInstanceRef.self, forKey: .instance)) ?? ExtensionCloudInstanceRef()
+    }
+}
+
+/// An instance's snapshots, at most 200. snapshots may be left out when there are none; the manager's answer to the
+/// apps always has it.
+public nonisolated struct ExtensionCloudSnapshotList: Codable, Hashable, Sendable {
+    public var snapshots: [ExtensionCloudSnapshot]?
+
+    public init(snapshots: [ExtensionCloudSnapshot]? = nil) {
+        self.snapshots = snapshots
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case snapshots
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.snapshots = try? c.decodeIfPresent([ExtensionCloudSnapshot].self, forKey: .snapshots)
+    }
+}
+
+/// One enabled cloud_hosts contribution, as the manager lists it for the apps.
+public nonisolated struct ExtensionCloudProvider: Codable, Hashable, Sendable {
+    public var `extension`: String
+    public var id: ExtensionCloudProviderID
+    public var name: String
+    public var vendor: String
+
+    public init(`extension`: String = "", id: ExtensionCloudProviderID = ExtensionCloudProviderID(""), name: String = "", vendor: String = "") {
+        self.extension = `extension`
+        self.id = id
+        self.name = name
+        self.vendor = vendor
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case `extension`
+        case id
+        case name
+        case vendor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.extension = (try? c.decodeIfPresent(String.self, forKey: .`extension`)) ?? ""
+        self.id = (try? c.decodeIfPresent(ExtensionCloudProviderID.self, forKey: .id)) ?? ExtensionCloudProviderID("")
+        self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        self.vendor = (try? c.decodeIfPresent(String.self, forKey: .vendor)) ?? ""
+    }
+}
+
+/// GET /api/v1/extensions/-/cloud: the enabled providers. No program is asked.
+public nonisolated struct ExtensionCloudProviders: Codable, Hashable, Sendable {
+    public var providers: [ExtensionCloudProvider]
+
+    public init(providers: [ExtensionCloudProvider] = []) {
+        self.providers = providers
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case providers
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.providers = (try? c.decodeIfPresent([ExtensionCloudProvider].self, forKey: .providers)) ?? []
+    }
+}
+
+/// One thing the apps can ask of a host, with the gate the hub holds it to (safety). id, title and confirm_text are a
+/// custom action's, from the manifest.
+public nonisolated struct ExtensionCloudHostAction: Codable, Hashable, Sendable {
+    public var action: ExtensionCloudActionKind
+    public var id: ExtensionCloudCustomActionID?
+    public var title: String?
+    public var safety: ExtensionCloudSafety
+    public var confirmText: String?
+
+    public init(action: ExtensionCloudActionKind = .unknown(""), id: ExtensionCloudCustomActionID? = nil, title: String? = nil, safety: ExtensionCloudSafety = .unknown(""), confirmText: String? = nil) {
+        self.action = action
+        self.id = id
+        self.title = title
+        self.safety = safety
+        self.confirmText = confirmText
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case action
+        case id
+        case title
+        case safety
+        case confirmText = "confirm_text"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.action = (try? c.decodeIfPresent(ExtensionCloudActionKind.self, forKey: .action)) ?? .unknown("")
+        self.id = try? c.decodeIfPresent(ExtensionCloudCustomActionID.self, forKey: .id)
+        self.title = try? c.decodeIfPresent(String.self, forKey: .title)
+        self.safety = (try? c.decodeIfPresent(ExtensionCloudSafety.self, forKey: .safety)) ?? .unknown("")
+        self.confirmText = try? c.decodeIfPresent(String.self, forKey: .confirmText)
+    }
+}
+
+/// One instance as the manager gives it to the apps: its provider (extension, provider, provider_name, vendor), the
+/// instance as the program answered it and the hub re-checked it, the actions it takes with their safety levels, and
+/// machine_id when a computer is bound to it.
+public nonisolated struct ExtensionCloudHost: Codable, Hashable, Sendable {
+    public var `extension`: String
+    public var provider: ExtensionCloudProviderID
+    public var providerName: String
+    public var vendor: String
+    public var instance: ExtensionCloudInstance
+    public var actions: [ExtensionCloudHostAction]
+    public var machineId: ExtensionCloudMachineID?
+
+    public init(`extension`: String = "", provider: ExtensionCloudProviderID = ExtensionCloudProviderID(""), providerName: String = "", vendor: String = "", instance: ExtensionCloudInstance = ExtensionCloudInstance(), actions: [ExtensionCloudHostAction] = [], machineId: ExtensionCloudMachineID? = nil) {
+        self.extension = `extension`
+        self.provider = provider
+        self.providerName = providerName
+        self.vendor = vendor
+        self.instance = instance
+        self.actions = actions
+        self.machineId = machineId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case `extension`
+        case provider
+        case providerName = "provider_name"
+        case vendor
+        case instance
+        case actions
+        case machineId = "machine_id"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.extension = (try? c.decodeIfPresent(String.self, forKey: .`extension`)) ?? ""
+        self.provider = (try? c.decodeIfPresent(ExtensionCloudProviderID.self, forKey: .provider)) ?? ExtensionCloudProviderID("")
+        self.providerName = (try? c.decodeIfPresent(String.self, forKey: .providerName)) ?? ""
+        self.vendor = (try? c.decodeIfPresent(String.self, forKey: .vendor)) ?? ""
+        self.instance = (try? c.decodeIfPresent(ExtensionCloudInstance.self, forKey: .instance)) ?? ExtensionCloudInstance()
+        self.actions = (try? c.decodeIfPresent([ExtensionCloudHostAction].self, forKey: .actions)) ?? []
+        self.machineId = try? c.decodeIfPresent(ExtensionCloudMachineID.self, forKey: .machineId)
+    }
+}
+
+/// A provider whose instances could not be listed: code is a CloudError code, error says why in the reader's
+/// language.
+public nonisolated struct ExtensionCloudProviderProblem: Codable, Hashable, Sendable {
+    public var `extension`: String
+    public var provider: ExtensionCloudProviderID
+    public var providerName: String
+    public var code: String
+    public var error: ExtensionCloudMessage
+
+    public init(`extension`: String = "", provider: ExtensionCloudProviderID = ExtensionCloudProviderID(""), providerName: String = "", code: String = "", error: ExtensionCloudMessage = ExtensionCloudMessage("")) {
+        self.extension = `extension`
+        self.provider = provider
+        self.providerName = providerName
+        self.code = code
+        self.error = error
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case `extension`
+        case provider
+        case providerName = "provider_name"
+        case code
+        case error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.extension = (try? c.decodeIfPresent(String.self, forKey: .`extension`)) ?? ""
+        self.provider = (try? c.decodeIfPresent(ExtensionCloudProviderID.self, forKey: .provider)) ?? ExtensionCloudProviderID("")
+        self.providerName = (try? c.decodeIfPresent(String.self, forKey: .providerName)) ?? ""
+        self.code = (try? c.decodeIfPresent(String.self, forKey: .code)) ?? ""
+        self.error = (try? c.decodeIfPresent(ExtensionCloudMessage.self, forKey: .error)) ?? ExtensionCloudMessage("")
+    }
+}
+
+/// GET /api/v1/extensions/-/cloud/instances: every enabled provider's instances together, the bound ones naming their
+/// computer. A provider that failed is in problems and the others' instances are still listed; partial when a
+/// provider said its own list may be incomplete.
+public nonisolated struct ExtensionCloudHosts: Codable, Hashable, Sendable {
+    public var hosts: [ExtensionCloudHost]
+    public var problems: [ExtensionCloudProviderProblem]
+    public var partial: Bool?
+
+    public init(hosts: [ExtensionCloudHost] = [], problems: [ExtensionCloudProviderProblem] = [], partial: Bool? = nil) {
+        self.hosts = hosts
+        self.problems = problems
+        self.partial = partial
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case hosts
+        case problems
+        case partial
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.hosts = (try? c.decodeIfPresent([ExtensionCloudHost].self, forKey: .hosts)) ?? []
+        self.problems = (try? c.decodeIfPresent([ExtensionCloudProviderProblem].self, forKey: .problems)) ?? []
+        self.partial = try? c.decodeIfPresent(Bool.self, forKey: .partial)
+    }
+}
+
+/// A computer bound to an instance: machine_id ↔ (extension, provider, account, instance). The rest is what the hub
+/// last read of it, kept so the computers' list draws a badge without asking a program: provider_name, vendor,
+/// display_name, state and public_ip as of seen_at.
+public nonisolated struct ExtensionCloudBinding: Codable, Hashable, Sendable {
+    public var machineId: ExtensionCloudMachineID
+    public var `extension`: String
+    public var provider: ExtensionCloudProviderID
+    public var account: ExtensionCloudAccountID
+    public var instance: ExtensionCloudInstanceID
+    public var boundAt: String
+    public var providerName: String?
+    public var vendor: String?
+    public var displayName: String?
+    public var state: ExtensionCloudInstanceState?
+    public var publicIp: String?
+    public var seenAt: String?
+
+    public init(machineId: ExtensionCloudMachineID = ExtensionCloudMachineID(""), `extension`: String = "", provider: ExtensionCloudProviderID = ExtensionCloudProviderID(""), account: ExtensionCloudAccountID = ExtensionCloudAccountID(""), instance: ExtensionCloudInstanceID = ExtensionCloudInstanceID(""), boundAt: String = "", providerName: String? = nil, vendor: String? = nil, displayName: String? = nil, state: ExtensionCloudInstanceState? = nil, publicIp: String? = nil, seenAt: String? = nil) {
+        self.machineId = machineId
+        self.extension = `extension`
+        self.provider = provider
+        self.account = account
+        self.instance = instance
+        self.boundAt = boundAt
+        self.providerName = providerName
+        self.vendor = vendor
+        self.displayName = displayName
+        self.state = state
+        self.publicIp = publicIp
+        self.seenAt = seenAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case machineId = "machine_id"
+        case `extension`
+        case provider
+        case account
+        case instance
+        case boundAt = "bound_at"
+        case providerName = "provider_name"
+        case vendor
+        case displayName = "display_name"
+        case state
+        case publicIp = "public_ip"
+        case seenAt = "seen_at"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.machineId = (try? c.decodeIfPresent(ExtensionCloudMachineID.self, forKey: .machineId)) ?? ExtensionCloudMachineID("")
+        self.extension = (try? c.decodeIfPresent(String.self, forKey: .`extension`)) ?? ""
+        self.provider = (try? c.decodeIfPresent(ExtensionCloudProviderID.self, forKey: .provider)) ?? ExtensionCloudProviderID("")
+        self.account = (try? c.decodeIfPresent(ExtensionCloudAccountID.self, forKey: .account)) ?? ExtensionCloudAccountID("")
+        self.instance = (try? c.decodeIfPresent(ExtensionCloudInstanceID.self, forKey: .instance)) ?? ExtensionCloudInstanceID("")
+        self.boundAt = (try? c.decodeIfPresent(String.self, forKey: .boundAt)) ?? ""
+        self.providerName = try? c.decodeIfPresent(String.self, forKey: .providerName)
+        self.vendor = try? c.decodeIfPresent(String.self, forKey: .vendor)
+        self.displayName = try? c.decodeIfPresent(String.self, forKey: .displayName)
+        self.state = try? c.decodeIfPresent(ExtensionCloudInstanceState.self, forKey: .state)
+        self.publicIp = try? c.decodeIfPresent(String.self, forKey: .publicIp)
+        self.seenAt = try? c.decodeIfPresent(String.self, forKey: .seenAt)
+    }
+}
+
+/// GET /api/v1/extensions/-/cloud/bindings: every binding, by machine id. No program is asked.
+public nonisolated struct ExtensionCloudBindings: Codable, Hashable, Sendable {
+    public var bindings: [ExtensionCloudBinding]
+
+    public init(bindings: [ExtensionCloudBinding] = []) {
+        self.bindings = bindings
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case bindings
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.bindings = (try? c.decodeIfPresent([ExtensionCloudBinding].self, forKey: .bindings)) ?? []
+    }
+}
+
+/// PUT /api/v1/machines/{mid}/cloud: bind the computer to this instance (replacing its binding). The instance must be
+/// one the provider answers now, and bound to no other computer.
+public nonisolated struct ExtensionCloudBindRequest: Codable, Hashable, Sendable {
+    public var `extension`: String
+    public var provider: ExtensionCloudProviderID
+    public var account: ExtensionCloudAccountID
+    public var instance: ExtensionCloudInstanceID
+
+    public init(`extension`: String = "", provider: ExtensionCloudProviderID = ExtensionCloudProviderID(""), account: ExtensionCloudAccountID = ExtensionCloudAccountID(""), instance: ExtensionCloudInstanceID = ExtensionCloudInstanceID("")) {
+        self.extension = `extension`
+        self.provider = provider
+        self.account = account
+        self.instance = instance
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case `extension`
+        case provider
+        case account
+        case instance
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.extension = (try? c.decodeIfPresent(String.self, forKey: .`extension`)) ?? ""
+        self.provider = (try? c.decodeIfPresent(ExtensionCloudProviderID.self, forKey: .provider)) ?? ExtensionCloudProviderID("")
+        self.account = (try? c.decodeIfPresent(ExtensionCloudAccountID.self, forKey: .account)) ?? ExtensionCloudAccountID("")
+        self.instance = (try? c.decodeIfPresent(ExtensionCloudInstanceID.self, forKey: .instance)) ?? ExtensionCloudInstanceID("")
+    }
+}
+
+/// Where a start-and-reconnect is: starting (waiting for the instance to run), reconnecting (it runs: the computer's
+/// node is being connected again), done (the computer is connected), failed (error says why; the instance may still
+/// be running).
+/// A value this app does not know decodes to .unknown with the raw value, and encodes back as it came.
+public nonisolated enum ExtensionCloudRecoveryPhase: Codable, Hashable, Sendable {
+    case starting
+    case reconnecting
+    case done
+    case failed
+    /// A value this app does not know, kept as it came.
+    case unknown(String)
+
+    public static let all: [ExtensionCloudRecoveryPhase] = [.starting, .reconnecting, .done, .failed]
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "starting": self = .starting
+        case "reconnecting": self = .reconnecting
+        case "done": self = .done
+        case "failed": self = .failed
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .starting: "starting"
+        case .reconnecting: "reconnecting"
+        case .done: "done"
+        case .failed: "failed"
+        case .unknown(let raw): raw
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self.init(rawValue: raw)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// A start-and-reconnect the manager is running or last ran for a computer. It lives in the manager's memory: after
+/// its restart there is none, and the instance's state and the computer's own Reconnect say the rest. ip_changed: the
+/// instance came back with another public address than the binding last had.
+public nonisolated struct ExtensionCloudRecovery: Codable, Hashable, Sendable {
+    public var phase: ExtensionCloudRecoveryPhase
+    public var startedAt: String
+    public var error: ExtensionCloudMessage?
+    public var ipChanged: Bool?
+
+    public init(phase: ExtensionCloudRecoveryPhase = .unknown(""), startedAt: String = "", error: ExtensionCloudMessage? = nil, ipChanged: Bool? = nil) {
+        self.phase = phase
+        self.startedAt = startedAt
+        self.error = error
+        self.ipChanged = ipChanged
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case phase
+        case startedAt = "started_at"
+        case error
+        case ipChanged = "ip_changed"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.phase = (try? c.decodeIfPresent(ExtensionCloudRecoveryPhase.self, forKey: .phase)) ?? .unknown("")
+        self.startedAt = (try? c.decodeIfPresent(String.self, forKey: .startedAt)) ?? ""
+        self.error = try? c.decodeIfPresent(ExtensionCloudMessage.self, forKey: .error)
+        self.ipChanged = try? c.decodeIfPresent(Bool.self, forKey: .ipChanged)
+    }
+}
+
+/// GET /api/v1/machines/{mid}/cloud: the computer's binding and, when the provider answered, its host now. bound
+/// false: no binding, nothing else. problem: the provider could not be asked or failed (the binding still stands),
+/// with a CloudError code. recovery: a start-and-reconnect in progress or just ended.
+public nonisolated struct ExtensionCloudMachine: Codable, Hashable, Sendable {
+    public var bound: Bool
+    public var binding: ExtensionCloudBinding?
+    public var host: ExtensionCloudHost?
+    public var problem: ExtensionCloudProviderProblem?
+    public var recovery: ExtensionCloudRecovery?
+
+    public init(bound: Bool = false, binding: ExtensionCloudBinding? = nil, host: ExtensionCloudHost? = nil, problem: ExtensionCloudProviderProblem? = nil, recovery: ExtensionCloudRecovery? = nil) {
+        self.bound = bound
+        self.binding = binding
+        self.host = host
+        self.problem = problem
+        self.recovery = recovery
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case bound
+        case binding
+        case host
+        case problem
+        case recovery
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.bound = (try? c.decodeIfPresent(Bool.self, forKey: .bound)) ?? false
+        self.binding = try? c.decodeIfPresent(ExtensionCloudBinding.self, forKey: .binding)
+        self.host = try? c.decodeIfPresent(ExtensionCloudHost.self, forKey: .host)
+        self.problem = try? c.decodeIfPresent(ExtensionCloudProviderProblem.self, forKey: .problem)
+        self.recovery = try? c.decodeIfPresent(ExtensionCloudRecovery.self, forKey: .recovery)
+    }
+}
+
+/// POST /api/v1/machines/{mid}/cloud/actions, an app's request on the instance the computer is bound to. id names a
+/// custom action. confirm: a person agreed to exactly this action (needed for safety confirm and destructive, else
+/// confirmation_required). acknowledge: the instance's id typed or shown back (needed for destructive, else
+/// acknowledgement_required). name: a new snapshot's name. reconnect (start only): once the instance runs, connect
+/// the computer's node again (CloudRecovery).
+public nonisolated struct ExtensionCloudActionRequest: Codable, Hashable, Sendable {
+    public var action: ExtensionCloudActionKind
+    public var id: ExtensionCloudCustomActionID?
+    public var confirm: Bool?
+    public var acknowledge: String?
+    public var name: String?
+    public var reconnect: Bool?
+
+    public init(action: ExtensionCloudActionKind = .unknown(""), id: ExtensionCloudCustomActionID? = nil, confirm: Bool? = nil, acknowledge: String? = nil, name: String? = nil, reconnect: Bool? = nil) {
+        self.action = action
+        self.id = id
+        self.confirm = confirm
+        self.acknowledge = acknowledge
+        self.name = name
+        self.reconnect = reconnect
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case action
+        case id
+        case confirm
+        case acknowledge
+        case name
+        case reconnect
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.action = (try? c.decodeIfPresent(ExtensionCloudActionKind.self, forKey: .action)) ?? .unknown("")
+        self.id = try? c.decodeIfPresent(ExtensionCloudCustomActionID.self, forKey: .id)
+        self.confirm = try? c.decodeIfPresent(Bool.self, forKey: .confirm)
+        self.acknowledge = try? c.decodeIfPresent(String.self, forKey: .acknowledge)
+        self.name = try? c.decodeIfPresent(String.self, forKey: .name)
+        self.reconnect = try? c.decodeIfPresent(Bool.self, forKey: .reconnect)
+    }
+}
+
+/// The actions route's answer: status done or accepted (a refusal is a CloudError), the host after it when the
+/// program said, the snapshot it made, the url to open (console), the provider's one line (message) and the
+/// start-and-reconnect it began (recovery).
+public nonisolated struct ExtensionCloudActionOutcome: Codable, Hashable, Sendable {
+    public var status: ExtensionCloudActionStatus
+    public var host: ExtensionCloudHost?
+    public var snapshot: ExtensionCloudSnapshot?
+    public var url: String?
+    public var expiresAt: String?
+    public var message: String?
+    public var recovery: ExtensionCloudRecovery?
+
+    public init(status: ExtensionCloudActionStatus = .unknown(""), host: ExtensionCloudHost? = nil, snapshot: ExtensionCloudSnapshot? = nil, url: String? = nil, expiresAt: String? = nil, message: String? = nil, recovery: ExtensionCloudRecovery? = nil) {
+        self.status = status
+        self.host = host
+        self.snapshot = snapshot
+        self.url = url
+        self.expiresAt = expiresAt
+        self.message = message
+        self.recovery = recovery
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case host
+        case snapshot
+        case url
+        case expiresAt = "expires_at"
+        case message
+        case recovery
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.status = (try? c.decodeIfPresent(ExtensionCloudActionStatus.self, forKey: .status)) ?? .unknown("")
+        self.host = try? c.decodeIfPresent(ExtensionCloudHost.self, forKey: .host)
+        self.snapshot = try? c.decodeIfPresent(ExtensionCloudSnapshot.self, forKey: .snapshot)
+        self.url = try? c.decodeIfPresent(String.self, forKey: .url)
+        self.expiresAt = try? c.decodeIfPresent(String.self, forKey: .expiresAt)
+        self.message = try? c.decodeIfPresent(String.self, forKey: .message)
+        self.recovery = try? c.decodeIfPresent(ExtensionCloudRecovery.self, forKey: .recovery)
+    }
+}
+
+/// GET /api/v1/machines/{mid}/cloud/snapshots: the bound instance's snapshots, newest first.
+public nonisolated struct ExtensionCloudSnapshots: Codable, Hashable, Sendable {
+    public var snapshots: [ExtensionCloudSnapshot]
+
+    public init(snapshots: [ExtensionCloudSnapshot] = []) {
+        self.snapshots = snapshots
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case snapshots
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.snapshots = (try? c.decodeIfPresent([ExtensionCloudSnapshot].self, forKey: .snapshots)) ?? []
+    }
+}
+
+/// One audited change: a bind, an unbind or an action asked of an instance, with who asked (actor: a device, or the
+/// assistant for a tool call a person approved) and how it ended (outcome: done, accepted, refused, failed). Never a
+/// credential, an address or a provider's words.
+public nonisolated struct ExtensionCloudAuditEntry: Codable, Hashable, Sendable {
+    public var at: String
+    public var `extension`: String
+    public var event: String
+    public var actor: String
+    public var machineId: ExtensionCloudMachineID?
+    public var provider: ExtensionCloudProviderID?
+    public var instance: ExtensionCloudInstanceID?
+    public var action: String?
+    public var safety: String?
+    public var outcome: String?
+
+    public init(at: String = "", `extension`: String = "", event: String = "", actor: String = "", machineId: ExtensionCloudMachineID? = nil, provider: ExtensionCloudProviderID? = nil, instance: ExtensionCloudInstanceID? = nil, action: String? = nil, safety: String? = nil, outcome: String? = nil) {
+        self.at = at
+        self.extension = `extension`
+        self.event = event
+        self.actor = actor
+        self.machineId = machineId
+        self.provider = provider
+        self.instance = instance
+        self.action = action
+        self.safety = safety
+        self.outcome = outcome
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case at
+        case `extension`
+        case event
+        case actor
+        case machineId = "machine_id"
+        case provider
+        case instance
+        case action
+        case safety
+        case outcome
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.at = (try? c.decodeIfPresent(String.self, forKey: .at)) ?? ""
+        self.extension = (try? c.decodeIfPresent(String.self, forKey: .`extension`)) ?? ""
+        self.event = (try? c.decodeIfPresent(String.self, forKey: .event)) ?? ""
+        self.actor = (try? c.decodeIfPresent(String.self, forKey: .actor)) ?? ""
+        self.machineId = try? c.decodeIfPresent(ExtensionCloudMachineID.self, forKey: .machineId)
+        self.provider = try? c.decodeIfPresent(ExtensionCloudProviderID.self, forKey: .provider)
+        self.instance = try? c.decodeIfPresent(ExtensionCloudInstanceID.self, forKey: .instance)
+        self.action = try? c.decodeIfPresent(String.self, forKey: .action)
+        self.safety = try? c.decodeIfPresent(String.self, forKey: .safety)
+        self.outcome = try? c.decodeIfPresent(String.self, forKey: .outcome)
+    }
+}
+
+/// GET /api/v1/machines/{mid}/cloud/audit: what was asked of the computer's instances, newest first.
+public nonisolated struct ExtensionCloudAudit: Codable, Hashable, Sendable {
+    public var audit: [ExtensionCloudAuditEntry]
+
+    public init(audit: [ExtensionCloudAuditEntry] = []) {
+        self.audit = audit
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case audit
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.audit = (try? c.decodeIfPresent([ExtensionCloudAuditEntry].self, forKey: .audit)) ?? []
+    }
+}
+
+/// A cloud route's error: error in the reader's language and a code: bad_request, read_only, not_found (no such
+/// computer, provider or instance), not_bound, already_bound (machine_id: the computer that holds the instance),
+/// confirmation_required and acknowledgement_required (safety says which gate), unsupported, invalid_state,
+/// not_signed_in, rate_limited, capacity, refused, plugin_failed (detail: the provider's own words, one line),
+/// provider_off, deadline, no_database.
+public nonisolated struct ExtensionCloudError: Codable, Hashable, Sendable {
+    public var error: ExtensionCloudMessage
+    public var code: String
+    public var safety: ExtensionCloudSafety?
+    public var detail: String?
+    public var machineId: ExtensionCloudMachineID?
+
+    public init(error: ExtensionCloudMessage = ExtensionCloudMessage(""), code: String = "", safety: ExtensionCloudSafety? = nil, detail: String? = nil, machineId: ExtensionCloudMachineID? = nil) {
+        self.error = error
+        self.code = code
+        self.safety = safety
+        self.detail = detail
+        self.machineId = machineId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case error
+        case code
+        case safety
+        case detail
+        case machineId = "machine_id"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.error = (try? c.decodeIfPresent(ExtensionCloudMessage.self, forKey: .error)) ?? ExtensionCloudMessage("")
+        self.code = (try? c.decodeIfPresent(String.self, forKey: .code)) ?? ""
+        self.safety = try? c.decodeIfPresent(ExtensionCloudSafety.self, forKey: .safety)
+        self.detail = try? c.decodeIfPresent(String.self, forKey: .detail)
+        self.machineId = try? c.decodeIfPresent(ExtensionCloudMachineID.self, forKey: .machineId)
     }
 }
 

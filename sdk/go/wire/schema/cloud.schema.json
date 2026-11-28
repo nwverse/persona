@@ -1,0 +1,981 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cloud.schema.json",
+  "title": "Cloud host provider protocol",
+  "description": "The cloud_hosts extension point's calls (version 1; docs/design/machine-cloud-ops.md): the manager asks a provider's program which instances its accounts hold (cloud.instances), how one is now (cloud.instance), to act on one (cloud.action: power, the address read back, a snapshot, a console link or a custom action the manifest declares; only after the gate of the action's safety level passed) and which snapshots it has (cloud.snapshots, optional). An action is a request: what follows is read from the instance's state, there are no jobs. Every params object carries contribution (the cloud_hosts item's id) and locale (the caller's language: the words the program writes, message and state_detail, are in it). The provider's credentials are its own secrets: no call carries one, and no answer may. The apps read the manager's routes' answers (CloudProviders, CloudHosts, CloudMachine, CloudBindings, CloudActionOutcome, CloudSnapshots, CloudAudit, CloudError).",
+  "x-methods": {
+    "cloud.instances": {
+      "from": "hub",
+      "params": "CloudInstancesParams",
+      "result": "CloudInstanceList"
+    },
+    "cloud.instance": {
+      "from": "hub",
+      "params": "CloudInstanceParams",
+      "result": "CloudInstance"
+    },
+    "cloud.action": {
+      "from": "hub",
+      "params": "CloudActionParams",
+      "result": "CloudActionResult"
+    },
+    "cloud.snapshots": {
+      "from": "hub",
+      "params": "CloudSnapshotsParams",
+      "result": "CloudSnapshotList"
+    }
+  },
+  "$defs": {
+    "CloudAccountID": {
+      "description": "A provider's own name for a set of credentials, a project or a panel login: opaque to the hub, never a secret.",
+      "type": "string",
+      "x-id": "CloudAccountID",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "CloudInstanceID": {
+      "description": "An instance's id at its vendor: opaque to the hub, kept as given.",
+      "type": "string",
+      "x-id": "CloudInstanceID",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "CloudSnapshotID": {
+      "description": "A snapshot's id at its vendor.",
+      "type": "string",
+      "x-id": "CloudSnapshotID",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "CloudRequestID": {
+      "description": "One request to act, the same for its retries.",
+      "type": "string",
+      "x-id": "CloudRequestID",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "CloudMachineID": {
+      "description": "A computer's id at the hub.",
+      "type": "string",
+      "x-id": "CloudMachineID"
+    },
+    "CloudProviderID": {
+      "description": "A cloud_hosts contribution's id (manifest.schema.json ID).",
+      "type": "string",
+      "x-id": "CloudProviderID"
+    },
+    "CloudCustomActionID": {
+      "description": "A custom action's id, as the manifest declares it (manifest.schema.json ID).",
+      "type": "string",
+      "x-id": "CloudCustomActionID",
+      "maxLength": 32
+    },
+    "CloudMessage": {
+      "description": "One line for people, in the reader's language: why something failed or was refused.",
+      "type": "string",
+      "x-text": "CloudMessage"
+    },
+    "CloudErrorCode": {
+      "description": "error.code a provider answers besides the base ErrorCode: not_found (no such instance or account, or the credentials cannot see it), not_signed_in (credentials are missing, expired or refused: the user sets them in the extension's settings), unsupported (this instance has no such action), invalid_state (the action does not apply to the state the instance is in, such as start on a running one), rate_limited (the vendor's API asks to slow down), capacity (the vendor has no capacity or quota for it now, such as a spot instance that cannot be placed), refused (the vendor said no: say why in message), failed (anything else, say why in message). The manager shows the message on one line, clipped.",
+      "type": "string",
+      "enum": [
+        "not_found",
+        "not_signed_in",
+        "unsupported",
+        "invalid_state",
+        "rate_limited",
+        "capacity",
+        "refused",
+        "failed"
+      ],
+      "x-enum": "closed"
+    },
+    "CloudInstanceState": {
+      "description": "An instance's state in the words every vendor's are mapped to: running; stopped (off, and can be started); starting; stopping; rebooting; preempted (a spot instance the vendor took back: off, and start may bring it back); terminated (gone or being deleted: nothing acts on it); unknown (the provider cannot say).",
+      "type": "string",
+      "enum": [
+        "running",
+        "stopped",
+        "starting",
+        "stopping",
+        "rebooting",
+        "preempted",
+        "terminated",
+        "unknown"
+      ],
+      "x-enum": "closed"
+    },
+    "CloudActionKind": {
+      "description": "What can be asked of an instance. Power: start, stop (a graceful shutdown), reboot (a graceful restart), hard_reset (reset without shutting the system down), force_stop (power off without shutting it down). Operations: sync_ip (read its addresses back from the vendor now), snapshot_list (its snapshots, asked with cloud.snapshots, never cloud.action), snapshot_create, console (a link to its page or console at the vendor), custom (one of the manifest's custom_actions, named by its id). The safety level of each is the hub's (manifest.schema.json CloudSafety): sync_ip, snapshot_list and console read; start, stop, reboot and snapshot_create confirm; hard_reset and force_stop destructive; a custom action's is the manifest's.",
+      "type": "string",
+      "enum": [
+        "start",
+        "stop",
+        "reboot",
+        "hard_reset",
+        "force_stop",
+        "sync_ip",
+        "snapshot_list",
+        "snapshot_create",
+        "console",
+        "custom"
+      ],
+      "x-enum": "closed"
+    },
+    "CloudActionStatus": {
+      "description": "cloud.action's answer: done (it has taken effect: instance, snapshot or url say what is there now), accepted (the vendor took the request and the instance is on its way: read its state to follow), refused (nothing happened; message says why).",
+      "type": "string",
+      "enum": [
+        "done",
+        "accepted",
+        "refused"
+      ],
+      "x-enum": "closed"
+    },
+    "CloudSnapshotState": {
+      "description": "A snapshot: creating, ready, failed or deleting.",
+      "type": "string",
+      "enum": [
+        "creating",
+        "ready",
+        "failed",
+        "deleting"
+      ],
+      "x-enum": "closed"
+    },
+    "CloudInstanceRef": {
+      "description": "One instance of a provider: the account that holds it (the provider's own name for a set of credentials, a project or a panel login, never a secret) and its id at the vendor. Both are opaque to the hub and kept as given.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "$ref": "#/$defs/CloudAccountID"
+        },
+        "id": {
+          "$ref": "#/$defs/CloudInstanceID"
+        }
+      },
+      "required": [
+        "account",
+        "id"
+      ]
+    },
+    "CloudSpec": {
+      "description": "An instance's size. size is the vendor's name for it (its instance type, machine type or shape); cpu its virtual CPUs (a burstable share may be a fraction); memory_mb and disk_gb what it has.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "size": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "cpu": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 4096
+        },
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 0,
+          "x-go-type": "int64"
+        },
+        "disk_gb": {
+          "type": "integer",
+          "minimum": 0,
+          "x-go-type": "int64"
+        },
+        "arch": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "os": {
+          "type": "string",
+          "maxLength": 80
+        }
+      }
+    },
+    "CloudLifecycle": {
+      "description": "What ends or interrupts an instance. spot: the vendor may take it back at any time (spot, preemptible). expires_at: when what was paid for ends. renews_at: when it is charged or renewed next. keepalive_at: by when the account has to show activity to keep it (a free tier's idle rule). auto_renew: it renews by itself.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spot": {
+          "type": "boolean"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "renews_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "keepalive_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "auto_renew": {
+          "type": "boolean"
+        }
+      }
+    },
+    "CloudInstance": {
+      "description": "One instance as its provider reads it. account and id name it (CloudInstanceRef); display_name is what people call it. public_ips and private_ips are plain IPv4 or IPv6 addresses, the one to reach it by first. console_url is an https address of its page at the vendor, without credentials. actions are what can be asked of this instance now (never custom; snapshot_list means cloud.snapshots answers), custom_actions the manifest's custom actions that apply to it. observed_at is when the provider read it from the vendor. state_detail says more about the state in the caller's language, one line.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "$ref": "#/$defs/CloudAccountID"
+        },
+        "id": {
+          "$ref": "#/$defs/CloudInstanceID"
+        },
+        "display_name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "state": {
+          "$ref": "#/$defs/CloudInstanceState"
+        },
+        "state_detail": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "zone": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "public_ips": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 45
+          }
+        },
+        "private_ips": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 45
+          }
+        },
+        "spec": {
+          "$ref": "#/$defs/CloudSpec"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/CloudLifecycle"
+        },
+        "console_url": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "actions": {
+          "type": "array",
+          "maxItems": 9,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/CloudActionKind"
+          }
+        },
+        "custom_actions": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/CloudCustomActionID"
+          }
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "account",
+        "id",
+        "state"
+      ]
+    },
+    "CloudInstancesParams": {
+      "description": "cloud.instances: every instance of every account the provider is set up with. refresh asks it not to answer from its own cache.",
+      "type": "object",
+      "properties": {
+        "contribution": {
+          "$ref": "manifest.schema.json#/$defs/ID"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "refresh": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "contribution",
+        "locale"
+      ]
+    },
+    "CloudInstanceList": {
+      "description": "The provider's instances, at most 500. partial when the list may be incomplete (an account could not be read: detail says which, in the caller's language). instances may be left out when there are none.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "instances": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/CloudInstance"
+          }
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 300
+        }
+      }
+    },
+    "CloudInstanceParams": {
+      "description": "cloud.instance: how one instance is now. refresh asks the vendor rather than the provider's cache. Answered with the CloudInstance of that account and id, or not_found.",
+      "type": "object",
+      "properties": {
+        "contribution": {
+          "$ref": "manifest.schema.json#/$defs/ID"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "instance": {
+          "$ref": "#/$defs/CloudInstanceRef"
+        },
+        "refresh": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "contribution",
+        "locale",
+        "instance"
+      ]
+    },
+    "CloudActionParams": {
+      "description": "cloud.action: act on one instance. action is never snapshot_list; custom carries the manifest's custom action id in custom. name is a new snapshot's name (snapshot_create). The gate of the action's safety level has passed before the program hears of it. request_id is the same for a retry of the same request: a program that already did it answers what it answered.",
+      "type": "object",
+      "properties": {
+        "contribution": {
+          "$ref": "manifest.schema.json#/$defs/ID"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "instance": {
+          "$ref": "#/$defs/CloudInstanceRef"
+        },
+        "action": {
+          "$ref": "#/$defs/CloudActionKind"
+        },
+        "custom": {
+          "$ref": "#/$defs/CloudCustomActionID"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "request_id": {
+          "$ref": "#/$defs/CloudRequestID"
+        }
+      },
+      "required": [
+        "contribution",
+        "locale",
+        "instance",
+        "action",
+        "request_id"
+      ]
+    },
+    "CloudSnapshot": {
+      "description": "One snapshot of an instance.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/CloudSnapshotID"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "state": {
+          "$ref": "#/$defs/CloudSnapshotState"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "size_gb": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "state"
+      ]
+    },
+    "CloudActionResult": {
+      "description": "cloud.action's answer (CloudActionStatus). instance is the instance after the request when the program knows it (sync_ip always answers it); snapshot the one snapshot_create made; url what console opens: an https address, which may be signed and short-lived (expires_at). message is one line for people in the caller's language: why it was refused, or what a custom action found.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/CloudActionStatus"
+        },
+        "instance": {
+          "$ref": "#/$defs/CloudInstance"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/CloudSnapshot"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 300
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "CloudSnapshotsParams": {
+      "description": "cloud.snapshots: one instance's snapshots, newest first. Asked only of an instance whose actions name snapshot_list.",
+      "type": "object",
+      "properties": {
+        "contribution": {
+          "$ref": "manifest.schema.json#/$defs/ID"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "instance": {
+          "$ref": "#/$defs/CloudInstanceRef"
+        }
+      },
+      "required": [
+        "contribution",
+        "locale",
+        "instance"
+      ]
+    },
+    "CloudSnapshotList": {
+      "description": "An instance's snapshots, at most 200. snapshots may be left out when there are none; the manager's answer to the apps always has it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "snapshots": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/CloudSnapshot"
+          }
+        }
+      }
+    },
+    "CloudProvider": {
+      "description": "One enabled cloud_hosts contribution, as the manager lists it for the apps.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extension": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/CloudProviderID"
+        },
+        "name": {
+          "type": "string"
+        },
+        "vendor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "extension",
+        "id",
+        "name",
+        "vendor"
+      ]
+    },
+    "CloudProviders": {
+      "description": "GET /api/v1/extensions/-/cloud: the enabled providers. No program is asked.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CloudProvider"
+          }
+        }
+      },
+      "required": [
+        "providers"
+      ]
+    },
+    "CloudHostAction": {
+      "description": "One thing the apps can ask of a host, with the gate the hub holds it to (safety). id, title and confirm_text are a custom action's, from the manifest.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/CloudActionKind"
+        },
+        "id": {
+          "$ref": "#/$defs/CloudCustomActionID"
+        },
+        "title": {
+          "type": "string"
+        },
+        "safety": {
+          "$ref": "manifest.schema.json#/$defs/CloudSafety"
+        },
+        "confirm_text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "safety"
+      ]
+    },
+    "CloudHost": {
+      "description": "One instance as the manager gives it to the apps: its provider (extension, provider, provider_name, vendor), the instance as the program answered it and the hub re-checked it, the actions it takes with their safety levels, and machine_id when a computer is bound to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extension": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/CloudProviderID"
+        },
+        "provider_name": {
+          "type": "string"
+        },
+        "vendor": {
+          "type": "string"
+        },
+        "instance": {
+          "$ref": "#/$defs/CloudInstance"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CloudHostAction"
+          }
+        },
+        "machine_id": {
+          "$ref": "#/$defs/CloudMachineID"
+        }
+      },
+      "required": [
+        "extension",
+        "provider",
+        "provider_name",
+        "vendor",
+        "instance",
+        "actions"
+      ]
+    },
+    "CloudProviderProblem": {
+      "description": "A provider whose instances could not be listed: code is a CloudError code, error says why in the reader's language.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extension": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/CloudProviderID"
+        },
+        "provider_name": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "error": {
+          "$ref": "#/$defs/CloudMessage"
+        }
+      },
+      "required": [
+        "extension",
+        "provider",
+        "provider_name",
+        "code",
+        "error"
+      ]
+    },
+    "CloudHosts": {
+      "description": "GET /api/v1/extensions/-/cloud/instances: every enabled provider's instances together, the bound ones naming their computer. A provider that failed is in problems and the others' instances are still listed; partial when a provider said its own list may be incomplete.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hosts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CloudHost"
+          }
+        },
+        "problems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CloudProviderProblem"
+          }
+        },
+        "partial": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hosts",
+        "problems"
+      ]
+    },
+    "CloudBinding": {
+      "description": "A computer bound to an instance: machine_id ↔ (extension, provider, account, instance). The rest is what the hub last read of it, kept so the computers' list draws a badge without asking a program: provider_name, vendor, display_name, state and public_ip as of seen_at.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "machine_id": {
+          "$ref": "#/$defs/CloudMachineID"
+        },
+        "extension": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/CloudProviderID"
+        },
+        "account": {
+          "$ref": "#/$defs/CloudAccountID"
+        },
+        "instance": {
+          "$ref": "#/$defs/CloudInstanceID"
+        },
+        "bound_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "provider_name": {
+          "type": "string"
+        },
+        "vendor": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/CloudInstanceState"
+        },
+        "public_ip": {
+          "type": "string"
+        },
+        "seen_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "machine_id",
+        "extension",
+        "provider",
+        "account",
+        "instance",
+        "bound_at"
+      ]
+    },
+    "CloudBindings": {
+      "description": "GET /api/v1/extensions/-/cloud/bindings: every binding, by machine id. No program is asked.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CloudBinding"
+          }
+        }
+      },
+      "required": [
+        "bindings"
+      ]
+    },
+    "CloudBindRequest": {
+      "description": "PUT /api/v1/machines/{mid}/cloud: bind the computer to this instance (replacing its binding). The instance must be one the provider answers now, and bound to no other computer.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extension": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "$ref": "#/$defs/CloudProviderID"
+        },
+        "account": {
+          "$ref": "#/$defs/CloudAccountID"
+        },
+        "instance": {
+          "$ref": "#/$defs/CloudInstanceID"
+        }
+      },
+      "required": [
+        "extension",
+        "provider",
+        "account",
+        "instance"
+      ]
+    },
+    "CloudRecoveryPhase": {
+      "description": "Where a start-and-reconnect is: starting (waiting for the instance to run), reconnecting (it runs: the computer's node is being connected again), done (the computer is connected), failed (error says why; the instance may still be running).",
+      "type": "string",
+      "enum": [
+        "starting",
+        "reconnecting",
+        "done",
+        "failed"
+      ],
+      "x-enum": "closed"
+    },
+    "CloudRecovery": {
+      "description": "A start-and-reconnect the manager is running or last ran for a computer. It lives in the manager's memory: after its restart there is none, and the instance's state and the computer's own Reconnect say the rest. ip_changed: the instance came back with another public address than the binding last had.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "phase": {
+          "$ref": "#/$defs/CloudRecoveryPhase"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "error": {
+          "$ref": "#/$defs/CloudMessage"
+        },
+        "ip_changed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "phase",
+        "started_at"
+      ]
+    },
+    "CloudMachine": {
+      "description": "GET /api/v1/machines/{mid}/cloud: the computer's binding and, when the provider answered, its host now. bound false: no binding, nothing else. problem: the provider could not be asked or failed (the binding still stands), with a CloudError code. recovery: a start-and-reconnect in progress or just ended.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bound": {
+          "type": "boolean"
+        },
+        "binding": {
+          "$ref": "#/$defs/CloudBinding"
+        },
+        "host": {
+          "$ref": "#/$defs/CloudHost"
+        },
+        "problem": {
+          "$ref": "#/$defs/CloudProviderProblem"
+        },
+        "recovery": {
+          "$ref": "#/$defs/CloudRecovery"
+        }
+      },
+      "required": [
+        "bound"
+      ]
+    },
+    "CloudActionRequest": {
+      "description": "POST /api/v1/machines/{mid}/cloud/actions, an app's request on the instance the computer is bound to. id names a custom action. confirm: a person agreed to exactly this action (needed for safety confirm and destructive, else confirmation_required). acknowledge: the instance's id typed or shown back (needed for destructive, else acknowledgement_required). name: a new snapshot's name. reconnect (start only): once the instance runs, connect the computer's node again (CloudRecovery).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/CloudActionKind"
+        },
+        "id": {
+          "$ref": "#/$defs/CloudCustomActionID"
+        },
+        "confirm": {
+          "type": "boolean"
+        },
+        "acknowledge": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "reconnect": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "CloudActionOutcome": {
+      "description": "The actions route's answer: status done or accepted (a refusal is a CloudError), the host after it when the program said, the snapshot it made, the url to open (console), the provider's one line (message) and the start-and-reconnect it began (recovery).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/CloudActionStatus"
+        },
+        "host": {
+          "$ref": "#/$defs/CloudHost"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/CloudSnapshot"
+        },
+        "url": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "message": {
+          "type": "string"
+        },
+        "recovery": {
+          "$ref": "#/$defs/CloudRecovery"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "CloudSnapshots": {
+      "description": "GET /api/v1/machines/{mid}/cloud/snapshots: the bound instance's snapshots, newest first.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "snapshots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CloudSnapshot"
+          }
+        }
+      },
+      "required": [
+        "snapshots"
+      ]
+    },
+    "CloudAuditEntry": {
+      "description": "One audited change: a bind, an unbind or an action asked of an instance, with who asked (actor: a device, or the assistant for a tool call a person approved) and how it ended (outcome: done, accepted, refused, failed). Never a credential, an address or a provider's words.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "extension": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string"
+        },
+        "actor": {
+          "type": "string"
+        },
+        "machine_id": {
+          "$ref": "#/$defs/CloudMachineID"
+        },
+        "provider": {
+          "$ref": "#/$defs/CloudProviderID"
+        },
+        "instance": {
+          "$ref": "#/$defs/CloudInstanceID"
+        },
+        "action": {
+          "type": "string"
+        },
+        "safety": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "extension",
+        "event",
+        "actor"
+      ]
+    },
+    "CloudAudit": {
+      "description": "GET /api/v1/machines/{mid}/cloud/audit: what was asked of the computer's instances, newest first.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audit": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CloudAuditEntry"
+          }
+        }
+      },
+      "required": [
+        "audit"
+      ]
+    },
+    "CloudError": {
+      "description": "A cloud route's error: error in the reader's language and a code: bad_request, read_only, not_found (no such computer, provider or instance), not_bound, already_bound (machine_id: the computer that holds the instance), confirmation_required and acknowledgement_required (safety says which gate), unsupported, invalid_state, not_signed_in, rate_limited, capacity, refused, plugin_failed (detail: the provider's own words, one line), provider_off, deadline, no_database.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/CloudMessage"
+        },
+        "code": {
+          "type": "string"
+        },
+        "safety": {
+          "$ref": "manifest.schema.json#/$defs/CloudSafety"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "machine_id": {
+          "$ref": "#/$defs/CloudMachineID"
+        }
+      },
+      "required": [
+        "error",
+        "code"
+      ]
+    }
+  }
+}

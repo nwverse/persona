@@ -1,11 +1,13 @@
 // The alert sheet's section for a computer that is not connected (#8037): why, in our words (the hub's error_code, else
 // what its error says: lib/node-health.ts), when it was last seen, a numbered checklist for that reason, the hub's raw
 // error under Details, and Reconnect (the card's own call); Redeploy when the reason is the version and the hub can
-// update it.
-import { useState } from "react";
+// update it. A computer bound to a cloud instance that offers start gets "Start and reconnect" first (CloudOffline.tsx,
+// its own chunk; docs/design/machine-cloud-ops.md "The web"); without a binding the part is as it always was.
+import { lazy, Suspense, useState, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { machineErrorText } from "../../lib/add-computer";
 import type { OfflineReason } from "../../lib/machine-alerts";
+import { bindingOf, useCloudStore } from "../../lib/cloud-hosts";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { classifyConnection } from "../../lib/node-health";
 import { relativeTime } from "../../lib/relative-time";
@@ -13,6 +15,8 @@ import type { Machine } from "../../lib/types";
 import { Button, Collapse } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { SheetPart } from "./AlertParts";
+
+const OfflineCloud = lazy(() => import("./CloudOffline").then((m) => ({ default: m.OfflineCloud })));
 
 /** How many checklist lines each reason has (machines-alerts.check_<reason>_<n>). */
 const CHECKS: Record<Exclude<OfflineReason, "node_outdated">, number> = {
@@ -32,6 +36,7 @@ export function OfflineSection({ machine, reason, onReconnect, onRedeploy }: { m
   const seen = relativeTime(machine.last_seen);
   const deployment = machineDeployment(machine);
   const version = reason === "version" || reason === "node_outdated";
+  const bound = !!bindingOf(useCloudStore(), machine.id);
   const reconnect = async () => {
     setBusy(true);
     try {
@@ -40,6 +45,20 @@ export function OfflineSection({ machine, reason, onReconnect, onRedeploy }: { m
       setBusy(false);
     }
   };
+  // the row of actions; `lead` (Start and reconnect) goes first, and Reconnect is then the second choice
+  const row = (lead?: ReactNode, quiet = false) => (
+    <div className="flex flex-wrap gap-2">
+      {lead}
+      <Button tone={quiet ? "secondary" : "primary"} icon="retry" busy={busy} onClick={() => void reconnect()} testId="reconnect">
+        {t("machines.reconnect")}
+      </Button>
+      {version && deployment.supported && (
+        <Button tone="secondary" disabled={!deployment.canDeploy} title={deployment.reason || undefined} onClick={onRedeploy} testId="offline-redeploy">
+          {t("lib-machine-deploy.redeploy")}
+        </Button>
+      )}
+    </div>
+  );
   return (
     <>
       <SheetPart part="what">
@@ -69,16 +88,13 @@ export function OfflineSection({ machine, reason, onReconnect, onRedeploy }: { m
         )}
       </SheetPart>
       <SheetPart part="do">
-        <div className="flex flex-wrap gap-2">
-          <Button tone="primary" icon="retry" busy={busy} onClick={() => void reconnect()} testId="reconnect">
-            {t("machines.reconnect")}
-          </Button>
-          {version && deployment.supported && (
-            <Button tone="secondary" disabled={!deployment.canDeploy} title={deployment.reason || undefined} onClick={onRedeploy} testId="offline-redeploy">
-              {t("lib-machine-deploy.redeploy")}
-            </Button>
-          )}
-        </div>
+        {bound ? (
+          <Suspense fallback={row()}>
+            <OfflineCloud mid={machine.id} row={row} />
+          </Suspense>
+        ) : (
+          row()
+        )}
         {version && deployment.reason && <p className="mt-1.5 text-submeta text-ink-3">{deployment.reason}</p>}
       </SheetPart>
     </>

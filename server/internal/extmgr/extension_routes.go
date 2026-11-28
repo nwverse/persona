@@ -265,6 +265,7 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 	h.sandboxRoutes(api)
 	h.contributionRoutes(api)
 	h.offloadRoutes(api)
+	h.cloudRoutes(api)
 	h.declaredRoutes(api)
 	ps := func() *extensions { return h.extensions }
 	h.legacyExtensionRoutes(api, "/api/v1/plugins", "/api/v1/extensions")

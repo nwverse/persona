@@ -1,0 +1,10 @@
+{
+  "providers": [
+    {
+      "extension": "example-hosts",
+      "id": "main",
+      "name": "Example Hosts",
+      "vendor": "examplehosts"
+    }
+  ]
+}

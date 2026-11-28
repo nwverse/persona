@@ -154,6 +154,7 @@ var catalogItemTypes = map[string]reflect.Type{
 
 	"repository_providers": reflect.TypeFor[RepositoryProviderItem](),
 	"disk_offload":         reflect.TypeFor[DiskOffloadItem](),
+	"cloud_hosts":          reflect.TypeFor[CloudHostItem](),
 	"text_lookup":          reflect.TypeFor[TextLookupItem](),
 }
 

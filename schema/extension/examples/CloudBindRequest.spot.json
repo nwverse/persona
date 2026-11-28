@@ -1,0 +1,6 @@
+{
+  "extension": "example-hosts",
+  "provider": "main",
+  "account": "lab",
+  "instance": "i-0a1b2c3d"
+}

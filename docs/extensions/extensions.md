@@ -151,6 +151,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `text_lookup` (version 1, #10977) | `text_lookup.` | `id` (`^[a-z0-9][a-z0-9_-]{0,63}$`), `name?` (1–80 characters), `languages?` (only `["en"]`; omitted means `["en"]`) | Process speaks the protocol | A dictionary the apps ask for a word the user taps (`text_lookup.state`, `text_lookup.lookup`, `text_lookup.save`, `text_lookup.remove`); see "Looking up a word" below |
 | `memory_sources` (version 1, #13532, #13586) | `memory.` | `id`, `name` (1–80 characters, not only spaces, no control characters: what settings call the source); one per extension | Process speaks the protocol | The extension's memory, entry by entry: the manager reads it with `memory.entries` (`schema/extension/memory.schema.json`) and grades each entry by scene itself, and stops delivering the extension's own text outlets directly; the install page says so, the permission digest does not change; see "Memory sources" below |
 | `disk_offload` (version 1, #14576) | `offload.` | `id`, `name` (1–40 characters: the disk map offers "Offload to <name>"), `kinds?` (1–3 of `file`, `dir`, `app`, each once; omitted means `file`, `dir`), `restore?` (items can be brought back) | Process speaks the protocol | A provider for a computer's disk usage map: the map lists the enabled contributions, draws what the provider already holds of that computer beside the local map (`offload.inventory`), and, after the user confirmed and the computer's own protection rules agreed to every path, starts an offload or restore (`offload.run`, followed with `offload.job`, the optional `offload.cancel`; `schema/extension/offload.schema.json`). Asked by the manager only, each answer held to the schema; see "Disk offload" below |
+| `cloud_hosts` (version 1) | `cloud.` | `id`, `name` (1–40 characters: what the apps call the provider), `vendor` (a short lowercase id the apps draw as text), `custom_actions?` (at most 8, each id once: `id`, `title` (1–40 characters), `safety` (`read`, `confirm` or `destructive`), `confirm` (the confirmation's sentence, required unless `safety` is `read`)) | Process speaks the protocol; a sandboxed program reaches the vendor's API only through `permissions.network` | A provider for rented computers: the manager lists the instances of the user's accounts (`cloud.instances`, `cloud.instance`), binds a computer to its instance at the user's word, and, after the hub's safety gate passed, asks for an action (`cloud.action`: start, stop, reboot, hard reset, force stop, read the addresses back, snapshot, console, or a declared custom action; the optional `cloud.snapshots`; `schema/extension/cloud.schema.json`). Asked by the manager only, each answer held to the schema and re-checked; see "Cloud hosts" below |
 | `track_kinds` (version 1, #14574) | `track_kinds.` | `id`, `title`, `config` (`schema: 1`, the declarative `assistantwire.TrackKindConfig`: template, context, categories, rhythms, attention, supervision, usage, assembly, capture target, channels and sidebar) | Declarative only; the manager validates every field and option | The headless assistant track registry and execution policy. The optional `space-conversations` extension contributes the `space` kind. An extension-provided kind is read-only through the custom-kind API; disabling its provider hides its surface but preserves existing records and conversations. |
 
 Extension points the hub doesn't know: the extension still installs (it may be written for a newer hub), that item has no effect, and the preview and list show a warning. When adding extension points later (knowledge base sources, link recognition…), add a row to this table.
@@ -872,6 +873,20 @@ offload is checked on the computer with `machine.storage.check` before the progr
 a command-line tool on the computer, `offload.run` answers `needs_install` with the tool and where it comes from; the
 apps ask the user a second time and only then send `install: true`. The routes, errors and the install confirmation
 are in `docs/server/machine-usage-map.md` "Extension point `disk_offload`".
+
+### Cloud hosts
+
+An extension that speaks for a cloud vendor or a hosting panel contributes `cloud_hosts`. Core never names a vendor:
+`vendor` is a free id the apps draw as text, and the vendor's API, accounts and credentials stay the extension's (its
+own `secrets`; no `cloud.` call or answer carries one). The manager asks the program (`cloud.instances`,
+`cloud.instance`, `cloud.action`, the optional `cloud.snapshots`; `schema/extension/cloud.schema.json`) with the
+contribution and the caller's language, and only for a device with full credentials. The user binds a computer to
+one instance; its page, the offline sheet (**Start and reconnect**) and the assistant's `cloud_hosts` and
+`cloud_host_action` tools then offer the actions that instance offers. A standard action's safety level is the hub's
+table (`extension.CloudActionSafety`), which a program cannot lower: `confirm` and `destructive` actions need the
+user's confirmation (from the apps, or an approval card for the assistant) before the program hears of them, and
+every write that passed the gate is audited. The whole contract (instances, actions and safety, bindings, start and reconnect, routes,
+audit, tools) is in `docs/design/machine-cloud-ops.md`.
 
 ### Facts and report sections for scheduled routines
 

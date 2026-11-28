@@ -71,6 +71,11 @@ const RepositoryNamespace = "repo"
 // contribution. A provider answers them with ext.Methods under this namespace.
 const OffloadNamespace = "offload"
 
+// CloudNamespace is the cloud_hosts extension point's: the manager asks cloud.instances, cloud.instance, cloud.action
+// and the optional cloud.snapshots (schema/extension/cloud.schema.json), with the cloud_hosts item's id as the
+// contribution. A provider answers them with ext.Methods under this namespace.
+const CloudNamespace = "cloud"
+
 // SentNamespace is the hub's own namespace for the sent-as-user ledger: RecordSent is sent.record.
 const SentNamespace = "sent"
 

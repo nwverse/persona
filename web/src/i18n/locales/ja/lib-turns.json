@@ -48,6 +48,8 @@
   "persona_computer_run": "コンピューターを操作",
   "persona_browser_run": "ブラウザを使う",
   "persona_browser_look": "ブラウザを見る",
+  "persona_cloud_hosts": "クラウドサーバーを確認",
+  "persona_cloud_host_action": "クラウドサーバーを操作",
   "persona_secret_run": "パスワードで実行",
   "persona_phone": "iPhone",
   "persona_mail": "メール"

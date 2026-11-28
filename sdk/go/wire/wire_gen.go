@@ -317,6 +317,7 @@ type Contributes struct {
 	TextLookup          []TextLookupItem         `json:"text_lookup,omitempty"`
 	MemorySources       []MemorySourceItem       `json:"memory_sources,omitempty"`
 	DiskOffload         []DiskOffloadItem        `json:"disk_offload,omitempty"`
+	CloudHosts          []CloudHostItem          `json:"cloud_hosts,omitempty"`
 	Messaging           []MessagingItem          `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
@@ -328,7 +329,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "memory_sources", "disk_offload", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "memory_sources", "disk_offload", "cloud_hosts", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -360,7 +361,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "memory_sources", "disk_offload", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "memory_sources", "disk_offload", "cloud_hosts", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -650,6 +651,59 @@ type DiskOffloadItem struct {
 	Kinds []string `json:"kinds,omitempty"`
 	// Items it holds can be brought back (Restore on the map's cloud side).
 	Restore bool `json:"restore,omitempty"`
+}
+
+// CloudHostItem: A provider of cloud instances and hosted servers (docs/design/machine-cloud-ops.md): it lists the
+// instances of the accounts the user set it up with, says how each is, and starts, stops and restarts them, reads
+// their addresses back, snapshots them and opens their console, for the computers' page and the assistant. The
+// manager asks the program (cloud.instances, cloud.instance, cloud.action, cloud.snapshots; cloud.schema.json), a
+// write only after its safety gate passed. The vendor's credentials are the extension's own secrets. Needs the
+// program to speak the protocol.
+type CloudHostItem struct {
+	ID CloudProviderID `json:"id"`
+	// What the computers' page calls the provider (Example Cloud). Not only spaces, no control characters.
+	Name string `json:"name"`
+	// A short lowercase id of whose machines these are (aws, gcp, oci, a panel's own name): the badge beside a bound
+	// computer. Several contributions may share one.
+	Vendor string `json:"vendor"`
+	// Actions of its own beside the standard ones (renew, a keep-alive probe), each id once. An instance offers one by
+	// naming its id in custom_actions.
+	CustomActions []CloudCustomAction `json:"custom_actions,omitempty"`
+}
+
+// CloudCustomAction: A provider's own action on an instance. safety is the gate the hub holds it to; confirm is what
+// the confirmation asks, in a sentence (needed unless safety is read).
+type CloudCustomAction struct {
+	ID CloudCustomActionID `json:"id"`
+	// The button's words (Renew). Not only spaces, no control characters.
+	Title  string      `json:"title"`
+	Safety CloudSafety `json:"safety"`
+	// The confirmation's sentence. Not only spaces, no control characters.
+	Confirm string `json:"confirm,omitempty"`
+}
+
+// CloudSafety: the gate an action on a cloud instance passes before a program hears of it: read (none: it changes
+// nothing), confirm (a person agreed to exactly this action), destructive (a person agreed and acknowledged the
+// instance by its id: it may lose what is unsaved).
+// A value this side does not know keeps its raw string and is not Valid.
+type CloudSafety string
+
+const (
+	CloudSafetyRead        CloudSafety = "read"
+	CloudSafetyConfirm     CloudSafety = "confirm"
+	CloudSafetyDestructive CloudSafety = "destructive"
+)
+
+// CloudSafeties are the values of CloudSafety, in order.
+var CloudSafeties = []CloudSafety{CloudSafetyRead, CloudSafetyConfirm, CloudSafetyDestructive}
+
+// Valid reports whether v is one of CloudSafeties.
+func (v CloudSafety) Valid() bool {
+	switch v {
+	case CloudSafetyRead, CloudSafetyConfirm, CloudSafetyDestructive:
+		return true
+	}
+	return false
 }
 
 // DiskOffloadKind: what a disk_offload provider takes: file, dir (a folder) or app (a macOS app bundle).
@@ -7667,6 +7721,525 @@ type OffloadError struct {
 	Items  []OffloadRunItem `json:"items,omitempty"`
 }
 
+// CloudAccountID: A provider's own name for a set of credentials, a project or a panel login: opaque to the hub,
+// never a secret.
+type CloudAccountID string
+
+// String returns the ID as it is on the wire.
+func (v CloudAccountID) String() string { return string(v) }
+
+// CloudInstanceID: an instance's id at its vendor: opaque to the hub, kept as given.
+type CloudInstanceID string
+
+// String returns the ID as it is on the wire.
+func (v CloudInstanceID) String() string { return string(v) }
+
+// CloudSnapshotID: A snapshot's id at its vendor.
+type CloudSnapshotID string
+
+// String returns the ID as it is on the wire.
+func (v CloudSnapshotID) String() string { return string(v) }
+
+// CloudRequestID: one request to act, the same for its retries.
+type CloudRequestID string
+
+// String returns the ID as it is on the wire.
+func (v CloudRequestID) String() string { return string(v) }
+
+// CloudMachineID: A computer's id at the hub.
+type CloudMachineID string
+
+// String returns the ID as it is on the wire.
+func (v CloudMachineID) String() string { return string(v) }
+
+// CloudProviderID: A cloud_hosts contribution's id (manifest.schema.json ID).
+type CloudProviderID string
+
+// String returns the ID as it is on the wire.
+func (v CloudProviderID) String() string { return string(v) }
+
+// CloudCustomActionID: A custom action's id, as the manifest declares it (manifest.schema.json ID).
+type CloudCustomActionID string
+
+// String returns the ID as it is on the wire.
+func (v CloudCustomActionID) String() string { return string(v) }
+
+// CloudMessage: one line for people, in the reader's language: why something failed or was refused.
+// It is free text, not a closed set of values.
+type CloudMessage string
+
+// CloudErrorCode: error.code a provider answers besides the base ErrorCode: not_found (no such instance or account,
+// or the credentials cannot see it), not_signed_in (credentials are missing, expired or refused: the user sets them
+// in the extension's settings), unsupported (this instance has no such action), invalid_state (the action does not
+// apply to the state the instance is in, such as start on a running one), rate_limited (the vendor's API asks to slow
+// down), capacity (the vendor has no capacity or quota for it now, such as a spot instance that cannot be placed),
+// refused (the vendor said no: say why in message), failed (anything else, say why in message). The manager shows the
+// message on one line, clipped.
+// A value this side does not know keeps its raw string and is not Valid.
+type CloudErrorCode string
+
+const (
+	CloudErrorCodeNotFound     CloudErrorCode = "not_found"
+	CloudErrorCodeNotSignedIn  CloudErrorCode = "not_signed_in"
+	CloudErrorCodeUnsupported  CloudErrorCode = "unsupported"
+	CloudErrorCodeInvalidState CloudErrorCode = "invalid_state"
+	CloudErrorCodeRateLimited  CloudErrorCode = "rate_limited"
+	CloudErrorCodeCapacity     CloudErrorCode = "capacity"
+	CloudErrorCodeRefused      CloudErrorCode = "refused"
+	CloudErrorCodeFailed       CloudErrorCode = "failed"
+)
+
+// CloudErrorCodes are the values of CloudErrorCode, in order.
+var CloudErrorCodes = []CloudErrorCode{CloudErrorCodeNotFound, CloudErrorCodeNotSignedIn, CloudErrorCodeUnsupported, CloudErrorCodeInvalidState, CloudErrorCodeRateLimited, CloudErrorCodeCapacity, CloudErrorCodeRefused, CloudErrorCodeFailed}
+
+// Valid reports whether v is one of CloudErrorCodes.
+func (v CloudErrorCode) Valid() bool {
+	switch v {
+	case CloudErrorCodeNotFound, CloudErrorCodeNotSignedIn, CloudErrorCodeUnsupported, CloudErrorCodeInvalidState, CloudErrorCodeRateLimited, CloudErrorCodeCapacity, CloudErrorCodeRefused, CloudErrorCodeFailed:
+		return true
+	}
+	return false
+}
+
+// CloudInstanceState: an instance's state in the words every vendor's are mapped to: running; stopped (off, and can
+// be started); starting; stopping; rebooting; preempted (a spot instance the vendor took back: off, and start may
+// bring it back); terminated (gone or being deleted: nothing acts on it); unknown (the provider cannot say).
+// A value this side does not know keeps its raw string and is not Valid.
+type CloudInstanceState string
+
+const (
+	CloudInstanceStateRunning    CloudInstanceState = "running"
+	CloudInstanceStateStopped    CloudInstanceState = "stopped"
+	CloudInstanceStateStarting   CloudInstanceState = "starting"
+	CloudInstanceStateStopping   CloudInstanceState = "stopping"
+	CloudInstanceStateRebooting  CloudInstanceState = "rebooting"
+	CloudInstanceStatePreempted  CloudInstanceState = "preempted"
+	CloudInstanceStateTerminated CloudInstanceState = "terminated"
+	CloudInstanceStateUnknown    CloudInstanceState = "unknown"
+)
+
+// CloudInstanceStates are the values of CloudInstanceState, in order.
+var CloudInstanceStates = []CloudInstanceState{CloudInstanceStateRunning, CloudInstanceStateStopped, CloudInstanceStateStarting, CloudInstanceStateStopping, CloudInstanceStateRebooting, CloudInstanceStatePreempted, CloudInstanceStateTerminated, CloudInstanceStateUnknown}
+
+// Valid reports whether v is one of CloudInstanceStates.
+func (v CloudInstanceState) Valid() bool {
+	switch v {
+	case CloudInstanceStateRunning, CloudInstanceStateStopped, CloudInstanceStateStarting, CloudInstanceStateStopping, CloudInstanceStateRebooting, CloudInstanceStatePreempted, CloudInstanceStateTerminated, CloudInstanceStateUnknown:
+		return true
+	}
+	return false
+}
+
+// CloudActionKind: what can be asked of an instance. Power: start, stop (a graceful shutdown), reboot (a graceful
+// restart), hard_reset (reset without shutting the system down), force_stop (power off without shutting it down).
+// Operations: sync_ip (read its addresses back from the vendor now), snapshot_list (its snapshots, asked with
+// cloud.snapshots, never cloud.action), snapshot_create, console (a link to its page or console at the vendor),
+// custom (one of the manifest's custom_actions, named by its id). The safety level of each is the hub's
+// (manifest.schema.json CloudSafety): sync_ip, snapshot_list and console read; start, stop, reboot and
+// snapshot_create confirm; hard_reset and force_stop destructive; a custom action's is the manifest's.
+// A value this side does not know keeps its raw string and is not Valid.
+type CloudActionKind string
+
+const (
+	CloudActionKindStart          CloudActionKind = "start"
+	CloudActionKindStop           CloudActionKind = "stop"
+	CloudActionKindReboot         CloudActionKind = "reboot"
+	CloudActionKindHardReset      CloudActionKind = "hard_reset"
+	CloudActionKindForceStop      CloudActionKind = "force_stop"
+	CloudActionKindSyncIp         CloudActionKind = "sync_ip"
+	CloudActionKindSnapshotList   CloudActionKind = "snapshot_list"
+	CloudActionKindSnapshotCreate CloudActionKind = "snapshot_create"
+	CloudActionKindConsole        CloudActionKind = "console"
+	CloudActionKindCustom         CloudActionKind = "custom"
+)
+
+// CloudActionKinds are the values of CloudActionKind, in order.
+var CloudActionKinds = []CloudActionKind{CloudActionKindStart, CloudActionKindStop, CloudActionKindReboot, CloudActionKindHardReset, CloudActionKindForceStop, CloudActionKindSyncIp, CloudActionKindSnapshotList, CloudActionKindSnapshotCreate, CloudActionKindConsole, CloudActionKindCustom}
+
+// Valid reports whether v is one of CloudActionKinds.
+func (v CloudActionKind) Valid() bool {
+	switch v {
+	case CloudActionKindStart, CloudActionKindStop, CloudActionKindReboot, CloudActionKindHardReset, CloudActionKindForceStop, CloudActionKindSyncIp, CloudActionKindSnapshotList, CloudActionKindSnapshotCreate, CloudActionKindConsole, CloudActionKindCustom:
+		return true
+	}
+	return false
+}
+
+// CloudActionStatus: cloud.action's answer: done (it has taken effect: instance, snapshot or url say what is there
+// now), accepted (the vendor took the request and the instance is on its way: read its state to follow), refused
+// (nothing happened; message says why).
+// A value this side does not know keeps its raw string and is not Valid.
+type CloudActionStatus string
+
+const (
+	CloudActionStatusDone     CloudActionStatus = "done"
+	CloudActionStatusAccepted CloudActionStatus = "accepted"
+	CloudActionStatusRefused  CloudActionStatus = "refused"
+)
+
+// CloudActionStatuses are the values of CloudActionStatus, in order.
+var CloudActionStatuses = []CloudActionStatus{CloudActionStatusDone, CloudActionStatusAccepted, CloudActionStatusRefused}
+
+// Valid reports whether v is one of CloudActionStatuses.
+func (v CloudActionStatus) Valid() bool {
+	switch v {
+	case CloudActionStatusDone, CloudActionStatusAccepted, CloudActionStatusRefused:
+		return true
+	}
+	return false
+}
+
+// CloudSnapshotState: A snapshot: creating, ready, failed or deleting.
+// A value this side does not know keeps its raw string and is not Valid.
+type CloudSnapshotState string
+
+const (
+	CloudSnapshotStateCreating CloudSnapshotState = "creating"
+	CloudSnapshotStateReady    CloudSnapshotState = "ready"
+	CloudSnapshotStateFailed   CloudSnapshotState = "failed"
+	CloudSnapshotStateDeleting CloudSnapshotState = "deleting"
+)
+
+// CloudSnapshotStates are the values of CloudSnapshotState, in order.
+var CloudSnapshotStates = []CloudSnapshotState{CloudSnapshotStateCreating, CloudSnapshotStateReady, CloudSnapshotStateFailed, CloudSnapshotStateDeleting}
+
+// Valid reports whether v is one of CloudSnapshotStates.
+func (v CloudSnapshotState) Valid() bool {
+	switch v {
+	case CloudSnapshotStateCreating, CloudSnapshotStateReady, CloudSnapshotStateFailed, CloudSnapshotStateDeleting:
+		return true
+	}
+	return false
+}
+
+// CloudInstanceRef: one instance of a provider: the account that holds it (the provider's own name for a set of
+// credentials, a project or a panel login, never a secret) and its id at the vendor. Both are opaque to the hub and
+// kept as given.
+type CloudInstanceRef struct {
+	Account CloudAccountID  `json:"account"`
+	ID      CloudInstanceID `json:"id"`
+}
+
+// CloudSpec: an instance's size. size is the vendor's name for it (its instance type, machine type or shape); cpu its
+// virtual CPUs (a burstable share may be a fraction); memory_mb and disk_gb what it has.
+type CloudSpec struct {
+	Size     string  `json:"size,omitempty"`
+	Cpu      float64 `json:"cpu,omitempty"`
+	MemoryMb int64   `json:"memory_mb,omitempty"`
+	DiskGb   int64   `json:"disk_gb,omitempty"`
+	Arch     string  `json:"arch,omitempty"`
+	OS       string  `json:"os,omitempty"`
+}
+
+// CloudLifecycle: what ends or interrupts an instance. spot: the vendor may take it back at any time (spot,
+// preemptible). expires_at: when what was paid for ends. renews_at: when it is charged or renewed next. keepalive_at:
+// by when the account has to show activity to keep it (a free tier's idle rule). auto_renew: it renews by itself.
+type CloudLifecycle struct {
+	Spot        bool      `json:"spot,omitempty"`
+	ExpiresAt   time.Time `json:"expires_at,omitzero"`
+	RenewsAt    time.Time `json:"renews_at,omitzero"`
+	KeepaliveAt time.Time `json:"keepalive_at,omitzero"`
+	AutoRenew   bool      `json:"auto_renew,omitempty"`
+}
+
+// CloudInstance: one instance as its provider reads it. account and id name it (CloudInstanceRef); display_name is
+// what people call it. public_ips and private_ips are plain IPv4 or IPv6 addresses, the one to reach it by first.
+// console_url is an https address of its page at the vendor, without credentials. actions are what can be asked of
+// this instance now (never custom; snapshot_list means cloud.snapshots answers), custom_actions the manifest's custom
+// actions that apply to it. observed_at is when the provider read it from the vendor. state_detail says more about
+// the state in the caller's language, one line.
+type CloudInstance struct {
+	Account       CloudAccountID        `json:"account"`
+	ID            CloudInstanceID       `json:"id"`
+	DisplayName   string                `json:"display_name,omitempty"`
+	State         CloudInstanceState    `json:"state"`
+	StateDetail   string                `json:"state_detail,omitempty"`
+	Region        string                `json:"region,omitempty"`
+	Zone          string                `json:"zone,omitempty"`
+	PublicIps     []string              `json:"public_ips,omitempty"`
+	PrivateIps    []string              `json:"private_ips,omitempty"`
+	Spec          *CloudSpec            `json:"spec,omitempty"`
+	Lifecycle     *CloudLifecycle       `json:"lifecycle,omitempty"`
+	ConsoleURL    string                `json:"console_url,omitempty"`
+	Actions       []CloudActionKind     `json:"actions,omitempty"`
+	CustomActions []CloudCustomActionID `json:"custom_actions,omitempty"`
+	ObservedAt    time.Time             `json:"observed_at,omitzero"`
+}
+
+// CloudInstancesParams: cloud.instances: every instance of every account the provider is set up with. refresh asks it
+// not to answer from its own cache.
+type CloudInstancesParams struct {
+	Contribution string `json:"contribution"`
+	Locale       string `json:"locale"`
+	Refresh      bool   `json:"refresh,omitempty"`
+}
+
+// CloudInstanceList: the provider's instances, at most 500. partial when the list may be incomplete (an account could
+// not be read: detail says which, in the caller's language). instances may be left out when there are none.
+type CloudInstanceList struct {
+	Instances []CloudInstance `json:"instances,omitempty"`
+	Partial   bool            `json:"partial,omitempty"`
+	Detail    string          `json:"detail,omitempty"`
+}
+
+// CloudInstanceParams: cloud.instance: how one instance is now. refresh asks the vendor rather than the provider's
+// cache. Answered with the CloudInstance of that account and id, or not_found.
+type CloudInstanceParams struct {
+	Contribution string           `json:"contribution"`
+	Locale       string           `json:"locale"`
+	Instance     CloudInstanceRef `json:"instance"`
+	Refresh      bool             `json:"refresh,omitempty"`
+}
+
+// CloudActionParams: cloud.action: act on one instance. action is never snapshot_list; custom carries the manifest's
+// custom action id in custom. name is a new snapshot's name (snapshot_create). The gate of the action's safety level
+// has passed before the program hears of it. request_id is the same for a retry of the same request: a program that
+// already did it answers what it answered.
+type CloudActionParams struct {
+	Contribution string              `json:"contribution"`
+	Locale       string              `json:"locale"`
+	Instance     CloudInstanceRef    `json:"instance"`
+	Action       CloudActionKind     `json:"action"`
+	Custom       CloudCustomActionID `json:"custom,omitempty"`
+	Name         string              `json:"name,omitempty"`
+	RequestID    CloudRequestID      `json:"request_id"`
+}
+
+// CloudSnapshot: one snapshot of an instance.
+type CloudSnapshot struct {
+	ID        CloudSnapshotID    `json:"id"`
+	Name      string             `json:"name,omitempty"`
+	State     CloudSnapshotState `json:"state"`
+	CreatedAt time.Time          `json:"created_at,omitzero"`
+	SizeGb    float64            `json:"size_gb,omitempty"`
+}
+
+// CloudActionResult: cloud.action's answer (CloudActionStatus). instance is the instance after the request when the
+// program knows it (sync_ip always answers it); snapshot the one snapshot_create made; url what console opens: an
+// https address, which may be signed and short-lived (expires_at). message is one line for people in the caller's
+// language: why it was refused, or what a custom action found.
+type CloudActionResult struct {
+	Status    CloudActionStatus `json:"status"`
+	Instance  *CloudInstance    `json:"instance,omitempty"`
+	Snapshot  *CloudSnapshot    `json:"snapshot,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	ExpiresAt time.Time         `json:"expires_at,omitzero"`
+	Message   string            `json:"message,omitempty"`
+}
+
+// CloudSnapshotsParams: cloud.snapshots: one instance's snapshots, newest first. Asked only of an instance whose
+// actions name snapshot_list.
+type CloudSnapshotsParams struct {
+	Contribution string           `json:"contribution"`
+	Locale       string           `json:"locale"`
+	Instance     CloudInstanceRef `json:"instance"`
+}
+
+// CloudSnapshotList: an instance's snapshots, at most 200. snapshots may be left out when there are none; the
+// manager's answer to the apps always has it.
+type CloudSnapshotList struct {
+	Snapshots []CloudSnapshot `json:"snapshots,omitempty"`
+}
+
+// CloudProvider: one enabled cloud_hosts contribution, as the manager lists it for the apps.
+type CloudProvider struct {
+	Extension string          `json:"extension"`
+	ID        CloudProviderID `json:"id"`
+	Name      string          `json:"name"`
+	Vendor    string          `json:"vendor"`
+}
+
+// CloudProviders: GET /api/v1/extensions/-/cloud: the enabled providers. No program is asked.
+type CloudProviders struct {
+	Providers []CloudProvider `json:"providers"`
+}
+
+// CloudHostAction: one thing the apps can ask of a host, with the gate the hub holds it to (safety). id, title and
+// confirm_text are a custom action's, from the manifest.
+type CloudHostAction struct {
+	Action      CloudActionKind     `json:"action"`
+	ID          CloudCustomActionID `json:"id,omitempty"`
+	Title       string              `json:"title,omitempty"`
+	Safety      CloudSafety         `json:"safety"`
+	ConfirmText string              `json:"confirm_text,omitempty"`
+}
+
+// CloudHost: one instance as the manager gives it to the apps: its provider (extension, provider, provider_name,
+// vendor), the instance as the program answered it and the hub re-checked it, the actions it takes with their safety
+// levels, and machine_id when a computer is bound to it.
+type CloudHost struct {
+	Extension    string            `json:"extension"`
+	Provider     CloudProviderID   `json:"provider"`
+	ProviderName string            `json:"provider_name"`
+	Vendor       string            `json:"vendor"`
+	Instance     CloudInstance     `json:"instance"`
+	Actions      []CloudHostAction `json:"actions"`
+	MachineID    CloudMachineID    `json:"machine_id,omitempty"`
+}
+
+// CloudProviderProblem: A provider whose instances could not be listed: code is a CloudError code, error says why in
+// the reader's language.
+type CloudProviderProblem struct {
+	Extension    string          `json:"extension"`
+	Provider     CloudProviderID `json:"provider"`
+	ProviderName string          `json:"provider_name"`
+	Code         string          `json:"code"`
+	Error        CloudMessage    `json:"error"`
+}
+
+// CloudHosts: GET /api/v1/extensions/-/cloud/instances: every enabled provider's instances together, the bound ones
+// naming their computer. A provider that failed is in problems and the others' instances are still listed; partial
+// when a provider said its own list may be incomplete.
+type CloudHosts struct {
+	Hosts    []CloudHost            `json:"hosts"`
+	Problems []CloudProviderProblem `json:"problems"`
+	Partial  bool                   `json:"partial,omitempty"`
+}
+
+// CloudBinding: A computer bound to an instance: machine_id ↔ (extension, provider, account, instance). The rest is
+// what the hub last read of it, kept so the computers' list draws a badge without asking a program: provider_name,
+// vendor, display_name, state and public_ip as of seen_at.
+type CloudBinding struct {
+	MachineID    CloudMachineID     `json:"machine_id"`
+	Extension    string             `json:"extension"`
+	Provider     CloudProviderID    `json:"provider"`
+	Account      CloudAccountID     `json:"account"`
+	Instance     CloudInstanceID    `json:"instance"`
+	BoundAt      time.Time          `json:"bound_at"`
+	ProviderName string             `json:"provider_name,omitempty"`
+	Vendor       string             `json:"vendor,omitempty"`
+	DisplayName  string             `json:"display_name,omitempty"`
+	State        CloudInstanceState `json:"state,omitempty"`
+	PublicIp     string             `json:"public_ip,omitempty"`
+	SeenAt       time.Time          `json:"seen_at,omitzero"`
+}
+
+// CloudBindings: GET /api/v1/extensions/-/cloud/bindings: every binding, by machine id. No program is asked.
+type CloudBindings struct {
+	Bindings []CloudBinding `json:"bindings"`
+}
+
+// CloudBindRequest: PUT /api/v1/machines/{mid}/cloud: bind the computer to this instance (replacing its binding). The
+// instance must be one the provider answers now, and bound to no other computer.
+type CloudBindRequest struct {
+	Extension string          `json:"extension"`
+	Provider  CloudProviderID `json:"provider"`
+	Account   CloudAccountID  `json:"account"`
+	Instance  CloudInstanceID `json:"instance"`
+}
+
+// CloudRecoveryPhase: where a start-and-reconnect is: starting (waiting for the instance to run), reconnecting (it
+// runs: the computer's node is being connected again), done (the computer is connected), failed (error says why; the
+// instance may still be running).
+// A value this side does not know keeps its raw string and is not Valid.
+type CloudRecoveryPhase string
+
+const (
+	CloudRecoveryPhaseStarting     CloudRecoveryPhase = "starting"
+	CloudRecoveryPhaseReconnecting CloudRecoveryPhase = "reconnecting"
+	CloudRecoveryPhaseDone         CloudRecoveryPhase = "done"
+	CloudRecoveryPhaseFailed       CloudRecoveryPhase = "failed"
+)
+
+// CloudRecoveryPhases are the values of CloudRecoveryPhase, in order.
+var CloudRecoveryPhases = []CloudRecoveryPhase{CloudRecoveryPhaseStarting, CloudRecoveryPhaseReconnecting, CloudRecoveryPhaseDone, CloudRecoveryPhaseFailed}
+
+// Valid reports whether v is one of CloudRecoveryPhases.
+func (v CloudRecoveryPhase) Valid() bool {
+	switch v {
+	case CloudRecoveryPhaseStarting, CloudRecoveryPhaseReconnecting, CloudRecoveryPhaseDone, CloudRecoveryPhaseFailed:
+		return true
+	}
+	return false
+}
+
+// CloudRecovery: A start-and-reconnect the manager is running or last ran for a computer. It lives in the manager's
+// memory: after its restart there is none, and the instance's state and the computer's own Reconnect say the rest.
+// ip_changed: the instance came back with another public address than the binding last had.
+type CloudRecovery struct {
+	Phase     CloudRecoveryPhase `json:"phase"`
+	StartedAt time.Time          `json:"started_at"`
+	Error     CloudMessage       `json:"error,omitempty"`
+	IpChanged bool               `json:"ip_changed,omitempty"`
+}
+
+// CloudMachine: GET /api/v1/machines/{mid}/cloud: the computer's binding and, when the provider answered, its host
+// now. bound false: no binding, nothing else. problem: the provider could not be asked or failed (the binding still
+// stands), with a CloudError code. recovery: a start-and-reconnect in progress or just ended.
+type CloudMachine struct {
+	Bound    bool                  `json:"bound"`
+	Binding  *CloudBinding         `json:"binding,omitempty"`
+	Host     *CloudHost            `json:"host,omitempty"`
+	Problem  *CloudProviderProblem `json:"problem,omitempty"`
+	Recovery *CloudRecovery        `json:"recovery,omitempty"`
+}
+
+// CloudActionRequest: POST /api/v1/machines/{mid}/cloud/actions, an app's request on the instance the computer is
+// bound to. id names a custom action. confirm: a person agreed to exactly this action (needed for safety confirm and
+// destructive, else confirmation_required). acknowledge: the instance's id typed or shown back (needed for
+// destructive, else acknowledgement_required). name: a new snapshot's name. reconnect (start only): once the instance
+// runs, connect the computer's node again (CloudRecovery).
+type CloudActionRequest struct {
+	Action      CloudActionKind     `json:"action"`
+	ID          CloudCustomActionID `json:"id,omitempty"`
+	Confirm     bool                `json:"confirm,omitempty"`
+	Acknowledge string              `json:"acknowledge,omitempty"`
+	Name        string              `json:"name,omitempty"`
+	Reconnect   bool                `json:"reconnect,omitempty"`
+}
+
+// CloudActionOutcome: the actions route's answer: status done or accepted (a refusal is a CloudError), the host after
+// it when the program said, the snapshot it made, the url to open (console), the provider's one line (message) and
+// the start-and-reconnect it began (recovery).
+type CloudActionOutcome struct {
+	Status    CloudActionStatus `json:"status"`
+	Host      *CloudHost        `json:"host,omitempty"`
+	Snapshot  *CloudSnapshot    `json:"snapshot,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	ExpiresAt time.Time         `json:"expires_at,omitzero"`
+	Message   string            `json:"message,omitempty"`
+	Recovery  *CloudRecovery    `json:"recovery,omitempty"`
+}
+
+// CloudSnapshots: GET /api/v1/machines/{mid}/cloud/snapshots: the bound instance's snapshots, newest first.
+type CloudSnapshots struct {
+	Snapshots []CloudSnapshot `json:"snapshots"`
+}
+
+// CloudAuditEntry: one audited change: a bind, an unbind or an action asked of an instance, with who asked (actor: a
+// device, or the assistant for a tool call a person approved) and how it ended (outcome: done, accepted, refused,
+// failed). Never a credential, an address or a provider's words.
+type CloudAuditEntry struct {
+	At        time.Time       `json:"at"`
+	Extension string          `json:"extension"`
+	Event     string          `json:"event"`
+	Actor     string          `json:"actor"`
+	MachineID CloudMachineID  `json:"machine_id,omitempty"`
+	Provider  CloudProviderID `json:"provider,omitempty"`
+	Instance  CloudInstanceID `json:"instance,omitempty"`
+	Action    string          `json:"action,omitempty"`
+	Safety    string          `json:"safety,omitempty"`
+	Outcome   string          `json:"outcome,omitempty"`
+}
+
+// CloudAudit: GET /api/v1/machines/{mid}/cloud/audit: what was asked of the computer's instances, newest first.
+type CloudAudit struct {
+	Audit []CloudAuditEntry `json:"audit"`
+}
+
+// CloudError: A cloud route's error: error in the reader's language and a code: bad_request, read_only, not_found (no
+// such computer, provider or instance), not_bound, already_bound (machine_id: the computer that holds the instance),
+// confirmation_required and acknowledgement_required (safety says which gate), unsupported, invalid_state,
+// not_signed_in, rate_limited, capacity, refused, plugin_failed (detail: the provider's own words, one line),
+// provider_off, deadline, no_database.
+type CloudError struct {
+	Error     CloudMessage   `json:"error"`
+	Code      string         `json:"code"`
+	Safety    CloudSafety    `json:"safety,omitempty"`
+	Detail    string         `json:"detail,omitempty"`
+	MachineID CloudMachineID `json:"machine_id,omitempty"`
+}
+
 type RoutineFactsParams struct {
 	Contribution RoutineContributionID `json:"contribution"`
 	// Calendar date in the routine's time zone.
@@ -8309,6 +8882,8 @@ var newDef = map[string]func() any{
 	"RepositoryProviderItem":        func() any { return new(RepositoryProviderItem) },
 	"TextLookupItem":                func() any { return new(TextLookupItem) },
 	"DiskOffloadItem":               func() any { return new(DiskOffloadItem) },
+	"CloudHostItem":                 func() any { return new(CloudHostItem) },
+	"CloudCustomAction":             func() any { return new(CloudCustomAction) },
 	"MemorySourceItem":              func() any { return new(MemorySourceItem) },
 	"RepositoryLinkLabel":           func() any { return new(RepositoryLinkLabel) },
 	"RoutineFactsItem":              func() any { return new(RoutineFactsItem) },
@@ -8819,6 +9394,35 @@ var newDef = map[string]func() any{
 	"OffloadRunRequest":             func() any { return new(OffloadRunRequest) },
 	"OffloadStarted":                func() any { return new(OffloadStarted) },
 	"OffloadError":                  func() any { return new(OffloadError) },
+	"CloudInstanceRef":              func() any { return new(CloudInstanceRef) },
+	"CloudSpec":                     func() any { return new(CloudSpec) },
+	"CloudLifecycle":                func() any { return new(CloudLifecycle) },
+	"CloudInstance":                 func() any { return new(CloudInstance) },
+	"CloudInstancesParams":          func() any { return new(CloudInstancesParams) },
+	"CloudInstanceList":             func() any { return new(CloudInstanceList) },
+	"CloudInstanceParams":           func() any { return new(CloudInstanceParams) },
+	"CloudActionParams":             func() any { return new(CloudActionParams) },
+	"CloudSnapshot":                 func() any { return new(CloudSnapshot) },
+	"CloudActionResult":             func() any { return new(CloudActionResult) },
+	"CloudSnapshotsParams":          func() any { return new(CloudSnapshotsParams) },
+	"CloudSnapshotList":             func() any { return new(CloudSnapshotList) },
+	"CloudProvider":                 func() any { return new(CloudProvider) },
+	"CloudProviders":                func() any { return new(CloudProviders) },
+	"CloudHostAction":               func() any { return new(CloudHostAction) },
+	"CloudHost":                     func() any { return new(CloudHost) },
+	"CloudProviderProblem":          func() any { return new(CloudProviderProblem) },
+	"CloudHosts":                    func() any { return new(CloudHosts) },
+	"CloudBinding":                  func() any { return new(CloudBinding) },
+	"CloudBindings":                 func() any { return new(CloudBindings) },
+	"CloudBindRequest":              func() any { return new(CloudBindRequest) },
+	"CloudRecovery":                 func() any { return new(CloudRecovery) },
+	"CloudMachine":                  func() any { return new(CloudMachine) },
+	"CloudActionRequest":            func() any { return new(CloudActionRequest) },
+	"CloudActionOutcome":            func() any { return new(CloudActionOutcome) },
+	"CloudSnapshots":                func() any { return new(CloudSnapshots) },
+	"CloudAuditEntry":               func() any { return new(CloudAuditEntry) },
+	"CloudAudit":                    func() any { return new(CloudAudit) },
+	"CloudError":                    func() any { return new(CloudError) },
 	"RoutineFactsParams":            func() any { return new(RoutineFactsParams) },
 	"RoutineReportSection":          func() any { return new(RoutineReportSection) },
 	"RoutineFactsResult":            func() any { return new(RoutineFactsResult) },
@@ -8942,5 +9546,9 @@ var Calls = map[string]Call{
 	"offload.run":                     {Name: "offload.run", From: "hub", Params: "OffloadRunParams", Result: "OffloadRunResult"},
 	"offload.job":                     {Name: "offload.job", From: "hub", Params: "OffloadJobParams", Result: "OffloadJob"},
 	"offload.cancel":                  {Name: "offload.cancel", From: "hub", Params: "OffloadJobParams", Result: "Empty"},
+	"cloud.instances":                 {Name: "cloud.instances", From: "hub", Params: "CloudInstancesParams", Result: "CloudInstanceList"},
+	"cloud.instance":                  {Name: "cloud.instance", From: "hub", Params: "CloudInstanceParams", Result: "CloudInstance"},
+	"cloud.action":                    {Name: "cloud.action", From: "hub", Params: "CloudActionParams", Result: "CloudActionResult"},
+	"cloud.snapshots":                 {Name: "cloud.snapshots", From: "hub", Params: "CloudSnapshotsParams", Result: "CloudSnapshotList"},
 	"routine_facts.collect":           {Name: "routine_facts.collect", From: "hub", Params: "RoutineFactsParams", Result: "RoutineFactsResult"},
 }

@@ -721,6 +721,9 @@ const PERSONA_VERB_KEY: Record<string, string> = {
   computer_run: "persona_computer_run",
   browser_run: "persona_browser_run",
   browser_look: "persona_browser_look",
+  // the cloud servers computers run on (docs/design/machine-cloud-ops.md)
+  cloud_hosts: "persona_cloud_hosts",
+  cloud_host_action: "persona_cloud_host_action",
   // commands run on a computer with a password typed on the iPhone (#1137)
   secret_run: "persona_secret_run",
 };

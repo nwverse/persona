@@ -27,6 +27,7 @@ from them instead of being written once per platform:
 | `memory.schema.json` | **Plugin-side.** The `memory_sources` extension point's call (#13532, registered in #13586; the item is `MemorySourceItem` in `manifest.schema.json`): the manager reads a memory extension's entries one by one with `memory.entries` (`MemoryEntriesParams`, `MemoryEntriesResult`, `MemoryEntry`, `MemoryErrorCode`) and grades them by scene itself; see `docs/extensions/extensions.md` ("Memory sources") |
 | `routine.schema.json` | **Plugin-side.** The `routine_facts.collect` request and its bounded plain-text facts and report sections. |
 | `offload.schema.json` | The `disk_offload` extension point's calls (#14576; the item is `DiskOffloadItem` in `manifest.schema.json`): the manager asks a provider's program `offload.inventory` (what it holds of a computer, drawn beside the disk usage map), `offload.run` (offload paths or restore items, after the user confirmed; `needs_install` names the tool to install), `offload.job` and the optional `offload.cancel`; and the manager routes' answers the apps read (`OffloadProviders`, `OffloadRunRequest`, `OffloadStarted`, `OffloadError`); see `docs/server/machine-usage-map.md` |
+| `cloud.schema.json` | The `cloud_hosts` extension point's calls (the item is `CloudHostItem`, with `CloudCustomAction` and `CloudSafety`, in `manifest.schema.json`): the manager asks a provider's program `cloud.instances` (every instance of its accounts), `cloud.instance` (one instance now), `cloud.action` (a standard or declared custom action, after the hub's safety gate passed; `request_id` makes a retry idempotent) and the optional `cloud.snapshots`, and re-checks every answer (`CloudInstance`, `CloudActionResult`, `CloudErrorCode`); and the manager routes' answers the apps read (`CloudProviders`, `CloudHosts`, `CloudBindings`, `CloudMachine`, `CloudBindRequest`, `CloudActionRequest`, `CloudActionOutcome`, `CloudRecovery`, `CloudSnapshots`, `CloudAudit`, `CloudError`); see `docs/design/machine-cloud-ops.md` |
 | `examples/` | Examples: `<definition>.<name>.json` must hold to the schema; those under `examples/invalid/` must not. The plugin-side schemas' are in `examples/plugin/` (and `examples/plugin/invalid/`) |
 
 ## Generating
@@ -311,7 +312,10 @@ The generator understands only what is below; anything else stops it with an err
   unique, `state` at most 16 KB) stay the hub's hand-written checks.
 - The opt-in typed keywords (`x-enum: closed`, `x-unknown: count`, `x-id`, enum-keyed maps made structs,
   `x-decode: strict`, `x-opaque`) and the Rust output are described in `schema/wire/README.md` ("Typed keywords
-  (opt-in)"); no extension schema uses them yet.
+  (opt-in)"). Extension schemas use them where a new type would otherwise be a bare string: `cloud.schema.json` (its
+  closed enums, its ids and `CloudMessage`), the three Cloud definitions of `manifest.schema.json` (`CloudSafety`
+  closed, the ids of `CloudHostItem` and `CloudCustomAction`) and its contribution ids, `kb.schema.json` and
+  `assistant.schema.json`.
 - A manifest example also has to pass the hub's `extension.Parse` (semantic checks beyond the schema, such as
   `contributes.events` needing `on_startup`): `server/internal/extension/manifest_examples_test.go` requires
   `examples/Manifest.*.json` and `sdk/templates/{go,ts}/persona-extension.json` (placeholders filled in) to install

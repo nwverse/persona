@@ -166,6 +166,7 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/machines/{mid}/iphone", withMachine(h.getIPhone))
 	api.HandleFunc("PUT /api/v1/machines/{mid}/iphone", withMachine(h.putIPhone))
 	api.HandleFunc("POST /api/v1/machines/{mid}/iphone/{action}", withMachine(h.postIPhoneJob))
+	h.cloudMachineRoutes(api)
 	api.HandleFunc("GET /api/v1/iphone", h.getIPhoneList)
 	api.HandleFunc("PUT /api/v1/iphone/consent", h.putIPhoneConsent)
 	api.HandleFunc("POST /api/v1/iphone/try", h.postIPhoneTry)
@@ -764,6 +765,7 @@ func (h *Manager) AgentTools(ctx context.Context, assistant bool) (agents, assis
 	if assistant {
 		assistantOnly = append(assistantOnly, h.computerTools()...)
 		assistantOnly = append(assistantOnly, h.browserTools()...)
+		assistantOnly = append(assistantOnly, h.cloudTools()...)
 		assistantOnly = append(assistantOnly, h.iphoneTools()...)
 		assistantOnly = append(assistantOnly, h.subscriptionTools()...)
 		if hp, _ := h.larkImageSource(); hp != nil && connector.StatusOf(ctx, h.connectors.Get(connector.Lark)).State == connector.StateOK {
@@ -802,6 +804,8 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 		return h.callComputerTool(ctx, session, name, args), true
 	case assistant && isBrowserTool(name):
 		return h.callBrowserTool(ctx, machine, session, name, args), true
+	case assistant && isCloudTool(name):
+		return h.callCloudTool(ctx, session, name, args), true
 	case assistant && isIPhoneTool(name):
 		return h.callIPhoneTool(ctx, session, name, args), true
 	case assistant && isSubscriptionTool(name):
@@ -846,6 +850,8 @@ func (h *Manager) ToolAccess(name string) (known, readOnly bool) {
 		return hp != nil, hp != nil
 	case isComputerTool(name), isBrowserTool(name), isIPhoneTool(name):
 		return true, false
+	case isCloudTool(name): // the hosts are read; an action is a write even when it only reads
+		return true, name == toolCloudHosts
 	case isSubscriptionTool(name):
 		return true, name == "subscription_list" || name == "subscription_get" ||
 			name == "subscription_sources" || name == "subscription_dry_run"

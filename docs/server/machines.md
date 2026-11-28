@@ -594,6 +594,19 @@ rules alone, for the extension manager to ask before an offload. An extension ca
 the generic `disk_offload` extension point. The whole contract (the tree, the rules, the routes, the extension point
 and what the apps draw) is [machine-usage-map.md](machine-usage-map.md).
 
+## Cloud host operations
+
+Many computers are rented instances at a cloud vendor or a hosting panel. An extension that speaks for such a vendor
+contributes the generic `cloud_hosts` extension point (namespace `cloud.`); core never names a vendor. The user binds a
+computer to the instance it runs on (at most one per computer, never guessed), and the computer's page, the offline
+sheet's **Start and reconnect** and the assistant's `cloud_hosts` / `cloud_host_action` tools then read the instance's
+state and offer its actions (start, shut down, restart, force restart, power off, read the addresses back, snapshots,
+console, declared custom actions). The extension manager holds the gate: each standard action's safety level is the
+hub's table, `confirm` and `destructive` actions need the user's confirmation before the program hears of them, and
+every write that passed the gate is audited; credentials stay in the extension. The whole contract (instances, actions and safety,
+bindings, start and reconnect, routes, audit, tools and what the web draws) is
+[machine-cloud-ops.md](../design/machine-cloud-ops.md).
+
 ## Renaming a computer
 
 A computer's name is its hub.json `name`; its id never changes. It can be renamed from the admin page, the web app's machine details (and, once PR 2 lands, the iOS / Mac / Android ones), the computer's

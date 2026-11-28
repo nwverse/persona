@@ -464,6 +464,12 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if len(m.DiskOffloads()) > 0 {
 		out = append(out, permissionLine(l, "disk_offload"))
 	}
+	// Speaking for a cloud vendor is shown, like recalls not agreed to here: it lists the servers of the accounts the
+	// user set it up with, and Persona asks it to change one only after the user confirmed that action
+	// (cloud_hosts.go, docs/design/machine-cloud-ops.md).
+	if len(m.CloudHosts()) > 0 {
+		out = append(out, permissionLine(l, "cloud_hosts"))
+	}
 	if topics := m.Topics(); len(topics) > 0 {
 		var what []string
 		for _, t := range topics {

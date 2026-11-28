@@ -381,6 +381,7 @@
         "text_lookup": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TextLookupItem"}},
         "memory_sources": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/MemorySourceItem"}},
         "disk_offload": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/DiskOffloadItem"}},
+        "cloud_hosts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/CloudHostItem"}},
         "messaging": {"type": "array", "minItems": 1, "items": {"$ref": "messaging.schema.json#/$defs/MessagingItem"}}
       }
     },
@@ -627,6 +628,44 @@
         "restore": {"type": "boolean", "description": "Items it holds can be brought back (Restore on the map's cloud side)."}
       },
       "required": ["id", "name"]
+    },
+    "CloudHostItem": {
+      "description": "A provider of cloud instances and hosted servers (docs/design/machine-cloud-ops.md): it lists the instances of the accounts the user set it up with, says how each is, and starts, stops and restarts them, reads their addresses back, snapshots them and opens their console, for the computers' page and the assistant. The manager asks the program (cloud.instances, cloud.instance, cloud.action, cloud.snapshots; cloud.schema.json), a write only after its safety gate passed. The vendor's credentials are the extension's own secrets. Needs the program to speak the protocol.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$", "x-id": "CloudProviderID"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\x00-\\x20\\x7f-\\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000][^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "What the computers' page calls the provider (Example Cloud). Not only spaces, no control characters."},
+        "vendor": {"$ref": "#/$defs/ID", "description": "A short lowercase id of whose machines these are (aws, gcp, oci, a panel's own name): the badge beside a bound computer. Several contributions may share one."},
+        "custom_actions": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"$ref": "#/$defs/CloudCustomAction"},
+          "description": "Actions of its own beside the standard ones (renew, a keep-alive probe), each id once. An instance offers one by naming its id in custom_actions."}
+      },
+      "required": ["id", "name", "vendor"]
+    },
+    "CloudCustomAction": {
+      "description": "A provider's own action on an instance. safety is the gate the hub holds it to; confirm is what the confirmation asks, in a sentence (needed unless safety is read).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$", "x-id": "CloudCustomActionID"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\x00-\\x20\\x7f-\\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000][^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "The button's words (Renew). Not only spaces, no control characters."},
+        "safety": {"$ref": "#/$defs/CloudSafety"},
+        "confirm": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\x00-\\x20\\x7f-\\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000][^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "The confirmation's sentence. Not only spaces, no control characters."}
+      },
+      "required": ["id", "title", "safety"],
+      "anyOf": [
+        {"description": "confirm is needed unless safety is read.", "properties": {"safety": {"const": "read"}}},
+        {"required": ["confirm"]}
+      ]
+    },
+    "CloudSafety": {
+      "description": "The gate an action on a cloud instance passes before a program hears of it: read (none: it changes nothing), confirm (a person agreed to exactly this action), destructive (a person agreed and acknowledged the instance by its id: it may lose what is unsaved).",
+      "type": "string",
+      "enum": ["read", "confirm", "destructive"],
+      "x-enum": "closed"
     },
     "DiskOffloadKind": {
       "description": "What a disk_offload provider takes: file, dir (a folder) or app (a macOS app bundle).",
