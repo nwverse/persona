@@ -182,6 +182,7 @@ func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (sta
 	push := func(ctx context.Context) { s.reportRelayRefused(ctx, machine, to, msg.Tool, code) }
 	switch {
 	case msg.standalonePermission():
+		s.workEvent(machine, to, "ask_internal_delivery_failed", map[string]any{"id": msg.Card, "to": to, "code": code})
 		what = "the card can return to the app when its hold ends"
 		return false, nil
 	case msg.Tool == superviseTool:

@@ -2061,6 +2061,9 @@ func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInterac
 // restart is not kept: a question that may have rung then only goes back on the apps when its time is up, while an
 // approval rings (ringAsks). True when it was routed.
 func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
+	if s.activeInternalCard(ix) {
+		return s.handNonOwnerCard(ix)
+	}
 	if !routable(ix) {
 		return false
 	}
@@ -2068,7 +2071,7 @@ func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 	defer s.supervise.routingMu.Unlock()
 	ladder, todo, home, ok := s.askLadder(ctx, ix)
 	if !ok {
-		return false
+		return s.handNonOwnerCard(ix)
 	}
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[ix.ID]
