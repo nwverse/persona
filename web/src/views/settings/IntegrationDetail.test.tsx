@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectModuleHub } from "../../core/module-host";
 import { t } from "../../i18n";
+import { setPairedToken } from "../../lib/api";
 import { ago } from "../../lib/format";
 import { channelStateText, type ChannelDetail } from "../../lib/channels";
 import type { HubConnector } from "../../lib/connectors";
@@ -239,6 +240,7 @@ beforeEach(() => {
   currentRepositories = [{ id: "repo-1", provider: "github" }, { id: "repo-2", provider: "github" }];
 
   resetManagerChoice();
+  setPairedToken("");
   setRoster(ROSTER);
   setStoreAssistant(true);
   connectModuleHub(getState, subscribe);
@@ -738,11 +740,11 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
     )!;
     const enable = delivery.querySelector<HTMLButtonElement>('[role="switch"]')!;
     const topic = t("settings-integrations.thread_mode_topic_title");
-    await act(async () => option(topic).click());
-    expect(enable.disabled).toBe(true);
     delayNextRead = true;
     const refresh = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-integrations.refresh")}"]`)!;
     await act(async () => refresh.click());
+    await act(async () => option(topic).click());
+    expect(enable.disabled).toBe(true);
     expect(option(topic).getAttribute("aria-checked")).toBe("true");
 
     currentChannels.larkx_chat.thread_mode = "per_group_and_topic";
@@ -776,8 +778,11 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
     expect(input().value).toBe("48");
     expect(section("channel")?.querySelector('[role="radio"][aria-checked="true"]')?.textContent)
       .toContain(t("settings-integrations.thread_mode_topic_title"));
+    // The narrow Settings host can also replace the detail subtree.
+    await act(async () => root.render(null));
     for (const wide of [false, true]) {
       await draw(wide);
+      await act(async () => vi.dynamicImportSettled());
       expect(input().value).toBe("48");
       expect(!!host.querySelector("[data-integrations-split]")).toBe(wide);
     }
