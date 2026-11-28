@@ -346,6 +346,8 @@ type Service struct {
 	prFeedback     prFeedbackBook         // pr_feedback.go: per-PR feedback cursors and routing serialization
 	parkReplies    parkReplyBook          // park_reply.go: bounded source reads for explicitly bound person replies
 
+	topicFollowups topicFollowupBook // topic_followup.go: activity in already linked task topics
+
 	reviewDismissals  taskReviewDismissalBook // task_review_dismissals.go
 	supervisorSettles supervisorSettleBook    // decision_supervisor_reply.go: exact choices waiting for their send (#13041)
 	repoRootsMu       sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time

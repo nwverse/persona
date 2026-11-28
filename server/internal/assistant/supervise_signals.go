@@ -142,6 +142,8 @@ type superviseSignal struct {
 	Told bool
 	// Inbox: the Inbox item an inbox signal names, and how many new messages it tells (supervise_inbox.go).
 	Inbox *prompts.SuperviseInbox
+	// Thread guards a linked-topic notification if the task is rebound while its digest waits.
+	Thread *TodoThread
 	// Optional routine batching keeps these in memory only, after routing and before delivery. They are never part of
 	// a persisted relay payload: once admitted, the existing queue owns delivery.
 	batchTo    string
@@ -276,7 +278,7 @@ func (g superviseSignal) urgent() bool {
 		return !g.JudgeDown
 	case sigNeedsYou, sigIdle, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigRecovered, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
-		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOutageRecovery, sigOwnerPresent:
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOutageRecovery, sigOwnerPresent, sigTopicFollowup:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress

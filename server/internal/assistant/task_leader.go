@@ -518,6 +518,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	}
 	if len(entries) == 0 {
 		s.ackSupervisePending(batch)
+		s.topicFollowupsTold(ctx, holds)
 		s.todoReadyTold(ctx, holds)
 		s.prMergeWakeTold(ctx, holds)
 		s.parentCloseoutTold(ctx, holds)
@@ -562,8 +563,10 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		return false
 	}
 	s.logf("supervise: %d signal(s) to task leader %s", len(entries), short(lead.SessionID))
+	s.ackTopicFollowupDedup(ctx, kept)
 	s.ackSupervisePending(batch)
 	s.parkedDueTold(ctx, kept)
+	s.topicFollowupsTold(ctx, holds)
 	s.estimateDueTold(ctx, kept)
 	s.todoReadyTold(ctx, holds)
 	s.prMergeWakeTold(ctx, holds)
@@ -639,6 +642,8 @@ func (s *Service) leaderDelivered(ctx context.Context, lead TodoAgent, entries [
 	if _, _, _, err := s.reserveSupervision(ctx, entries, sent, time.Now()); err != nil {
 		s.logf("supervise: task leader %s took the message; deduplication not recorded: %v", short(lead.SessionID), err)
 	}
+	s.ackTopicFollowupDedup(ctx, sent)
+	s.topicFollowupsTold(ctx, receipts)
 	s.ackSupervisePending(all)
 	s.parkedDueTold(ctx, sent)
 	s.estimateDueTold(ctx, sent)

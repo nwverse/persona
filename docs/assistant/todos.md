@@ -1163,6 +1163,36 @@ checkable and the request must actually have been sent; drafts and unknown sends
 
 ### Replies in the thread
 
+(#9763) **Other participants' follow-ups** use a read-only observation path (`assistant/topic_followup.go`). An open to-do's existing Feishu topic binding is watched through the configured,
+enabled built-in lark-cli connector, independently of parking, the named-person wait, Inbox AI processing, and
+`assistant.inbox_signals`. A human text/post message can notify its current Agent and supervisor; it is third-party
+context, never owner consent, task acceptance, or an automatic outward reply. Own-account, app/bot, forwarded,
+deleted, unsupported and unrelated-topic messages are excluded. Another participant's follow-up does not satisfy
+the named person's parking receipt. The Agent's subsequent turn follows the existing task/parking lifecycle.
+
+- Observation reuses the named-reply reader's provider identity, exact chat/topic proof, timestamp intervals and
+  read-only pagination helpers. The minute source pass visits at most four topics, oldest attempted first, with
+  eight seconds per read and a thirty-second read context; each source reads at most four newest-first pages of fifty,
+  stopping once it reaches the checkpoint. This is bounded polling, not a push subscription, complete history scan,
+  or fixed-latency guarantee. Source I/O never runs on task-list or snapshot requests.
+- `todos.thread.followups` is internal JSON, not part of the public `TodoThread` response or accepted binding input.
+  New bindings start at the recorded bind time. A legacy binding without a trustworthy cutoff establishes one on
+  its first successful observation without replaying earlier messages. If a checkpoint has a timestamp but no
+  recorded IDs, its first successful read records the IDs already visible at that timestamp. Subsequent reads can
+  deliver newly visible IDs at the same timestamp. The checked app/account identity is retained
+  across restarts; changing the configured identity does not silently retarget an existing watch. Unbind/rebind
+  explicitly starts a new observation. Incomplete or coarse ordering that cannot prove activity after binding is ignored.
+- A bounded timestamp/ID checkpoint and one pending source receipt coalesce activity into the newest topic context.
+  Commit the receipt before dispatch and keep it until both paths acknowledge it.
+  Use the existing task input and supervisor digest paths; choose the current Agent
+  and revalidate the current open task, binding and queued copy. Closed/rebound tasks drop stale work. A binding CAS
+  prevents a read or retry from overwriting a newer binding/checkpoint; observation does not update `todo.updated_at`.
+- The supervisor copy distinguishes a successful Agent send from a retryable failure or missing Agent. The observer leaves stopped and unreachable Agents pending for retry.
+  The receipt survives failed writes and reconstruction.
+  Repeated polls do not resend an acknowledged Agent notification. A crash after a transport accepted a message but
+  before its receipt/acknowledgment was committed can still retry: this is at-least-once, not exactly-once delivery,
+  execution, or #6206's separate general delivery/outbox redesign. No owner push or external message is sent here.
+
 (#5279, step 3.) The bot routes group messages by their topic (`modules/lark/thread.go`). It skips private-chat commands, card answers and the current target. The hub hands the assistant only the owner's messages in a topic of a group chat the owner opted in (`docs/extensions/bots.md` ("Topic group chats")); the assistant's own rule here is the second line of defense.
 
 **Using it in Lark**: (1) in the Open Platform console give the bot `im:message.group_at_msg:readonly` (every message then has to @ the bot) or `im:message.group_msg` (all messages in the group, needs the admin's review), and add the bot to a group chat with you; (2) send `/topics` in that group, the bot answers that it is on; (3) to track work from an unbound topic, send `/todo` followed by what you want done; (4) what you write in the topic is a decision of the to-do and goes to its Agent, and the answer, the progress card and the Agent's questions and permission requests come back into the same topic, where the buttons (Stop included) work for you alone. `/topics off` turns the group off.
