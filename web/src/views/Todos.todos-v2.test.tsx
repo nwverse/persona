@@ -1232,6 +1232,65 @@ describe("TodosView slim header & left pane under todos_v2 (#14830)", () => {
     expect(host.querySelector("[data-testid=todos-summary]")).toBeTruthy();
     expect(host.querySelector("[data-testid=todos-list-column]")?.className).toContain("md:w-[380px]");
   });
+
+  it("enforces a strict slim-row line-2 badge quota so the primary decision/wait cue is never starved (#17696)", async () => {
+    const overloaded: Todo[] = [
+      {
+        id: "overloaded_goal",
+        title: "Ship cross-repo release with many badges",
+        direction_id: "dir-platform",
+        project: "persona",
+        pr_url: "https://github.com/nwverse/persona/pull/17696",
+        spaces: [
+          { machine_id: "m1", space: "core", linked_at: iso(2 * HOUR) },
+          { machine_id: "m1", space: "web", linked_at: iso(2 * HOUR) },
+        ],
+        child_summary: { total: 4, open: 3, needs_you: 2, working: 1, done: 1 },
+        repo_gate: {
+          state: "blocked_ci",
+          target_count: 3,
+          ready_count: 2,
+          reference_count: 0,
+          blocking_repo: "nwverse/persona",
+          reason: "ci_failed",
+        },
+        ask: { verdict: "Approve production rollout window?", asked_at: iso(1 * HOUR), outcome: "decide" },
+        created_at: iso(3 * HOUR),
+        updated_at: iso(1 * HOUR),
+        view: view("needs_you", "owner_decides", "needs_you", 0),
+      },
+    ];
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/mergetrain") {
+        return {
+          repos: [],
+          by_todo: {
+            overloaded_goal: { repo_key: "nwverse/persona", position: 1, state: "escalated" },
+          },
+        };
+      }
+      return {};
+    });
+
+    await render({
+      todos: overloaded,
+      todosV2: true,
+      leaders: ["dir-platform"],
+      conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform" }],
+    });
+
+    const line2 = host.querySelector<HTMLElement>('[data-todo="overloaded_goal"] [data-testid="todo-slim-line2"]')!;
+    expect(line2).toBeTruthy();
+    // With a primary decision cue present, at most 1 highest-signal badge renders and lower-priority badges demote to detail
+    expect(line2.getAttribute("data-badge-count")).toBe("1");
+    expect(Number(line2.getAttribute("data-omitted-badges"))).toBeGreaterThanOrEqual(4);
+    expect(line2.querySelector("[data-testid=todo-child-summary-needs-you]")).toBeTruthy();
+    expect(line2.querySelector("[data-testid=todo-direction-tag]")).toBeNull();
+    expect(line2.querySelector("[data-testid=todo-project-tag]")).toBeNull();
+    expect(line2.querySelector("[data-testid=todo-row-repo-gate]")).toBeNull();
+    expect(line2.querySelector("[data-testid=todo-ask]")?.textContent).toBe("Approve production rollout window?");
+  });
 });
 
 describe("TodoDetail single-item Change direction control under todos_v2 (#15653)", () => {

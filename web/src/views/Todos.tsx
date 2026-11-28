@@ -143,8 +143,10 @@ import {
   isPersonalSlimRow,
   repoCountOf,
   sectionStartsFoldedV2,
+  selectSlimLine2Badges,
   slimSecondaryCue,
   type SlimCueTone,
+  type SlimLine2BadgeKind,
 } from "../lib/todo-slim-row";
 import { DecisionQueuePanel, decisionQueueCandidates } from "../features/todos/DecisionQueuePanel";
 import { TodoCausalTraceSection } from "../features/todos/TodoCausalTraceSection";
@@ -3406,15 +3408,101 @@ const TodoListItem = memo(function TodoListItem({
     });
     const showSeenAction = effectiveSection === "just_done" && seenCanFile(todo) && Boolean(onSeen);
     const showRestoreAction = section === "shelved" && Boolean(onRestore);
+    const line2Budget = selectSlimLine2Badges(
+      {
+        goalBlocked: Boolean(goalSummary && goalSummary.blockedCount > 0),
+        childNeedsYou: Boolean(!goalSummary && childSummary && childSummary.needs_you > 0),
+        repoGate: Boolean(rowRepoGate && rowRepoGateText),
+        mergeTrain: Boolean(mergeTrainBadge),
+        parentGoal: Boolean(parentGoalTitle),
+        childWorking: Boolean(childSummary && childSummary.working > 0),
+        direction: Boolean(view.directionLabel),
+        project: Boolean(view.projectLabel),
+        repoCount: Boolean(!rowRepoGate && repoCount > 0),
+      },
+      { hasCue: Boolean(cue), hasAction: showSeenAction || showRestoreAction },
+    );
+    const badgeMaxClass = cue ? "max-w-[42%]" : "max-w-[55%]";
+    const renderLine2Badge = (kind: SlimLine2BadgeKind): ReactNode => {
+      switch (kind) {
+        case "parent_goal":
+          return parentGoalTitle ? (
+            <span key="parent_goal" data-testid="todo-parent-goal" className={cx("inline-flex min-w-0 shrink items-center gap-1 truncate", badgeMaxClass)}>
+              <Icon name="target" size={11} stroke={2} className="shrink-0" />
+              <span className="truncate">{t("todos.goal_parent_hint", { title: parentGoalTitle })}</span>
+            </span>
+          ) : null;
+        case "goal_blocked":
+          return goalSummary && goalSummary.blockedCount > 0 ? (
+            <span key="goal_blocked" data-testid="todo-goal-blocked" className={cx("shrink-0 truncate whitespace-nowrap font-medium text-attention", badgeMaxClass)}>
+              {t("todos.goal_blocked", { count: goalSummary.blockedCount })}
+            </span>
+          ) : null;
+        case "child_needs_you":
+          return !goalSummary && childSummary && childSummary.needs_you > 0 ? (
+            <span key="child_needs_you" data-testid="todo-child-summary-needs-you" className={cx("shrink-0 truncate whitespace-nowrap font-medium text-attention", badgeMaxClass)}>
+              {t("todos.goal_blocked", { count: childSummary.needs_you })}
+            </span>
+          ) : null;
+        case "child_working":
+          return childSummary && childSummary.working > 0 ? (
+            <span key="child_working" data-testid="todo-child-summary-working" className={cx("shrink-0 truncate whitespace-nowrap text-ink-2 tabular-nums", badgeMaxClass)}>
+              {t("todos.child_summary_working", { count: childSummary.working })}
+            </span>
+          ) : null;
+        case "mergetrain":
+          return mergeTrainBadge ? (
+            <span
+              key="mergetrain"
+              data-testid="todo-mergetrain-badge"
+              data-mergetrain-state={mergeTrainBadge.state}
+              data-mergetrain-position={mergeTrainBadge.position}
+              title={mergeTrainBadge.repo_key}
+              className={cx(
+                "shrink-0 truncate rounded-chip px-1.5 text-submeta font-medium whitespace-nowrap tabular-nums",
+                badgeMaxClass,
+                mergeTrainBadge.state === "escalated"
+                  ? "bg-orange-tint text-attention"
+                  : "bg-field text-ink-2",
+              )}
+            >
+              {mergeTrainBadgeText(mergeTrainBadge)}
+            </span>
+          ) : null;
+        case "direction":
+          return view.directionLabel ? (
+            <span key="direction" data-testid="todo-direction-tag" className={cx("max-w-28 shrink-0 truncate text-ink-2", cue && "max-w-[42%]")}>
+              {view.directionLabel}
+            </span>
+          ) : null;
+        case "project":
+          return view.projectLabel ? (
+            <span key="project" data-testid="todo-project-tag" className={cx("max-w-24 shrink-0 truncate rounded-chip bg-field px-1.5 text-ink-3", cue && "max-w-[42%]")}>
+              {view.projectLabel}
+            </span>
+          ) : null;
+        case "repo_gate":
+          return rowRepoGate && rowRepoGateText ? (
+            <span
+              key="repo_gate"
+              data-testid="todo-row-repo-gate"
+              data-gate-state={rowRepoGate.state}
+              title={rowRepoGateText}
+              className={cx("shrink-0 truncate whitespace-nowrap tabular-nums", cue ? "max-w-[42%]" : "max-w-44", rowRepoGateToneClass[repoGateTone(rowRepoGate.state)])}
+            >
+              {rowRepoGateText}
+            </span>
+          ) : null;
+        case "repo_count":
+          return repoCount > 0 ? (
+            <span key="repo_count" data-testid="todo-repo-count" className="shrink-0 whitespace-nowrap tabular-nums">
+              {t("todos.slim_repo_count", { count: repoCount })}
+            </span>
+          ) : null;
+      }
+    };
     const hasLine2 = Boolean(
-      parentGoalTitle ||
-      (goalSummary && goalSummary.blockedCount > 0) ||
-      (childSummary && (childSummary.working > 0 || (!goalSummary && childSummary.needs_you > 0))) ||
-      mergeTrainBadge ||
-      view.directionLabel ||
-      view.projectLabel ||
-      rowRepoGate ||
-      repoCount > 0 ||
+      line2Budget.shown.length > 0 ||
       cue ||
       showSeenAction ||
       showRestoreAction,
@@ -3545,70 +3633,15 @@ const TodoListItem = memo(function TodoListItem({
             </span>
           </div>
 
-          {/* Line 2: concise metadata (direction, project, repo count, parent goal, or short blocker/decision cue) */}
+          {/* Line 2: budgeted metadata badges + guaranteed readable wait/decision cue (#17696) */}
           {hasLine2 && (
-            <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden text-submeta text-ink-3" data-testid="todo-slim-line2">
-              {parentGoalTitle && (
-                <span data-testid="todo-parent-goal" className="inline-flex min-w-0 shrink items-center gap-1 truncate">
-                  <Icon name="target" size={11} stroke={2} className="shrink-0" />
-                  <span className="truncate">{t("todos.goal_parent_hint", { title: parentGoalTitle })}</span>
-                </span>
-              )}
-              {goalSummary && goalSummary.blockedCount > 0 && (
-                <span data-testid="todo-goal-blocked" className="shrink-0 whitespace-nowrap font-medium text-attention">
-                  {t("todos.goal_blocked", { count: goalSummary.blockedCount })}
-                </span>
-              )}
-              {!goalSummary && childSummary && childSummary.needs_you > 0 && (
-                <span data-testid="todo-child-summary-needs-you" className="shrink-0 whitespace-nowrap font-medium text-attention">
-                  {t("todos.goal_blocked", { count: childSummary.needs_you })}
-                </span>
-              )}
-              {childSummary && childSummary.working > 0 && (
-                <span data-testid="todo-child-summary-working" className="shrink-0 whitespace-nowrap text-ink-2 tabular-nums">
-                  {t("todos.child_summary_working", { count: childSummary.working })}
-                </span>
-              )}
-              {mergeTrainBadge && (
-                <span
-                  data-testid="todo-mergetrain-badge"
-                  data-mergetrain-state={mergeTrainBadge.state}
-                  data-mergetrain-position={mergeTrainBadge.position}
-                  title={mergeTrainBadge.repo_key}
-                  className={cx(
-                    "shrink-0 rounded-chip px-1.5 text-submeta font-medium whitespace-nowrap tabular-nums",
-                    mergeTrainBadge.state === "escalated"
-                      ? "bg-orange-tint text-attention"
-                      : "bg-field text-ink-2",
-                  )}
-                >
-                  {mergeTrainBadgeText(mergeTrainBadge)}
-                </span>
-              )}
-              {view.directionLabel && (
-                <span data-testid="todo-direction-tag" className="max-w-28 shrink-0 truncate text-ink-2">
-                  {view.directionLabel}
-                </span>
-              )}
-              {view.projectLabel && (
-                <span data-testid="todo-project-tag" className="max-w-24 shrink-0 truncate rounded-chip bg-field px-1.5 text-ink-3">
-                  {view.projectLabel}
-                </span>
-              )}
-              {rowRepoGate && rowRepoGateText ? (
-                <span
-                  data-testid="todo-row-repo-gate"
-                  data-gate-state={rowRepoGate.state}
-                  title={rowRepoGateText}
-                  className={cx("max-w-44 shrink-0 truncate whitespace-nowrap tabular-nums", rowRepoGateToneClass[repoGateTone(rowRepoGate.state)])}
-                >
-                  {rowRepoGateText}
-                </span>
-              ) : repoCount > 0 && (
-                <span data-testid="todo-repo-count" className="shrink-0 whitespace-nowrap tabular-nums">
-                  {t("todos.slim_repo_count", { count: repoCount })}
-                </span>
-              )}
+            <div
+              className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden text-submeta text-ink-3"
+              data-testid="todo-slim-line2"
+              data-badge-count={line2Budget.shown.length}
+              data-omitted-badges={line2Budget.omittedCount || undefined}
+            >
+              {line2Budget.shown.map(renderLine2Badge)}
               {cue && (
                 <span
                   data-testid={cue.testId}
