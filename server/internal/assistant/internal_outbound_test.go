@@ -193,11 +193,21 @@ func TestInternalOutboundApprovalIsScopedToCurrentBoundary(t *testing.T) {
 					t.Fatal("old internal approval replaced owner privacy consent")
 				}
 			}
-			if err := e.s.resolve(next.ID, proto.Resolution{Cancel: true}); err != nil {
-				t.Fatal(err)
+			if mode == "target" {
+				if _, err := runJSON(t, e.s, "conv1", "interaction_answer", map[string]any{
+					"machine": "server", "session_id": "side-chat", "interaction_id": next.ID,
+					"allow": false, "reason": "The second target is not authorized",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				deny := false
+				if err := e.s.resolve(next.ID, proto.Resolution{Allow: &deny}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if second := <-done; second.Allowed || second.Failure != nil {
-				t.Fatalf("cancelled second proposal was authorized: %+v", second)
+				t.Fatalf("refused second proposal was authorized: %+v", second)
 			}
 		})
 	}
