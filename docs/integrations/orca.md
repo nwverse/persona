@@ -46,7 +46,7 @@ Orca is an engine of its own (engine name `orca`, display name "Orca"), alone or
 - **No push**: does not implement `Watcher`. Orca machines have no event stream; node polls a snapshot every second, not the slow 10-second snapshot used with herdr event streams.
   Keep it lightweight: normally omit layouts in `terminal.list` (`includeVisualLayouts:false`; Orca says this is expensive), requesting them only when the terminal set or a worktree's `topologyRevisions` changes,
   or after 30 seconds. Pass the previous `afterSnapshotId` to `worktree.ps`, which returns only `unchanged` if unchanged. Scan processes at most every 1.5 seconds,
-  in two steps (`ps -o pid=,stat=,etime=,args=` to find Claude Code, Codex, TRAE CLI, and the Antigravity CLI (`agy`), then `ps -E` only for them). `Agents` after a failed snapshot reuses that attempt's result.
+  in two steps (`ps -o pid=,stat=,etime=,args=` to find Claude Code, Codex, TRAE CLI, omp and the Antigravity CLI (`agy`), then `ps -E` only for them; Linux reads `/proc`). `Agents` after a failed snapshot reuses that attempt's result.
   Local measurement: about 0.2 seconds per refresh (10 terminals).
 
 ### Mapping
@@ -100,7 +100,7 @@ Orca is an engine of its own (engine name `orca`, display name "Orca"), alone or
 - `~/Library/Application Support/orca/agent-hooks/last-status.json` also has per-pane session IDs (`entries[paneKey].providerSession.id`),
   but is an internal Orca file; do not use it.
 - TRAE CLI on Linux and macOS uses the same foreground send check as Claude Code and Codex. The `traecli` command and its older alias identify the same agent. TRAE CLI history identifies the session, and the send check requires the matching foreground process in the pane.
-- Live integration checks are read-only: `go test -tags orcalive -run OrcaLive ./internal/node/ -v` uses a read-only client (allowing only `status.get`, `terminal.list`,
+- Live checks: the `orcalive` test against the user's own Orca is read-only, `go test -tags orcalive -run OrcaLive ./internal/node/ -v` uses a read-only client (allowing only `status.get`, `terminal.list`,
   `worktree.ps`, `terminal.read`, `terminal.agentStatus`; all other methods reject before sending) to list the active Orca once, print panes, status, pid, and session ID, and compare against
   `sessions/<pid>.json`, without printing screen content. Orca-mutating calls are tested against fake runtimes: `orcarttest` validates every request against Orca's
   parameter schema (`src/shared/rpc-contract`), returning and recording `invalid_argument` for invalid requests; tests verify none occur. And against a real Orca
