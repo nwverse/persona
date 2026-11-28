@@ -18,17 +18,21 @@ import (
 // Orca bots on this computer (#16891): one bot whose Home Chat is a structured session in its home folder, another
 // structured session there that the bot ran on its own (a Look around), and the items it keeps.
 const (
-	orcaBotID        = "bot-c3"
-	fakeBotHome      = "orca_home_a1"
-	fakeBotHomeUUID  = "6f1e2d3c-4b5a-4c69-8d7e-0a1b2c3d4e5f"
-	orcaBotRun       = "orca_run_b2"
-	orcaBotRunUUID   = "7a2b3c4d-5e6f-4a7b-9c8d-1e2f3a4b5c6d"
-	fakeBotNewHome   = "orca_home_new"
-	orcaBotFolder    = "/home/example/.orca/bots/helper"
-	orcaBotWorktree  = "folder:e5"
-	orcaBotItemUID   = "item-d4"
-	orcaBotQuestion  = "Which first?"
-	orcaBotQuestion2 = "**Ship** it today?\nMore words."
+	orcaBotID          = "bot-c3"
+	fakeBotHome        = "orca_home_a1"
+	fakeBotHomeUUID    = "6f1e2d3c-4b5a-4c69-8d7e-0a1b2c3d4e5f"
+	orcaBotRun         = "orca_run_b2"
+	orcaBotRunUUID     = "7a2b3c4d-5e6f-4a7b-9c8d-1e2f3a4b5c6d"
+	fakeBotNewHome     = "orca_home_new"
+	fakeBotNewHomeUUID = "8b3c4d5e-6f7a-4b8c-8d9e-2f3a4b5c6d7e"
+	// fakeBotTabHome is a Home Chat a reset has just opened: no turn yet, so only Orca's tabs list it.
+	fakeBotTabHome     = "orca_home_tab"
+	fakeBotTabHomeUUID = "9c4d5e6f-7a8b-4c9d-8e0f-3a4b5c6d7e8f"
+	orcaBotFolder      = "/home/example/.orca/bots/helper"
+	orcaBotWorktree    = "folder:e5"
+	orcaBotItemUID     = "item-d4"
+	orcaBotQuestion    = "Which first?"
+	orcaBotQuestion2   = "**Ship** it today?\nMore words."
 )
 
 // orcaBots is a fake Orca with the bot: its roster, chats, items and the two structured sessions' rows and history.
@@ -40,22 +44,18 @@ type orcaBots struct {
 	status   string // the item's status
 	question string // the item question's event ("": none)
 	twoAsks  bool   // the question has two decisions
+	closed   bool   // Orca closed the first Home Chat (a reset): worktree.ps no longer lists it
+	tabs     []any  // the chats among the tabs (session.tabs.listAll) beyond worktree.ps's
+	refuse   int    // how many answers Orca refuses before it takes one
 }
 
 func newOrcaBots(t *testing.T) *orcaBots {
 	t.Helper()
 	t.Setenv("ORCA_USER_DATA_PATH", t.TempDir())
-	o := &orcaBots{f: orcarttest.New(t), home: fakeBotHome, status: "needs_you", question: "e4"}
-	o.f.SetWorktrees(map[string]any{"worktreeId": orcaBotWorktree, "path": orcaBotFolder, "branch": "", "hostId": "local",
-		"agents": []any{
-			map[string]any{"paneKey": "structured-agent-session-" + fakeBotHome + ":aa", "agentType": "claude", "state": "done",
-				"conversationName": "Helper", "updatedAt": 1795756239063},
-			map[string]any{"paneKey": "structured-agent-session-" + orcaBotRun + ":bb", "agentType": "claude", "state": "done",
-				"conversationName": "Look around", "updatedAt": 1795751550629},
-			map[string]any{"paneKey": "structured-agent-session-" + fakeBotNewHome + ":cc", "agentType": "claude", "state": "done",
-				"conversationName": "Helper", "updatedAt": 1795751550000},
-		}})
-	providers := map[string]string{fakeBotHome: fakeBotHomeUUID, orcaBotRun: orcaBotRunUUID, fakeBotNewHome: "8b3c4d5e-6f7a-4b8c-8d9e-2f3a4b5c6d7e"}
+	o := &orcaBots{f: orcarttest.New(t), home: fakeBotHome, status: "needs_you", question: "e4", tabs: []any{}}
+	o.trees()
+	providers := map[string]string{fakeBotHome: fakeBotHomeUUID, orcaBotRun: orcaBotRunUUID, fakeBotNewHome: fakeBotNewHomeUUID,
+		fakeBotTabHome: fakeBotTabHomeUUID}
 	o.f.Handle("agentSession.history", func(p map[string]any) any {
 		session, _ := p["sessionId"].(string)
 		provider, ok := providers[session]
@@ -74,6 +74,11 @@ func newOrcaBots(t *testing.T) *orcaBots {
 	})
 	o.f.Handle("agentSession.send", func(map[string]any) any {
 		return map[string]any{"ok": true, "replayed": false, "value": map[string]any{}}
+	})
+	o.f.Handle("session.tabs.listAll", func(map[string]any) any {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		return map[string]any{"snapshots": []any{map[string]any{"worktree": orcaBotWorktree, "tabs": o.tabs}}}
 	})
 	o.f.Handle("bots.roster", func(map[string]any) any {
 		return map[string]any{"bots": []any{map[string]any{"id": orcaBotID, "name": "Helper", "agent": "claude", "paused": false,
@@ -114,14 +119,44 @@ func newOrcaBots(t *testing.T) *orcaBots {
 		}
 		return map[string]any{"botId": orcaBotID, "botName": "Helper", "items": items}
 	})
-	o.f.Handle("bots.items.owner.comment", func(map[string]any) any { return map[string]any{"eventId": "e5"} })
+	o.f.Handle("bots.items.owner.comment", func(map[string]any) any {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.refuse > 0 {
+			o.refuse--
+			return orcarttest.Fail{Code: "item_busy"}
+		}
+		return map[string]any{"eventId": "e5"}
+	})
 	return o
 }
 
+// trees lists the chats in the bot's folder in worktree.ps: its first Home Chat (until Orca closed it), its own run and
+// the chat a reset makes its Home Chat.
+func (o *orcaBots) trees() {
+	o.mu.Lock()
+	closed := o.closed
+	o.mu.Unlock()
+	agents := []any{}
+	if !closed {
+		agents = append(agents, map[string]any{"paneKey": "structured-agent-session-" + fakeBotHome + ":aa", "agentType": "claude",
+			"state": "done", "conversationName": "Helper", "updatedAt": 1795756239063})
+	}
+	agents = append(agents,
+		map[string]any{"paneKey": "structured-agent-session-" + orcaBotRun + ":bb", "agentType": "claude", "state": "done",
+			"conversationName": "Look around", "updatedAt": 1795751550629},
+		map[string]any{"paneKey": "structured-agent-session-" + fakeBotNewHome + ":cc", "agentType": "claude", "state": "done",
+			"conversationName": "Helper", "updatedAt": 1795751550000})
+	o.f.SetWorktrees(map[string]any{"worktreeId": orcaBotWorktree, "path": orcaBotFolder, "branch": "", "hostId": "local",
+		"agents": agents})
+}
+
+// set changes the fake's bot under its lock, then lists its chats again.
 func (o *orcaBots) set(fn func(o *orcaBots)) {
 	o.mu.Lock()
 	fn(o)
 	o.mu.Unlock()
+	o.trees()
 }
 
 // botNode is a node whose Orca client is the fake (no hub, no bridge): the manager's agentbot.* calls.
@@ -243,14 +278,17 @@ func asRPC(err error, out **rpc.Error) bool {
 	return ok
 }
 
-// orcaBotsBridge is a node with a fake hub whose Orca bridge runs against the fake bots; the hub answers cards with
-// resolve (nil: it never answers while the test runs).
-func orcaBotsBridge(t *testing.T, resolve func(proto.Interaction) proto.Resolution) (*Node, *runtimeHub, *orcaBots) {
+// orcaBotsBridge is a node with a fake hub whose Orca bridge runs against the fake bots, set up by setup before it
+// starts; the hub answers cards with resolve (nil: it never answers while the test runs).
+func orcaBotsBridge(t *testing.T, resolve func(proto.Interaction) proto.Resolution, setup ...func(o *orcaBots)) (*Node, *runtimeHub, *orcaBots) {
 	t.Helper()
 	o := newOrcaBots(t)
-	saved, savedPoll, savedBots := orcaClient, orcaBridgePoll, orcaBotsPoll
+	for _, fn := range setup {
+		o.set(fn)
+	}
+	saved, savedPoll, savedTabs, savedBots := orcaClient, orcaBridgePoll, orcaTabsPoll, orcaBotsPoll
 	orcaClient = func() *orcart.Client { return &orcart.Client{MetaPath: o.f.MetaPath} }
-	orcaBridgePoll, orcaBotsPoll = 50*time.Millisecond, 100*time.Millisecond
+	orcaBridgePoll, orcaTabsPoll, orcaBotsPoll = 50*time.Millisecond, 50*time.Millisecond, 100*time.Millisecond
 	n, hub := runtimeNode(t)
 	release := make(chan struct{})
 	if resolve == nil {
@@ -263,7 +301,7 @@ func orcaBotsBridge(t *testing.T, resolve func(proto.Interaction) proto.Resoluti
 	t.Cleanup(func() {
 		close(release)
 		n.runtimeHost.setOrcaBridge(false)
-		orcaClient, orcaBridgePoll, orcaBotsPoll = saved, savedPoll, savedBots
+		orcaClient, orcaBridgePoll, orcaTabsPoll, orcaBotsPoll = saved, savedPoll, savedTabs, savedBots
 	})
 	waitFor(t, "the Home Chat listed", func() bool { _, ok := listed(t, n)[fakeBotHomeUUID]; return ok })
 	return n, hub, o
@@ -332,6 +370,69 @@ func TestOrcaBotItemAnswerGoesBackToOrca(t *testing.T) {
 	hub.mu.Unlock()
 	if got[0]["item"] != orcaBotItemUID || got[0]["questionId"] != "e4" || got[0]["text"] != "Front end, Not now" || got[0]["requestId"] != id {
 		t.Fatalf("comment %v", got[0])
+	}
+}
+
+// An answer Orca did not take is never dropped: while the item still waits on the question, it goes on the phone
+// again as a card of its own, and the answer to that one lands, under that card's id.
+func TestOrcaBotItemAnswerOrcaRefusedIsAskedAgain(t *testing.T) {
+	_, hub, o := orcaBotsBridge(t, func(ix proto.Interaction) proto.Resolution {
+		return proto.Resolution{Answers: map[string]string{ix.Questions[0].Question: "Front end"}}
+	}, func(o *orcaBots) { o.refuse = 1 })
+	waitFor(t, "the answer to the second card in Orca", func() bool { return o.f.Count("bots.items.owner.comment") >= 2 })
+	reads := o.f.Count("bots.items.list")
+	waitFor(t, "two more reads of the items", func() bool { return o.f.Count("bots.items.list") >= reads+2 }) // no third card
+	hub.mu.Lock()
+	asked := append([]proto.Interaction(nil), hub.asked...)
+	hub.mu.Unlock()
+	got := o.f.Params("bots.items.owner.comment")
+	if len(asked) != 2 || len(got) != 2 {
+		t.Fatalf("%d cards and %d answers, want 2 and 2", len(asked), len(got))
+	}
+	key := orcaBotItemUID + "/e4"
+	if asked[0].ID != orcaItemCardID(key, 0) || asked[1].ID != orcaItemCardID(key, 1) || asked[0].ID == asked[1].ID {
+		t.Fatalf("card ids %q, %q", asked[0].ID, asked[1].ID)
+	}
+	if got[0]["requestId"] != asked[0].ID || got[1]["requestId"] != asked[1].ID || got[1]["text"] != "Front end" {
+		t.Fatalf("answers %v", got)
+	}
+}
+
+// After a reset Orca closed the bot's first Home Chat, which the bridge now lists closed: an item raised there is
+// asked on the bot's open Home Chat, where the owner talks to the bot.
+func TestOrcaBotItemRaisedInAClosedChatIsAskedOnTheHomeChat(t *testing.T) {
+	n, hub, o := orcaBotsBridge(t, nil, func(o *orcaBots) { o.question = "" })
+	o.set(func(o *orcaBots) { o.home, o.closed = fakeBotNewHome, true })
+	waitFor(t, "the first Home Chat listed closed", func() bool {
+		s, ok := listed(t, n)[fakeBotHomeUUID]
+		return ok && s.Status == proto.StatusOffline
+	})
+	o.set(func(o *orcaBots) { o.question = "e4" }) // the item, raised in the first Home Chat, asks now
+	waitFor(t, "the item's card", func() bool { hub.mu.Lock(); defer hub.mu.Unlock(); return len(hub.asked) > 0 })
+	hub.mu.Lock()
+	ix := hub.asked[0]
+	hub.mu.Unlock()
+	if ix.SessionID != fakeBotNewHomeUUID {
+		t.Fatalf("asked on %q, want the open Home Chat %q", ix.SessionID, fakeBotNewHomeUUID)
+	}
+}
+
+// A Home Chat a reset has just opened has no turn yet, so only Orca's tabs list it: the bot's own run and its earlier
+// Home Chat fold under it at once, not after its first turn.
+func TestOrcaBotRunsFoldUnderAHomeChatOnlyTheTabsList(t *testing.T) {
+	n, _, o := orcaBotsBridge(t, nil)
+	waitFor(t, "the run folded", func() bool { run := listed(t, n)[orcaBotRunUUID]; return run.ParentAgentID() == fakeBotHomeUUID })
+	o.set(func(o *orcaBots) {
+		o.home = fakeBotTabHome
+		o.tabs = []any{map[string]any{"type": "agent-session", "sessionId": fakeBotTabHome, "agent": "claude", "title": "Helper"}}
+	})
+	waitFor(t, "the run folded under the new Home Chat", func() bool {
+		rows := listed(t, n)
+		run, first := rows[orcaBotRunUUID], rows[fakeBotHomeUUID]
+		return run.ParentAgentID() == fakeBotTabHomeUUID && first.ParentAgentID() == fakeBotTabHomeUUID
+	})
+	if home := listed(t, n)[fakeBotTabHomeUUID]; home.ParentAgentID() != "" {
+		t.Fatalf("the new Home Chat folds under %q", home.ParentAgentID())
 	}
 }
 

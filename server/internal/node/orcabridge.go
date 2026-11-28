@@ -278,7 +278,8 @@ func (b *orcaBridge) refresh(ctx context.Context) {
 	waiting := map[string]string{}         // Orca session id → Persona session id, sessions with a prompt pending
 	open := map[string]bool{}              // Orca session ids of the chats open in Orca
 	opts := map[string][]*orcart.Options{} // the open chats' options, by provider: their launchers' models
-	for _, c := range orcaOpenChats(trees, tabs) {
+	chats := orcaOpenChats(trees, tabs)
+	for _, c := range chats {
 		open[c.orca] = true
 		h := b.head(ctx, c.orca, c.rev)
 		if h == nil {
@@ -330,7 +331,7 @@ func (b *orcaBridge) refresh(ctx context.Context) {
 		}
 	}
 	b.prompts(ctx, waiting)
-	b.botsTick(ctx, trees, orcaOf)
+	b.botsTick(ctx, chats, orcaOf, closed)
 }
 
 // chatTabs are the chat tabs, read again every orcaTabsPoll (the last ones meanwhile); none from a host without them.

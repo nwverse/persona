@@ -6,8 +6,8 @@ package node
 //
 //	go test -tags orcalive -run OrcaBotsLive ./internal/node/ -v
 //
-// It only reads, through a read-only client: bots.roster, bots.chats, bots.items.list, worktree.ps and the structured
-// sessions' history, options and pending requests go out, and anything else is refused before it is sent. It shows the
+// It only reads, through a read-only client: bots.roster, bots.chats, bots.items.list, worktree.ps, the chat tabs and the
+// structured sessions' history, options and pending requests go out, and anything else is refused before it is sent. It shows the
 // bots agentbot.roster finds, each one's Home Chat, and the open items agentbot.items reads. Then it runs the Orca
 // bridge with a hub that never answers, and shows the card each item waiting on the owner becomes, and what folds under
 // the bots' Home Chats. It prints names, titles and the cards' questions, never a token. Nothing is answered: the cards

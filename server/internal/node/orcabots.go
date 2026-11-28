@@ -2,8 +2,6 @@ package node
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -19,9 +17,10 @@ import (
 // Orca's bots in the bridge (docs/plans/plan-orca-support.md "Bots found on a computer", #16891). Every orcaBotsPoll
 // the bridge reads the computer's bots (bots.roster), each one's chats (bots.chats) and its items waiting on the owner
 // (bots.items.list), all on Orca's local socket. Two things come of it:
-//   - an item's open question becomes one question card on the session of the chat it was raised in (its home; the
-//     bot's Home Chat when that chat is not listed), deduplicated by the item and the question, taken down when the
-//     item no longer waits on that question, and answered back to Orca as the owner (bots.items.owner.comment);
+//   - an item's open question becomes one question card on the session of the chat it was raised in (the bot's open
+//     Home Chat when that chat is not listed or listed closed), deduplicated by the item and the question, taken down
+//     when the item no longer waits on that question, and answered back to Orca as the owner
+//     (bots.items.owner.comment); an answer Orca did not take goes on the phone again, as the prompts' do (ask);
 //   - the sessions a bot runs on its own in its home folder (Look around, Tidy-up, and its earlier Home Chats) fold under
 //     its open Home Chat as side sessions (parent_agent_id, linkOrcaBotRuns). The bot's other open chats stay rows of
 //     their own.
@@ -100,7 +99,8 @@ func underFolder(dir, folder string) bool {
 type orcaItemAsk struct {
 	bot     string // the bot's Orca id: its cards are only taken down after its items were read
 	cancel  context.CancelFunc
-	retryAt time.Time // the node could not take it: offer it again then
+	retryAt time.Time // the node could not take it, or Orca did not take its answer: offer it again then
+	attempt int       // how many times it was put on the phone before; each time under its own card id
 	done    bool      // answered, handed back or expired: not offered again while the item waits on this question
 }
 
@@ -115,8 +115,9 @@ type orcaBotsState struct {
 }
 
 // botsTick starts a read of the bots when orcaBotsPoll has passed since the last one and none runs: off the refresh
-// goroutine, so a slow Orca never holds the 1.5 s session list.
-func (b *orcaBridge) botsTick(ctx context.Context, trees []orcart.Worktree, orcaOf map[string]string) {
+// goroutine, so a slow Orca never holds the 1.5 s session list. chats are the chats open in Orca (orcaOpenChats),
+// orcaOf and closed the refresh's (never written once it has handed them over).
+func (b *orcaBridge) botsTick(ctx context.Context, chats []orcaChat, orcaOf map[string]string, closed map[string]bool) {
 	st := &b.bots
 	st.mu.Lock()
 	if st.running || time.Since(st.at) < orcaBotsPoll {
@@ -131,12 +132,12 @@ func (b *orcaBridge) botsTick(ctx context.Context, trees []orcart.Worktree, orca
 			st.running = false
 			st.mu.Unlock()
 		}()
-		b.readBots(ctx, trees, orcaOf)
+		b.readBots(ctx, chats, orcaOf, closed)
 	}()
 }
 
 // readBots reads the bots once and brings the cards and the fold in step with them.
-func (b *orcaBridge) readBots(ctx context.Context, trees []orcart.Worktree, orcaOf map[string]string) {
+func (b *orcaBridge) readBots(ctx context.Context, chats []orcaChat, orcaOf map[string]string, closed map[string]bool) {
 	bots, err := b.c.Bots(ctx)
 	switch {
 	case errors.Is(err, orcart.ErrNotRunning), orcart.IsCode(err, "method_not_found"), orcart.IsCode(err, "method_not_supported"):
@@ -154,15 +155,10 @@ func (b *orcaBridge) readBots(ctx context.Context, trees []orcart.Worktree, orca
 	for persona, orca := range orcaOf {
 		personaOf[orca] = persona
 	}
-	folderOf := map[string]string{} // Orca session → the local worktree its row is in
-	for _, w := range trees {
-		if w.HostID != "" && w.HostID != "local" {
-			continue
-		}
-		for _, a := range w.Agents {
-			if id, ok := orcart.SessionOf(a.PaneKey); ok && w.Path != "" {
-				folderOf[id] = filepath.Clean(w.Path)
-			}
+	folderOf := map[string]string{} // Orca session → the local worktree it runs in (a chat with no turn yet too)
+	for _, c := range chats {
+		if c.tree.Path != "" {
+			folderOf[c.orca] = filepath.Clean(c.tree.Path)
 		}
 	}
 	homes := &orcaBotHomes{keep: map[string]bool{}}
@@ -191,8 +187,8 @@ func (b *orcaBridge) readBots(ctx context.Context, trees []orcart.Worktree, orca
 				continue
 			}
 			persona := personaOf[string(it.ChatSessionID)]
-			if persona == "" {
-				persona = personaOf[string(bot.HomeSessionID)] // raised in a chat Persona does not list: the bot's home
+			if home := personaOf[string(bot.HomeSessionID)]; home != "" && (persona == "" || closed[persona]) {
+				persona = home // raised in a chat Persona does not list, or lists closed: the bot's open Home Chat
 			}
 			if persona == "" {
 				continue // no home in Persona's list: Orca's own panel holds it
@@ -253,22 +249,27 @@ func (b *orcaBridge) settleItemCards(live, read map[string]bool) {
 }
 
 // offerItem puts one item question on the phone unless it is there already, or was answered, handed back or expired.
+// An answer Orca did not take (it refused it, or it is not known whether it took it) is never dropped: while the item
+// still waits on the question, the next read puts it on the phone again as a new card.
 func (b *orcaBridge) offerItem(ctx context.Context, key, bot, persona string, it proto.OrcaBotItem) {
 	b.bots.mu.Lock()
 	if b.bots.asks == nil {
 		b.bots.asks = map[string]*orcaItemAsk{}
 	}
 	a := b.bots.asks[key]
-	due := a == nil || !a.done && !a.retryAt.IsZero() && time.Now().After(a.retryAt)
-	if !due {
+	if a != nil && (a.done || a.retryAt.IsZero() || time.Now().Before(a.retryAt)) {
 		b.bots.mu.Unlock()
 		return
 	}
+	attempt := 0
+	if a != nil {
+		attempt = a.attempt
+	}
 	ix := orcaItemInteraction(persona, it)
-	sum := sha256.Sum256([]byte(key))
-	ix.ID = "orcaitem_" + hex.EncodeToString(sum[:8])
+	ix.ID = orcaItemCardID(key, attempt)
 	askCtx, cancel := context.WithCancel(ctx)
-	b.bots.asks[key] = &orcaItemAsk{bot: bot, cancel: cancel}
+	mine := &orcaItemAsk{bot: bot, cancel: cancel, attempt: attempt}
+	b.bots.asks[key] = mine
 	b.bots.mu.Unlock()
 	go func() {
 		defer cancel()
@@ -280,31 +281,50 @@ func (b *orcaBridge) offerItem(ctx context.Context, key, bot, persona string, it
 			}
 			return
 		}
-		b.bots.mu.Lock()
 		if err != nil {
-			if a := b.bots.asks[key]; a != nil {
-				a.retryAt = time.Now().Add(orcaAskRetry)
-			}
-			b.bots.mu.Unlock()
+			b.retryItem(key, mine, attempt, time.Now().Add(orcaAskRetry))
 			return
 		}
-		if a := b.bots.asks[key]; a != nil {
-			a.done = true
+		text := ""
+		if !res.Dismiss { // handed back, or nobody answered in time: Orca's own panel answers it
+			text = orcaItemAnswer(ix, it, res)
 		}
-		b.bots.mu.Unlock()
-		if res.Dismiss {
-			return // handed back, or nobody answered in time: Orca's own panel answers it
-		}
-		text := orcaItemAnswer(ix, it, res)
 		if text == "" {
+			b.retryItem(key, mine, -1, time.Time{})
 			return
 		}
 		// The card's id is the request's: an answer the manager hands again (the bridge asked again after a restart)
 		// lands once in Orca.
-		if err := b.c.AnswerBotItem(ctx, it.ItemID, it.Question.EventID, text, ix.ID); err != nil && ctx.Err() == nil {
-			b.logf("orca bridge: answering item %s: %v", it.ItemID, err)
+		if err := b.c.AnswerBotItem(ctx, it.ItemID, it.Question.EventID, text, ix.ID); err != nil {
+			if ctx.Err() == nil {
+				b.logf("orca bridge: answering item %s: %v (offered again while it waits on the question)", it.ItemID, err)
+			}
+			b.retryItem(key, mine, attempt+1, time.Now())
+			return
 		}
+		b.retryItem(key, mine, -1, time.Time{})
 	}()
+}
+
+// retryItem has the item question's card a offered again at at, as its attempt-th time on the phone; attempt -1: it is
+// done (answered, handed back or expired), not offered again while the item waits on the question.
+func (b *orcaBridge) retryItem(key string, a *orcaItemAsk, attempt int, at time.Time) {
+	b.bots.mu.Lock()
+	defer b.bots.mu.Unlock()
+	if b.bots.asks[key] != a {
+		return // taken down meanwhile (another card may stand for the question now)
+	}
+	if attempt < 0 {
+		a.done = true
+		return
+	}
+	a.attempt, a.retryAt = attempt, at
+}
+
+// orcaItemCardID is the card id of an item question's attempt-th time on the phone, by orcaCardID's rule (the first
+// one's is the question's alone, the same after a node restart; a later one's its own) under its own prefix.
+func orcaItemCardID(key string, attempt int) string {
+	return "orcaitem_" + strings.TrimPrefix(orcaCardID(key, attempt), "orca_")
 }
 
 // orcaItemInteraction is the question card of an item: one question per decision of the bot's ask, with its quick
