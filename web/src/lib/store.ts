@@ -122,6 +122,7 @@ export interface State {
   closedError: string | null;
   /** Optional server-computed `board` projection tree from GET /todos under todos_v2 (#15800). */
   todoBoard: TodoBoardProjection | null;
+  scopedTodoBoard?: { manager: string; board: TodoBoardProjection | null };
   todosSupported: boolean;
   todosLoaded: boolean;
   todosError: string | null;
@@ -1834,6 +1835,10 @@ async function readTodos(dedupe = false) {
   return { answer, owner, etag, revision, notModified, todoBoard };
 }
 
+export function applyScopedTodoBoard(scopedTodoBoard: NonNullable<State["scopedTodoBoard"]>) {
+  set({ scopedTodoBoard });
+}
+
 type TodosRead = Awaited<ReturnType<typeof readTodos>>;
 const todosAsked = numbered<TodosRead>("/todos", readTodos);
 const assistantAsked = numbered<AssistantInfo>("/assistant");
@@ -1924,6 +1929,7 @@ function applyTodos(todos: PromiseSettledResult<TodosRead>, fresh: () => boolean
       olderClosedTodos: older,
       sharedBlockers,
       todoBoard: todoBoard ?? null,
+      ...(!todoBoard && { scopedTodoBoard: undefined }),
       closedCursors: mergeClosedCursors(state.closedCursors, closedCursorsOf(answer)),
       closedLoading: false,
       closedError: null,
@@ -1940,7 +1946,7 @@ function applyTodos(todos: PromiseSettledResult<TodosRead>, fresh: () => boolean
   if (reason instanceof ApiError && reason.status === 404) {
     closedEpoch++;
     keptTodos = null;
-    return set({ todos: [], olderClosedTodos: [], sharedBlockers: [], todoBoard: null, closedCursors: {}, closedLoading: false, closedError: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
+    return set({ todos: [], olderClosedTodos: [], sharedBlockers: [], todoBoard: null, scopedTodoBoard: undefined, closedCursors: {}, closedLoading: false, closedError: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
   }
   set({ todosLoaded: true, todosError: errorText(reason) });
 }
@@ -2390,6 +2396,7 @@ export function reset() {
     todos: [],
     sharedBlockers: [],
     todoBoard: null,
+    scopedTodoBoard: undefined,
     olderClosedTodos: [],
     closedCursors: {},
     closedLoading: false,

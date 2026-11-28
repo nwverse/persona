@@ -1,11 +1,10 @@
-// The sidebar's To-dos badge and the To-dos page's marks (#11085, #11838): one set of to-dos, each with why it counts
-// (todo-triage ownerNeeds), worked out from the same inputs for both, so the number and the marked rows cannot disagree:
-// the current assistant's to-dos, their Agents read as the page's sections read them (useTodoLookup), the shelved to-dos
-// brought back in this browser, and one minute clock that moves to-dos across the 24 h and 48 h lines for both at once.
+// The sidebar's To-dos badge and the To-dos page's marks (#11085, #11838). The v2 board supplies the hub's counts.
+// The fallback uses the current assistant's to-dos, linked Agents, local restores and a shared minute clock.
 
-import { useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { answeredLookup } from "./answered-lookup";
-import { useScopedTodos } from "./current-assistant";
+import { useScopedTodos, type Scope } from "./current-assistant";
+import { sameManager } from "./manager-choice";
 import { useAgentSessions } from "./sessions";
 import { useStore, withTaskRows } from "./store";
 import { ownerNeeds, type OwnerNeed } from "./todo-triage";
@@ -54,11 +53,20 @@ export function useTodoLookup(): SessionLookup {
 
 /** The to-dos the sidebar's badge counts, each with why (ownerNeeds): its size is the badge, and the To-dos page marks
  *  exactly these rows. The current assistant's to-dos only, as the badge has always counted. */
-export function useOwnerNeeds(): ReadonlyMap<string, OwnerNeed> {
+export function useOwnerNeeds(enabled = true): ReadonlyMap<string, OwnerNeed> {
   const todos = useScopedTodos();
   const lookup = useTodoLookup();
   const [restored] = useRestoredTodos();
   // placed again on each minute's tick as on each change, at the moment it is placed (as the page's sections are)
   const minute = useTodoMinute();
-  return useMemo(() => ownerNeeds(todos, lookup, Date.now(), restored), [todos, lookup, restored, minute]);
+  return useMemo(() => enabled ? ownerNeeds(todos, lookup, Date.now(), restored) : new Map(), [enabled, todos, lookup, restored, minute]);
+}
+
+export function useTodoBoard({ id, several }: Scope, enabled = true) {
+  const source = useStore((s) => enabled && s.assistant?.todos_v2 === true && sameManager(s.assistant.manager ?? id, id) ? s.todoBoard : null);
+  const scoped = useStore((s) => several && source && s.scopedTodoBoard?.manager === id ? s.scopedTodoBoard.board : null);
+  useEffect(() => {
+    if (source && several) void import("../features/todos/board-wire").then((wire) => wire.refreshScopedTodoBoard(id, source)).catch(() => {});
+  }, [source, several, id]);
+  return several ? scoped : source;
 }
