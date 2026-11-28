@@ -28,6 +28,9 @@ import { composerModelName } from '../models/SessionComposerModes';
 import { launchModelName } from '../models/AgentLaunchChoices';
 import { PersonaStatusPill } from '../design/NormalizedPrimitives';
 import { detailLines, rowSummary, TodoWaitDetailModel, TodoWaitInput, TodoWaitLabels, TodoWaitRowSummary } from '../core/TodoWaitText';
+import { TodoStageBar, TodoStagePill } from './TodoStageBar';
+import { TodoDecisionsSection } from './TodoDecisionsSection';
+import { RuleSuggestionBar } from './RuleSuggestionBar';
 
 interface TodoWindowFrame { left:number; top:number; width:number; height:number; }
 
@@ -902,6 +905,12 @@ export struct TodoWorkspacePage {
             binding.value.phone.reviewTone==='positive' ? $r('app.color.todo_review_positive_fill') :
               binding.value.phone.reviewTone==='danger' ? $r('app.color.todo_review_danger_fill') : $r('app.color.todo_review_neutral_fill'))
           .borderRadius(Tokens.radiusCapsule).id('todos.review.'+binding.value.lead.id)
+        TodoStagePill({
+          stage: binding.value.lead.stage,
+          stageKind: binding.value.lead.stageKind,
+          done: this.rowClosed(binding.value.lead),
+          identity: 'todos.stage.' + binding.value.lead.id
+        })
       }.constraintSize({maxWidth:'100%'})
   }
   @Builder seenChip(current:()=>TodoWorkspaceItem) {
@@ -1655,12 +1664,26 @@ export struct TodoWorkspacePage {
         if (this.workspace.selected.id) Column({ space: Tokens.page }) {
           PhoneTodoDetailForm({workspace:this.workspace, editor:this.detailEditor,locale:this.dateLocale(),now:this.clock,
             status:this.detailState(), statusLine:this.detailStatusLine(),statusMenu:():void=>this.todoMenu(this.workspace.selected),tone:Colors.link})
+          TodoStageBar({
+            stage: this.workspace.selected.stage,
+            stageKind: this.workspace.selected.stageKind,
+            done: this.workspace.selected.isDone()
+          })
           this.todoWaitSection(this.workspace.selected)
+          if (Object.keys(Wire.object(this.workspace.selected.ask, 'suggestion')).length > 0) {
+            RuleSuggestionBar({
+              model: this.model,
+              rawSuggestion: Wire.object(this.workspace.selected.ask, 'suggestion'),
+              cardKey: 'todo|' + this.workspace.selected.id + '|' + Wire.text(this.workspace.selected.ask, 'asked_at'),
+              manager: this.workspace.selected.manager,
+              onSettled: () => { this.workspace.refresh().catch(() => undefined); }
+            })
+          }
           Column({space:6}) {
             Row() {
               Text(tr('todo_detail_notes')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).layoutWeight(1)
               Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.edit).fontSize('16vp').fontColor([Colors.link]) }
-                .padding(0).width(36).height(36).backgroundColor(Color.Transparent).accessibilityText(tr('edit')).id('todo.notes.edit')
+                .padding(0).width(Tokens.controlBar).height(Tokens.controlBar).backgroundColor(Color.Transparent).accessibilityText(tr('edit')).id('todo.notes.edit')
                 .enabled(this.workspace.detailEditable() && !this.workspace.saving).onClick(() => this.workspace.beginEdit(this.workspace.selected))
             }.width('100%')
             if (this.workspace.selected.notes) MarkdownText({text:this.workspace.selected.notes,onLink:(address:string) => this.onLink(address)})
@@ -1668,6 +1691,12 @@ export struct TodoWorkspacePage {
           }.alignItems(HorizontalAlign.Start).width('100%').padding(16).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
             .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
             .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
+          TodoDecisionsSection({
+            model: this.model,
+            todo: this.workspace.selected,
+            editable: this.workspace.detailEditable() && !this.workspace.saving,
+            onChanged: () => { this.workspace.refresh().catch(() => undefined); }
+          })
           if (this.workspace.selected.project) {
             Row() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: this.workspace.projectTitle(this.workspace.selected) }) }) }
               .onClick(() => this.openProject())

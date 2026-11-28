@@ -9671,6 +9671,374 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "ナレッジページ"
+    },
+    {
+      "name": "todo_stage_plan",
+      "value": "計画"
+    },
+    {
+      "name": "todo_stage_develop",
+      "value": "開発"
+    },
+    {
+      "name": "todo_stage_review",
+      "value": "レビュー"
+    },
+    {
+      "name": "todo_stage_merge",
+      "value": "マージ"
+    },
+    {
+      "name": "todo_stage_deploy",
+      "value": "デプロイ"
+    },
+    {
+      "name": "todo_stage_verify",
+      "value": "検証済み"
+    },
+    {
+      "name": "todo_stage_done",
+      "value": "完了"
+    },
+    {
+      "name": "todo_stage_state_done",
+      "value": "完了"
+    },
+    {
+      "name": "todo_stage_state_current",
+      "value": "現在のステップ"
+    },
+    {
+      "name": "todo_stage_state_ahead",
+      "value": "未着手"
+    },
+    {
+      "name": "todo_stage_step_of",
+      "value": "{total} ステップ中 {current} 番目"
+    },
+    {
+      "name": "todo_stage_step_summary",
+      "value": "ステップ {current}/{total} · {stage}"
+    },
+    {
+      "name": "todo_decisions_title",
+      "value": "決定事項"
+    },
+    {
+      "name": "todo_decisions_loading",
+      "value": "決定事項を読み込み中…"
+    },
+    {
+      "name": "todo_decisions_load_failed",
+      "value": "決定事項を読み込めませんでした。"
+    },
+    {
+      "name": "todo_decisions_empty",
+      "value": "このTo-Doでの決定がここに記録されます。エージェントへの回答や完了結果が自動で記録されるほか、手動でも追加できます。"
+    },
+    {
+      "name": "todo_decisions_show_all",
+      "value": "全 {count} 件を表示"
+    },
+    {
+      "name": "todo_decisions_show_first",
+      "value": "最初の {count} 件を表示"
+    },
+    {
+      "name": "todo_decisions_full_history",
+      "value": "すべての履歴（改訂 {count} 件）"
+    },
+    {
+      "name": "todo_decisions_current_only",
+      "value": "現在の有効分のみ"
+    },
+    {
+      "name": "todo_decision_chose",
+      "value": "決定："
+    },
+    {
+      "name": "todo_decision_reason_prefix",
+      "value": "理由："
+    },
+    {
+      "name": "todo_decision_revise",
+      "value": "改訂"
+    },
+    {
+      "name": "todo_decision_revised_badge",
+      "value": "改訂済み"
+    },
+    {
+      "name": "todo_decision_revises",
+      "value": "「{choice}」を改訂"
+    },
+    {
+      "name": "todo_decision_revises_item",
+      "value": "「{question} → {choice}」の改訂にする"
+    },
+    {
+      "name": "todo_decision_undo_revision",
+      "value": "改訂の関連付けを解除"
+    },
+    {
+      "name": "todo_decision_record_title",
+      "value": "決定を記録"
+    },
+    {
+      "name": "todo_decision_save",
+      "value": "記録"
+    },
+    {
+      "name": "todo_decision_revise_note",
+      "value": "以前の選択「{choice}」は取り消し線付きで履歴に残り、新しい選択のみがエージェントに渡されます。"
+    },
+    {
+      "name": "todo_decision_question_label",
+      "value": "質問"
+    },
+    {
+      "name": "todo_decision_question_placeholder",
+      "value": "何を決める必要がありますか…"
+    },
+    {
+      "name": "todo_decision_choice_label",
+      "value": "選択"
+    },
+    {
+      "name": "todo_decision_choice_placeholder",
+      "value": "決まった内容…"
+    },
+    {
+      "name": "todo_decision_reason_label",
+      "value": "理由（任意）"
+    },
+    {
+      "name": "todo_decision_reason_placeholder",
+      "value": "その理由や除外した選択肢…"
+    },
+    {
+      "name": "todo_decision_source_manual",
+      "value": "手動で追加"
+    },
+    {
+      "name": "todo_decision_source_outcome",
+      "value": "エージェント完了時に記録"
+    },
+    {
+      "name": "todo_decision_source_agent",
+      "value": "エージェント作業中に記録"
+    },
+    {
+      "name": "todo_decision_source_thread",
+      "value": "Lark トピックで発言"
+    },
+    {
+      "name": "todo_decision_source_card",
+      "value": "エージェントの質問に回答"
+    },
+    {
+      "name": "todo_decision_recorded_toast",
+      "value": "決定を記録しました"
+    },
+    {
+      "name": "todo_decision_revised_toast",
+      "value": "決定を改訂しました"
+    },
+    {
+      "name": "todo_decision_marked_revised",
+      "value": "改訂としてマークしました"
+    },
+    {
+      "name": "todo_decision_revision_undone",
+      "value": "改訂マークを解除しました"
+    },
+    {
+      "name": "expand_all",
+      "value": "すべて展開"
+    },
+    {
+      "name": "collapse_all",
+      "value": "すべて折りたたむ"
+    },
+    {
+      "name": "saving",
+      "value": "保存中…"
+    },
+    {
+      "name": "token_usage_recent_hourly",
+      "value": "最近の時間別利用量"
+    },
+    {
+      "name": "token_usage_by_machine_7d",
+      "value": "コンピュータ別 · 過去7日間"
+    },
+    {
+      "name": "token_usage_by_agent_7d",
+      "value": "エージェント別 · 過去7日間"
+    },
+    {
+      "name": "token_usage_by_agent",
+      "value": "エージェント別"
+    },
+    {
+      "name": "token_usage_by_launcher",
+      "value": "ランチャー別"
+    },
+    {
+      "name": "token_usage_by_place",
+      "value": "フォルダとワークツリー"
+    },
+    {
+      "name": "token_usage_requests",
+      "value": "リクエスト"
+    },
+    {
+      "name": "token_usage_worktree",
+      "value": "リンクされたワークツリー"
+    },
+    {
+      "name": "token_usage_removed_computer",
+      "value": "削除されたコンピュータ"
+    },
+    {
+      "name": "token_usage_not_split",
+      "value": "未分類（更新前）"
+    },
+    {
+      "name": "token_usage_launcher_terminal",
+      "value": "ターミナルで開始"
+    },
+    {
+      "name": "token_usage_project_by_hour",
+      "value": "時間別"
+    },
+    {
+      "name": "token_usage_project_each_day",
+      "value": "日別"
+    },
+    {
+      "name": "next_suggestions_title",
+      "value": "次のメッセージを提案"
+    },
+    {
+      "name": "next_suggestions_note",
+      "value": "開いているチャットで返信があった後、空の入力欄の上に次のメッセージ候補を提案します。"
+    },
+    {
+      "name": "suggestion_use",
+      "value": "使う"
+    },
+    {
+      "name": "suggestion_fill_in",
+      "value": "入力欄に入れる"
+    },
+    {
+      "name": "suggestion_send_now",
+      "value": "今すぐ送信"
+    },
+    {
+      "name": "suggestion_hint_safe",
+      "value": "タップで入力、長押しですぐに送信できます。"
+    },
+    {
+      "name": "suggestion_hint_risky",
+      "value": "タップして入力欄で確認してください。"
+    },
+    {
+      "name": "rule_suggestion_always",
+      "value": "常に実行"
+    },
+    {
+      "name": "rule_suggestion_not_now",
+      "value": "今はしない"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust",
+      "value": "「常に実行」はこの種類のタスクを自動開始に追加し、次回から確認なしで開始します。"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust_scoped",
+      "value": "「常に実行」はルールを追加します：{machine} の {directory} でファイルを変更するタスクを確認なしで開始します。"
+    },
+    {
+      "name": "rule_suggestion_creates_standing",
+      "value": "「常に実行」は {machine} の {directory} での「{action}」に常時許可を作成します。"
+    },
+    {
+      "name": "rule_suggestion_creates_setting",
+      "value": "「常に実行」はルールを保存せず、この提案を30日間非表示にします。"
+    },
+    {
+      "name": "rule_suggestion_made_task_trust",
+      "value": "ルールを追加しました：次回から確認なしで開始します。"
+    },
+    {
+      "name": "rule_suggestion_made_standing",
+      "value": "常時許可を追加しました。"
+    },
+    {
+      "name": "rule_suggestion_made_setting",
+      "value": "この提案（{setting}）を非表示にしました。"
+    },
+    {
+      "name": "rule_suggestion_made_none",
+      "value": "完了しました。ルールは保存されませんでした。"
+    },
+    {
+      "name": "rule_suggestion_conflict",
+      "value": "常時許可が変更されました。もう一度お試しください。"
+    },
+    {
+      "name": "rule_suggestion_failed",
+      "value": "回答を保存できませんでした。"
+    },
+    {
+      "name": "recording_bookmark",
+      "value": "ブックマーク"
+    },
+    {
+      "name": "recording_transcript_review",
+      "value": "文字起こしを検索"
+    },
+    {
+      "name": "recording_transcript_find",
+      "value": "文字起こし内を検索…"
+    },
+    {
+      "name": "recording_transcript_previous",
+      "value": "前の一致"
+    },
+    {
+      "name": "recording_transcript_next",
+      "value": "次の一致"
+    },
+    {
+      "name": "recording_transcript_bookmarks",
+      "value": "ブックマーク"
+    },
+    {
+      "name": "recording_transcript_copy",
+      "value": "テキストをコピー"
+    },
+    {
+      "name": "recording_transcript_copied",
+      "value": "文字起こしをコピーしました"
+    },
+    {
+      "name": "recording_transcript_no_matches",
+      "value": "一致なし"
+    },
+    {
+      "name": "recording_transcript_matches",
+      "value": "件一致"
+    },
+    {
+      "name": "recording_transcript_expired",
+      "value": "音声の文字起こしは期限切れとなり、ブックマークのみ保持されています。"
+    },
+    {
+      "name": "recording_transcript_empty",
+      "value": "保持されている文字起こしはありません。"
     }
   ]
 }

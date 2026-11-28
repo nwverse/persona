@@ -32,6 +32,7 @@ import { conversationImageEntries, conversationImageKey } from '../core/MessageI
 import type { MessageImageGalleryEntry, LoadedMessageImage } from '../core/MessageImageGallery';
 import { MarkdownText } from './MarkdownText';
 import { AssistantCards } from './AssistantCards';
+import { canDirectSendSuggestion, ComposerSuggestionChip, extractSessionSuggestions } from '../core/NextSuggestions';
 import { DecisionPager } from '../models/DecisionPager';
 import { QuestionWorkspace, QuestionSheet, questionPrompt } from '../models/QuestionWorkspace';
 import { InteractionDecisionForm } from './InteractionDecisionForm';
@@ -2397,6 +2398,97 @@ export struct Conversation {
     const source = matched || selected;
     return extractComposerQueue(source.data());
   }
+  @Computed get composerSuggestions(): ComposerSuggestionChip[] {
+    if (!this.active || !this.composerAvailable() || this.model.draftLoading || !!this.model.draft.trim() ||
+      this.sending || !!this.model.decision || this.model.canStop() || this.model.assistantReplyWorking()) {
+      return [];
+    }
+    if (this.model.demo && this.model.nextSuggestionsValue === false) return [];
+    const selected = this.model.selected;
+    if (!selected || !selected.id) return [];
+    const targetSession = selected.session || selected.id;
+    const pool = selected.kind === 'conversation' ? this.model.conversations : this.model.sessions;
+    const matched = pool.find((row: ResourceRow) =>
+      (row.session || row.id) === targetSession &&
+      (!selected.machine || row.machine === selected.machine) &&
+      (!selected.manager || row.manager === selected.manager)
+    );
+    const source = matched || selected;
+    return extractSessionSuggestions(source.data());
+  }
+  private fillSuggestion(chip: ComposerSuggestionChip): void {
+    if (!this.sendCurrent() || !this.composerAvailable() || this.sending) return;
+    Haptics.tap();
+    this.model.updateDraft(chip.text);
+    this.getUIContext().getFocusController().requestFocus('chat.input');
+  }
+  private sendSuggestionNow(chip: ComposerSuggestionChip): void {
+    if (!canDirectSendSuggestion(chip) || !this.sendCurrent() || !this.composerAvailable() || this.sending) return;
+    Haptics.success();
+    this.model.updateDraft(chip.text);
+    this.sendDraft().catch(() => undefined);
+  }
+  @Builder suggestionChipMenu(chip: ComposerSuggestionChip) {
+    Menu() {
+      if (canDirectSendSuggestion(chip)) {
+        MenuItem({ content: tr('suggestion_send_now') })
+          .onClick(() => this.sendSuggestionNow(chip))
+          .id('chat.suggestion.send_now')
+      }
+      MenuItem({ content: tr('suggestion_fill_in') })
+        .onClick(() => this.fillSuggestion(chip))
+        .id('chat.suggestion.fill_in')
+    }
+  }
+  @Builder suggestionChipsBar() {
+    if (this.composerSuggestions.length > 0) {
+      Scroll() {
+        Row({ space: Tokens.spaceS }) {
+          ForEach(this.composerSuggestions, (chip: ComposerSuggestionChip, index: number) => {
+            Button({ type: ButtonType.Capsule }) {
+              Row({ space: Tokens.spaceS }) {
+                SymbolGlyph($r('sys.symbol.wand_and_stars'))
+                  .fontSize('14vp')
+                  .fontColor([Colors.ai])
+                Text(chip.text)
+                  .fontSize(Tokens.typeSecondary)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+                  .fontColor(Colors.ink)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .constraintSize({ maxWidth: 220 })
+                Text(tr('suggestion_use'))
+                  .fontSize(Tokens.typeLabel)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Colors.link)
+                  .maxLines(1)
+              }
+              .alignItems(VerticalAlign.Center)
+            }
+            .constraintSize({ minHeight: Tokens.controlBar })
+            .padding({ left: Tokens.spaceM, right: Tokens.spaceM, top: Tokens.spaceXs, bottom: Tokens.spaceXs })
+            .backgroundColor(Colors.aiWash)
+            .border({
+              width: PhoneStyle.surfaceEdgeWidth(0.5),
+              color: PhoneStyle.cardBorder(this.environment.dark),
+              radius: Tokens.radiusCapsule
+            })
+            .accessibilityText(chip.text)
+            .accessibilityDescription(tr(canDirectSendSuggestion(chip) ? 'suggestion_hint_safe' : 'suggestion_hint_risky'))
+            .onClick(() => this.fillSuggestion(chip))
+            .bindContextMenu(this.suggestionChipMenu(chip), ResponseType.LongPress)
+            .id('chat.suggestion.' + String(index))
+          }, (chip: ComposerSuggestionChip, index: number) => String(index) + ':' + chip.text + ':' + String(chip.risky))
+        }
+        .padding({ left: Tokens.spaceXs, right: Tokens.spaceXs })
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%')
+      .id('chat.suggestions')
+    }
+  }
   private queueSendNowKey(owner: ClientModel = this.model, row: ResourceRow = this.model.selected): string {
     if (!row || !row.id) return '';
     return JSON.stringify([owner.scope(), row.machine, row.session || row.id]);
@@ -2708,6 +2800,7 @@ export struct Conversation {
       Column({ space: Tokens.gap }) {
         if (this.model.canCompose()) {
           if (this.attachments.busy && !this.sending && (this.attachments.errorKey === 'chat_attachment_storage_unavailable' || this.model.error === 'cache_unavailable')) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).onClick(() => { this.attachmentKey = ''; this.syncAttachments(); })
+          this.suggestionChipsBar()
           this.composer()
         } else if (!this.model.canSend()) {
           if (this.model.canAttach()) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('attach_live')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('attach_live', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('attach_live')).bindTips(tr('attach_live')).onClick(() => this.model.attach())
