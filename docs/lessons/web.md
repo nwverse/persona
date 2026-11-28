@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## Idle app ownership still needs takeover confirmation (#17419)
+
+A Codex takeover plan's `running` and `app_owned` flags describe different things. An idle app-owned session still
+requires explicit confirmation and `confirm_stop: true`; use both flags when opening the dialog and building the POST
+body. Keep the running-turn warning for active turns and show app-ownership copy for idle App sessions.
+
 ## Closed history extends the to-do list without replacing the board (#17695)
 
 The hub projects the board and its direction counts before bounding the closed rows in GET /todos. Use those counts to
@@ -640,6 +646,7 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 - `lib/viewport.ts` caches each MediaQueryList. A responsive test mock must expose a live `matches` getter (and deliver change events when testing an in-place resize), rather than capture its first value. Pin the test language explicitly: a shared Chrome's browser preferences can differ from the test driver's locale.
 - A host-owned secondary page under a connector route must opt out of the connector split-detail layout (#2412); otherwise the record ledger keeps an unrelated connector list beside it. Scope category-button assertions to the settings navigation: a secondary page's Back button can have the same label as its parent category. Legacy path aliases also need normalization on browser history events, not only on initial mount.
 - Continuous deep-link reloads hit a Vite development-module fetch failure during this check. Keep the failure record and rerun against the production build with the same mock hub; a working initial dev screenshot does not prove reload/share behavior.
+- A route change in lazy Settings can still alter the first screen. Calling `useShownOffline` with options kept its controlled-hook branches on the startup path. Match the existing offline result to the route owner in Settings. Importing the Settings path parser before the URL builder also reordered Vite's preload dependencies for other pages. Keep the parser behind the integration codec and compare the normalized production counts for each language on the same base (#17762).
 
 ## Message provenance is independent of model roles (#2125)
 

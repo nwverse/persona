@@ -1,5 +1,25 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Codex dialog hints do not identify the active dialog (#17406)
+
+Codex 0.172 shares submit/cancel hints between approvals and questions; match the active title and options, and
+ignore approval titles above a composer or a newer question. PlainScreen drops dim styling: compare complete known
+placeholders after joining wrapped rows, and preserve text that only starts with a placeholder.
+
+## A missing queue receipt leaves delivery unknown (#17444)
+
+Fall back to steering after an explicit queue rejection. A lost or incomplete receipt may follow a persisted submission, so steering then can deliver a duplicate.
+
+## A held Codex rollout needs its engine's pane identity (#17406)
+
+- A no-daemon Codex in herdr-core, Tern or Orca holds its own rollout. Resolve the process's engine-specific pane
+  through `host.PaneRef` before recording ownership; an empty owner rejects even the waiting pane's own thread as
+  another writer's. Exercise both direct held-rollout selection and new-thread filtering, including a different pane
+  that must still be refused. Open-file fixture paths may be canonicalized by the OS; resolve symlinks in assertions.
+
+## Shared Codex app-server snapshots can lag events (#17428)
+
+Keep pending requests and same-turn blocked state across metadata refreshes. When waiting for an interrupt, read the current thread on each poll.
 ## A delivery label does not prove a disabled feature (#16936)
 
 - A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require

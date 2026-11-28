@@ -1544,11 +1544,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	if s.todosLoaded() {
 		s.pruneHandledStalls(ctx, openIDs)
 	}
-	if todosV2 {
-		if _, err := s.ReconcileTodoBlockers(ctx, ""); err != nil {
-			s.logf("todos_v2 blocker reconcile sweep: %v", err)
-		}
-	}
+	s.queueTodoBlockerSweep(ctx, now)
 }
 
 // SetSuperviseTimings makes supervision messages gather for gather and come at most every every (urgent: urgent), and
