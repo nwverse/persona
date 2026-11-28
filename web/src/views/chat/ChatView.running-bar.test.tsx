@@ -7,7 +7,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item, Session } from "../../lib/types";
-import { initI18n } from "../../i18n";
+import { initI18n, t } from "../../i18n";
 
 await initI18n("zh-Hans");
 
@@ -353,5 +353,74 @@ describe("launch handoff pending message state (#16657)", () => {
     } finally {
       putLaunch({ ...launch, phase: "failed", outgoing: undefined, handoffAt: undefined });
     }
+  });
+});
+
+describe("foreground Stop and Esc are hidden when only background work remains", () => {
+  const stopBtn = () => host.querySelector<HTMLButtonElement>(`[data-testid="composer-stop"]`);
+  const barInterruptBtn = () => dockBar()?.querySelector<HTMLButtonElement>(`button`);
+  const composerInput = () => host.querySelector<HTMLTextAreaElement>("textarea");
+  const escapeKey = () => act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+
+  it("hides dock interrupt, composer Stop, queue placeholder, and Esc shortcut during background-only state", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    captured.session = {
+      machine_id: "hub",
+      session_id: "c1",
+      title: "Agent",
+      agent: "agy",
+      source_kind: "runtime",
+      capabilities: { send: true, interrupt: true },
+      cwd: "/code",
+      status: "working",
+      state: "working",
+      state_since: "2026-11-13T01:00:01Z",
+      background_working: true,
+      background: [{ id: "hub/task-1", kind: "monitor", description: "Timer: 3m", started_at: "2026-11-13T01:00:02Z" }],
+    } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+
+    expect(dockBar()).not.toBeNull();
+    expect(barInterruptBtn()).toBeNull();
+    expect(stopBtn()).toBeNull();
+    expect(composerInput()?.getAttribute("placeholder")).toBe(t("chat-chatview.agent_placeholder"));
+
+    const callsBefore = fetchMock.mock.calls.length;
+    escapeKey();
+    await flush();
+    expect(fetchMock.mock.calls.slice(callsBefore).some(([url]) => String(url).includes("/interrupt"))).toBe(false);
+  });
+
+  it("keeps dock interrupt, composer Stop, queue placeholder, and Esc shortcut during a foreground turn", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    captured.session = {
+      machine_id: "hub",
+      session_id: "c1",
+      title: "Agent",
+      agent: "agy",
+      source_kind: "runtime",
+      capabilities: { send: true, interrupt: true },
+      cwd: "/code",
+      status: "working",
+      state: "working",
+      state_since: "2026-11-13T01:00:01Z",
+      background_working: false,
+    } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+
+    expect(dockBar()).not.toBeNull();
+    expect(barInterruptBtn()).not.toBeNull();
+    expect(stopBtn()).not.toBeNull();
+    expect(composerInput()?.getAttribute("placeholder")).toBe(t("chat-chatview.queue_placeholder"));
+
+    escapeKey();
+    await flush();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/interrupt"))).toBe(true);
   });
 });
