@@ -817,6 +817,51 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --core-only [--no-build-
 
 Simulator limits: computer-use can't click simulators while the screen is locked; use DEBUG launch arguments to open pages directly. Push, real HealthKit data and WatchConnectivity sync need devices.
 
+## iOS real core-only and full hubs
+
+Run `python3 scripts/ci/ios-core-only-hub.py --shots ~/persona-pr-shots/ios-core-only` from the repository root with macOS,
+Xcode, Go and Docker (`DOCKER` names another client). This is an opt-in local gate, not a hosted-CI step or a test that runs
+in an ordinary suite. The output directory must be empty and outside the checkout.
+
+The driver copies the current tracked and uncommitted source inputs into a disposable source snapshot, builds the **default**
+iOS app once (never `PERSONA_CORE_ONLY=YES`), and starts a real core-only hub and then a real full hub. Every hub has a fresh
+temporary `HOME` and explicit `PERSONA_HOME`, a generated master token, a free loopback port and a uniquely named disposable
+Postgres 18 container. The app uses only the synthetic `org.example.persona.ci` bundle configuration. The driver boots a new
+simulator through `scripts/app/sim-boot.sh`, keeps its audio muted where the local audio guard is installed, and shuts down and
+deletes only that simulator at the end.
+
+For each edition the app receives a real single-use `jp_…` code from `POST /api/v1/auth/pair-codes` and pairs through
+`-openPairLink`, without `-pairURL` (whose presence would skip the credential exchange). The driver reads the fresh sessions,
+Inbox and To-dos API responses before pairing, then drives the actual app through the DEBUG Runtime CLI: active pairing, the
+real hello's module registry, Agents with its synthetic offline computer, the empty Inbox / To-dos pages, the drawer, Settings home and Advanced, Connectors,
+Channels, Extensions, Devices and the main-chat composer. Both Inbox styles check the shared retained-source rule (#17399, #17814):
+a fresh core-only hub has no Lark or Mail chip or Lark/mail empty-state wording and uses the generic message, while the full hub keeps
+its current chips and wording; @Me / DM / Group filters remain unchanged. The current device must be marked in Devices, a second exchange of
+the pair code must answer 401, and the app must still answer at the end. Health, Screen Share, Voice, recording-write,
+Mail and Lark entry assertions are checked against the full-hub positive control. The recording archive's read entry remains
+available in both editions. Each hub declares only a synthetic offline computer named `Fixture Computer`. After the initial
+core-page checks, the driver inserts a clearly marked synthetic idle main-session
+record into the real manager's Postgres store and opens it through the app's real assistant route for the composer comparison;
+a short-lived real Link/node pair, in its own short-path temporary home and without any service installation, keeps that
+computer online while the app reads the session. The node has an independent state root and `PERSONA_NODE_SESSION_DIR`,
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` inside it, so it cannot discover the OS user's other Agent sessions. Before opening
+the composer, the driver requires both real projections to contain the synthetic main session and fails if either contains
+any additional session. Herdr and botmux autostart are off because the fixture runs no engine; no daemon is left behind.
+The driver stops both processes and removes the node home. The composer's
+`PersonaUITests/CoreOnlyHubLiveUITests` uses XCTest's real press-and-hold and skips when `PERSONA_IOS_CORE_HUB_FIXTURE` is absent;
+a malformed fixture fails. This does not claim model or Agent execution.
+
+Light/dark PNGs, including Settings › Advanced at the largest accessibility text size, per-edition sanitized proofs and
+`evidence.json` (commit, Xcode and pre-build local-time / idle readings) are
+written below `--shots`; credentials are never included. Each heavy build checks the idle reading again: from 07:00 through
+22:59 it starts only when the reading is greater than 900 seconds; below 120 seconds it stops
+before that build for a clean retry later; the owner's 23:00–07:00 window remains allowed. A failed app phase also leaves
+a screenshot and a credential-free state/accessibility diagnostic there. Inspect every PNG. `--keep` retains the temporary
+hub homes and logs for diagnosis; without it the driver removes them. Every run ends with one `PASS`, `FAIL` or `TIMEOUT` line.
+A failed build or assertion, a missing proof, or a missing capture is never a pass.
+
+This is simulator UI evidence, not visionOS, physical-device, push, microphone, permission or performance verification.
+
 ## Android real core-only and full hubs
 
 Run `python3 scripts/ci/android-core-only-hub.py --evidence /tmp/android-hub-editions.json` from the repository root with
@@ -1943,6 +1988,46 @@ with denial reason/already answered), question then approval, two Plan questions
 - Each round/case prints `LIVE <version> round <n> <case>: ok in <seconds>`, failure screen; final `RESULT all: passed|FAILED`.
   Codex model-service errors (e.g. Selected model is at capacity, not Persona) log `SERVICE-RETRY` and rerun once;
   each RESULT reports retry count—include in stability reports, not pretend absent.
+
+## Isolated Orca runtime (#17058)
+
+Orca's writes are tested against the fake runtime (`server/internal/orcart/orcarttest`, which checks every request
+against Orca's schema), and the `orcalive` test only reads the Orca that runs on the computer. The `orcaiso` tests
+write to a real Orca without touching the user's: each starts its own headless Orca server with a temporary HOME,
+profile and loopback port, and drives Persona's own Orca host and client against it
+(`server/internal/node/hostorca_iso_test.go`):
+
+- **Start, type, keys, close**: open a terminal for a start in a throwaway Git repository Orca holds (`repo.add`),
+  check that a shell at rest takes no typed text and that a second start in the terminal is refused, start `cat`, type
+  a line and press Enter (the screen shows it twice), ctrl+c back to the shell, and close the terminal.
+- **Split, rename, close tab**: split a pane and close the new one, rename the tab (Orca's tab model has the new name),
+  open a second tab and close it whole, and rename the worktree.
+- **Worktree**: make a worktree through Orca (New worktree…), then remove it as an Agent's worktree is removed
+  (`worktree.rm`, the branch kept).
+- **Refusal**: metadata of another profile, a socket outside the temporary root, no local socket, or a process with
+  another HOME is refused before anything is written (needs no server).
+
+Run them, Linux only, with an Orca server install (the directory holding `orcad/orcad-server.js` and
+`runtimes/node-*/bin/node`; Orca 1.4.277 checked), from `server/`:
+
+```sh
+PERSONA_ORCA_ISO_SERVER=<Orca server install> go test -tags orcaiso -run OrcaIsolated ./internal/node/ -v -timeout 10m
+```
+
+Without the variable the tests skip. Safety:
+
+- The server gets an environment of its own (no `ORCA_*` variable, HOME or XDG directory of yours), binds to
+  `127.0.0.1` with pairing off (`--no-pairing --refuse-public`), and keeps its metadata in the temporary HOME.
+- The client is pinned to that metadata, and the tests refuse to write unless it is under the temporary root and not
+  in your home, every local socket it lists is under the temporary root, a process it names has the temporary HOME,
+  and the runtime that answers is the one it names. The test process points `ORCA_USER_DATA_PATH` there too, and the
+  host's process scan keeps only processes with the temporary HOME, so your agents are never looked at.
+- Run it with the `ORCA_*` variables of the shell it starts from unset when that shell is itself in an Orca terminal
+  (`for v in $(env | grep -o '^ORCA_[A-Z_]*'); do unset $v; done`): the server and git get environments of their own
+  anyway, but nothing else in the test process should see the user's Orca.
+- At the end the tests stop the server they started and every process whose `/proc/<pid>/environ` holds the temporary
+  HOME (the terminal daemon, its shells, what ran in them), each by PID after checking, never by name, and fail if one
+  is left; then they remove the temporary root. A failed run prints the server's log tail.
 
 ## New-user copy guard (`scripts/test/test_onboarding_copy.py`, #287)
 

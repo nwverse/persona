@@ -259,15 +259,20 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string, row startRow
 // taskWorks is what follows a turn's start on open task t: the stretch of work begins now, and what was judged or
 // waited for before is moot. s.tasks.completionMu is held (taskWorking, or taskStartMissed for a start nobody heard).
 func (s *Service) taskWorks(ctx context.Context, t Todo) {
+	now := time.Now()
 	s.tasks.mu.Lock()
-	s.tasks.working[t.ID] = time.Now()
+	s.tasks.working[t.ID] = now
 	s.tasks.mu.Unlock()
 	if err := s.recordTodoCloseDecline(ctx, t.ID, time.Time{}); err != nil {
 		s.logf("task %s: clearing close decline: %v", t.ID, err)
 	}
 	s.interruptsSoon()          // an interrupted receipt of it reads resumed now (interruptions.go)
 	s.clearTaskCheck(ctx, t.ID) // it judged the work before this turn (task_check.go)
-	s.setTaskStage(ctx, t.ID, "develop", "")
+	if t.hasTaskRuntime() {
+		s.taskRuntimeWorking(ctx, t, now)
+	} else {
+		s.setTaskStage(ctx, t.ID, "develop", "")
+	}
 	s.taskPlanApproval()
 	if t.Supervision != nil {
 		s.supervisedWorking(ctx, t)
@@ -807,9 +812,11 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		s.taskInboxTurnEnded(cctx, t, last, items, false)
 	}
 	// The whole last reply, as Markdown: the session list's last_text is one line cut at 200 characters.
-	text := strings.TrimSpace(last.LastText)
 	_, answer := turnExchange(items)
-	text = cmp.Or(answer, text)
+	text := answer
+	if text == "" && !isUnlinkedAgyPane(last, items) {
+		text = strings.TrimSpace(last.LastText)
+	}
 	// A paged reply may have lost its tail (the file lines and the closeout are there): read the whole item.
 	text = s.taskAnswer(cctx, last.MachineID, last.SessionID, items, text)
 	if current, ok := s.todoNow(t.ID); !ok || current.Cancelled() || current.AgentAborted(machine, sid) {

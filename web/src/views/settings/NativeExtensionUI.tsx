@@ -13,6 +13,7 @@ import { confirmedDefaultManager, onDefaultManager } from "../../lib/manager-cho
 import { uuid } from "../../lib/format";
 import { takeOverlayEntry, withoutOverlayState } from "../../lib/back-close";
 import { navigate } from "../../lib/router";
+import { safeWebURL } from "../../lib/format";
 import { openLink } from "../../lib/links";
 import { wideView } from "../../lib/code-view";
 import { currentLanguage, t } from "../../i18n";
@@ -105,7 +106,10 @@ function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; onL
           // other answer's URL opens as a link.
           const prompt = composeText(result.open_url);
           if (prompt) composeAssistant(prompt);
-          else openLink(result.open_url);
+          else {
+            const safe = safeWebURL(result.open_url, true);
+            if (safe) openLink(safe);
+          }
         }
         if (result.push) callbacks.current.push(result.push);
         if (result.pop) callbacks.current.pop();

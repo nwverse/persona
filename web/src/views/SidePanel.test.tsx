@@ -342,4 +342,25 @@ describe("侧边面板的键盘操作", () => {
       dialog.remove();
     }
   });
+
+  it("keeps the panel open and delegates Escape to an unsaved editor when focus is on the resize handle", () => {
+    const onWindow = vi.fn();
+    addEventListener("keydown", onWindow);
+    const aside = host.querySelector("aside")!;
+    const editor = document.createElement("div");
+    editor.setAttribute("data-unsaved-edit", "");
+    const onUnsaved = vi.fn((ev: Event) => ev.preventDefault());
+    editor.addEventListener("persona:escape-unsaved", onUnsaved);
+    aside.append(editor);
+    try {
+      separator().focus();
+      press(separator(), "Escape");
+      expect(onUnsaved).toHaveBeenCalledTimes(1);
+      expect(host.querySelector("aside")).not.toBeNull();
+      expect(onWindow).not.toHaveBeenCalled();
+    } finally {
+      removeEventListener("keydown", onWindow);
+      editor.remove();
+    }
+  });
 });

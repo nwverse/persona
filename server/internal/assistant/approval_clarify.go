@@ -100,6 +100,9 @@ func (s *Service) waitPreparedCard(ctx context.Context, ix proto.Interaction, op
 	if reservedCard(ix) || ix.Kind != proto.IxPermission || op.Apply == nil {
 		return approvalops.Outcome{}, errClarifyUnavailable
 	}
+	if proto.InternalMaintenanceApproval(ix) {
+		return s.waitOneShotPreparedCard(ctx, ix, op)
+	}
 	live := ix.MachineID != "" && ix.SessionID != ""
 	if live {
 		// Clarification needs an exact live conversation for the owner's question

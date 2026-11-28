@@ -185,6 +185,19 @@ type runtimeConn struct {
 	// superseded is true once a newer runtime.hello of the same runtime replaced this connection as stale (guarded by
 	// runtimeRegistry.mu).
 	superseded bool
+	// Per-connection ordered runtime.hub delivery state (guarded by h.mu).
+	// hubHolders counts in-flight runtime.hello calls gating notifications between registerRuntime
+	// and completion of the runtime.hello reply write (rpc.AfterReply), ensuring runtime.hub events
+	// never precede the hello reply on the wire even across duplicate or concurrent hellos.
+	hubHolders       int
+	hubNotifying     bool   // true while this connection's drainHubNotifications goroutine is active
+	hubStateInit     bool   // true once hello reply or a runtime.hub push recorded hubLastConnected/hubLastEpoch
+	hubLastConnected bool   // last connected state delivered to this runtime (hello reply or runtime.hub)
+	hubLastEpoch     uint64 // RuntimeHost.hubEpoch of that last delivered state
+	hubTargetSeq     uint64 // highest RuntimeHost.hubSeq applied to this connection
+	hubTargetEpoch   uint64 // RuntimeHost.hubEpoch of hubTargetSeq
+	hubTargetConn    bool   // RuntimeHost connected state of hubTargetSeq
+	hubClosed        bool   // connection closed/removed; stop delivering runtime.hub
 }
 
 // isDaemon: the node dialed it (a daemon in daemons.json), it did not connect to the socket.
