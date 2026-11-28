@@ -14,17 +14,21 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 )
 
-// Launcher keys that are references (docs/extensions/secret-providers.md, "Launcher keys"): a launcher's key is
-// opened every time a computer pulls it and every time the manager calls the provider's service itself. Saving the
-// reference in Settings is the owner's standing approval for that launcher, so the value its provider gave is kept
-// here, in this process's memory and sealed with the manager's secret.key in the database (launcherKeptKey, which the
-// key rotation re-seals: db.SealedSettings), and every later use is answered from it: a restart of the manager, a
-// provider that is locked, restarting or offline asks nobody. It is kept until it is revoked: the provider is removed
-// or switched off or no longer claims the scheme, the launcher is removed or its key no longer is this reference, or
-// the provider says the reference is gone (not_found) or refuses it (refused). A failure that may pass (not signed
-// in, provider off, rate limited, a timeout) leaves it as it is. RefreshLauncherSecret asks the provider again (the
-// secret was rotated). Only launchers: an extension's secrets resolve at each start, an Agent's hand-off after each
-// card, and neither is ever kept here.
+// References saved in Settings (docs/extensions/secret-providers.md, "Launcher keys" and "Extension secrets"): a
+// launcher's key is opened every time a computer pulls it and every time the manager calls the provider's service
+// itself, and an extension's secret every time its program starts (a restart, an upgrade, a new setting). Saving the
+// reference in Settings is the owner's standing approval for that launcher or extension, so the value its provider
+// gave is kept here, in this process's memory and sealed with the manager's secret.key in the database
+// (launcherKeptKey, which the key rotation re-seals: db.SealedSettings), and every later use is answered from it: a
+// restart of the manager, a provider that is locked, restarting or offline, or one that would have to ask the user
+// to authorize it again (1Password's op on a computer asks after 10 idle minutes, 12 hours, or the app locking) asks
+// nobody. It is kept until it is revoked: the provider is removed or switched off or no longer claims the scheme, the
+// launcher or extension is removed or its secret no longer is this reference, or the provider says the reference is
+// gone (not_found) or refuses it (refused). A failure that may pass (not signed in, provider off, rate limited, a
+// timeout) leaves it as it is. RefreshLauncherSecret asks the provider again (the secret was rotated). A value marked
+// stale (the provider stored a secret) is asked for again quietly (SecretsResolveParams.Quiet: the provider must not
+// ask the user for it) and keeps answering while it cannot be. An Agent's hand-off resolves after each card the user
+// approves, and is never kept here.
 
 // launcherKeptKey is the setting with the sealed copies (storedKeptSecret).
 const launcherKeptKey = "secrets.launcher_kept"
@@ -51,9 +55,11 @@ type keptSecret struct {
 	stale bool
 }
 
-// storedKeptSecret is one kept launcher key as the database has it: the reference and the value are sealed together.
+// storedKeptSecret is one kept value as the database has it: the reference and the value are sealed together. A
+// launcher's key has Launcher (and Machine); an extension's secret has Extension.
 type storedKeptSecret struct {
-	Launcher    string    `json:"launcher"`
+	Launcher    string    `json:"launcher,omitempty"`
+	Extension   string    `json:"extension,omitempty"`
 	Machine     string    `json:"machine,omitempty"`
 	Provider    string    `json:"provider"`
 	At          time.Time `json:"at"`
@@ -97,20 +103,27 @@ func (k *keptSecrets) put(key keptKey, value, provider string, gen uint64) bool 
 }
 
 // edit runs fn on every kept value; one it returns false for is dropped. Whether any was dropped or changed.
-func (k *keptSecrets) edit(fn func(keptKey, *keptSecret) bool) bool {
+func (k *keptSecrets) edit(fn func(keptKey, *keptSecret) bool) bool { return k.editGen(true, fn) }
+
+// editGen is edit; revoking says the edit may revoke what a resolution under way would bring (a provider gone): it
+// moves the generation, so that value is not kept. An edit that is not revoking moves it only when it drops one: a
+// provider's restart or new configuration must not turn away a value resolved meanwhile.
+func (k *keptSecrets) editGen(revoking bool, fn func(keptKey, *keptSecret) bool) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.gen++
-	changed := false
+	changed, dropped := false, false
 	for key, v := range k.kept {
 		was := v
 		if !fn(key, &v) {
 			delete(k.kept, key)
-			changed = true
+			changed, dropped = true, true
 		} else if v != was {
 			k.kept[key] = v
 			changed = true
 		}
+	}
+	if revoking || dropped {
+		k.gen++
 	}
 	return changed
 }
@@ -177,10 +190,16 @@ func (h *Manager) loadKept(ctx context.Context) {
 			continue
 		}
 		var p keptPlain
-		if json.Unmarshal([]byte(raw), &p) != nil || p.Reference == "" || p.Value == "" || e.Launcher == "" {
+		if json.Unmarshal([]byte(raw), &p) != nil || p.Reference == "" || p.Value == "" {
 			continue
 		}
 		key := keptKey{reference: p.Reference, kind: "launcher", id: e.Launcher, machine: e.Machine}
+		if e.Extension != "" {
+			key = keptKey{reference: p.Reference, kind: "extension", id: e.Extension}
+		}
+		if key.id == "" || e.Launcher != "" && e.Extension != "" {
+			continue
+		}
 		if _, ok := k.kept[key]; !ok {
 			k.kept[key] = keptSecret{value: p.Value, provider: e.Provider, at: e.At, stale: e.Stale}
 		}
@@ -211,8 +230,8 @@ func (h *Manager) saveKept(ctx context.Context) {
 	}
 	k.mu.Unlock()
 	slices.SortFunc(snap, func(a, b entry) int {
-		return cmp.Or(strings.Compare(a.key.id, b.key.id), strings.Compare(a.key.machine, b.key.machine),
-			strings.Compare(a.key.reference, b.key.reference))
+		return cmp.Or(strings.Compare(a.key.kind, b.key.kind), strings.Compare(a.key.id, b.key.id),
+			strings.Compare(a.key.machine, b.key.machine), strings.Compare(a.key.reference, b.key.reference))
 	})
 	list := make([]storedKeptSecret, 0, len(snap))
 	for _, e := range snap {
@@ -222,8 +241,12 @@ func (h *Manager) saveKept(ctx context.Context) {
 			h.logf("launcher keys: the kept copies were not sealed")
 			return
 		}
-		list = append(list, storedKeptSecret{Launcher: e.key.id, Machine: e.key.machine, Provider: e.v.provider,
-			At: e.v.at, Stale: e.v.stale, ValueSealed: sealed})
+		st := storedKeptSecret{Launcher: e.key.id, Machine: e.key.machine, Provider: e.v.provider, At: e.v.at,
+			Stale: e.v.stale, ValueSealed: sealed}
+		if e.key.kind == "extension" {
+			st.Launcher, st.Machine, st.Extension = "", "", e.key.id
+		}
+		list = append(list, st)
 	}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -239,13 +262,19 @@ func (h *Manager) LauncherSecret(ctx context.Context, reference, launcher, machi
 	if h.extensions == nil {
 		return h.ResolveSecret(ctx, reference, wire.SecretPurpose{}, "settings") // says no provider is on
 	}
+	return h.keptSecret(ctx, keptKey{reference: reference, kind: "launcher", id: launcher, machine: machine})
+}
+
+// keptSecret is key's value: what is kept of it, else what its provider gives now (approved by "settings"), kept from
+// then on. A stale one is asked for quietly (the provider must not ask the user) and answers while that fails.
+func (h *Manager) keptSecret(ctx context.Context, key keptKey) (string, error) {
 	h.loadKept(ctx)
-	key := keptKey{reference: reference, kind: "launcher", id: launcher, machine: machine}
 	kept, stale, gen, ok := h.extensions.kept.get(key)
 	if ok && !stale {
 		return kept, nil
 	}
-	v, err := h.ResolveSecret(ctx, reference, wire.SecretPurpose{Kind: "launcher", ID: launcher, Machine: machine}, "settings")
+	purpose := wire.SecretPurpose{Kind: key.kind, ID: key.id, Machine: key.machine}
+	v, err := h.resolveSecret(ctx, key.reference, purpose, "settings", ok)
 	if err != nil {
 		var se *SecretError
 		if ok && errors.As(err, &se) && !revokes(se.Code) {
@@ -253,7 +282,7 @@ func (h *Manager) LauncherSecret(ctx context.Context, reference, launcher, machi
 		}
 		return "", err
 	}
-	h.keepLauncherSecret(ctx, key, v, gen)
+	h.keepSecret(ctx, key, v, gen)
 	return v, nil
 }
 
@@ -272,11 +301,11 @@ func (h *Manager) RefreshLauncherSecret(ctx context.Context, reference, launcher
 	if err != nil {
 		return err
 	}
-	h.keepLauncherSecret(ctx, key, v, gen)
+	h.keepSecret(ctx, key, v, gen)
 	return nil
 }
 
-func (h *Manager) keepLauncherSecret(ctx context.Context, key keptKey, v string, gen uint64) {
+func (h *Manager) keepSecret(ctx context.Context, key keptKey, v string, gen uint64) {
 	prov, ok := h.SecretProviderOf(key.reference)
 	if ok && h.extensions.kept.put(key, v, prov.Extension, gen) {
 		h.saveKept(ctx)
@@ -302,6 +331,38 @@ func (h *Manager) RetainLauncherSecrets(ctx context.Context, keep func(launcher,
 	}
 }
 
+// ExtensionSecret is extension id's secret when it is reference: kept as a launcher key is (keptSecret).
+func (ps *extensions) extensionSecret(ctx context.Context, id, reference string) (string, error) {
+	if ps.h == nil {
+		return ps.resolveSecret(ctx, reference, wire.SecretPurpose{Kind: "extension", ID: id}, "settings", false)
+	}
+	return ps.h.keptSecret(ctx, keptKey{reference: reference, kind: "extension", id: id})
+}
+
+// retainExtensionSecrets drops what is kept of extension id's secrets that are no longer one of references (its
+// settings name another reference now, or a value).
+func (ps *extensions) retainExtensionSecrets(ctx context.Context, id string, references map[string]string) {
+	if ps.h == nil {
+		return
+	}
+	ps.h.loadKept(ctx)
+	// Not revoking: every start of every extension comes here, and one that drops nothing must not turn away a value
+	// resolved meanwhile (a launcher's, another extension's).
+	if ps.kept.editGen(false, func(key keptKey, _ *keptSecret) bool {
+		if key.kind != "extension" || key.id != id {
+			return true
+		}
+		for _, ref := range references {
+			if ref == key.reference {
+				return true
+			}
+		}
+		return false
+	}) {
+		ps.h.saveKept(ctx)
+	}
+}
+
 // forgetReference: reference's provider said it is gone or refused it.
 func (ps *extensions) forgetReference(ctx context.Context, reference string) {
 	if ps.h == nil {
@@ -315,8 +376,9 @@ func (ps *extensions) forgetReference(ctx context.Context, reference string) {
 }
 
 // keptProviderChanged is a registry change of provider id (old: its id before, when it was renamed) as the kept
-// launcher keys take it: removed or switched off, or no longer claiming a kept reference's scheme, drops them. An
-// upgrade, a restart, a new configuration that still claims the scheme keeps them: the values are the same secret's.
+// values take it: removed or switched off, or no longer claiming a kept reference's scheme, drops them. An upgrade, a
+// restart, a new configuration that still claims the scheme keeps them: the values are the same secret's. An
+// extension removed (or renamed) also drops the values kept of its own secrets.
 func (ps *extensions) keptProviderChanged(ctx context.Context, c extension.Change) {
 	old := ""
 	if c.Old != nil && c.Old.Record.ID != c.ID {
@@ -342,7 +404,13 @@ func (ps *extensions) keptProviderChanged(ctx context.Context, c extension.Chang
 	if ps.h != nil {
 		ps.h.loadKept(ctx)
 	}
-	changed := ps.kept.edit(func(key keptKey, v *keptSecret) bool {
+	// Removed, switched off or renamed may revoke a value resolved meanwhile; a restart, an upgrade that keeps the
+	// schemes or a new configuration does not (an upgrade that drops a scheme drops what it kept of it).
+	revoking := c.Kind == "removed" || old != "" || p == nil || !p.Record.Enabled
+	changed := ps.kept.editGen(revoking, func(key keptKey, v *keptSecret) bool {
+		if key.kind == "extension" && (key.id == old || c.Kind == "removed" && key.id == c.ID) {
+			return false // the extension that held the reference is gone (or another now: it resolves again)
+		}
 		if v.provider != c.ID && (old == "" || v.provider != old) {
 			return true
 		}
