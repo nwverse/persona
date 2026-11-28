@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -106,8 +107,13 @@ func (n *Node) orcaFinishedOwnerLocked(p host.Agent, id, fallback string) string
 	return id
 }
 
-func orcaTerminalRefusal() error {
-	return refusal("agent_busy", "the stopped terminal changed or is in use; check it before closing", nil)
+func orcaTerminalRefusal() error { return terminalChangedRefusal() }
+
+// terminalChangedRefusal refuses a close of a stopped Agent whose terminal changed or is in use (Orca's or herdr's,
+// close_after_exit.go): agent_busy, which the hub words by its reason (apierr's reasonKeys, #17057); the words here stay
+// English, as they were for a hub that does not.
+func terminalChangedRefusal() error {
+	return refusal("agent_busy", i18n.T(i18n.En, "rpc-errors.agent_busy_terminal_changed"), map[string]any{"reason": "terminal_changed"})
 }
 
 // orcaCloseTarget uses a direct inventory. A missing key is idempotent only

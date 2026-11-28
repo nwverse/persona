@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // Limits of a package.
@@ -230,7 +232,7 @@ func StageUpload(body io.Reader, name, dir string) (string, error) {
 	}
 	if fi, err := os.Stat(file); err != nil || fi.Size() > PackageMost {
 		_ = os.Remove(file)
-		return "", fmt.Errorf("包超过 %d MB", PackageMost>>20)
+		return "", errOverMost(PackageMost)
 	}
 	out := filepath.Join(dir, "pkg")
 	if err := unpackAs(file, name, out); err != nil {
@@ -340,10 +342,10 @@ func verifySubtreeLinks(sub string) error {
 			return err
 		}
 		if !linkInside(relSlash, target) {
-			return fmt.Errorf("%s 是指向包外的链接", relSlash)
+			return errLinkOutside(relSlash)
 		}
 		if _, err := root.Stat(rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("%s 是指向包外的链接", relSlash)
+			return errLinkOutside(relSlash)
 		}
 		return nil
 	})
@@ -360,6 +362,17 @@ func macMetadata(rel string) bool {
 	}
 	return false
 }
+
+// The refusals the walks and the unpackers share, each worded once.
+func errLinkOutside(rel string) error { return fmt.Errorf("%s 是指向包外的链接", rel) }
+
+func errEscapes(name string) error { return fmt.Errorf("%s 跳出了包", name) }
+
+func errNotRegular(rel string) error { return fmt.Errorf("%s 不是普通文件", rel) }
+
+func errOverMost(most int64) error { return fmt.Errorf("包超过 %d MB", most>>20) }
+
+func errNotGzip(err error) error { return fmt.Errorf("不是 gzip：%w", err) }
 
 // budget keeps a package within PackageMost bytes and PackageFiles files (or its own limits, for a tool).
 type budget struct{ bytes, files, maxBytes, maxFiles int64 }
@@ -380,14 +393,14 @@ func (b *budget) limitFiles() int64 {
 
 func (b *budget) take(n int64) error {
 	if n < 0 {
-		return fmt.Errorf("包里的文件大小无效：%d", n)
+		return i18n.Err("extension-source.package_size_invalid", i18n.Args{"size": n})
 	}
 	most, files := b.limitBytes(), b.limitFiles()
 	if b.files >= files {
 		return fmt.Errorf("包里超过 %d 个文件", files)
 	}
 	if n > most-b.bytes {
-		return fmt.Errorf("包超过 %d MB", most>>20)
+		return errOverMost(most)
 	}
 	b.files++
 	b.bytes += n
@@ -397,7 +410,7 @@ func (b *budget) take(n int64) error {
 func (b *budget) takeUint64(n uint64) (int64, error) {
 	most := b.limitBytes()
 	if n > uint64(most) {
-		return 0, fmt.Errorf("包超过 %d MB", most>>20)
+		return 0, errOverMost(most)
 	}
 	sz := int64(n)
 	if err := b.take(sz); err != nil {
@@ -465,7 +478,7 @@ func copyTree(from, to string) error {
 		}
 		relSlash := filepath.ToSlash(rel)
 		if !inside(relSlash) {
-			return fmt.Errorf("%s 跳出了包", relSlash)
+			return errEscapes(relSlash)
 		}
 		if macMetadata(relSlash) {
 			if d.IsDir() {
@@ -492,7 +505,7 @@ func copyTree(from, to string) error {
 				return err
 			}
 			if !linkInside(relSlash, target) {
-				return fmt.Errorf("%s 是指向包外的链接", relSlash)
+				return errLinkOutside(relSlash)
 			}
 			if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 				return err
@@ -503,7 +516,7 @@ func copyTree(from, to string) error {
 			links = append(links, rel)
 			return nil
 		case !info.Mode().IsRegular():
-			return fmt.Errorf("%s 不是普通文件", relSlash)
+			return errNotRegular(relSlash)
 		}
 		if err := b.take(info.Size()); err != nil {
 			return err
@@ -520,7 +533,7 @@ func copyTree(from, to string) error {
 	}
 	for _, l := range links {
 		if _, err := root.Stat(l); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("%s 是指向包外的链接", filepath.ToSlash(l))
+			return errLinkOutside(filepath.ToSlash(l))
 		}
 	}
 	return nil
@@ -587,7 +600,7 @@ func unpackAs(file, name, to string) error {
 	return fmt.Errorf("%s：包只能是目录、.tar.gz 或 .zip", filepath.Base(name))
 }
 
-var errStreamLimit = errors.New("包太大")
+var errStreamLimit = i18n.Err("extension-source.package_too_big")
 
 // boundedReader caps total decompressed bytes read from an archive stream and returns errStreamLimit
 // instead of io.EOF when exceeded, so tar.Reader cannot mistake truncation for a clean archive end.
@@ -646,7 +659,7 @@ func untarIn(file, to string, b *budget) error {
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return fmt.Errorf("不是 gzip：%w", err)
+		return errNotGzip(err)
 	}
 	defer gz.Close()
 	br := &boundedReader{r: gz, rem: tarStreamLimit(b)}
@@ -674,19 +687,19 @@ func untarIn(file, to string, b *budget) error {
 			const maxTrailerPad = 1 << 20
 			n, derr := io.Copy(io.Discard, io.LimitReader(gz, maxTrailerPad+1))
 			if derr != nil {
-				return fmt.Errorf("不是 gzip：%w", derr)
+				return errNotGzip(derr)
 			}
 			if n > maxTrailerPad {
 				return errStreamLimit
 			}
 			if err := gz.Close(); err != nil {
-				return fmt.Errorf("不是 gzip：%w", err)
+				return errNotGzip(err)
 			}
 			// A link that only points out, through another one ("d" -> "a/.."), is refused as well. One pointing at
 			// nothing inside the package stays as it was allowed before.
 			for _, l := range links {
 				if _, err := root.Stat(l); err != nil && !errors.Is(err, fs.ErrNotExist) {
-					return fmt.Errorf("%s 是指向包外的链接", filepath.ToSlash(l))
+					return errLinkOutside(filepath.ToSlash(l))
 				}
 			}
 			return nil
@@ -701,13 +714,13 @@ func untarIn(file, to string, b *budget) error {
 			continue
 		}
 		if strings.HasPrefix(hd.Name, "/") {
-			return fmt.Errorf("%s 跳出了包", hd.Name)
+			return errEscapes(hd.Name)
 		}
 		rel := strings.TrimPrefix(hd.Name, "./")
 		rel = strings.TrimSuffix(rel, "/")
 		if rel == "" || rel == "." {
 			if hd.Typeflag != tar.TypeDir || hd.Size != 0 {
-				return fmt.Errorf("%s 跳出了包", hd.Name)
+				return errEscapes(hd.Name)
 			}
 			if err := b.take(0); err != nil {
 				return err
@@ -715,7 +728,7 @@ func untarIn(file, to string, b *budget) error {
 			continue
 		}
 		if !inside(rel) {
-			return fmt.Errorf("%s 跳出了包", hd.Name)
+			return errEscapes(hd.Name)
 		}
 		if macMetadata(rel) {
 			if err := b.take(hd.Size); err != nil {
@@ -744,7 +757,7 @@ func untarIn(file, to string, b *budget) error {
 				return err
 			}
 			if !linkInside(rel, hd.Linkname) {
-				return fmt.Errorf("%s 是指向包外的链接", rel)
+				return errLinkOutside(rel)
 			}
 			if err := root.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 				return err
@@ -754,7 +767,7 @@ func untarIn(file, to string, b *budget) error {
 			}
 			links = append(links, dst)
 		default:
-			return fmt.Errorf("%s 不是普通文件", rel)
+			return errNotRegular(rel)
 		}
 	}
 }
@@ -777,14 +790,14 @@ func unzipIn(file, to string, b *budget) error {
 	defer root.Close()
 	for _, zf := range zr.File {
 		if strings.HasPrefix(zf.Name, "/") {
-			return fmt.Errorf("%s 跳出了包", zf.Name)
+			return errEscapes(zf.Name)
 		}
 		m := zf.Mode()
 		rel := strings.TrimPrefix(zf.Name, "./")
 		rel = strings.TrimSuffix(rel, "/")
 		if rel == "" || rel == "." {
 			if !m.IsDir() || zf.UncompressedSize64 != 0 {
-				return fmt.Errorf("%s 跳出了包", zf.Name)
+				return errEscapes(zf.Name)
 			}
 			if err := b.take(0); err != nil {
 				return err
@@ -792,7 +805,7 @@ func unzipIn(file, to string, b *budget) error {
 			continue
 		}
 		if !inside(rel) {
-			return fmt.Errorf("%s 跳出了包", zf.Name)
+			return errEscapes(zf.Name)
 		}
 		if macMetadata(rel) {
 			if _, err := b.takeUint64(zf.UncompressedSize64); err != nil {
@@ -813,7 +826,7 @@ func unzipIn(file, to string, b *budget) error {
 		case m&fs.ModeSymlink != 0:
 			return fmt.Errorf("%s：zip 包里不能有链接", rel)
 		case !m.IsRegular():
-			return fmt.Errorf("%s 不是普通文件", rel)
+			return errNotRegular(rel)
 		}
 		sz, err := b.takeUint64(zf.UncompressedSize64)
 		if err != nil {

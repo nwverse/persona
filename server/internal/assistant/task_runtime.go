@@ -21,6 +21,7 @@ func (st todoStage) hasTaskRuntime() bool { return st.Phase != "" || st.WaitStat
 
 func (st todoStage) applyRuntime(t *Todo) {
 	t.Phase, t.WaitState, t.runtimeAt = st.Phase, st.WaitState, st.RuntimeAt
+	t.runtimeObservedWait = st.ObservedWait
 }
 
 func sameTaskWait(a, b *assistantwire.TaskWaitState) bool {
@@ -31,7 +32,8 @@ func sameTaskWait(a, b *assistantwire.TaskWaitState) bool {
 }
 
 func sameTaskRuntime(a, b Todo) bool {
-	return a.Phase == b.Phase && a.runtimeAt.Equal(b.runtimeAt) && sameTaskWait(a.WaitState, b.WaitState)
+	return a.Phase == b.Phase && a.runtimeObservedWait == b.runtimeObservedWait &&
+		a.runtimeAt.Equal(b.runtimeAt) && sameTaskWait(a.WaitState, b.WaitState)
 }
 
 func taskRuntimeWork(t Todo, lang i18n.Lang) *proto.WorkState {
@@ -88,9 +90,9 @@ func (s *Service) recordTaskRuntimeReport(ctx context.Context, t Todo, machine, 
 	if phase == "" && deliveryPR == "" && t.hasTaskRuntime() {
 		return nil // reports omitting runtime fields leave the last explicit state in place
 	}
+	brief, _ := s.committedBriefOfTodo(t.ID)
 	var initial assistantwire.TaskPhase
 	if phase == "" {
-		brief, _ := s.committedBriefOfTodo(t.ID)
 		if deliveryPR != "" || brief.WorkModeNow.Valid() {
 			switch kind {
 			case upReportProgress, upReportQuestion:
@@ -136,7 +138,7 @@ func (s *Service) recordTaskRuntimeReport(ctx context.Context, t Todo, machine, 
 		st.RuntimeAt = at.UTC()
 		newPR := st.bindPR(pr)
 		if newPR || !wasStructured {
-			st.refreshRuntimeDelivery(at)
+			st.refreshRuntimeDelivery(at, brief.CompletionModeNow)
 		}
 		return true, nil
 	})
@@ -251,7 +253,7 @@ func (st todoStage) runtimeDeploy(p *TodoPRStatus) *deployWatch {
 	return nil
 }
 
-func (st *todoStage) refreshRuntimeDelivery(at time.Time) {
+func (st *todoStage) refreshRuntimeDelivery(at time.Time, mode assistantwire.CompletionMode) {
 	if st.PR == "" && len(st.PRs) == 0 {
 		return
 	}
@@ -262,7 +264,10 @@ func (st *todoStage) refreshRuntimeDelivery(at time.Time) {
 	case w != nil && w.State == deployIn:
 		d.State = deliveryLive
 	case w != nil && (w.State == deployOut || w.State == deployNotIn && w.Merged):
-		d.State, d.Gate, d.Unblock = deliveryMerged, w.Gate, unblockOther
+		d.State, d.Unblock = deliveryMerged, unblockAgent
+		if mode != assistantwire.CompletionModeLanded {
+			d.Gate, d.Unblock = w.Gate, unblockOther
+		}
 	case p != nil && p.State == "merged":
 		d.State, d.Unblock = deliveryMerged, unblockAgent
 	}
@@ -280,8 +285,8 @@ func prNeedsWork(p TodoPRStatus) bool {
 
 // Structured waits for other people, dates and dependencies live independently
 // of delivery. Only evidence about the exact observed dependency can clear it.
-func (st *todoStage) refreshRuntimeFromProviders(at time.Time, checksReason string) {
-	st.refreshRuntimeDelivery(at)
+func (st *todoStage) refreshRuntimeFromProviders(at time.Time, checksReason string, mode assistantwire.CompletionMode) {
+	st.refreshRuntimeDelivery(at, mode)
 	if !st.Phase.Valid() || at.Before(st.RuntimeAt) {
 		return
 	}
@@ -318,7 +323,10 @@ func (st *todoStage) refreshRuntimeFromProviders(at time.Time, checksReason stri
 	case w != nil && w.State == deployIn:
 		st.Phase = assistantwire.TaskPhaseReviewing
 	case w != nil && (w.State == deployOut || w.State == deployNotIn && w.Merged):
-		st.Phase, url, reason = assistantwire.TaskPhaseWaiting, w.PR, w.Gate
+		st.Phase = assistantwire.TaskPhaseReviewing
+		if mode != assistantwire.CompletionModeLanded {
+			st.Phase, url, reason = assistantwire.TaskPhaseWaiting, w.PR, w.Gate
+		}
 	case w != nil && w.State == deployUnmerged && p == nil:
 		st.Phase = assistantwire.TaskPhaseWorking
 	case p == nil:

@@ -90,7 +90,7 @@ func TestGroupAccessPrecedence(t *testing.T) {
 		set    FeishuBotSettings
 		sender string
 		chat   string
-		want   botGuestRefusal
+		want   string
 	}{
 		{"blocked user, even on the allowlist", access(assistantwire.FeishuGroupAllowlist), "ou_bad", "oc_ok", botGuestBlockedUser},
 		{"allowed user in a blocked chat", access(assistantwire.FeishuGroupAllowlist), "ou_ok", "oc_bad", botGuestBlockedChat},

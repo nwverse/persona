@@ -86,9 +86,10 @@ type Todo struct {
 	Supervision *Supervision `json:"supervision,omitempty"`
 	// Phase and WaitState come from the task stage ledger. They are present in
 	// either to-do mode once the task uses structured runtime reports.
-	Phase     assistantwire.TaskPhase      `json:"phase,omitempty"`
-	WaitState *assistantwire.TaskWaitState `json:"wait_state,omitempty"`
-	runtimeAt time.Time
+	Phase               assistantwire.TaskPhase      `json:"phase,omitempty"`
+	WaitState           *assistantwire.TaskWaitState `json:"wait_state,omitempty"`
+	runtimeAt           time.Time
+	runtimeObservedWait bool
 	// Stage is how far its work got (plan, develop, review, merge, deploy, verify; "" not known) and PRURL the PR it
 	// named, read off its agents' replies (reports.go, #2768); the apps draw the stage bar from them.
 	Stage    string        `json:"stage,omitempty"`
@@ -491,8 +492,7 @@ func (s *Service) todosLoaded() bool {
 // todosChanged tells the apps to read the todos again ({"type":"todos"}), once the rest of the write is in
 // (todosPushSoon).
 func (s *Service) todosChanged(ctx context.Context) {
-	s.trevision.changed() // seen/restored/Someday come through here too, without moving updated_at
-	s.todosPushSoon()
+	s.todoRevisionChanged() // seen/restored/Someday come through here too, without moving updated_at
 	s.todoChangedSoon()
 	s.remindSoon()        // a reminder set, moved or done (todo_plan.go)
 	s.boardChanged()      // a to-do closed, reopened or gone leaves "Please verify"
@@ -1108,34 +1108,48 @@ func (s *Service) todoRoutes() {
 			}
 		}
 		writes := s.trevision.writes.Load()
-		list, p, err := s.todosViewed(r.Context(), true)
+		ctx := r.Context()
+		isExtension := r.Header.Get(RoleHeader) == roleExtension
+		var cfg Settings
+		if !isExtension {
+			cfg, _ = s.settingsLastGood(ctx)
+		}
+		list, p, err := s.todosViewed(ctx, true)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
+		var counts assistantwire.TodoCounts
+		if !paged {
+			counts = p.counts()
+		}
 		partial := false
-		isExtension := r.Header.Get(RoleHeader) == roleExtension
 		if isExtension {
-			if list, partial, err = s.extensionRows(r.Context(), list, p); err != nil {
+			if list, partial, err = s.extensionRows(ctx, list, p); err != nil {
 				apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 				return
 			}
-		} else if !paged {
-			s.tagTodoRevision(w, writes, p)
 		}
 		var sharedBlockers []projection.SharedBlocker
 		var board *todoBoardProjection
 		if !isExtension {
 			sharedBlockers = p.sharedBlockers()
-			if cfg := s.settings(r.Context()); cfg.todosV2On() {
+			prefs := todoRevisionPrefsOf(cfg)
+			var directions map[string]string
+			if prefs.V2 || !paged {
+				directions = s.todoDirectionLabels(ctx, cfg)
+			}
+			if prefs.V2 {
 				sharedBlockers = mergePersistedSharedBlockers(list, p, sharedBlockers)
-				directions := s.todoBoardDirectionLabels(r.Context())
-				populateTodoEffectiveDirections(list, directions)
+				s.populateTodoEffectiveDirections(list, directions)
 				if !paged {
 					// The board is the same complete projection as Counts. The closed_limit option bounds the rows a list
 					// client has to parse; it does not silently create a second, smaller set of board totals.
-					board = buildTodoBoardProjectionWithOptions(list, directions, cfg.todosV2FoldChildrenOn())
+					board = buildTodoBoardProjectionWithOptions(list, directions, prefs.FoldChildren, counts)
 				}
+			}
+			if !paged {
+				s.tagTodoRevision(ctx, w, writes, p, prefs, directions)
 			}
 		}
 		var closedNext string
@@ -1149,7 +1163,7 @@ func (s *Service) todoRoutes() {
 		}
 		apierr.WriteJSON(w, todosList{
 			Todos:            list,
-			Counts:           p.counts(),
+			Counts:           counts,
 			SharedBlockers:   sharedBlockers,
 			Board:            board,
 			ClosedNextCursor: closedNext,
