@@ -85,10 +85,15 @@ func (p *Proxy) handler(fixed string) http.Handler {
 			}
 		default:
 			allowed = Matches(host, rule.Hosts)
-			if allowed && (IsLoopbackHost(host) || isSelfIP(host)) && p.ownPort(port) {
-				allowed, local = false, true
+			selfBlocked := false
+			if allowed && (IsLoopbackHost(host) || isSelfIP(host)) {
+				if p.ownPort(port) {
+					allowed, local, selfBlocked = false, true, true
+				} else if p.hubPort(port) {
+					allowed, selfBlocked = false, true
+				}
 			}
-			if !allowed && !local && rule.target(host, port, connect) {
+			if !allowed && !selfBlocked && rule.target(host, port, connect) {
 				if IsLoopbackHost(host) {
 					if !p.ownPort(port) && !p.hubPort(port) {
 						allowed, local = true, true
@@ -102,7 +107,7 @@ func (p *Proxy) handler(fixed string) http.Handler {
 			}
 			// A host the owner allowed is reached the way a settings address is (dialConfigured): never this machine
 			// by name, and each answer of its name checked (#5697).
-			if !allowed && !local && rule.owned(host, port) && !IsLoopbackHost(host) {
+			if !allowed && !selfBlocked && rule.owned(host, port) && !IsLoopbackHost(host) {
 				allowed, configured = true, true
 			}
 		}

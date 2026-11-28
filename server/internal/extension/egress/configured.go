@@ -78,13 +78,18 @@ func Unreachable(ip net.IP) bool {
 	return slices.ContainsFunc(metadataIPs, func(m string) bool { return net.ParseIP(m).Equal(ip) })
 }
 
-// forSettings says whether an address from an extension's settings (or one its owner allowed) may be dialled at port:
-// not Unreachable, and not this machine's own address at the hub's or this proxy's port.
-func (p *Proxy) forSettings(ip net.IP, port string) bool {
-	if Unreachable(ip) {
+// isSelfService reports whether ip:port targets this machine's own hub or
+// egress-proxy listener. Unspecified/0.0.0.0/8 addresses are included because
+// dialing them connects to loopback on Linux. Fails closed if interface
+// addresses cannot be listed.
+func (p *Proxy) isSelfService(ip net.IP, port string) bool {
+	if !p.hubPort(port) && !p.ownPort(port) {
 		return false
 	}
-	if !p.hubPort(port) && !p.ownPort(port) {
+	if ip.IsLoopback() || ip.IsUnspecified() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 0 {
 		return true
 	}
 	var addrs []net.IP
@@ -94,10 +99,16 @@ func (p *Proxy) forSettings(ip net.IP, port string) bool {
 		var err error
 		addrs, err = machineAddrs()
 		if err != nil {
-			return false
+			return true
 		}
 	}
-	return !slices.ContainsFunc(addrs, ip.Equal)
+	return slices.ContainsFunc(addrs, ip.Equal)
+}
+
+// forSettings says whether an address from an extension's settings (or one its owner allowed) may be dialled at port:
+// not Unreachable, and not this machine's own address at the hub's or this proxy's port.
+func (p *Proxy) forSettings(ip net.IP, port string) bool {
+	return !Unreachable(ip) && !p.isSelfService(ip, port)
 }
 
 // machineAddrs are this machine's own addresses.

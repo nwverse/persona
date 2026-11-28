@@ -204,15 +204,18 @@ func (p *Proxy) runtimeDial(ctx context.Context, host, port string, configured b
 	if len(ips) == 0 {
 		return nil, errors.New("egress target has no addresses")
 	}
-	if net.ParseIP(host) != nil && isSelfIP(host) && p.ownPort(port) {
-		return nil, errInternal
-	}
 	for _, ip := range ips {
 		if configured && !p.forSettings(ip, port) {
 			return nil, errNotForSettings
 		}
-		if net.ParseIP(host) == nil && Unreachable(ip) {
-			return nil, errInternal
+		if !configured {
+			if net.ParseIP(host) == nil {
+				if !p.forSettings(ip, port) {
+					return nil, errInternal
+				}
+			} else if p.isSelfService(ip, port) {
+				return nil, errInternal
+			}
 		}
 	}
 	upstream := p.Upstream
