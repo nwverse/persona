@@ -211,7 +211,7 @@ Non-HTML subresources and non-GET requests receive a JSON error body `{"error": 
 | `bad_gateway` | 502 | Upstream connection error or reset while proxying |
 | `auth_failed` | 401 / 403 | Redemption code expired / replayed / invalid, preview cookie expired, or device revoked |
 
-Web clients (PR 5) should verify `event.origin === grant.origin` (and `event.source === iframe.contentWindow`) and `event.data?.persona_preview === "unreachable"` before acting: e.g., re-granting once on `auth_failed` if the device is still signed in, or falling back automatically to the headless browser stream (`GET /api/v1/machines/{mid}/preview/connect`) on `port_gone`, `timeout`, `bad_gateway`, or `too_many_connections`.
+Web clients should verify `event.origin === grant.origin` (and `event.source === iframe.contentWindow`) and `event.data?.persona_preview === "unreachable"` before acting: e.g., re-granting once on `auth_failed` if the device is still signed in, or falling back automatically to the headless browser stream (`GET /api/v1/machines/{mid}/preview/connect`) on `port_gone`, `timeout`, `bad_gateway`, or `too_many_connections`.
 
 ### Verification
 
