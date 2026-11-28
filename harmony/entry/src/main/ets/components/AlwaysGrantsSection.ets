@@ -35,6 +35,7 @@ export struct AlwaysGrantsSection {
   @Local private revokingHash: string = '';
   @Local private restartNeeded: boolean = false;
   private loadRevision: number = 0;
+  private pendingConfirmKey: string = '';
 
   aboutToAppear(): void {
     void this.loadGrants();
@@ -49,10 +50,12 @@ export struct AlwaysGrantsSection {
     const owner = this.model;
     const convId = (this.conversationId || '').trim();
     const rev = ++this.loadRevision;
+    this.grants = undefined;
+    this.revokingHash = '';
+    this.pendingConfirmKey = '';
     this.unavailable = false;
     this.error = '';
     if (!owner.connected || !convId) {
-      this.grants = undefined;
       this.loading = false;
       this.restartNeeded = false;
       return;
@@ -92,31 +95,47 @@ export struct AlwaysGrantsSection {
   private confirmRevoke(grant: AlwaysGrant): void {
     if (this.revokingHash) return;
     const owner = this.model;
-    const convId = this.conversationId;
+    const convId = (this.conversationId || '').trim();
+    if (!convId) return;
     const generation = owner.connectionGeneration();
     const scope = owner.scope();
+    const confirmKey = JSON.stringify([scope, generation, convId, grant.key_hash]);
+    this.pendingConfirmKey = confirmKey;
     const name = grant.tool_name || tr('always_grant_unnamed');
     this.getUIContext().showAlertDialog({
       title: tr('always_grant_revoke_title'),
       message: name + '\n' + tr('always_grant_revoke_message'),
       autoCancel: true,
       alignment: DialogAlignment.Center,
-      primaryButton: { value: tr('cancel'), action: () => {} },
+      primaryButton: {
+        value: tr('cancel'),
+        action: () => {
+          if (this.pendingConfirmKey === confirmKey) this.pendingConfirmKey = '';
+        }
+      },
       secondaryButton: {
         value: tr('standing_revoke'),
         fontColor: Colors.danger,
         action: () => {
-          if (owner !== this.model || !owner.owns(generation, scope) || convId !== this.conversationId) return;
-          void this.revoke(grant);
+          if (
+            this.pendingConfirmKey !== confirmKey ||
+            owner !== this.model ||
+            !owner.owns(generation, scope) ||
+            convId !== (this.conversationId || '').trim()
+          ) {
+            return;
+          }
+          this.pendingConfirmKey = '';
+          void this.revoke(grant, convId);
         }
       }
     });
   }
 
-  private async revoke(grant: AlwaysGrant): Promise<void> {
+  private async revoke(grant: AlwaysGrant, expectedConvId: string): Promise<void> {
     const owner = this.model;
     const convId = (this.conversationId || '').trim();
-    if (!owner.connected || !convId || !grant.key_hash || this.revokingHash) return;
+    if (!owner.connected || !convId || convId !== expectedConvId || !grant.key_hash || this.revokingHash) return;
     const path = revokeAlwaysGrantPath(convId, grant.key_hash);
     if (owner.operationBlocked(path)) {
       toastCenter.error(tr('pending_action'));
@@ -132,9 +151,9 @@ export struct AlwaysGrantsSection {
         'DELETE',
         {},
         '',
-        () => owner === this.model && owner.owns(generation, scope) && convId === this.conversationId
+        () => owner === this.model && owner.owns(generation, scope) && convId === (this.conversationId || '').trim()
       );
-      if (owner !== this.model || !owner.owns(generation, scope) || convId !== this.conversationId) return;
+      if (owner !== this.model || !owner.owns(generation, scope) || convId !== (this.conversationId || '').trim()) return;
       const outcome = parseAlwaysRevokeResponse(res);
       this.grants = (this.grants || []).filter((item: AlwaysGrant) => item.key_hash !== grant.key_hash);
       Haptics.success();
@@ -147,7 +166,7 @@ export struct AlwaysGrantsSection {
         this.restartNeeded = true;
       }
     } catch (err) {
-      if (owner === this.model && owner.owns(generation, scope) && convId === this.conversationId) {
+      if (owner === this.model && owner.owns(generation, scope) && convId === (this.conversationId || '').trim()) {
         Haptics.error();
         const message = trError((err as Error).message || 'failed');
         this.error = message;

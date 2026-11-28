@@ -1461,6 +1461,7 @@ struct Index {
         selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
         AutoConversationsSheet({
           model: this.model,
+          history: this.sidebarTaskHistory,
           onOpen: (row: ResourceRow) => {
             this.autoChatsSheetShown = false;
             this.openPickedChat(row);

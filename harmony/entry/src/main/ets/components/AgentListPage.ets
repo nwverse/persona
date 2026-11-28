@@ -858,7 +858,8 @@ export struct AgentListPage {
           showsSource:!!binding.presentation.activitySource,sourceTitle:binding.presentation.activitySource ? tr(binding.presentation.activitySource) : '',
           narrow:this.listWidth>0 && this.listWidth<296,leftInset:(groupId.includes('/project/') ? 36 : 20)+16*depth,
           controlScale:Math.max(1,Math.min(this.environment.fontScale,67/51)),fontScale:this.environment.fontScale,
-          tint:this.rowStatusColor(binding.presentation),activityList:true,useHerdrTabName:this.model.directoryOwnerFor(binding.bound.value)?.useHerdrTabName ?? this.model.useHerdrTabName})
+          tint:this.rowStatusColor(binding.presentation),activityList:true,useHerdrTabName:this.model.directoryOwnerFor(binding.bound.value)?.useHerdrTabName ?? this.model.useHerdrTabName,
+          renaming:!!(this.model.namingAgentKeys && this.model.namingAgentKeys.length > 0 && this.model.isAutoRenamingRow(binding.bound.value))})
       }.width('100%').backgroundColor(this.isRowSelected(binding) ? Colors.selection : this.displayedAgentStyle==='cards'?Colors.grouped:Colors.surface)
        .borderRadius({topLeft:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,topRight:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,
          bottomLeft:this.endsSurface(binding,groupId) && endOfSurface ? 26:0,bottomRight:this.endsSurface(binding,groupId) && endOfSurface ? 26:0})

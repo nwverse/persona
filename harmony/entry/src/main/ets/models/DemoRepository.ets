@@ -39,6 +39,7 @@ interface DemoPath {
 export class DemoRoster {
   features: string[] = [];
   mainId: string = '';
+  leaders: string[] = [];
   machines: ResourceRow[] = [];
   sessions: ResourceRow[] = [];
   conversations: ResourceRow[] = [];
@@ -443,7 +444,7 @@ export class DemoRepository extends HubRepository {
   seed(): DemoRoster { this.reset(); return this.roster(); }
 
   roster(): DemoRoster {
-    const roster = new DemoRoster(); roster.features = this.features.slice(); roster.mainId = this.mainId;
+    const roster = new DemoRoster(); roster.features = this.features.slice(); roster.mainId = this.mainId; roster.leaders = this.leaderIds.slice();
     roster.machines = copyRows([this.machineData()], 'machine'); roster.sessions = copyRows(this.activeSessions(), 'session');
     roster.conversations = copyRows(this.conversationsData, 'conversation'); roster.todos = copyRows(this.todosData, 'todo');
     roster.knowledge = copyRows(this.knowledgeData.filter((item: DemoRecord) => Wire.text(item, 'kind') === 'projects'), 'knowledge');

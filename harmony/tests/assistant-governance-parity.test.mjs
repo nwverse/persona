@@ -370,6 +370,8 @@ test('QuickCommandPalette, UI components, and trilingual resources wire all Wave
   const alwaysSection = readEts('components/AlwaysGrantsSection.ets');
   assert.match(alwaysSection, /always\.restart\.banner/);
   assert.match(alwaysSection, /Tokens\.controlBar/);
+  assert.match(alwaysSection, /loadGrants\(\)[\s\S]*this\.grants = undefined;\s*this\.revokingHash = '';\s*this\.pendingConfirmKey = '';/);
+  assert.match(alwaysSection, /this\.pendingConfirmKey !== confirmKey/);
 
   const searchSheet = readEts('components/AssistantSearchSheet.ets');
   assert.match(searchSheet, /PersonaSheetHeader\(/);
@@ -381,6 +383,11 @@ test('QuickCommandPalette, UI components, and trilingual resources wire all Wave
   assert.match(autoSheet, /PersonaSheetHeader\(/);
   assert.match(autoSheet, /closeIdentity:\s*'auto\.chats\.close'/);
   assert.match(autoSheet, /auto\.chats\.filter\./);
+  assert.match(autoSheet, /knownTaskIds/);
+  assert.match(autoSheet, /if \(this\.canMutate\(item\.row\)\) \{[\s\S]*\.bindContextMenu/);
+
+  const standingSheetSrc = readEts('components/StandingAuthSheet.ets');
+  assert.match(standingSheetSrc, /@Monitor\('model\.conversations'\)/);
 
   const archivedSheet = readEts('components/ArchivedConversationsSheet.ets');
   assert.match(archivedSheet, /archived\.tab\.chats/);
@@ -391,6 +398,11 @@ test('QuickCommandPalette, UI components, and trilingual resources wire all Wave
   const agentList = readEts('components/AgentListPage.ets');
   assert.match(agentList, /agents\.menu\.autoname/);
   assert.match(agentList, /isAutoRenamingRow/);
+  assert.match(agentList, /AgentDirectoryRowContent\(\{[\s\S]*renaming:/);
+
+  const rowContent = readEts('components/AgentDirectoryRowContent.ets');
+  assert.match(rowContent, /@Param renaming: boolean = false;/);
+  assert.match(rowContent, /if \(this\.renaming\) return tr\('agent_renaming'\);/);
 
   const indexSrc = readEts('pages/Index.ets');
   assert.match(indexSrc, /action:open_standing_auth/);
@@ -442,7 +454,7 @@ test('DemoRepository serves standing authorizations, always grants, assistant se
   assert.ok(searchAns.results.some((r) => r.session_id === 'demo-recent-review'));
   assert.ok(searchAns.results.some((r) => r.hits.some((h) => h.ranges.length > 0)));
 
-  // 4. AutoConversations over Demo conversations
+  // 4. AutoConversations over Demo conversations + top-level leaders Pin/Unpin persistence
   const demoConvs = roster.conversations.map((r) => ({
     id: r.id,
     session_id: r.session || r.id,
@@ -458,6 +470,18 @@ test('DemoRepository serves standing authorizations, always grants, assistant se
   const demoPartition = partitionAutoConversations(demoConvs, { mainId: roster.mainId, hubSays: true });
   assert.ok(demoPartition.mine.some((c) => c.id === 'demo-recent-review'));
   assert.ok(demoPartition.auto.some((c) => c.id === 'demo-auto-summary'));
+
+  const pinned = await repo.call('/api/v1/assistant/directions/demo-recent-review/make', 'POST', {});
+  assert.deepEqual(pinned.leaders, ['demo-recent-review']);
+  const assistantAfterPin = await repo.call('/api/v1/assistant');
+  assert.deepEqual(assistantAfterPin.leaders, ['demo-recent-review']);
+  assert.deepEqual(repo.roster().leaders, ['demo-recent-review']);
+  const unpinned = await repo.call('/api/v1/assistant/directions/demo-recent-review/end', 'POST', {});
+  assert.deepEqual(unpinned.leaders, []);
+  const assistantAfterUnpin = await repo.call('/api/v1/assistant');
+  assert.deepEqual(assistantAfterUnpin.leaders, []);
+  const pinsPut = await repo.call('/api/v1/pins', 'PUT', { spaces: [], sessions: ['demo-mac/demo-agent-review'] });
+  assert.deepEqual(pinsPut.sessions, ['demo-mac/demo-agent-review']);
 
   // 5. Archived agent sessions & unarchive
   const archivedAgents = await repo.call('/api/v1/sessions/archived');

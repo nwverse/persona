@@ -49,10 +49,15 @@ export struct StandingAuthSheet {
     void this.loadStanding();
   }
 
-  @Monitor('model', 'model.connected', 'model.profile', 'model.conversations')
+  @Monitor('model', 'model.connected', 'model.profile')
   onModelChanged(): void {
     this.syncDefaultConversation();
     void this.loadStanding();
+  }
+
+  @Monitor('model.conversations')
+  onConversationsChanged(): void {
+    this.syncDefaultConversation();
   }
 
   private syncDefaultConversation(): void {

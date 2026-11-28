@@ -20,7 +20,7 @@ import {
   sourceOfAutoConversation
 } from '../core/AutoConversations';
 import { relativeActivityDate } from '../core/PhoneDate';
-import { assistantChatState, sidebarConversationTitle } from '../models/AssistantRecentChats';
+import { assistantChatState, sidebarConversationTitle, SidebarTaskHistory } from '../models/AssistantRecentChats';
 import { ClientModel } from '../models/ClientModel';
 import { segment } from '../models/HubRepository';
 import { toastCenter } from '../models/ToastCenter';
@@ -36,6 +36,7 @@ interface BoundAutoConversation extends AutoConversationInput {
 @ComponentV2
 export struct AutoConversationsSheet {
   @Require @Param model: ClientModel;
+  @Param history?: SidebarTaskHistory = undefined;
   @Param initialFilter: AutoConversationFilter = 'all';
   @Event onOpen: (row: ResourceRow) => void = () => {};
   @Event onClose: () => void = () => {};
@@ -49,6 +50,9 @@ export struct AutoConversationsSheet {
   aboutToAppear(): void {
     this.filter = this.initialFilter;
     this.clockTimer = setInterval(() => { this.clock = Date.now(); }, 60000);
+    if (this.history) {
+      this.history.refresh(this.model, true).catch(() => undefined);
+    }
   }
 
   aboutToDisappear(): void {
@@ -62,6 +66,16 @@ export struct AutoConversationsSheet {
   onModelReset(): void {
     this.filter = 'all';
     this.busyKeys = [];
+    if (this.history) {
+      this.history.refresh(this.model, true).catch(() => undefined);
+    }
+  }
+
+  @Monitor('model.connected', 'model.conversations')
+  onConversationsUpdated(): void {
+    if (this.history) {
+      this.history.refresh(this.model, true).catch(() => undefined);
+    }
   }
 
   private toInput(row: ResourceRow): BoundAutoConversation {
@@ -88,6 +102,12 @@ export struct AutoConversationsSheet {
     };
   }
 
+  @Computed get knownTaskIds(): string[] {
+    if (!this.history) return [];
+    const _rev = this.history.revision;
+    return this.history.known(this.model.scope()).taskSessionIds(this.model.conversations);
+  }
+
   @Computed get partition(): AutoConversationsPartition<BoundAutoConversation> {
     const inputs = this.model.conversations.map((row: ResourceRow) => this.toInput(row));
     return partitionAutoConversations(inputs, {
@@ -95,7 +115,8 @@ export struct AutoConversationsSheet {
       mainMachineId: this.model.mainMachineId,
       group: this.model.profile.id,
       manager: this.model.profile.manager,
-      hubSays: this.model.demo || this.model.features.includes(AUTO_CONVERSATION_FEATURE)
+      hubSays: this.model.demo || this.model.features.includes(AUTO_CONVERSATION_FEATURE),
+      knownTaskIds: this.knownTaskIds
     });
   }
 
@@ -140,7 +161,7 @@ export struct AutoConversationsSheet {
   }
 
   private sourceOf(item: BoundAutoConversation): string {
-    return sourceOfAutoConversation(item) || '';
+    return sourceOfAutoConversation(item, this.knownTaskIds) || '';
   }
 
   private rowDetail(item: BoundAutoConversation): string {
@@ -387,7 +408,6 @@ export struct AutoConversationsSheet {
     })
     .shadow(PhoneStyle.cardElevation(this.env.dark))
     .alignItems(VerticalAlign.Center)
-    .bindContextMenu(this.rowActionsMenu(item.row), ResponseType.LongPress)
     .id('auto.chats.row.' + (item.session_id || item.id))
   }
 
@@ -437,11 +457,18 @@ export struct AutoConversationsSheet {
         } else {
           List({ space: Tokens.spaceS }) {
             ForEach(this.visibleItems, (item: BoundAutoConversation) => {
-              ListItem() {
-                this.chatCard(item)
+              if (this.canMutate(item.row)) {
+                ListItem() {
+                  this.chatCard(item)
+                }
+                .bindContextMenu(this.rowActionsMenu(item.row), ResponseType.LongPress)
+              } else {
+                ListItem() {
+                  this.chatCard(item)
+                }
               }
             }, (item: BoundAutoConversation) =>
-              item.row.key() + ':' + (item.updated_at || '') + ':' + String(this.isPinned(item.row)) + ':' + String(this.isBusy(item.row)))
+              item.row.key() + ':' + (item.updated_at || '') + ':' + String(this.isPinned(item.row)) + ':' + String(this.isBusy(item.row)) + ':' + String(this.canMutate(item.row)))
           }
           .width('100%')
           .layoutWeight(1)

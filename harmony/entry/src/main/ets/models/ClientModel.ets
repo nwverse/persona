@@ -2330,6 +2330,9 @@ export class ClientModel {
     const demo = this.demoRepository; if (!this.demo || !demo) return;
     const roster = demo.roster(); this.features = roster.features; this.mainId = roster.mainId;
     this.sessions = roster.sessions; this.sessionsReady = true; this.machines = roster.machines; this.conversations = roster.conversations; this.mainMachineId = roster.conversations.find((row: ResourceRow) => row.id === roster.mainId)?.machine || '';
+    if (roster.leaders.length > 0 || this.sidebarConfig !== '') {
+      this.acceptSidebarConfig(Wire.payload(['main', 'main_machine_id', 'leaders'], [roster.mainId, this.mainMachineId, roster.leaders]));
+    }
     this.todos = roster.todos; this.knowledge = roster.knowledge; this.inbox = roster.inbox;
     this.managers = [new ResourceRow('demo', tr('local_demo'), 'manager')];
     if (this.selected.kind === 'session') { const current = this.sessions.find((row: ResourceRow) => row.id === this.selected.id && row.machine === this.selected.machine); if (current) this.selected = current; }
