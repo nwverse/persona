@@ -137,7 +137,8 @@ func (s *Service) todoBlockersRoutes() {
 			return
 		}
 		wasActive := matched.State == db.TodoBlockerStateActive
-		if _, err := s.cancelTodoBlocker(ctx, blockerID); err != nil {
+		cancelled, err := s.cancelTodoBlocker(ctx, blockerID)
+		if err != nil {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -145,14 +146,17 @@ func (s *Service) todoBlockersRoutes() {
 			s.clearMergeTrainBlocker(todoID, matched.TargetRef, matched.ConditionJSON)
 		}
 		s.todosChanged(ctx)
-		if wasActive && !s.hasActiveTodoBlockers(ctx, todoID) {
+		if wasActive && cancelled != nil && !s.hasActiveTodoBlockers(ctx, todoID) {
 			var onUnblocked func(ctx context.Context, todoID string)
 			if h := s.todoBlockerHooks(false); h != nil {
 				h.mu.RLock()
 				onUnblocked = h.onUnblocked
 				h.mu.RUnlock()
 			}
-			s.notifyTodoBlockerUnblocked(ctx, todoID, onUnblocked)
+			s.notifyTodoBlockerUnblocked(ctx, todoID, *cancelled, nil, onUnblocked)
+			if s.settings(ctx).todosV2On() {
+				s.sweepAdmissionQueue(ctx)
+			}
 		}
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})

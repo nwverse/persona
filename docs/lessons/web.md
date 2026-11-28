@@ -1,5 +1,19 @@
 # Lessons: web UI and interactions
 
+## Closed history extends the to-do list without replacing the board (#17695)
+
+The hub projects the board and its direction counts before bounding the closed rows in GET /todos. Use those counts to
+offer a direction review even before its first completed row is loaded. Keep that review selected while the cursor reads
+older rows. Append those rows to Done or Cancelled without feeding them back into active board groups. Calendar shows
+the dated rows already in memory.
+
+## Channel refreshes keep the routing draft (#17664)
+
+A channel read updates the current configuration document under one resource key. A refresh counter in that key or a
+different component tree at the split-pane breakpoint discards unsaved input. A committed PUT acknowledges the edit even
+when a GET overlaps it. Read again after the PUT to reconcile the displayed state and ignore the overlapping reply once
+that follow-up starts.
+
 ## A TypeError is not a network failure (#16182)
 
 fetch rejects a failed connection with a TypeError, and JavaScript throws one for a bug in the page's own code.

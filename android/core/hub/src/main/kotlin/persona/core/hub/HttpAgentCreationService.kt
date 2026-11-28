@@ -33,6 +33,8 @@ class HttpAgentCreationService(
     private val startHttp = http.newBuilder().readTimeout(130, TimeUnit.SECONDS).build()
     // The hub gives the node 70 s to ask the launcher's CLI for its models (it starts it once, then caches the list).
     private val modelsHttp = http.newBuilder().readTimeout(75, TimeUnit.SECONDS).build()
+    /** Orca's worktree create, rename and delete (#17054), on the same pairing and client. */
+    override val worktrees: WorktreeManagement = HttpWorktreeManagement(base, token, client, isCurrent)
     private fun url(vararg segments: String) = base.newBuilder().apply { segments.forEach(::addPathSegment) }.build()
     private fun checkScope() { if (!isCurrent()) throw CancellationException("Pairing changed") }
     private suspend fun read(request: Request, client: OkHttpClient = http): JsonObject {

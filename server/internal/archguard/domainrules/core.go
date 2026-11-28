@@ -301,7 +301,7 @@ func (c *coreChecks) structRules(t *typeDecl) {
 			if exported(n.Name) {
 				c.at(f, n, "core-exported-field", t.name+"."+n.Name+" is exported")
 			}
-			primitive := many && n.Name != "_" && c.p.decls.primitive(fl.Type)
+			primitive := many && n.Name != "_" && c.p.decls.primitive(f, c.idx, fl.Type)
 			if primitive && !c.exempt(t.name+"."+n.Name, "core-primitive-field") {
 				c.at(f, n, "core-primitive-field", t.name+"."+n.Name+" is "+exprString(fl.Type))
 			}
@@ -387,28 +387,41 @@ func (c *coreChecks) signature(f *File, n ast.Node, name, recv string, ft *ast.F
 	build := top && (wordPrefix(decl.Name.Name, "New") || wordPrefix(decl.Name.Name, "Restore"))
 	wire := recv != "" && strings.HasSuffix(name, ".Wire")
 	for _, p := range ps {
-		if c.p.decls.primitive(p) && !parse && !c.exempt(name, "core-primitive-signature") && !c.funcParam(p, decl) {
+		if c.p.decls.primitive(f, c.idx, p) && !parse && !c.exempt(name, "core-primitive-signature") && !c.funcParam(f, p, decl) {
 			c.at(f, n, "core-primitive-signature", name+" takes "+exprString(p))
 		}
-		if c.p.decls.collection(p) && !build {
+		if c.p.decls.collection(f, c.idx, p) && !build {
 			c.at(f, n, "core-collection", name+" takes "+exprString(p))
 		}
 	}
 	for _, r := range rs {
-		if c.p.decls.primitive(r) && exprString(r) != "bool" && !wire &&
+		if c.p.decls.primitive(f, c.idx, r) && exprString(r) != "bool" && !wire &&
 			!c.exempt(name, "core-primitive-signature") {
 			c.at(f, n, "core-primitive-signature", name+" returns "+exprString(r))
 		}
-		if c.p.decls.collection(r) {
+		if c.p.decls.collection(f, c.idx, r) {
 			c.at(f, n, "core-collection", name+" returns "+exprString(r))
 		}
 	}
 }
 
 // funcParam says whether p is a func-typed parameter, which core-interface-param reports instead.
-func (c *coreChecks) funcParam(p ast.Expr, decl *ast.FuncDecl) bool {
-	_, ok := c.p.decls.named(p).(*ast.FuncType)
-	return ok && decl != nil
+func (c *coreChecks) funcParam(f *File, p ast.Expr, decl *ast.FuncDecl) bool {
+	if decl == nil {
+		return false
+	}
+	t := c.p.decls.named(p)
+	if _, ok := t.(*ast.FuncType); ok {
+		return true
+	}
+	if base := genericBase(t); base != nil {
+		t = base
+	}
+	if sel, ok := t.(*ast.SelectorExpr); ok {
+		st := stdType(sel, f, c.idx)
+		return st == "iter.Seq" || st == "iter.Seq2"
+	}
+	return false
 }
 
 // unwrapParam is a parameter's type without pointers, slices, arrays, variadics and map values.

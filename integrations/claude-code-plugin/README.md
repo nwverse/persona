@@ -1,18 +1,16 @@
 # Persona plugin for Claude Code
 
-A Claude Code plugin that lets the owner's own messages from the Persona apps reach a Claude Code session the way
-typed input does, in sessions Persona has no terminal for: Claude's desktop app, a terminal herdr / Orca / Tern do not
-run, a background session. Without it the node can only use Claude Code's peer inbox there, which tells the model the
-words come from another session and that they are not the person's approval (`docs/integrations/claude-integration.md`,
-"Owner input through the Persona plugin").
+In Claude Desktop, background sessions and terminals outside Persona's engines, this plugin delivers the owner's
+messages as typed input. The peer inbox identifies them as coming from another session. See
+`docs/integrations/claude-integration.md`, "Owner input through the Persona plugin".
 
-The plugin polls the local Persona node while its session lives: it submits the owner's messages with
-`$.prompt.submit({ text, asUser: true })` (immediately when idle, or into Claude Code's prompt queue while a turn runs),
-cancels the active main-loop turn via `$.turn.abort({ turnId })` when the owner presses Stop, applies session-scoped
-model / effort picks on main-loop `turn.step` calls when `settings` is advertised, and bridges interactive tool
-permission prompts, `ExitPlanMode`, and `AskUserQuestion` cards through `classic.PermissionRequest` when the node
-explicitly authorizes `permissions: true` on `/poll`. It reads no file but its own manifest and stays quiet when no
-node is running.
+In Claude Desktop, background sessions and terminals outside Persona's engines, this plugin delivers the owner's
+messages as typed input. The peer inbox identifies them as coming from another session. See
+`docs/integrations/claude-integration.md`, "Owner input through the Persona plugin".
+
+The plugin polls the local node for messages, Stop, session model and effort choices, and authorized permission,
+plan and question cards. It reports the main loop's effort for Desktop sessions. It reads only its manifest and
+stays quiet when the node is unavailable.
 
 On a computer with managed settings, Claude Code's `cc-plugin-sec-default` guard can pass every `classic.*` event over
 the user-tier plugin. While bridging is paused, Persona directs the user to approve on the computer.
@@ -68,6 +66,11 @@ another session, gets `403`.
   `permissions: true` is returned only when the session is served by the plugin and not managed by `persona-hooks` or an
   external tmux pane. `retry_ms`, when present, is how long to wait before the next poll: a session the node does not
   deliver to this way (one in a Persona terminal, the assistant's own) is told to come back much later.
+- For a Desktop session, `observed_effort` reports the last main-loop step after session overrides, for example
+  `{"at_ms": 1790000000000, "level": "high"}`. The timestamp belongs to the step. A missing or numeric effort has no
+  named level. An applied `auto` choice remains automatic. A timestamped `reset: true` clears the observation on reload
+  or session change. Subagent steps do not update it. The node uses the observation while the same session and process are
+  live, and compares it with transcript evidence and newer session choices. A machine default is never a readback.
 - `classic_passed_over: true` reports two consecutive turns missing hooks for tools that emit them. The next
   `classic.PreToolUse` triggers a poll without the flag. While the flag is set, the node withdraws active plugin
   cards and returns `passthrough` for `/permission`. Transcript question cards (`clq_`) remain available.

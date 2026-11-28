@@ -260,6 +260,17 @@ func tabSlug(s string) string {
 // defaultTabName: a name nobody chose — the old fixed "persona", herdr's numbers, the agent-<n> fallback.
 var defaultTabName = lazyre.New(`^(persona(-\d+)?|\d+|agent-\d+)?$`)
 
+// orcaDefaultTabName is the name Orca gives every tab it opens without one (Orca 1.4.277): a name nobody chose too.
+const orcaDefaultTabName = "Terminal"
+
+// autonamedHosts are the hosts whose tabs autonameTabs renames (#17043: Orca's too).
+var autonamedHosts = map[string]bool{"herdr": true, "orca": true}
+
+// unchosenTabName: the session's tab has a name nobody chose, as its host names tabs.
+func unchosenTabName(c proto.Session) bool {
+	return defaultTabName.MatchString(c.SlotName) || c.SpaceKind == "orca" && c.SlotName == orcaDefaultTabName
+}
+
 // TabRename is one tab of POST /api/v1/tabs/autoname: renamed, or (dry run) what it would be called.
 type TabRename struct {
 	MachineID string `json:"machine_id"`
@@ -271,7 +282,7 @@ type TabRename struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// autonameTabs renames the herdr tabs of running agents whose names nobody chose (all of them with all) after
+// autonameTabs renames the herdr and Orca tabs of running agents whose names nobody chose (all of them with all) after
 // their session's title, the way new tabs are named. One tab per agent; agents without a title keep theirs.
 func (s *Service) autonameTabs(ctx context.Context, dryRun, all bool) []TabRename {
 	type tab struct {
@@ -284,7 +295,7 @@ func (s *Service) autonameTabs(ctx context.Context, dryRun, all bool) []TabRenam
 		list, _ := s.sessions(ctx, d.ID)
 		seen := map[string]bool{}
 		for _, c := range list {
-			if c.Assistant || c.SpaceKind != "herdr" || c.TabID == "" || c.Status == proto.StatusOffline || seen[c.TabID] {
+			if c.Assistant || !autonamedHosts[c.SpaceKind] || c.TabID == "" || c.Status == proto.StatusOffline || seen[c.TabID] {
 				continue
 			}
 			seen[c.TabID] = true
@@ -293,7 +304,7 @@ func (s *Service) autonameTabs(ctx context.Context, dryRun, all bool) []TabRenam
 				taken[ws] = map[string]bool{}
 			}
 			taken[ws][c.SlotName] = true
-			if (all || defaultTabName.MatchString(c.SlotName)) && strings.TrimSpace(c.Title) != "" {
+			if (all || unchosenTabName(c)) && strings.TrimSpace(c.Title) != "" {
 				todo = append(todo, tab{d.ID, c})
 			}
 		}

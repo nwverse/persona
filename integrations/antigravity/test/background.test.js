@@ -28,7 +28,10 @@ const cases = [
   { name: 'cron expression', args: { CronExpression: '0 * * * *' } },
   { name: 'cron description', args: { DurationSeconds: '60' }, description: 'Cron: 0 * * * *' },
   { name: 'cron iteration', args: { DurationSeconds: '60' }, message: 'Check again (iteration 1)' },
+  { name: 'timer prompt containing still running', args: { DurationSeconds: '60' }, message: 'Check build progress if still running', completed: true },
   { name: 'heartbeat', args: { DurationSeconds: '60' }, message: 'Task is still running' },
+  { name: 'heartbeat with notice prefix', args: { DurationSeconds: '60' }, message: '[Notice] Task is still running' },
+  { name: 'heartbeat with task id', args: { DurationSeconds: '60' }, message: 'Task id "task-3" is still running' },
   { name: 'different sender', sender: `${id}0` },
 ]
 

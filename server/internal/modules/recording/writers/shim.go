@@ -186,6 +186,7 @@ const (
 	recapNotesFile = recordingwire.RecapNotesFile
 
 	photosDir       = string(recordingwire.DirAttachments)
+	audioDir        = recordingwire.DirAudio
 	hubSegmentsFile = string(recordingwire.FileHubSegments)
 	meetingFile     = string(recordingwire.FileMeeting)
 	liveFile        = string(recordingwire.FileLive)
