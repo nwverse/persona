@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -160,9 +162,8 @@ func (ps *extensions) resolveSecret(ctx context.Context, reference string, purpo
 	}
 	cctx, cancel := context.WithTimeout(ctx, secretCallTimeout)
 	defer cancel()
-	var res wire.SecretsResolveResult
-	err = hp.proc.Call(cctx, "secrets.resolve",
-		wire.SecretsResolveParams{Contribution: prov.Contribution, Reference: reference, Purpose: purpose}, &res)
+	res, err := buswire.Call(cctx, hp.proc, extwire.SecretsResolveMethod,
+		wire.SecretsResolveParams{Contribution: prov.Contribution, Reference: reference, Purpose: purpose})
 	switch {
 	case err != nil:
 		return fail(providerError(prov, err, cctx.Err() != nil && ctx.Err() == nil))
@@ -192,8 +193,9 @@ func (ps *extensions) describeSecret(ctx context.Context, reference string) (Sec
 	}
 	cctx, cancel := context.WithTimeout(ctx, secretCallTimeout)
 	defer cancel()
-	var res wire.SecretsDescribeResult
-	if err := hp.proc.Call(cctx, "secrets.describe", wire.SecretsDescribeParams{Contribution: prov.Contribution, Reference: reference}, &res); err != nil {
+	res, err := buswire.Call(cctx, hp.proc, extwire.SecretsDescribeMethod,
+		wire.SecretsDescribeParams{Contribution: prov.Contribution, Reference: reference})
+	if err != nil {
 		return SecretDescription{}, providerError(prov, err, cctx.Err() != nil && ctx.Err() == nil)
 	}
 	d := SecretDescription{Provider: prov.Extension, ProviderName: prov.Name, Title: providerWords(res.Title, 200),

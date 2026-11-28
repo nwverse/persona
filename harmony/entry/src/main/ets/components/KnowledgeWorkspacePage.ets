@@ -1,6 +1,20 @@
 import { relativeActivityDate } from '../core/PhoneDate';
 import { MinutesWaitResult, resolveMinutesWait } from '../core/MinutesWait';
 import { isKnownDebateStatus, MinutesDebateItem, MinutesDebatePosition, parseMinutesDebates } from '../core/MinutesDebates';
+import {
+  buildTranscriptView,
+  exportTranscriptText,
+  filterTranscriptBookmarks,
+  findTranscriptMatches,
+  splitTranscriptMatchParts,
+  stepTranscriptMatch,
+  TranscriptMatchPart,
+  TranscriptRow,
+  transcriptRowDisplayText,
+  TranscriptViewData
+} from '../core/TranscriptSearch';
+import { pasteboard } from '@kit.BasicServicesKit';
+import { toastCenter } from '../models/ToastCenter';
 import { KBChatInboxPage, KBChatInboxPiece, KBInboxItem, kbInboxLine, kbInboxTier, parseChatInboxPage } from '../core/KBChatInbox';
 import { isHubPageHidden } from '../core/HubModules';
 import { PersonaSectionLabel, PersonaStatusPill, PersonaStatusTone } from '../design/NormalizedPrimitives';
@@ -55,7 +69,7 @@ const KIND_SYMBOLS: Map<string, KindSymbolMetrics> = new Map<string, KindSymbolM
   ['projects', new KindSymbolMetrics(1.28, 1.20, 1.00)], ['topics', new KindSymbolMetrics(1.30, 1.15, 1.22)],
   ['chats', new KindSymbolMetrics(1.70, 1.32, 1.23)], ['people', new KindSymbolMetrics(2.14, 1.18, 1.55)],
   ['docs', new KindSymbolMetrics(1.11, 1.15, 0.95)], ['meetings', new KindSymbolMetrics(1.46, 1.34, 0.96)],
-  ['events', new KindSymbolMetrics(1.26, 1.04, 1.11)]
+  ['events', new KindSymbolMetrics(1.26, 1.04, 1.11)], ['recordings', new KindSymbolMetrics(1.26, 1.15, 1.00)]
 ]);
 
 @ComponentV2
@@ -175,6 +189,10 @@ export struct KnowledgeWorkspacePage {
   private removedFactsOwner: string = '';
   private removedFactsNotice: number = 0;
   @Local recordingTools: boolean = false;
+  @Local transcriptReviewOpen: boolean = false;
+  @Local transcriptSearchQuery: string = '';
+  @Local transcriptSelectedId: string = '';
+  @Local transcriptBookmarksOnly: boolean = false;
   @Require @Param model: ClientModel;
   @Param row: ResourceRow | undefined = undefined;
   @Param list: ResourceRow[] = [];
@@ -351,11 +369,11 @@ export struct KnowledgeWorkspacePage {
     this.metadataSheet=this.workspace.editOpen;
   }
   @Monitor('workspace.editOpen') metadataChanged():void { if (!this.workspace.editOpen) this.metadataSheet=false; }
-  @Monitor('row') rowChanged(): void { this.metadataSheet=false; this.facts.close(); this.removedFacts=''; this.removedFactsOwner=''; this.recordingTools=false; this.chatInboxDoneShown=false; this.syncRowBindings(); this.openWorkspace(); }
+  @Monitor('row') rowChanged(): void { this.metadataSheet=false; this.facts.close(); this.removedFacts=''; this.removedFactsOwner=''; this.recordingTools=false; this.transcriptReviewOpen=false; this.transcriptSearchQuery=''; this.transcriptSelectedId=''; this.transcriptBookmarksOnly=false; this.chatInboxDoneShown=false; this.syncRowBindings(); this.openWorkspace(); }
 
   @Monitor('model.profile') profileChanged(): void {
     this.options().clear(this.recording);
-    this.metadataSheet=false; this.facts.close(); this.removedFacts=''; this.removedFactsOwner=''; this.recordingTools=false; this.chatInboxDoneShown=false; this.showIgnored=false; this.recordingOpen = false;
+    this.metadataSheet=false; this.facts.close(); this.removedFacts=''; this.removedFactsOwner=''; this.recordingTools=false; this.transcriptReviewOpen=false; this.transcriptSearchQuery=''; this.transcriptSelectedId=''; this.transcriptBookmarksOnly=false; this.chatInboxDoneShown=false; this.showIgnored=false; this.recordingOpen = false;
     this.selectedCalendarEvent=''; this.calendarRequest++; this.calendarEvents=[]; this.calendarState=''; this.meetingTitle=''; this.meetingKind='meeting';
     this.privateMeeting=false; this.invitationOverride='';this.syncMeetingOptions();this.meetingFeaturesChanged(); this.localMeetings = false; this.localOwner = ''; this.localOpening = undefined;
     this.recording.stopForBackground().catch(() => undefined); this.syncRowBindings(); this.openWorkspace();
@@ -489,10 +507,14 @@ export struct KnowledgeWorkspacePage {
       .width('100%').height('100%').align(Alignment.TopStart).backgroundColor(Colors.grouped)
   }
 
+  private visibleKinds(): string[] {
+    return this.model.canPreviewDemoRecordings() ? KB_KINDS.concat(['recordings']) : KB_KINDS;
+  }
+
   @Local kindsWidth: number = 0;
   @Computed get kindLabelWidths(): Map<string, number> {
     const context = this.getUIContext(), widths = new Map<string, number>();
-    for (const kind of KB_KINDS) {
+    for (const kind of this.visibleKinds()) {
       const pixels = context.getMeasureUtils().measureText({
         textContent: this.kindLabel(kind), fontSize: Tokens.interfaceFontVp(15, nativeEnvironment.fontScale),
         fontWeight: 600
@@ -507,12 +529,13 @@ export struct KnowledgeWorkspacePage {
   @Computed get kindsLayout(): number {
     const context = this.getUIContext();
     const width = this.kindsWidth || (nativeEnvironment.windowWidthPx ? context.px2vp(nativeEnvironment.windowWidthPx)-32 : 360);
+    const kinds = this.visibleKinds();
     let labels = 0, symbols = 0;
-    for (const kind of KB_KINDS) {
+    for (const kind of kinds) {
       labels += this.kindLabelWidths.get(kind) || 0;
       symbols += this.kindSymbolPointSize() * KIND_SYMBOLS.get(kind)!.advance;
     }
-    const count = KB_KINDS.length;
+    const count = kinds.length;
     if (labels + symbols + count*28 + (count-1)*8 <= width) return 0;
     if (labels + count*24 + (count-1)*6 <= width) return 1;
     if (labels + count*16 + (count-1)*4 <= width) return 2;
@@ -663,7 +686,7 @@ export struct KnowledgeWorkspacePage {
   }
   @Builder kindBar() {
     Flex({wrap:FlexWrap.Wrap,space:{main:LengthMetrics.vp(this.kindsLayout===2 ? 4 : this.kindsLayout===0 ? 8 : 6),cross:LengthMetrics.vp(8)}}) {
-      ForEach(KB_KINDS,(kind:string)=>{ this.kindChip(kind) },(kind:string)=>kind)
+      ForEach(this.visibleKinds(),(kind:string)=>{ this.kindChip(kind) },(kind:string)=>kind)
     }.width('100%').onAreaChange((_previous:Area,area:Area)=>{ const width=Number(area.width);if (width!==this.kindsWidth)this.kindsWidth=width; })
       .id('knowledge.kinds')
   }
@@ -936,6 +959,12 @@ export struct KnowledgeWorkspacePage {
               .onClick(() => { Haptics.tap(); this.openRecording(entry.id); }).id('recordings.local.' + entry.id)
           }.margin({top:10})
         }, (entry:KnowledgeRecordingEntry) => JSON.stringify([entry.id,entry.title,entry.duration,entry.uploadState,entry.transcriptionState]))
+        if (this.demoRecordingEntries().length > 0) ListItem() {
+          PhoneSectionTitle({ text: tr('knowledge_kind_recordings'), trailing: String(this.demoRecordingEntries().length) })
+        }.margin({ top: 18 })
+        ForEach(this.demoRecordingEntries(), (entry: ResourceRow) => {
+          ListItem() { this.libraryRow(entry, true) }.margin({ top: 10 })
+        }, (entry: ResourceRow) => entry.key())
         if (!this.workspace.query.trim()) ListItem() {
           Row({space:12}) {
             PhoneOutlineIcon({name:'books',iconScale:this.recordingMetric(1,1.33),color:Colors.link})
@@ -1206,6 +1235,55 @@ export struct KnowledgeWorkspacePage {
   private recordingMetric(regular:number,largest:number):number {
     return PhoneStyle.formSize(regular,largest,nativeEnvironment.fontScale);
   }
+  private demoRecordingEntries(): ResourceRow[] {
+    if (!this.model.canPreviewDemoRecordings()) return [];
+    const q = this.workspace.query.trim().toLowerCase();
+    return this.workspace.entries.filter((row: ResourceRow) =>
+      row.path === 'recordings' && (!q || [row.title, row.detail].join(' ').toLowerCase().includes(q))
+    );
+  }
+
+  private transcriptView(detail: Record<string, Object>): TranscriptViewData {
+    return buildTranscriptView(detail);
+  }
+
+  private transcriptRowsShown(view: TranscriptViewData): TranscriptRow[] {
+    if (this.transcriptReviewOpen && this.transcriptBookmarksOnly) {
+      return filterTranscriptBookmarks(view.rows);
+    }
+    return view.rows;
+  }
+
+  private transcriptMatches(detail: Record<string, Object>): TranscriptRow[] {
+    if (!this.transcriptReviewOpen) return [];
+    const view = this.transcriptView(detail);
+    return findTranscriptMatches(
+      view.rows,
+      this.transcriptSearchQuery,
+      tr('recording_bookmark'),
+      this.transcriptBookmarksOnly
+    );
+  }
+
+  private jumpTranscriptMatch(matches: readonly TranscriptRow[], direction: 1 | -1): void {
+    const nextId = stepTranscriptMatch(matches, this.transcriptSelectedId || null, direction);
+    if (!nextId) return;
+    Haptics.tap();
+    this.transcriptSelectedId = nextId;
+  }
+
+  private copyRetainedTranscript(rows: readonly TranscriptRow[]): void {
+    const text = exportTranscriptText(rows, tr('recording_bookmark'));
+    if (!text) return;
+    Haptics.success();
+    const board = pasteboard.getSystemPasteboard();
+    board.setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text)).then(() => {
+      toastCenter.success(tr('recording_transcript_copied'));
+    }).catch(() => {
+      toastCenter.error(tr('failed'));
+    });
+  }
+
   @Builder recordingHeading(key:string) {
     Row() {
       Text(tr(key)).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(FontWeight.Medium)
@@ -1790,11 +1868,205 @@ export struct KnowledgeWorkspacePage {
         }.width('100%').alignItems(VerticalAlign.Center).id('knowledge.minutes.wait')
       }
       Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('knowledge_minutes_make')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('knowledge_minutes_make', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('knowledge_minutes_make')).bindTips(tr('knowledge_minutes_make')).enabled(!this.workspace.busy && this.workspace.writeState !== 'pending' && this.workspace.writeState !== 'unknown').onClick(() => this.workspace.makeMinutes()).id('knowledge.minutes.make')
-      if (Wire.rows(detail.value, 'segments').length) {
-        Text(tr('knowledge_transcript')).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontWeight(FontWeight.Medium)
-        ForEach(Wire.rows(detail.value, 'segments'), (line: Record<string, Object>, index: number) => Text(Wire.text(line, 'text'))
-          .fontSize(Tokens.meta).width('100%').id('knowledge.transcript.' + String(index)),
-          (line: Record<string, Object>, index: number) => JSON.stringify([index, JSON.stringify(line)]))
+      if (this.transcriptView(detail.value).rows.length > 0 || this.transcriptView(detail.value).trimmedAt || Wire.rows(detail.value, 'segments').length) {
+        Column({ space: Tokens.spaceS }) {
+          Row({ space: Tokens.spaceS }) {
+            Text(tr('knowledge_transcript') + (this.transcriptView(detail.value).segmentCount > 0 ? ' · ' + String(this.transcriptView(detail.value).segmentCount) : ''))
+              .fontSize(Tokens.body)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.body))
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.ink)
+              .layoutWeight(1)
+
+            if (this.transcriptView(detail.value).rows.length > 0) {
+              Button(tr(this.transcriptReviewOpen ? 'close' : 'recording_transcript_review'), { type: ButtonType.Capsule })
+                .constraintSize({ minHeight: Tokens.controlBar })
+                .padding({ left: Tokens.spaceM, right: Tokens.spaceM })
+                .fontSize(Tokens.typeCaption)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
+                .fontWeight(FontWeight.Medium)
+                .backgroundColor(this.transcriptReviewOpen ? Colors.accentWell : Colors.control)
+                .fontColor(this.transcriptReviewOpen ? Colors.link : Colors.ink)
+                .onClick(() => {
+                  Haptics.tap();
+                  this.transcriptReviewOpen = !this.transcriptReviewOpen;
+                  if (!this.transcriptReviewOpen) {
+                    this.transcriptSearchQuery = '';
+                    this.transcriptSelectedId = '';
+                    this.transcriptBookmarksOnly = false;
+                  }
+                })
+                .id('knowledge.recording.review_toggle')
+            }
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
+
+          if (this.transcriptReviewOpen && this.transcriptView(detail.value).rows.length > 0) {
+            Column({ space: Tokens.spaceS }) {
+              Row({ space: Tokens.spaceXs }) {
+                TextInput({ text: this.transcriptSearchQuery, placeholder: tr('recording_transcript_find') })
+                  .layoutWeight(1)
+                  .constraintSize({ minHeight: Tokens.controlBar })
+                  .fontSize(Tokens.typeSecondary)
+                  .fontColor(Colors.ink)
+                  .backgroundColor(Colors.control)
+                  .borderRadius(Tokens.radiusControl)
+                  .padding({ left: Tokens.spaceM, right: Tokens.spaceM })
+                  .onChange((value: string) => {
+                    this.transcriptSearchQuery = value;
+                    this.transcriptSelectedId = '';
+                  })
+                  .id('knowledge.recording.search')
+
+                Button({ type: ButtonType.Normal }) {
+                  SymbolGlyph($r('sys.symbol.chevron_left'))
+                    .fontSize('16vp')
+                    .fontColor([this.transcriptMatches(detail.value).length > 0 ? Colors.ink : Colors.tertiary])
+                }
+                .buttonStyle(ButtonStyleMode.TEXTUAL)
+                .width(Tokens.controlBar)
+                .height(Tokens.controlBar)
+                .backgroundColor(Colors.control)
+                .borderRadius(Tokens.radiusControl)
+                .enabled(this.transcriptMatches(detail.value).length > 0)
+                .accessibilityText(tr('recording_transcript_previous'))
+                .onClick(() => this.jumpTranscriptMatch(this.transcriptMatches(detail.value), -1))
+                .id('knowledge.recording.prev')
+
+                Button({ type: ButtonType.Normal }) {
+                  SymbolGlyph($r('sys.symbol.chevron_right'))
+                    .fontSize('16vp')
+                    .fontColor([this.transcriptMatches(detail.value).length > 0 ? Colors.ink : Colors.tertiary])
+                }
+                .buttonStyle(ButtonStyleMode.TEXTUAL)
+                .width(Tokens.controlBar)
+                .height(Tokens.controlBar)
+                .backgroundColor(Colors.control)
+                .borderRadius(Tokens.radiusControl)
+                .enabled(this.transcriptMatches(detail.value).length > 0)
+                .accessibilityText(tr('recording_transcript_next'))
+                .onClick(() => this.jumpTranscriptMatch(this.transcriptMatches(detail.value), 1))
+                .id('knowledge.recording.next')
+              }
+              .width('100%')
+
+              Row({ space: Tokens.spaceS }) {
+                if (this.transcriptView(detail.value).hasBookmarks) {
+                  Button(tr('recording_transcript_bookmarks'), { type: ButtonType.Capsule })
+                    .constraintSize({ minHeight: Tokens.controlBar })
+                    .padding({ left: Tokens.spaceM, right: Tokens.spaceM })
+                    .fontSize(Tokens.typeCaption)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
+                    .fontWeight(FontWeight.Medium)
+                    .backgroundColor(this.transcriptBookmarksOnly ? Colors.accentWell : Colors.control)
+                    .fontColor(this.transcriptBookmarksOnly ? Colors.link : Colors.ink)
+                    .onClick(() => {
+                      Haptics.tap();
+                      this.transcriptBookmarksOnly = !this.transcriptBookmarksOnly;
+                      this.transcriptSelectedId = '';
+                    })
+                    .id('knowledge.recording.bookmarks')
+                }
+
+                Button(tr('recording_transcript_copy'), { type: ButtonType.Capsule })
+                  .constraintSize({ minHeight: Tokens.controlBar })
+                  .padding({ left: Tokens.spaceM, right: Tokens.spaceM })
+                  .fontSize(Tokens.typeCaption)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
+                  .fontWeight(FontWeight.Medium)
+                  .backgroundColor(Colors.control)
+                  .fontColor(Colors.link)
+                  .onClick(() => this.copyRetainedTranscript(this.transcriptView(detail.value).rows))
+                  .id('knowledge.recording.copy')
+
+                Blank().layoutWeight(1)
+
+                if (this.transcriptSearchQuery.trim()) {
+                  Text(
+                    this.transcriptMatches(detail.value).length === 0
+                      ? tr('recording_transcript_no_matches')
+                      : this.transcriptSelectedId
+                        ? String(Math.max(1, this.transcriptMatches(detail.value).findIndex((m: TranscriptRow) => m.id === this.transcriptSelectedId) + 1)) +
+                          ' / ' + String(this.transcriptMatches(detail.value).length)
+                        : String(this.transcriptMatches(detail.value).length) + ' ' + tr('recording_transcript_matches')
+                  )
+                    .fontSize(Tokens.typeLabel)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                    .fontColor(Colors.secondary)
+                    .id('knowledge.recording.match_count')
+                }
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Center)
+            }
+            .width('100%')
+            .padding(Tokens.spaceM)
+            .backgroundColor(Colors.surface)
+            .borderRadius(Tokens.radiusCard)
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.radiusCard })
+            .id('knowledge.recording.review_bar')
+          }
+
+          if (this.transcriptView(detail.value).trimmedAt || this.transcriptView(detail.value).rows.length === 0) {
+            Text(tr(this.transcriptView(detail.value).trimmedAt ? 'recording_transcript_expired' : 'recording_transcript_empty'))
+              .fontSize(Tokens.typeCaption)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
+              .fontColor(Colors.secondary)
+              .width('100%')
+              .id('knowledge.recording.transcript_notice')
+          }
+
+          ForEach(this.transcriptRowsShown(this.transcriptView(detail.value)), (line: TranscriptRow, index: number) => {
+            Row({ space: Tokens.spaceS }) {
+              Text(line.clock)
+                .fontSize(Tokens.typeLabel)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                .fontColor(line.bookmark ? Colors.link : Colors.secondary)
+                .fontWeight(line.bookmark ? FontWeight.Medium : FontWeight.Normal)
+                .fontFeature('tnum 1')
+                .width(56)
+              Text() {
+                if (this.transcriptReviewOpen && this.transcriptSearchQuery.trim()) {
+                  ForEach(
+                    splitTranscriptMatchParts(transcriptRowDisplayText(line, tr('recording_bookmark')), this.transcriptSearchQuery),
+                    (part: TranscriptMatchPart, _partIdx: number) => {
+                      if (part.hit) {
+                        Span(part.text)
+                          .fontWeight(FontWeight.Bold)
+                          .fontColor(Colors.link)
+                      } else {
+                        Span(part.text)
+                      }
+                    },
+                    (part: TranscriptMatchPart, partIdx: number) => String(partIdx) + ':' + (part.hit ? '1' : '0') + ':' + part.text
+                  )
+                } else {
+                  Span(transcriptRowDisplayText(line, tr('recording_bookmark')))
+                }
+              }
+                .fontSize(Tokens.meta)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
+                .fontColor(line.bookmark ? Colors.link : Colors.ink)
+                .layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ left: Tokens.spaceS, right: Tokens.spaceS, top: Tokens.spaceXs, bottom: Tokens.spaceXs })
+            .borderRadius(Tokens.radiusControl)
+            .backgroundColor(
+              this.transcriptReviewOpen && this.transcriptSelectedId === line.id
+                ? Colors.accentWell
+                : this.transcriptReviewOpen && this.transcriptSearchQuery.trim() &&
+                    this.transcriptMatches(detail.value).some((m: TranscriptRow) => m.id === line.id)
+                  ? Colors.aiWash
+                  : Color.Transparent
+            )
+            .alignItems(VerticalAlign.Top)
+            .id('knowledge.transcript.' + String(index))
+          }, (line: TranscriptRow, index: number) => JSON.stringify([index, JSON.stringify(line)]))
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
       } else if (Wire.text(detail.value, 'recent')) Text(Wire.text(detail.value, 'recent')).fontSize(Tokens.meta).width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start).id('knowledge.recording.transcript')
   }

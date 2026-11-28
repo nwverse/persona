@@ -1477,6 +1477,10 @@ export function upsertSession(s: Session, opts: { undelivered?: boolean } = {}) 
       merged.background_ended = s.background_ended;
       merged.subagents = s.subagents;
       merged.workflows = s.workflows;
+      if (s.queued === undefined) delete merged.queued;
+      else merged.queued = s.queued;
+      if (s.queued_relayed === undefined) delete merged.queued_relayed;
+      else merged.queued_relayed = s.queued_relayed;
     } else {
       // A summary is a complete projection: omitted zero counts and a disappeared run clear the previous one.
       merged.background_count = s.background_count ?? 0;
@@ -1550,6 +1554,12 @@ function syncAssistant(mid: string, list: Session[]): Partial<State> {
     // a push carries its machine's whole list, parsed anew in a full snapshot: a conversation it leaves as it was keeps
     // its object (the sidebar's memoized rows compare by identity)
     const next = { ...c, ...s };
+    if (typeof s.waiting !== "boolean") {
+      if (s.queued === undefined) delete next.queued;
+      else next.queued = s.queued;
+      if (s.queued_relayed === undefined) delete next.queued_relayed;
+      else next.queued_relayed = s.queued_relayed;
+    }
     if (sameValue(next, c)) return c;
     changed = true;
     return next;
