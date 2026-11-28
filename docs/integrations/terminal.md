@@ -751,6 +751,16 @@ A new agent can start in a Git worktree of its own, so agents on the same reposi
   worktree workspace Paseo made (#6297); `worktree/remove` then archives that workspace through Paseo, which removes the folder, with Delete
   worktree's guards (below): refused while a session in the workspace still runs (the closed agent has stopped by then; the clients try again for
   a few seconds) or an agent of another engine runs in the folder, and for uncommitted changes or an unmerged branch unless `force`; the branch goes after the folder only with `delete_branch`.
+- **Orca** (#17050, `node/hostorca_agentworktree.go`): where the engine is Orca and the folder's checkout is one of Orca's local git worktrees,
+  Orca makes the worktree as a child of that one (`worktree.create` with `parentWorktree`, same branch and folder name, from that worktree's
+  branch), so Orca's sidebar lists it under its parent; `worktree/add` answers its `workspace_id`. A main checkout Orca does not hold yet is
+  registered first (`repo.add`), under the rules a start in it follows (not the home, the root or a temporary folder); a folder Orca can't
+  hold, or an Orca that isn't running, keeps the plain `git worktree add`. The terminal Orca opens in the new worktree is Persona's first shell:
+  it closes once the Agent's tab opens there, whether the start names the workspace or only the folder. `worktree/status` calls a worktree
+  Persona's (`ours`) when it is under the checkouts directory or Orca lists it as one of its own linked worktrees (not the main checkout, not
+  an SSH target's), wherever Orca's workspace folder is; `worktree/remove` then has Orca remove it (`worktree.rm`, Orca's archive hooks run,
+  the branch kept unless `delete_branch`), after the guards above. An Orca without `worktree.remove-branch-policy.v1` leaves it to git, as
+  before. New Agent on the web and Android offers the switch for a picked Orca workspace too, and the start goes into the worktree Orca made.
 - All three are full-device routes like section 23's, and extension tokens never reach them. The body is read field by field, plus the two switches (`flags`, booleans only).
 
 ## 24. Full herdr UI: a PTY client, switchable beside Single pane (#2357)

@@ -110,7 +110,10 @@ test('normalized surfaces and PhoneStyle contain zero hardcoded hex color litera
     'components/AgentListPage.ets',
     'components/ProjectsPage.ets',
     'components/SettingsDirectory.ets',
-    'components/SettingsPage.ets'
+    'components/SettingsPage.ets',
+    'components/TodoStageBar.ets',
+    'components/TodoDecisionsSection.ets',
+    'components/RuleSuggestionBar.ets'
   ];
 
   for (const file of guardedFiles) {
