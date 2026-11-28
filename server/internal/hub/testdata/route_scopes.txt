@@ -665,6 +665,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/launchers/import/parse
 -                    POST /api/v1/launchers/test
 -                    POST /api/v1/launchers/{name}/check
+-                    POST /api/v1/launchers/{name}/refresh-key
 -                    POST /api/v1/launchers/{name}/restore
 -                    POST /api/v1/looks/uploads
 -                    POST /api/v1/machines/{id}/confirm

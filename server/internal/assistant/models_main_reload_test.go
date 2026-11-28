@@ -107,6 +107,7 @@ func (m *memLogicalStore) ConversationInputReceipt(context.Context, string, stri
 func (m *memLogicalStore) ClaimConversationInput(context.Context, string, string, int64) (*db.ConversationInput, error) {
 	return nil, nil
 }
+
 var (
 	_ logicalConversationStore = (*memLogicalStore)(nil)
 	_ logicalPickStore         = (*memLogicalStore)(nil)
