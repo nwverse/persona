@@ -34,7 +34,6 @@ import { BrandMark } from "../../ui/BrandMark";
 import { ChannelMark } from "../../ui/ChannelMark";
 import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { Icon } from "../../ui/icons";
-import { ListError } from "../../ui/ListError";
 import { Segmented } from "../assistant/parts";
 import { OfflineState, useShownOffline } from "../ManagerParts";
 import { OwnerMark } from "./OwnerMark";
@@ -60,7 +59,7 @@ import {
   type LarkGatewaySummary,
 } from "./integrations/catalog";
 import { capabilityLabel, projectedCatalogItem, projectedResource, projectionSourceErrors } from "./integrations/projectedCatalog";
-import { editableSection, projectedIntegrationTarget, projectedSections, ProjectionDetailIssues, type ProjectedDetail } from "./integrations/projectedDetail";
+import { editableSection, IntegrationReadProblem, projectedIntegrationTarget, projectedSections, ProjectionDetailIssues, type ProjectedDetail } from "./integrations/projectedDetail";
 import { useIntegrationCatalogProjection, useIntegrationDetailProjection, useIntegrationProjectionMode, useProjectedMarkets } from "./integrations/useIntegrationProjection";
 
 const IntegrationDetail = lazyPage(() => import("./IntegrationDetail").then((m) => m.IntegrationDetail));
@@ -836,16 +835,12 @@ function IntegrationsForManager({
   const listBody = (
     <>
       {catalogError && (
-        <Group>
-          <ListError text={t("settings-integrations.projection_load_error", { error: catalogError })} onRetry={retryCatalog} />
-        </Group>
+        <IntegrationReadProblem text={t("settings-integrations.projection_load_error", { error: catalogError })} retry={retryCatalog} />
       )}
       {loadErrors.length > 0 && (
         <div className="mb-4">
-          <Group>
-            {legacy ? <SettingsHint alert>{t("settings-integrations.list_partial_error", { error: loadErrors.join(" · ") })}</SettingsHint>
-              : <ListError text={t("settings-integrations.list_partial_error", { error: loadErrors.join(" · ") })} onRetry={retryCatalog} />}
-          </Group>
+          {legacy ? <Group><SettingsHint alert>{t("settings-integrations.list_partial_error", { error: loadErrors.join(" · ") })}</SettingsHint></Group>
+            : <IntegrationReadProblem text={t("settings-integrations.list_partial_error", { error: loadErrors.join(" · ") })} retry={retryCatalog} busy={catalog.loading} />}
         </div>
       )}
 
@@ -959,9 +954,7 @@ function IntegrationsForManager({
   const detailError = mode.mode === "error" ? mode.error : detail.error ?? (sourceDetailState && !catalog.value ? catalog.error : undefined);
   const detailRetry = mode.mode === "error" ? mode.retry : reloadDetail;
   const detailProblem = detailError && (
-    <Group>
-      <ListError text={t("settings-integrations.projection_detail_error", { error: detailError })} onRetry={detailRetry} />
-    </Group>
+    <IntegrationReadProblem text={t("settings-integrations.projection_detail_error", { error: detailError })} retry={detailRetry} />
   );
   const waitForProjection = showDetail && !legacy && !projection && (mode.mode !== "projection" || !!requested);
   const pendingBack = detailBack ?? (detailError && !headerBack ? onBack : undefined);

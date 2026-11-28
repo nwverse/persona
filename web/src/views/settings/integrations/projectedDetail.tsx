@@ -2,8 +2,8 @@ import { t } from "../../../i18n";
 import {
   INTEGRATION_STATES, type IntegrationDetail, type IntegrationKind, type IntegrationSection, type IntegrationSectionKind,
 } from "../../../lib/integrations-projection-wire";
-import { ListError } from "../../../ui/ListError";
-import { Group } from "../SettingsParts";
+import { Button } from "../../../ui/atoms";
+import { Group, SettingsHint } from "../SettingsParts";
 import type { IntegrationTarget } from "./model";
 import { capabilityLabel, projectionSourceErrors } from "./projectedCatalog";
 
@@ -50,9 +50,20 @@ const sectionLabels: Record<IntegrationSectionKind, string> = {
   lifecycle: "settings-integrations.section_management",
 };
 
+export function IntegrationReadProblem({ text, retry, title, busy }: { text: string; retry: () => void; title?: string; busy?: boolean }) {
+  return (
+    <Group title={title}>
+      <SettingsHint alert>{text}</SettingsHint>
+      <div className="px-4 py-2.5">
+        <Button className="min-h-11" onClick={retry} busy={busy}>{t("sidebar.retry")}</Button>
+      </div>
+    </Group>
+  );
+}
+
 export function ProjectionDetailIssues({ projection }: { projection?: ProjectedDetail }) {
   if (!projection) return null;
-  const { detail, refresh } = projection;
+  const { detail, refresh, loading } = projection;
   const sections = detail.sections.filter(({ availability }) => availability.reason === "read_failed");
   const capabilities = detail.item.capability_availability?.filter(({ availability }) => availability.reason === "read_failed") ?? [];
   const labels = new Set([
@@ -63,8 +74,7 @@ export function ProjectionDetailIssues({ projection }: { projection?: ProjectedD
   if (!labels.size && detail.item.availability.reason !== "read_failed") return null;
 
   return (
-    <Group title={labels.size > 0 ? [...labels].join(" · ") : undefined}>
-      <ListError text={t("settings-integrations.projection_section_error")} onRetry={refresh} />
-    </Group>
+    <IntegrationReadProblem title={labels.size > 0 ? [...labels].join(" · ") : undefined}
+      text={t("settings-integrations.projection_section_error")} retry={refresh} busy={loading} />
   );
 }
