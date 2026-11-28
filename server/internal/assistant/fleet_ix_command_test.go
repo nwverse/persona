@@ -1,9 +1,12 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +128,10 @@ func TestCommandInputRefusals(t *testing.T) {
 		if !errors.As(err, &m) || m.Key != key {
 			t.Fatalf("%s: err %v, want %s", code, err, key)
 		}
+		var refusal *commandInputRefusal
+		if !errors.As(err, &refusal) || refusal.code != code {
+			t.Fatalf("%s: err %v, want the code kept", code, err)
+		}
 		if pendingIDs(ft.s)["ci_0123456789abcdef"] == "" {
 			t.Fatalf("%s: the card did not stay", code)
 		}
@@ -140,6 +147,44 @@ func TestCommandInputRefusals(t *testing.T) {
 	}
 	if len(pendingIDs(ft.s)) != 0 {
 		t.Fatalf("a prompt that moved on stayed: %v", pendingIDs(ft.s))
+	}
+}
+
+// A refusal the resolve route answers keeps the node's code: a line that typed nothing is a 409 the app may answer
+// again, an unconfirmed one is a 502 whose outcome is unknown, and both say it in the request's language.
+func TestCommandInputRefusalKeepsItsCodeOnTheRoute(t *testing.T) {
+	yes := true
+	for code, status := range map[string]int{
+		"command_input_unreachable": http.StatusConflict,
+		"command_input_refused":     http.StatusConflict,
+		"command_input_line":        http.StatusConflict,
+		"command_input_unconfirmed": http.StatusBadGateway,
+	} {
+		t.Run(code, func(t *testing.T) {
+			ft, n := newCardFleet(t, false)
+			listCodex(ft.s, commandInputCardOf("ci_0123456789abcdef"))
+			n.mu.Lock()
+			n.err = &rpc.Error{Code: code, Message: "node words"}
+			n.mu.Unlock()
+			body, _ := json.Marshal(map[string]any{"allow": yes,
+				"values": map[string]string{proto.CommandInputField: "test-code-123"}})
+			w := httptest.NewRecorder()
+			ft.s.fleetHandler(http.NotFoundHandler()).ServeHTTP(w, httptest.NewRequest(http.MethodPost,
+				"/api/v1/interactions/ci_0123456789abcdef/resolve", bytes.NewReader(body)))
+			if w.Code != status {
+				t.Fatalf("status %d, want %d: %s", w.Code, status, w.Body)
+			}
+			var out map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if out["code"] != code {
+				t.Fatalf("code %v, want %s: %s", out["code"], code, w.Body)
+			}
+			if out["error"] == "node words" {
+				t.Fatalf("the node's words went out untranslated: %s", w.Body)
+			}
+		})
 	}
 }
 

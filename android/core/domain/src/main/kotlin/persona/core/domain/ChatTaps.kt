@@ -57,6 +57,12 @@ data class ChatTaps(
     /** The card [id] was put away on this device only. */
     fun discarded(id: String): ChatTaps = copy(resolved = resolved + id, uncertain = uncertain - id)
 
+    /**
+     * The hub's list was read after an unconfirmed answer: the answer may not have arrived, and answering again is
+     * safe (the hub's resolve is idempotent, as the Agents page's check relies on), so the card may be answered.
+     */
+    fun rechecked(id: String): ChatTaps = copy(uncertain = uncertain - id)
+
     /** The tapped card's request is over, however it went: the next tap may go. */
     fun idle(): ChatTaps = copy(busyId = null)
 

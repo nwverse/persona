@@ -1503,6 +1503,13 @@ data class Interaction(
      */
     val isSecretRun: Boolean get() = kind == "permission" && toolName == "secret_run"
 
+    /**
+     * A command an agent runs that stopped at a prompt (#14527): its one line is sent as the field `input`, from its
+     * own form in the conversation. A node may send the card without fields (the manager adds them), so this is
+     * what the answer builder and the card's form key on.
+     */
+    val isCommandInput: Boolean get() = kind == "permission" && toolName == "command_input"
+
     /** The manager's one-run secret hand-off (#3962). Only its full card may approve it. */
     val isSecretHandoff: Boolean get() = kind == "permission" && toolName == "secret_handoff"
 

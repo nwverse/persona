@@ -58,13 +58,13 @@ class CommandInputCardUiTest {
         useUnmergedTree = true,
     )
 
-    private fun show(masked: Boolean = true, dockHeight: Dp = 820.dp) {
+    private fun show(masked: Boolean = true, dockHeight: Dp = 820.dp, withFields: Boolean = true) {
         val maskField = if (masked) ""","masked":true""" else ""
+        val fields = if (withFields) ""","fields":[{"key":"input","label":"Enter a test code","secret":true}]""" else ""
         val card = JsonCodec.decodeFromString<Interaction>(
             """{"id":"fixture-command-input","machine_id":"example","session_id":"sample","kind":"permission",
               "tool_name":"command_input","tool_title":"Command input",
-              "tool_input":{"command":"example-cli login","prompt":"Enter a test code","output":"Open https://example.com/device"$maskField},
-              "fields":[{"key":"input","label":"Enter a test code","secret":true}]}""",
+              "tool_input":{"command":"example-cli login","prompt":"Enter a test code","output":"Open https://example.com/device"$maskField}$fields}""",
         )
         rule.setContent {
             PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
@@ -100,6 +100,14 @@ class CommandInputCardUiTest {
         send.assertIsNotEnabled()
         rule.runOnIdle { refusal = "The command refused the test line." }
         rule.onNodeWithText("The command refused the test line.", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test fun aPayloadOnlyCardCanSendItsLine() {
+        show(withFields = false)
+        rule.onNodeWithText("Send").assertIsNotEnabled()
+        line().performTextInput("example-code")
+        rule.onNodeWithText("Send").performClick()
+        assertEquals(listOf(Resolution(allow = true, values = mapOf("input" to "example-code"))), replies)
     }
 
     @Test fun unmaskedPromptStartsVisibleAndDecliningTypesNothing() {

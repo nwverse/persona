@@ -106,9 +106,11 @@ internal object KotlinAnswerBuilder {
         // A password card takes only its own two answers (#1581); no other card's answer carries a typed password.
         val passwordRulesMet = if (interaction.isSecretRun) secretRunAnswer(action, draft, context) else draft.password.isEmpty()
         if (!passwordRulesMet) return blocked()
-        // A fields card's values go only with its own Allow in the conversation; no other answer carries any.
-        if (draft.values.isNotEmpty() && !(interaction.hasFieldsForm && action == AnswerAction.Allow &&
-                context.entry == AnswerEntry.Conversation)) return blocked()
+        // A fields card's values, or a command-input card's line, go only with its own Allow in the conversation; no
+        // other answer carries any. A command-input card may arrive without declared fields (#14527), so it is
+        // recognized by its tool, not only by hasFieldsForm.
+        if (draft.values.isNotEmpty() && !((interaction.hasFieldsForm || interaction.isCommandInput) &&
+                action == AnswerAction.Allow && context.entry == AnswerEntry.Conversation)) return blocked()
         if (action in setOf(AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation)) {
             if (interaction.kind != "elicitation" || context.entry != AnswerEntry.Conversation || context.locked) return blocked()
             return when (action) {
@@ -171,6 +173,7 @@ internal object KotlinAnswerBuilder {
         // other's Fill In & Allow every required field (#4641). Such a card is never allowed for good: no Always.
         if (action in listOf(AnswerAction.Allow, AnswerAction.Always) && (draft.message.isNotEmpty() ||
                 (interaction.isSecretRun && draft.password.isEmpty()) ||
+                (interaction.isCommandInput && (action == AnswerAction.Always || draft.values["input"].isNullOrEmpty())) ||
                 (interaction.hasFieldsForm && (action == AnswerAction.Always || !fieldsFilled(interaction, draft))))) return blocked()
         if (action == AnswerAction.Deny && draft.message.length > 4000) return blocked()
         if (context.entry == AnswerEntry.Notification && policyId == ApprovalAction.ChooseOption) {

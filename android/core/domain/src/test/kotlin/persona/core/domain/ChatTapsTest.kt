@@ -55,6 +55,14 @@ class ChatTapsTest {
         assertTrue(taps.canTap(first, pending, now))
     }
 
+    @Test fun aRecheckAfterAnUnconfirmedAnswerLetsTheCardBeAnsweredAgain() {
+        val locked = ChatTaps().tapped(first.id).answered(first.id, CardAnswer.Unconfirmed).idle()
+        assertFalse(locked.answerable(first, now))
+        assertTrue(locked.rechecked(first.id).answerable(first, now))
+        // Rechecking a card that was never uncertain changes nothing.
+        assertEquals(ChatTaps(), ChatTaps().rechecked(first.id))
+    }
+
     @Test fun aDiscardedCardLeavesThePage() {
         val taps = ChatTaps().tapped(second.id).discarded(second.id).idle()
         assertEquals(listOf(first), taps.shown(pending))

@@ -91,6 +91,17 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 				errors.Is(err, errMissingAllow), errors.Is(err, errMissingApprove):
 				apierr.Write(w, http.StatusBadRequest, err)
 			default:
+				var refusal *commandInputRefusal
+				if errors.As(err, &refusal) {
+					// A refused line typed nothing: 409, the card stays answerable. An unconfirmed one may be in: 502,
+					// as an answer whose outcome is unknown, so an app that does not know the code looks before retrying.
+					status := http.StatusConflict
+					if refusal.code == "command_input_unconfirmed" {
+						status = http.StatusBadGateway
+					}
+					apierr.WriteCode(w, status, refusal.code, refusal)
+					return
+				}
 				apierr.Call(w, err) // prompt_changed: 409, nothing pressed
 			}
 			return

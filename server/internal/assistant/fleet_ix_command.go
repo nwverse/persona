@@ -56,8 +56,33 @@ func (s *Service) commandInputPending(machine string, ix proto.Interaction) *pen
 	return p
 }
 
+// commandInputRefusal is a node's refusal of a command-input answer with the manager's words. Its code stays on the
+// wire (the apps act on it: nothing was typed, so answer again, or the line may be in, so look first) and Text reads
+// in the answering app's language, as the i18n message it carries.
+type commandInputRefusal struct {
+	code    string
+	message *i18n.Message
+}
+
+func (e *commandInputRefusal) Error() string { return e.message.Error() }
+
+// Unwrap keeps the message findable as the *i18n.Message it is (logs, older callers, tests).
+func (e *commandInputRefusal) Unwrap() error { return e.message }
+
+// Text is the refusal in l (apierr.localizeFailure reads it).
+func (e *commandInputRefusal) Text(l i18n.Lang) string { return e.message.Text(l) }
+
+func commandInputRefused(code, key string) error {
+	err := i18n.Err(key)
+	if m, ok := err.(*i18n.Message); ok {
+		return &commandInputRefusal{code: code, message: m}
+	}
+	return err
+}
+
 // commandInputError is a node's refusal of a command-input answer as the owner reads it (i18n.Message: in the
-// request's language). The prompt that moved on keeps its code, prompt_changed, which every app knows already.
+// request's language), with the node's code kept for the apps. The prompt that moved on keeps its code,
+// prompt_changed, which every app knows already.
 func commandInputError(err error) error {
 	var re *rpc.Error
 	if !errors.As(err, &re) {
@@ -71,15 +96,15 @@ func commandInputError(err error) error {
 		_ = json.Unmarshal(re.Data, &d)
 		switch d.Problem {
 		case "empty", "too_long", "not_text", "control":
-			return i18n.Err("command-input.line_" + d.Problem)
+			return commandInputRefused(re.Code, "command-input.line_"+d.Problem)
 		}
-		return i18n.Err("command-input.line_control")
+		return commandInputRefused(re.Code, "command-input.line_control")
 	case "command_input_unreachable":
-		return i18n.Err("command-input.unreachable")
+		return commandInputRefused(re.Code, "command-input.unreachable")
 	case "command_input_refused":
-		return i18n.Err("command-input.refused_plain")
+		return commandInputRefused(re.Code, "command-input.refused_plain")
 	case "command_input_unconfirmed":
-		return i18n.Err("command-input.unconfirmed")
+		return commandInputRefused(re.Code, "command-input.unconfirmed")
 	}
 	return err
 }

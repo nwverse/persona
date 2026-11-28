@@ -120,11 +120,19 @@ internal class ChatInteractionController(
                     notice.value = failure
                 }
                 if (result.submission == InteractionSubmission.PromptChanged || !result.withdraw) {
+                    var refreshed = false
                     try {
                         interactions.refresh()
+                        refreshed = true
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {}
+                    // As the Agents page's checkUnconfirmed: the hub's list decides. A command-input card still pending
+                    // after an unconfirmed answer may be answered again (resolve is idempotent), so it is not locked
+                    // for good. A deterministic refusal is already Refused and never waits for this.
+                    if (refreshed && result.submission == InteractionSubmission.Unknown && interaction.isCommandInputPermission) {
+                        taps.value = taps.value.rechecked(interaction.id)
+                    }
                 }
             } finally {
                 taps.value = taps.value.idle()

@@ -33,12 +33,10 @@ import persona.core.designsystem.JTextField
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 
-internal const val CommandInputTool = "command_input"
-
 internal data class CommandInput(val command: String, val output: String, val prompt: String, val masked: Boolean)
 
 val Interaction.isCommandInputPermission: Boolean
-    get() = kind == "permission" && toolName == CommandInputTool
+    get() = isCommandInput
 
 internal val Interaction.commandInput: CommandInput?
     get() {
