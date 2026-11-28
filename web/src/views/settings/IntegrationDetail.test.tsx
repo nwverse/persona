@@ -15,8 +15,9 @@ import { track, type ExtensionOperation } from "../../lib/extension-operations";
 import type { HubExtensionDetail } from "../../lib/extensions";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
 import { chooseManager, chosenManager, managerHeaderFor, pinManagerAt, resetManagerChoice } from "../../lib/manager-choice";
-import { currentRoster, setRoster } from "../../lib/managers";
+import { setRoster, type ManagerList } from "../../lib/managers";
 import { applyCompleteSessions, getState, subscribe } from "../../lib/store";
+import type { ExtensionTrust } from "../../lib/tracks";
 import { FEATURES } from "./FeishuBot";
 import { Extensions } from "./Extensions";
 import { IntegrationDetail, isIntegrationsV2Active, partitionExtensionFields } from "./IntegrationDetail";
@@ -193,6 +194,8 @@ let currentConnectors: HubConnector[];
 let currentMailAccounts: { id: string; email: string; provider: string; status: string }[];
 let currentFeishuBot: FeishuBotStatus;
 let currentRepositories: { id: string; provider?: string }[] | "error" | null;
+let servedRoster: ManagerList;
+let grants: Record<string, ExtensionTrust>;
 
 const flush = async () => {
   for (let i = 0; i < 14; i++) {
@@ -239,6 +242,7 @@ beforeEach(() => {
   requests = [];
   projectionRead = undefined;
   currentExt = structuredClone(COMPOSITE_EXTENSION);
+  grants = {};
   currentChannels = {
     larkx_chat: structuredClone(COMPOSITE_CHANNEL),
     feishu: structuredClone(FEISHU_CHANNEL),
@@ -264,7 +268,8 @@ beforeEach(() => {
 
   resetManagerChoice();
   setPairedToken("");
-  setRoster(ROSTER);
+  servedRoster = ROSTER;
+  setRoster(servedRoster);
   setStoreAssistant(true);
   connectModuleHub(getState, subscribe);
 
@@ -283,8 +288,16 @@ beforeEach(() => {
       const result = await projectionRead(request);
       return result instanceof Response ? result : ok(result);
     }
-    if (url.endsWith("/managers")) return ok(currentRoster() ?? ROSTER);
-
+    if (url.endsWith("/managers")) return ok(servedRoster);
+    if (url.endsWith("/assistant/extension-trust")) {
+      const grant = grants[manager ?? "assistant"];
+      return grant ? ok({ items: [grant] }) : notFound();
+    }
+    if (url.endsWith(`/assistant/extension-trust/${currentExt.id}`) && method === "PUT") {
+      const grant = { ...(body as ExtensionTrust), extension: currentExt.id };
+      grants[manager ?? "assistant"] = grant;
+      return ok(grant);
+    }
     if (url.includes("/mail/accounts")) {
       return ok({ accounts: currentMailAccounts });
     }
@@ -363,9 +376,6 @@ beforeEach(() => {
     }
     if (url.includes("/lark/accounts")) {
       return ok({ accounts: [] });
-    }
-    if (url.includes("/trust")) {
-      return notFound();
     }
     return ok({});
   }));
@@ -463,9 +473,10 @@ describe("Integrations server detail", () => {
   }
 
   function announceProjection(work = true) {
-    setRoster({ ...ROSTER, managers: ROSTER.managers.map((manager) => ({
+    servedRoster = { ...ROSTER, managers: ROSTER.managers.map((manager) => ({
       ...manager, ...(manager.id === "assistant" || work ? { integrations_projection_v1: true } : {}),
-    })) });
+    })) };
+    setRoster(servedRoster);
   }
 
   function catalog(item: ReturnType<typeof row>) {
@@ -533,6 +544,26 @@ describe("Integrations server detail", () => {
     expect(host.querySelector('[data-integration-detail] h1')?.textContent).toBe(COMPOSITE_EXTENSION.name);
     expect(requests.some((r) => r.url.startsWith(endpoint))).toBe(false);
     expect(requests.some((r) => /\/(extensions|plugins)\/larkx\//.test(r.url) && r.manager === "work")).toBe(true);
+  });
+
+  it("shows the named assistant's confirmed information access as read only when the section says so", async () => {
+    announceProjection();
+    servedRoster = { ...servedRoster, managers: servedRoster.managers.map((m) => ({ ...m, extension_info_access_scoped: true })) };
+    setRoster(servedRoster);
+    grants.work = { extension: currentExt.id, trust: "owner", categories: [] };
+    projectionRead = ({ url }) => {
+      const item = row("work");
+      return url === endpoint ? catalog(item) : {
+        item, availability: [], sections: [
+          { kind: "information_access", ref: item.ref, availability: { state: "read_only" }, edit: "read_only" },
+        ],
+      };
+    };
+    await open("ext:larkx", "work");
+    const grant = host.querySelector<HTMLButtonElement>("[data-extension-info-access] [role=switch]")!;
+    expect(grant?.getAttribute("aria-checked")).toBe("true");
+    expect(grant.disabled).toBe(true);
+    expect(requests.filter((r) => r.url.endsWith("/assistant/extension-trust")).map((r) => r.manager)).toEqual(["work"]);
   });
 
   it("renders the server's module-off detail without calling the bot settings", async () => {
@@ -1127,6 +1158,44 @@ describe("Older Hub and legacy extension graceful degradation", () => {
 });
 
 describe("manager-owned integration links", () => {
+  it.each([
+    ["work", null],
+    ["assistant", "work"],
+  ] as const)("reads and writes the named %s extension's grants in Labs Integrations", async (manager, sidebar) => {
+    servedRoster = { ...ROSTER, managers: ROSTER.managers.map((m) => ({ ...m, extension_info_access_scoped: true })) };
+    setRoster(servedRoster);
+    chooseManager(sidebar);
+    grants = {
+      assistant: { extension: currentExt.id, trust: "owner", categories: [] },
+      work: { extension: currentExt.id, trust: "third_party", categories: ["finance"] },
+    };
+
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "extension", id: currentExt.id, manager }} />));
+    const owner = host.querySelector<HTMLButtonElement>("[data-extension-info-access] [role=switch]")!;
+    expect(owner?.getAttribute("aria-checked")).toBe(String(manager === "assistant"));
+    await act(async () => owner.click());
+    const trustRequests = requests.filter(({ url }) => url.includes("/assistant/extension-trust"));
+    expect(trustRequests.map((r) => [r.method, r.manager])).toEqual([["GET", manager], ["PUT", manager], ["GET", manager]]);
+    expect(grants.assistant.trust).toBe(manager === "assistant" ? "third_party" : "owner");
+    expect(grants.work.trust).toBe(manager === "work" ? "owner" : "third_party");
+    expect(chosenManager()).toBe(sidebar);
+  });
+
+  it("shows the supported assistant's confirmed grants on a read-only integration", async () => {
+    servedRoster = { ...ROSTER, managers: ROSTER.managers.map((m) => ({ ...m, extension_info_access_scoped: true })) };
+    setRoster(servedRoster);
+    currentExt = { ...currentExt, read_only: true };
+    grants.work = { extension: currentExt.id, trust: "owner", categories: [] };
+
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "extension", id: currentExt.id, manager: "work" }} />));
+    const owner = host.querySelector<HTMLButtonElement>("[data-extension-info-access] [role=switch]")!;
+    expect(owner?.getAttribute("aria-checked")).toBe("true");
+    expect(owner.disabled).toBe(true);
+    await act(async () => owner.click());
+    expect(requests.filter(({ url }) => url.includes("/assistant/extension-trust")).map(({ method, manager }) => [method, manager]))
+      .toEqual([["GET", "work"]]);
+  });
+
   it.each([
     ["feishu-bot", "/bots/feishu"],
     ["lark", "/lark/status"],

@@ -4,7 +4,7 @@ import { setPairedToken } from "./api";
 import { readIntegrationsCatalog, readIntegrationDetail, supportsIntegrationsProjection } from "./integrations-projection";
 import { chooseManager, MANAGER_HEADER, resetManagerChoice } from "./manager-choice";
 import { setRoster, type ManagerList } from "./managers";
-import { bindScopedAssistant, ownedAssistant, verifiedAssistantRoster } from "./scoped-assistant-api";
+import { bindScopedAssistant, ownedAssistant, verifyScopedAssistantRoster } from "./scoped-assistant-api";
 
 const roster: ManagerList = {
   default: "assistant",
@@ -104,7 +104,7 @@ it("retires pending reads and rechecks the roster when the same token is paired 
 
   setPairedToken("test-credential");
   expect(pendingSignal?.aborted).toBe(true);
-  expect(supportsIntegrationsProjection(await verifiedAssistantRoster(), "assistant")).toBe(false);
+  expect(supportsIntegrationsProjection(await verifyScopedAssistantRoster(), "assistant")).toBe(false);
   expect(detailClient("assistant").key).not.toBe(previous.key);
   await expect(readIntegrationDetail(detailClient("assistant"), "extension", "sample"))
     .resolves.toMatchObject({ item: { name: "New session" } });

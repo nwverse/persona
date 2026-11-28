@@ -930,7 +930,7 @@ function ExtensionIntegrationResource({
   const externalSources = projection ? projectedSections(projection, "external_sources").filter(editableSection).map(({ ref }) => ref.id)
     : [...connectorIds, ...(p?.contributes?.channel ?? []), channelId ?? ""];
   const infoAccess = projectedSections(projection, "information_access", "extension")[0];
-  const showInfoAccess = projection ? manager === roster?.default && !!infoAccess : !manager;
+  const showInfoAccess = !projection || !!infoAccess;
   const name = projection?.detail.item.name ?? (p?.name || target.name);
 
   const market = p ? (marketOf(p.origin) || p.upgrade?.market || "") : "";
@@ -1225,8 +1225,8 @@ function ExtensionIntegrationResource({
               editable={editableLifecycle}
               mutate={mutate}
             />
-            {showInfoAccess && <ExtensionInfoAccess extension={id} manager={projection ? manager : undefined}
-              editable={editable && (!infoAccess || editableSection(infoAccess))} />}
+            {showInfoAccess && <ExtensionInfoAccess client={binding.client} extension={id}
+              editable={editable && !offline && (!infoAccess || editableSection(infoAccess))} />}
             {!!p.depends?.length && (
               <Group title={t("settings-extensions.depends_title")} footer={t("settings-extensions.depends_footer")}>
                 {p.depends.map((d) => (

@@ -3,38 +3,41 @@ import { errorText } from "../../../lib/api";
 import { extRoot } from "../../../lib/extension-api";
 import { readIntegrationDetail, readIntegrationsCatalog, supportsIntegrationsProjection } from "../../../lib/integrations-projection";
 import type { IntegrationKind } from "../../../lib/integrations-projection-wire";
-import { setRoster, useRoster } from "../../../lib/managers";
-import { ownedAssistant, rosterForCredential, verifiedAssistantRoster, type ScopedAssistantClient } from "../../../lib/scoped-assistant-api";
+import { setRoster, useRoster, type ManagerList } from "../../../lib/managers";
+import { currentScopedAssistantRoster, ownedAssistant, verifyScopedAssistantRoster, type ScopedAssistantClient } from "../../../lib/scoped-assistant-api";
 import { useScopedAssistant } from "./useScopedAssistant";
 
 type Decision = { mode: "pending" | "projection" | "legacy" } | { mode: "error"; error: string };
 
 /** An unknown roster waits for negotiation. Only a confirmed absence selects the legacy catalog. */
 export function useIntegrationProjectionMode(manager: string) {
-  useRoster();
-  const roster = rosterForCredential();
-  const target = roster?.managers.find(({ id }) => id === manager);
-  const advertised = supportsIntegrationsProjection(roster, manager);
+  const observed = useRoster();
+  const roster = currentScopedAssistantRoster();
   const [decision, setDecision] = useState<Decision>({ mode: "pending" });
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (roster) {
+    const decide = (checked: ManagerList | null) => {
+      const target = checked?.managers.find(({ id }) => id === manager);
+      const advertised = supportsIntegrationsProjection(checked, manager);
       setDecision((previous) => target?.online === false && previous.mode === "projection" ? previous
         : { mode: advertised ? "projection" : "legacy" });
+    };
+    if (roster) {
+      decide(roster);
       return;
     }
     let active = true;
-    void verifiedAssistantRoster().then(
+    void verifyScopedAssistantRoster().then(
       (checked) => {
         if (!active) return;
-        if (checked && !rosterForCredential()) setRoster(checked);
-        setDecision({ mode: supportsIntegrationsProjection(checked, manager) ? "projection" : "legacy" });
+        if (checked && !observed) setRoster(checked);
+        decide(checked);
       },
       (error: unknown) => { if (active) setDecision({ mode: "error", error: errorText(error) }); },
     );
     return () => { active = false; };
-  }, [roster, manager, target?.online, advertised, attempt]);
+  }, [roster, observed, manager, attempt]);
 
   return {
     ...decision,
