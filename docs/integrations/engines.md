@@ -275,8 +275,10 @@ app makes goes through) sends a start to the computer's Orca chat launcher of th
   (Codex's chats take no Accept edits), and none of the options only a terminal takes (a faster speed, ultracode, a goal, model aliases).
 
 The chat runs the default's model when Orca's chats of that provider list it, with its effort when that model lists it; otherwise
-Orca's own, and the start's note says so. A start in a folder no Orca worktree holds (and no Git repository Orca can add) is refused
-as an explicit Orca chat start is (`orca_start_folder`); picking a terminal launcher starts it there.
+Orca's own, and the start's note says so. A start Orca refuses is refused as an explicit Orca chat start is, with nothing started: a
+folder no Orca worktree holds and no Git repository Orca can add (`orca_start_folder`), or a provider whose chat runtime Orca has not
+installed on that computer yet (Orca 1.4.277 refuses the launch; the launcher is still offered, #17684). Picking a terminal launcher
+starts it there.
 
 Never routed: the assistant's starts (`agent_start`, `dispatch_start`, `task_plan`, reviewers, follow-ups, which never go through
 `agents.start_params`; an Orca chat carries none of Persona's launcher, hooks or MCP config that a supervised task needs), resumes,
