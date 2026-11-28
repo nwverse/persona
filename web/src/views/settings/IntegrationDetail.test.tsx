@@ -21,6 +21,26 @@ import { IntegrationDetail, isIntegrationsV2Active, partitionExtensionFields } f
 import { Integrations } from "./Integrations";
 import { decodeIntegrationsRoute } from "./integrations-route";
 
+const hubEvents = vi.hoisted(() => ({
+  listeners: new Map<string, Set<(msg: Record<string, unknown>) => void>>(),
+}));
+
+vi.mock("../../lib/store", async (original) => {
+  const real = await original<typeof import("../../lib/store")>();
+  return {
+    ...real,
+    onHubEvent: (type: string, listener: (msg: Record<string, unknown>) => void) => {
+      if (!hubEvents.listeners.has(type)) hubEvents.listeners.set(type, new Set());
+      hubEvents.listeners.get(type)!.add(listener);
+      const off = real.onHubEvent(type, listener);
+      return () => {
+        hubEvents.listeners.get(type)?.delete(listener);
+        off();
+      };
+    },
+  };
+});
+
 vi.mock("../../ui/atoms", async (original) => ({
   ...(await original<typeof import("../../ui/atoms")>()),
   toast: vi.fn(),
@@ -1246,5 +1266,352 @@ describe("integration detail parity", () => {
     for (const id of ["larkx_chat", "second_chat", "larkx_conn"]) {
       expect(requests.some((r) => r.url.includes(`provider=${id}`)), id).toBe(true);
     }
+  });
+});
+
+describe("extension auth-to-connector sync and host-auth contract (#17803)", () => {
+  const emitHubEvent = (type: string, msg: Record<string, unknown>) => {
+    hubEvents.listeners.get(type)?.forEach((listener) => listener({ type, ...msg }));
+  };
+
+  function setupHostAuthExtension(manager?: string) {
+    currentExt = {
+      id: "storefront",
+      name: "Storefront",
+      kind: "process",
+      source: "installed",
+      status: "running",
+      version: "0.3.1",
+      enabled: true,
+      origin: "market:official/storefront",
+      contributes: { connectors: ["storefront_conn"] },
+      auth: {
+        title: "Storefront Sign-in",
+        state: "signed_out",
+      },
+      form: {
+        fields: [{ name: "region", type: "string", title: "Region" }],
+      },
+      config: { region: "us" },
+    };
+    currentConnectors = [
+      {
+        id: "storefront_conn",
+        name: "Storefront Library",
+        status: "not_signed_in",
+        enabled: true,
+        capabilities: ["read"],
+        ...(manager ? { manager } : {}),
+      },
+    ];
+  }
+
+  it("refreshes associated connector status after AuthGroup sign-in, preserves unsaved drafts, and hides hub_side_note", async () => {
+    setupHostAuthExtension();
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    let extAuth = structuredClone(currentExt.auth!);
+    mockFetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.endsWith("/-/auth/step") && method === "POST") {
+        extAuth = { title: "Storefront Sign-in", state: "signed_in", account: "player1" };
+        currentConnectors = [
+          {
+            id: "storefront_conn",
+            name: "Storefront Library",
+            status: "ok",
+            account: "player1",
+            enabled: true,
+            capabilities: ["read"],
+          },
+        ];
+        return ok({ done: true, account: "player1" }) as Response;
+      }
+      if (url.endsWith("/-/auth") && method === "GET") {
+        return ok(extAuth) as Response;
+      }
+      return fallback(input, init);
+    });
+
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "storefront" }} />));
+    await flush();
+
+    const connSection = () => section("connection")!;
+    expect(connSection().textContent).toContain(t("lib-extension-auth.signed_out"));
+    expect(connSection().textContent).toContain(t("lib-connectors.state_not_signed_in"));
+    // Top-level interactive AuthGroup is rendered -> suppress misleading manager.json note.
+    expect(connSection().textContent).not.toContain(t("settings-hubconnector.hub_side_note"));
+
+    // Create an unsaved config draft before signing in.
+    const regionInput = host.querySelector<HTMLInputElement>("#extension-field-region")!;
+    act(() => setInputValue(regionInput, "jp"));
+    await flush();
+    expect(regionInput.value).toBe("jp");
+
+    const signInBtn = [...connSection().querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === t("lib-extension-auth.sign_in"),
+    )!;
+    expect(signInBtn).toBeDefined();
+    await act(async () => signInBtn.click());
+    await flush();
+
+    // Both top AuthGroup and lower Connection status card reflect signed-in state.
+    expect(connSection().textContent).toContain(t("lib-extension-auth.signed_in_as", { account: "player1" }));
+    expect(connSection().textContent).toContain(t("lib-connectors.state_ok"));
+    expect(connSection().textContent).not.toContain(t("lib-connectors.state_not_signed_in"));
+    expect(connSection().textContent).not.toContain(t("settings-hubconnector.hub_side_note"));
+    // Unsaved draft stays intact.
+    expect(host.querySelector<HTMLInputElement>("#extension-field-region")!.value).toBe("jp");
+  });
+
+  it("syncs connector status on sign-out under secondary assistant scope and ignores other assistant auth pushes", async () => {
+    setupHostAuthExtension("work");
+    currentExt.auth = { title: "Storefront Sign-in", state: "signed_in", account: "work-player" };
+    currentConnectors = [
+      { id: "storefront_conn", name: "Storefront Library", status: "ok", account: "default-player", enabled: true, capabilities: ["read"] },
+      { id: "storefront_conn", name: "Storefront Library", status: "ok", account: "work-player", enabled: true, capabilities: ["read"], manager: "work" },
+    ];
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    mockFetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.endsWith("/-/auth/logout") && method === "POST") {
+        const manager = new Headers(init?.headers).get("X-Persona-Manager");
+        requests.push({ url, method, body: undefined, manager });
+        currentConnectors = [
+          currentConnectors[0],
+          { id: "storefront_conn", name: "Storefront Library", status: "not_signed_in", enabled: true, capabilities: ["read"], manager: "work" },
+        ];
+        return ok({ title: "Storefront Sign-in", state: "signed_out" }) as Response;
+      }
+      return fallback(input, init);
+    });
+
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "extension", id: "storefront", manager: "work" }} />));
+    await flush();
+
+    const connSection = () => section("connection")!;
+    expect(connSection().textContent).toContain("work-player");
+    expect(connSection().textContent).toContain(t("lib-connectors.state_ok"));
+
+    // An extension_auth event from another assistant must not touch work's auth or reload connectors.
+    const connectorReadsBefore = requests.filter((r) => /\/connectors(\?|$)/.test(r.url)).length;
+    await act(async () => {
+      emitHubEvent("extension_auth", {
+        extension: "storefront",
+        manager: "assistant",
+        auth: { title: "Storefront Sign-in", state: "signed_out" },
+      });
+    });
+    await flush();
+    expect(connSection().textContent).toContain("work-player");
+    expect(requests.filter((r) => /\/connectors(\?|$)/.test(r.url)).length).toBe(connectorReadsBefore);
+
+    // Signing out routes with X-Persona-Manager: work and refreshes work's connector snapshot.
+    const signOutBtn = [...connSection().querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === t("settings-extensionauth.sign_out"),
+    )!;
+    expect(signOutBtn).toBeDefined();
+    await act(async () => signOutBtn.click());
+    await flush();
+
+    expect(requests).toContainEqual(expect.objectContaining({ url: expect.stringContaining("/-/auth/logout"), method: "POST", manager: "work" }));
+    expect(connSection().textContent).toContain(t("lib-extension-auth.signed_out"));
+    expect(connSection().textContent).toContain(t("lib-connectors.state_not_signed_in"));
+    expect(connSection().textContent).not.toContain("default-player");
+  });
+
+  it("guards against stale out-of-order connector responses across rapid auth transitions", async () => {
+    setupHostAuthExtension();
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    let intercept = false;
+    let resolveFirst!: (r: Response) => void;
+    let resolveSecond!: (r: Response) => void;
+    let call = 0;
+
+    mockFetch.mockImplementation((input, init) => {
+      const url = String(input);
+      if (intercept && /\/connectors(\?|$)/.test(url)) {
+        call++;
+        if (call === 1) return new Promise<Response>((resolve) => { resolveFirst = resolve; });
+        if (call === 2) return new Promise<Response>((resolve) => { resolveSecond = resolve; });
+      }
+      return fallback(input, init);
+    });
+
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "storefront" }} />));
+    await flush();
+    intercept = true;
+
+    // Transition 1: signed_in (slow response #1).
+    await act(async () => {
+      emitHubEvent("extension_auth", {
+        extension: "storefront",
+        auth: { title: "Storefront Sign-in", state: "signed_in", account: "player1" },
+      });
+    });
+    // Transition 2: expired (faster response #2).
+    await act(async () => {
+      emitHubEvent("extension_auth", {
+        extension: "storefront",
+        auth: { title: "Storefront Sign-in", state: "expired" },
+      });
+    });
+
+    expect(call).toBe(2);
+    // Newer response #2 lands first -> not_signed_in.
+    await act(async () => {
+      resolveSecond(ok({
+        connectors: [{ id: "storefront_conn", name: "Storefront Library", status: "not_signed_in", enabled: true, capabilities: ["read"] }],
+      }) as Response);
+    });
+    await flush();
+    expect(section("connection")!.textContent).toContain(t("lib-connectors.state_not_signed_in"));
+
+    // Stale response #1 resolves later -> must be ignored.
+    await act(async () => {
+      resolveFirst(ok({
+        connectors: [{ id: "storefront_conn", name: "Storefront Library", status: "ok", account: "player1", enabled: true, capabilities: ["read"] }],
+      }) as Response);
+    });
+    await flush();
+
+    expect(section("connection")!.textContent).toContain(t("lib-extension-auth.expired"));
+    expect(section("connection")!.textContent).toContain(t("lib-connectors.state_not_signed_in"));
+    expect(section("connection")!.textContent).not.toContain("player1");
+  });
+
+  it("drops a stale getAuth response when a newer auth state arrives first", async () => {
+    setupHostAuthExtension();
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    let resolveStaleAuth!: (r: Response) => void;
+
+    mockFetch.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.endsWith("/-/auth/step") && method === "POST") {
+        return Promise.resolve(ok({ done: true, account: "player1" }) as Response);
+      }
+      if (url.endsWith("/-/auth") && method === "GET") {
+        return new Promise<Response>((resolve) => { resolveStaleAuth = resolve; });
+      }
+      return fallback(input, init);
+    });
+
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "storefront" }} />));
+    await flush();
+
+    // Start sign-in (triggers deferred GET /-/auth).
+    const signInBtn = [...section("connection")!.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === t("lib-extension-auth.sign_in"),
+    )!;
+    await act(async () => signInBtn.click());
+    await flush();
+
+    // A newer pushed status arrives before the deferred GET /-/auth resolves.
+    await act(async () => {
+      emitHubEvent("extension_auth", {
+        extension: "storefront",
+        auth: { title: "Storefront Sign-in", state: "expired" },
+      });
+    });
+    await flush();
+    expect(section("connection")!.textContent).toContain(t("lib-extension-auth.expired"));
+
+    // Resolve the older GET /-/auth -> must be ignored.
+    await act(async () => {
+      resolveStaleAuth(ok({ title: "Storefront Sign-in", state: "signed_in", account: "player1" }) as Response);
+    });
+    await flush();
+    expect(section("connection")!.textContent).toContain(t("lib-extension-auth.expired"));
+    expect(section("connection")!.textContent).not.toContain("player1");
+  });
+
+  it("preserves updated detail.auth on transient connector reload failure and recovers via retry", async () => {
+    setupHostAuthExtension();
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    let failConnectors = false;
+    let extAuth = structuredClone(currentExt.auth!);
+
+    mockFetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.endsWith("/-/auth/step") && method === "POST") {
+        extAuth = { title: "Storefront Sign-in", state: "signed_in", account: "player1" };
+        currentConnectors = [
+          { id: "storefront_conn", name: "Storefront Library", status: "ok", account: "player1", enabled: true, capabilities: ["read"] },
+        ];
+        return ok({ done: true, account: "player1" }) as Response;
+      }
+      if (url.endsWith("/-/auth") && method === "GET") {
+        return ok(extAuth) as Response;
+      }
+      if (failConnectors && /\/connectors(\?|$)/.test(url)) {
+        return new Response(JSON.stringify({ error: "Connector reload timed out" }), { status: 503 });
+      }
+      return fallback(input, init);
+    });
+
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "storefront" }} />));
+    await flush();
+
+    failConnectors = true;
+    const signInBtn = [...section("connection")!.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === t("lib-extension-auth.sign_in"),
+    )!;
+    await act(async () => signInBtn.click());
+    await flush();
+
+    // Auth card stays updated even though connector reload failed.
+    const connSection = () => section("connection")!;
+    expect(connSection().textContent).toContain(t("lib-extension-auth.signed_in_as", { account: "player1" }));
+    expect(connSection().querySelector('[role="alert"]')?.textContent).toContain("Connector reload timed out");
+
+    // Retry button inside the error card recovers the connector status cleanly.
+    failConnectors = false;
+    const retryBtn = [...connSection().querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === t("settings-hubconnector.recheck"),
+    )!;
+    expect(retryBtn).toBeDefined();
+    await act(async () => retryBtn.click());
+    await flush();
+
+    expect(connSection().querySelector('[role="alert"]')).toBeNull();
+    expect(connSection().textContent).toContain(t("lib-connectors.state_ok"));
+    expect(connSection().textContent).toContain("player1");
+  });
+
+  it("keeps hub_side_note visible for hub-configured connectors when no top-level interactive auth is present", async () => {
+    currentExt = {
+      id: "hub-managed-ext",
+      name: "Hub Managed Extension",
+      kind: "process",
+      source: "installed",
+      status: "running",
+      version: "1.0.0",
+      enabled: true,
+      origin: "market:official/hub-managed-ext",
+      contributes: { connectors: ["hub_managed_conn"] },
+    };
+    currentConnectors = [
+      { id: "hub_managed_conn", name: "Hub Managed", status: "not_signed_in", enabled: true, capabilities: ["read"] },
+    ];
+
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "hub-managed-ext" }} />));
+    await flush();
+    expect(section("connection")!.textContent).toContain(t("settings-hubconnector.hub_side_note"));
+
+    // Standalone built-in hub-configured connector also keeps hub_side_note.
+    act(() => root.render(null));
+    await act(async () => root.render(
+      <IntegrationDetail target={{ kind: "builtin", id: "hub_managed_conn", connectorId: "hub_managed_conn" }} />,
+    ));
+    await flush();
+    expect(section("connection")!.textContent).toContain(t("settings-hubconnector.hub_side_note"));
   });
 });
