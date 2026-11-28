@@ -778,7 +778,11 @@ func TestAgyWorkingCountsFiniteBackgroundWork(t *testing.T) {
 		return s
 	}
 	task := func(kind string) proto.BackgroundTask {
-		return proto.BackgroundTask{ID: "s1/task-1", Kind: kind, StartedAt: time.Now()}
+		t := proto.BackgroundTask{ID: "s1/task-1", Kind: kind, StartedAt: time.Now()}
+		if kind == "shell" {
+			t.Command = "make test" // a matched run_command carries its command line
+		}
+		return t
 	}
 	for _, tc := range []struct {
 		name     string
@@ -800,11 +804,17 @@ func TestAgyWorkingCountsFiniteBackgroundWork(t *testing.T) {
 		{"command described as cron", []proto.Session{idle(func(s *proto.Session) {
 			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Cron: rotate logs", Command: "./rotate.sh"}}
 		})}, true},
-		{"timer reported as a shell", []proto.Session{idle(func(s *proto.Session) {
+		{"unmatched timer reported as a shell", []proto.Session{idle(func(s *proto.Session) {
 			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Timer: 60s"}}
-		})}, true},
+		})}, false},
+		{"unmatched task reported as a shell", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Check status"}}
+		})}, false},
+		{"one-shot timer (monitor)", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "monitor", Description: "Timer: 60s"}}
+		})}, false},
 		{"monitor beside a command", []proto.Session{idle(func(s *proto.Session) {
-			s.Background = []proto.BackgroundTask{task("monitor"), {ID: "s1/task-2", Kind: "shell"}}
+			s.Background = []proto.BackgroundTask{task("monitor"), {ID: "s1/task-2", Kind: "shell", Command: "./serve"}}
 		})}, true},
 		{"running subagent", []proto.Session{idle(func(s *proto.Session) { s.Subagents = []proto.Subagent{{ID: "a1", Running: true}} })}, true},
 		{"finished subagent", []proto.Session{idle(func(s *proto.Session) { s.Subagents = []proto.Subagent{{ID: "a1"}} })}, false},
@@ -815,7 +825,7 @@ func TestAgyWorkingCountsFiniteBackgroundWork(t *testing.T) {
 			s.Workflows = []proto.Workflow{{TaskID: "w1", Status: proto.WorkflowCompleted}}
 		})}, false},
 		{"another session's command", []proto.Session{idle(nil), {SessionID: "s2", Status: proto.StatusDone,
-			Background: []proto.BackgroundTask{{ID: "s2/task-1", Kind: "shell"}}}}, true},
+			Background: []proto.BackgroundTask{{ID: "s2/task-1", Kind: "shell", Command: "make test"}}}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &runtimeConn{sessions: tc.sessions}
@@ -850,7 +860,11 @@ func TestAgyWorkingReadsTheCompanionsList(t *testing.T) {
 		t.Helper()
 		var tasks []string
 		for i, kind := range kinds {
-			tasks = append(tasks, fmt.Sprintf(`{"id":"%s/task-%d","kind":%q,"started_at":"2026-11-28T09:00:00Z"}`, agyTestID, i+1, kind))
+			command := ""
+			if kind == "shell" {
+				command = `,"command":"make test"` // a matched run_command carries its command line
+			}
+			tasks = append(tasks, fmt.Sprintf(`{"id":"%s/task-%d","kind":%q%s,"started_at":"2026-11-28T09:00:00Z"}`, agyTestID, i+1, kind, command))
 		}
 		return pushTasks(status, tasks...)
 	}
@@ -877,8 +891,13 @@ func TestAgyWorkingReadsTheCompanionsList(t *testing.T) {
 	}
 	command := `{"id":"` + agyTestID + `/task-2","kind":"shell","description":"Run the tests","command":"make test","started_at":"2026-11-28T09:00:00Z"}`
 	unmatchedCommand := `{"id":"` + agyTestID + `/task-3","kind":"shell","description":"Wait for ready","started_at":"2026-11-28T09:00:00Z"}`
-	if !pushTasks(proto.StatusIdle, unmatchedCron, command) || !pushTasks(proto.StatusIdle, unmatchedCommand) {
-		t.Error("a background command beside a cron schedule, or one without its command line, does not hold the drain")
+	if !pushTasks(proto.StatusIdle, unmatchedCron, command) {
+		t.Error("a background command beside a cron schedule does not hold the drain")
+	}
+	// Unmatched tasks (no command line) and schedules cannot be told apart from the row, so neither holds the drain:
+	// a misread one must never keep an upgrade waiting forever.
+	if pushTasks(proto.StatusIdle, unmatchedCommand) {
+		t.Error("an unmatched task without its command line holds the drain")
 	}
 }
 

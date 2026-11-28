@@ -617,14 +617,17 @@ func (h *runtimeConn) agyWorking() bool {
 	return false
 }
 
-// agyFiniteBackground: s lists background work that ends by itself, which a companion restart would stop ("All your
-// subagents and background tasks have been stopped due to server restart"): a command, workflow or subagent
-// (Background of kind shell / workflow / agent), or a running entry in Subagents or Workflows. A schedule (kind
-// monitor: agy's `schedule`, a cron job or a one-shot timer, which the row does not tell apart) is left out: a cron job
-// never ends, so a restart that waited on it would never come. So is a cron schedule that arrives as kind shell: the
-// companion (integrations/antigravity/lib/background.js extractBackground) calls a task shell when it cannot match the
-// task's start notice to its tool call (none, or two calls claiming the step), and only the notice's description, agy's
-// "Cron: <expression> <prompt>", still says what it is (agyStandingSchedule).
+// agyFiniteBackground: s lists background work the companion identified and that ends by itself, which a companion
+// restart would stop ("All your subagents and background tasks have been stopped due to server restart"): a Background
+// task agyIdentifiedFiniteTask accepts, or a running entry in Subagents or Workflows. Only identified work counts, so a
+// misread row can never hold an upgrade forever: integrations/antigravity/lib/background.js extractBackground calls a
+// task shell both for a matched run_command (with its command line) and for any start notice it could not match to its
+// tool call (none, or two calls claiming the step), and a description cannot tell an unmatched command from an
+// unmatched schedule in either direction (its own fixtures include a one-shot timer described "Check status" and a
+// cron schedule described "Timer: 60s"). Schedules (kind monitor: agy's `schedule`, cron or one-shot, which the row does
+// not tell apart) are left out too, so a one-shot timer, like an unmatched task, is still stopped by a restart, as
+// before #17200; closing that needs the companion to carry what it knows (its computed oneShot, whether a task was
+// matched), the companion-side follow-up.
 // The rows are the companion's runtime.sessions: Background lists only tasks running in a session its `agy acp` has
 // loaded (a terminal's tasks come separately, in agyPaneBackground, and a restart does not stop them), and the
 // hub-derived BackgroundWorking / BackgroundWaiting are not read, as they count a monitor too. Unlike
@@ -636,7 +639,7 @@ func (h *runtimeConn) agyWorking() bool {
 // the companion-side follow-up).
 func agyFiniteBackground(s proto.Session) bool {
 	for _, task := range s.Background {
-		if task.Kind != "monitor" && !agyStandingSchedule(task) {
+		if agyIdentifiedFiniteTask(task) {
 			return true
 		}
 	}
@@ -653,9 +656,15 @@ func agyFiniteBackground(s proto.Session) bool {
 	return false
 }
 
-// agyStandingSchedule: task is an agy cron schedule the companion could not tell from a command: kind shell, no command
-// line (a matched run_command has one) and the description agy gives a cron `schedule` (the prefix agyOneShotSchedule
-// reads too). A one-shot timer ("Timer: …") is not matched: it ends by itself, so at worst it holds a restart until then.
-func agyStandingSchedule(task proto.BackgroundTask) bool {
-	return task.Kind == "shell" && task.Command == "" && strings.HasPrefix(task.Description, "Cron:")
+// agyIdentifiedFiniteTask: task is finite background work the companion matched to its tool call: a run_command (kind
+// shell with its command line; an unmatched notice has none), a run_workflow (kind workflow) or an invoke_subagent
+// (kind agent), the only kinds extractBackground gives a matched call besides schedules.
+func agyIdentifiedFiniteTask(task proto.BackgroundTask) bool {
+	switch task.Kind {
+	case "workflow", "agent":
+		return true
+	case "shell":
+		return task.Command != ""
+	}
+	return false
 }
