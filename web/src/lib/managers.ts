@@ -41,6 +41,8 @@ export interface Manager {
   /** Its open inbox items that need the user (the inbox page's badge). Absent: not known (offline, installing, an
    *  older hub), counted as none. The hub pushes `managers` when it changes. */
   inbox_needs_you?: number;
+  /** The connected assistant advertises the read-only Integrations settings projection. */
+  integrations_projection_v1?: boolean;
 }
 
 export interface ManagerList {

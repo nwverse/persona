@@ -46,7 +46,7 @@ onCredentialChange(() => {
   subscribers.clear();
 });
 
-function rosterForCredential(): ManagerList | null {
+export function rosterForCredential(): ManagerList | null {
   rosterUsed = true;
   const roster = currentRoster();
   return roster === retiredRoster ? null : roster;
@@ -70,12 +70,20 @@ async function verifyRoster(owner: string): Promise<ManagerList | null> {
   }
 }
 
-/** Resolve the legacy default-only entry point before opening a resource with that owner. */
-export async function verifiedDefaultAssistant(): Promise<string> {
+/** Read the roster for this credential, or null for a hub that predates it. */
+export async function verifiedAssistantRoster(): Promise<ManagerList | null> {
   const owner = credentialOwner();
   const checked = rosterForCredential() ?? await verifyRoster(owner);
   assertCredential(owner);
-  return (rosterForCredential() ?? checked)?.default ?? BUILTIN_MANAGER;
+  return rosterForCredential() ?? checked;
+}
+
+/** Resolve the legacy default-only entry point before opening a resource with that owner. */
+export async function verifiedDefaultAssistant(): Promise<string> {
+  const owner = credentialOwner();
+  const roster = await verifiedAssistantRoster();
+  assertCredential(owner);
+  return roster?.default ?? BUILTIN_MANAGER;
 }
 
 /** Resolve current once when opening a resource. A change of sidebar selection opens a new binding. */
