@@ -2,7 +2,7 @@
 // for the cold first screen, so the overlay, its CSS transitions, and its long strings load on intent.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { t as tr } from "../i18n";
+import { formatDate, t as tr } from "../i18n";
 import { sendDraft } from "../lib/drafts";
 import { navigate } from "../lib/router";
 import { getState } from "../lib/store";
@@ -499,7 +499,7 @@ export function UsagePopover({
   const [tableSort, setTableSort] = useState<UsageTableSort | null>(null);
 
   const groups = useMemo(() => groupByProvider(accounts), [accounts]);
-  const hasAnyWindows = useMemo(() => accounts.some((a) => a.windows.length > 0), [accounts]);
+  const hasAnyWindows = groups.some((g) => g.accounts.some((a) => a.windows.length > 0));
   const pinnedIds = usePinnedUsageAccounts();
   const pinnedSet = new Set(pinnedIds);
   const { items: selectedPins, custom: hasLivePins } = selectSidebarUsageItems(accounts, pinnedIds);
@@ -704,14 +704,12 @@ export function UsagePopover({
               </div>
             )}
             {viewMode === "table" && tableModel ? (
-              <UsageTable
-                model={tableModel}
-                sort={tableSort}
-                onSort={setTableSort}
-                pinnedSet={pinnedSet}
-                overlaps={overlaps}
-                now={now}
-              />
+              <>
+                {tableModel.rows.length > 0 && (
+                  <UsageTable model={tableModel} sort={tableSort} onSort={setTableSort} pinnedSet={pinnedSet} overlaps={overlaps} now={now} />
+                )}
+                {groups.flatMap((g) => g.historicalReadings.map((a) => <HistoricalReading key={a.id} a={a} now={now} />))}
+              </>
             ) : (
               groups.map((g) => {
                 const title = providerTitle(g.provider);
@@ -755,7 +753,7 @@ export function UsagePopover({
                             {singlePlan}
                           </span>
                         )}
-                        {g.accounts.length > 1 && (
+                        {(g.accounts.length > 1 || g.historicalReadings.length > 0) && (
                           <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{tr("usage.provider_accounts", { count: g.accounts.length })}</span>
                         )}
                       </span>
@@ -786,6 +784,7 @@ export function UsagePopover({
                         />
                       </div>
                     ))}
+                    {g.historicalReadings.map((a) => <HistoricalReading key={a.id} a={a} now={now} />)}
                   </section>
                 );
               })
@@ -873,6 +872,34 @@ function PinToggle({
     >
       <Icon name="pin" size={iconSize} />
     </button>
+  );
+}
+
+/** A file sample is inspectable even when the hub has no current subscription reading. */
+function HistoricalReading({ a, now }: { a: UsageAccount; now: number }) {
+  return (
+    <details className="rounded-control bg-inset px-2.5 text-submeta text-ink-2">
+      <summary className="min-h-11 cursor-pointer break-words py-3.5 font-medium">
+        {[tr("usage.codex_local_reading"), sourceNames(a).join(" · "), sampleAge(a.sampled_at, now)].filter(Boolean).join(" · ")}
+      </summary>
+      <p className="mt-1 leading-snug">{tr("usage.codex_local_explanation")}</p>
+      <time dateTime={a.sampled_at} className="text-ink-3">{formatDate(a.sampled_at, { dateStyle: "medium", timeStyle: "short" })}</time>
+      <dl className="mt-1 flex flex-col gap-1 pb-2">
+        {a.windows.map((w) => (
+          <div key={windowKey(w)} className="flex flex-wrap items-baseline justify-between gap-x-2">
+            <dt>{w.label}</dt>
+            <dd className="flex flex-wrap justify-end gap-x-2 tabular-nums">
+              <span>{tr("usage.left_short", { percent: shown(remainingPercent(w.used_percent)) })}</span>
+              {w.resets_at && (
+                <time dateTime={w.resets_at} className="text-ink-3">
+                  {tr("usage.reset_at", { time: formatDate(w.resets_at, { dateStyle: "short", timeStyle: "short" }) })}
+                </time>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   );
 }
 

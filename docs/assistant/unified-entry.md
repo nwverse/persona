@@ -576,6 +576,26 @@ When enabled, tasks dispatched from the main chat (`task_plan`; also `agent_star
 
 ### Supervision (#3124)
 
+Routine reminders skip tasks awaiting the owner's acceptance, parked tasks, and tasks already waiting for the owner.
+They also skip a task for two minutes after verified owner input to one of its linked Agent sessions. An interruption
+while the owner already has the next action does not need its own turn. A recent owner message to that same Agent skips
+the generic owner-return reminder while it stays recent. A card that needs reissuing still follows the direct path.
+Completed work for review, explicit Agent reports, questions, permission cards, decisions, launch failures, escalations,
+and an open task's PR conflicts keep their direct routes under the automatic supervision mode.
+
+In **Settings › Assistant profile › Agent follow-up**, **Review routine follow-ups in briefings** is off by default because model-based
+deferral and its background model calls are opt-in. When enabled, Persona asks the configured **Sorting** model
+(`inbox.triage`) about eligible routine reminders and PR side signals in batches. It uses the verdict immediately.
+An inconclusive, unavailable, or invalid result goes to the briefing. The model can choose only whether to wake the
+supervisor or save the signal for review. The manager records each verdict with the signal, destination, reason, and
+time in Postgres (`supervision_triage`). A delivery can retry without changing a recorded verdict.
+The settings tool uses the key `assistant.supervision_triage` with the Boolean value `true` or `false` and asks the
+owner to approve a change. The manager logs how many routine signals the deterministic rules suppress in a batch.
+
+The morning and evening briefings with facts enabled list saved follow-ups from the last 24 hours and all older
+follow-ups that have yet to appear in a briefing. The saved verdicts remain available after being listed. Turning off
+triage stops asking the model about new signals and leaves the saved follow-ups in the briefings.
+
 Queued supervision digests retain their structured signals in the manager's relay setting (#10424). At drain time,
 the manager loads the task ledger, drops signals that no longer hold, and renders the remaining entries using the
 same rules as a new digest. An entirely obsolete digest leaves the queue without starting a conversation turn;

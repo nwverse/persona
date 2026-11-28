@@ -455,6 +455,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("arguments: %w", err)
 		}
 		a.Task = givenTask(a.RawTask)
+		var review resumeReview
+		if a.Resume && self != "" && s.ensureTodosLoaded(ctx) == nil {
+			review = beginResumeReview(self)
+		}
 		space := s.agentCallerSpace(ctx, machine, self)
 		am, c, err := s.findAgentInSpace(ctx, a.Machine, a.SessionID, &space)
 		if err != nil {
@@ -508,7 +512,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				}
 				resumeTodo = todo.ID
 			}
-			if err := s.resumeAllowed(ctx, self, am, c, resume, a.Task); err != nil {
+			if err := s.resumeAllowed(ctx, self, am, c, resume, a.Task, review); err != nil {
 				if resumeTodo != "" {
 					s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
 				}
