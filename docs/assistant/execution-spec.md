@@ -136,3 +136,9 @@ on it.
 | `POST /api/v1/assistant/conversations/{id}/model/restore` | `{ok, model_pick, last_good}`; 404 when none is kept. Full role. |
 
 `PUT /api/v1/model-profiles/{id}` takes `runtime` and `channel` on a tier and on each candidate.
+
+## Web
+
+The Web reads these routes as described in `docs/web/web.md` "Four dimensions in the Web (#17524)": the main chat's
+panel offers model and effort from the recommended combinations, the route folds out, Settings › Models has the Engines
+and Channels cards, and New Agent and presets show each combination's verdict.

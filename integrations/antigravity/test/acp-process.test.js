@@ -243,6 +243,16 @@ describe('agy acp process lifecycle', () => {
 })
 
 describe('ACP session recovery', () => {
+  it('retains advertised auth method IDs without eagerly signing in and clears them when the process ends', TIMEOUT, async t => {
+    const { client } = fakeClient(t, 'auth-methods', { channelSpec: { id: 'native', authMode: 'oauth', keyMode: false } })
+    await client.ensureStarted()
+    assert.deepEqual(client.authMethods, [{ id: 'oauth-personal' }, { id: 'gemini-api-key' }])
+    assert.equal(client._canRefreshAuth(), true)
+    await client.recycle('test', true)
+    assert.deepEqual(client.authMethods, [])
+    assert.equal(client._canRefreshAuth(), false)
+  })
+
   it('ignores every event from a replaced process', () => {
     const client = new AgyAcpClient()
     const old = {}

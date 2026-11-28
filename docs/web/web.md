@@ -3180,6 +3180,47 @@ location ^~ /v1/projects/ {
 
 Keep authorization headers and document bodies out of proxy logs. Members use their project-issued tokens. The Web app sends the token only with requests to the project document service and checks the returned project, document, approval and SHA-256 before offering the text. The confirmed text becomes part of the personal session and reaches the selected model provider when the member starts it.
 
+## Four dimensions in the Web (#17524)
+
+Who it serves: everyone in a Persona chat, who should change the model without knowing engines or providers, and the
+people who manage the gateways and keys behind it. Builds on the hub's execution spec (`docs/assistant/execution-spec.md`:
+runtime, channel, model, effort). A hub without the routes (404) keeps the launcher UI described above.
+
+- **Model panel (main chat, space new conversation)**: `views/execution/SimpleModelSheet.tsx` opens in place of the
+  launcher panel when the catalog (`GET /execution/catalog?machine=`) has recommended combinations for the chat's
+  computer. It shows only **Model** and **Thinking effort**, from the combinations that are not blocked and recommended,
+  once per model + effort; an experimental bridge is never offered here. **Advanced / route** folds out engine, channel,
+  model and effort (`views/execution/RouteFields.tsx`), each "Automatic" by default and narrowing the next (engine →
+  the computer's channels that run it → the channel's models → the model's efforts, else the engine's); a value that no
+  longer fits is cleared. A route is checked (`POST /execution/validate`, a moment after the last change). **Use** sends
+  `PUT …/conversations/{id}/model` with `runtime` and `channel` beside the launcher alias the hub matched. "All models and
+  providers" opens the launcher panel.
+- **Last working setup**: a kept chat's panel names it (`GET …/model/last-good`) with **Restore** (`POST …/model/restore`);
+  a turn that failed on its setup offers the same on its card ("Restore last working setup"). Nothing kept: a quiet note.
+- **The three levels** (`views/execution/VerdictNote.tsx`): allowed shows nothing; a notice shows the hub's words
+  (`reasons[].text`, never the Web's own) in a quiet status line, with a **Compatibility bridge (experimental)** label on an
+  experimental bridge; blocked shows the first reason as an alert, disables the form's confirm, and lists the hub's
+  alternatives as buttons that replace the combination in one tap.
+- **New Agent and model presets**: `views/execution/ExecutionCheck.tsx` sits under the model choice (New Agent) and under
+  each candidate (Settings › Model presets). It checks what the launcher, model and effort run as; a blocked one disables
+  Start or Save. **Engine and channel** folds out the route's two fields; **Use this route** applies the matched alias.
+  Presets read and write `runtime` and `channel` (`PUT /model-profiles/{id}`); a candidate given by them alone needs no
+  launcher (the hub fills in the alias).
+- **Settings › Models › Engines** (`views/settings/RuntimesCard.tsx`, anchor `#settings-runtimes`): each runtime the hub
+  declares, its protocols and efforts, what it switches without a restart, and which computers have it (online or
+  offline). Read only.
+- **Settings › Models › Channels** (`views/settings/ExecutionChannelsCard.tsx`, anchor `#settings-execution-channels`): each
+  managed channel with its Base URL, engine bindings (launcher aliases) and scope; the key and headers are write-only — a
+  row says only whether they are saved, the editor's fields stay empty ("Saved. Leave empty to keep it") and a save sends
+  only what was typed. Writes carry the catalog's revision; a 409 says another change came first and reads the catalog
+  again. Delete asks once. **History** lists the last 10 points with **Roll back** each and **Undo last change**. The
+  card says a save never stops a running session (new sessions and each running one's next turn use it).
+- **Read-only aliases in Providers**: a launcher that is a channel's alias carries a "Channel gw · read only" mark; its details hide
+  Edit and Delete and point to the channel (**Edit in Channels** opens its editor). A refusal from the hub (400,
+  `err_alias_read_only`) comes with the same action.
+- **Phone, themes, languages**: the panel and editors are one column on a phone in portrait; every color is a token
+  (light and dark); every string is in `i18n/locales/{en,zh-Hans,ja}/execution.json`.
+
 ## New Agent's model choice (#5104)
 
 Who it serves: people starting a coding Agent from the web (the **Agents** side). The user asked (2026-11-12) for this
