@@ -112,12 +112,24 @@ struct AgentConsoleRoot: View {
                 if mode == .running {
                     ChatsView().environment(\.agentConsole, true)
                 } else {
-                    LarkConversationsView()
+                    AgentConsoleExternalAgents()
                 }
             }
             .modifier(TabActivityScope(tab: .chats))
         }
         .badge(model.badges.agents)
+    }
+}
+
+@MainActor private struct AgentConsoleExternalAgents: View {
+    var body: some View {
+        NavigationStack {
+            PersonalAgentListView()
+                .accessibilityIdentifier("agent-console-external-agents")
+                .navigationDestination(for: PersonalAgentSession.self) { session in
+                    PersonalAgentSessionView(session: session).id(session.id)
+                }
+        }
     }
 }
 
