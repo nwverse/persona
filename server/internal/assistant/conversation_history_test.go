@@ -933,3 +933,163 @@ func TestConversationHistoryOfflineIdleProbeBackoff(t *testing.T) {
 		t.Fatalf("uncovered offline session was not fully backfilled: %+v %v", partialAfter, err)
 	}
 }
+
+type deadlineCheckingHub struct {
+	Hub
+	delayMethod string
+	delay       time.Duration
+}
+
+func (h *deadlineCheckingHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == h.delayMethod && h.delay > 0 {
+		select {
+		case <-time.After(h.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return h.Hub.DeviceCall(ctx, p)
+}
+
+type deadlineHistoryStore struct {
+	mu    sync.Mutex
+	pages []db.ConversationPage
+}
+
+func (m *deadlineHistoryStore) ConversationHistory(ctx context.Context, _, _ string) (*db.ConversationHistory, error) {
+	return nil, ctx.Err()
+}
+
+func (m *deadlineHistoryStore) PutConversationPage(ctx context.Context, page db.ConversationPage) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pages = append(m.pages, page)
+	return nil
+}
+
+func (m *deadlineHistoryStore) ConversationItems(ctx context.Context, _, _, _ string, _, _, _ int, _ bool) ([]conversationlog.Item, error) {
+	return nil, ctx.Err()
+}
+
+func (m *deadlineHistoryStore) ConversationItem(ctx context.Context, _, _, _, _ string) (*conversationlog.Item, error) {
+	return nil, ctx.Err()
+}
+
+func (m *deadlineHistoryStore) PutConversationSummary(ctx context.Context, _, _, _ string, _ int64, _ string) error {
+	return ctx.Err()
+}
+
+func (m *deadlineHistoryStore) ConversationHistoryStats(ctx context.Context) (db.ConversationHistoryStats, error) {
+	return db.ConversationHistoryStats{}, ctx.Err()
+}
+
+func TestHistoryRememberPersistsWhenCallerContextNearlyExpired(t *testing.T) {
+	var logs []string
+	var logMu sync.Mutex
+	f := newFakeHub().withMachine()
+	f.setSessions("server", proto.Session{SessionID: "main-chat", Assistant: true, Rev: 100})
+	s := New(Options{
+		Hub: &deadlineCheckingHub{Hub: f, delayMethod: "session.item", delay: 40 * time.Millisecond},
+		Logf: func(format string, args ...any) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			logs = append(logs, fmt.Sprintf(format, args...))
+		},
+	})
+	st := &deadlineHistoryStore{}
+
+	fullText := strings.Repeat("recovered-full-item-", 20)
+	var itemCalls int
+	var verifyCalls int
+	var callMu sync.Mutex
+
+	f.answerNode("session.item", func(_ string, _ json.RawMessage) (any, error) {
+		callMu.Lock()
+		itemCalls++
+		callMu.Unlock()
+		return proto.Item{ID: "i1", Seq: 1, Role: "assistant", Kind: proto.KindText, Text: fullText}, nil
+	})
+	f.answerNode(DeviceSessionItems, func(_ string, _ json.RawMessage) (any, error) {
+		callMu.Lock()
+		verifyCalls++
+		callMu.Unlock()
+		return map[string]any{"items": []proto.Item{}, "history": "h1", "from_seq": 1, "to_seq": 1}, nil
+	})
+
+	fromSeq, toSeq := 0, 1
+	page := historyPage{
+		Items: []proto.Item{
+			{ID: "i1", Seq: 1, Role: "assistant", Kind: proto.KindText, Text: "truncated", FullSize: len(fullText)},
+		},
+		History: "h1",
+		FromSeq: &fromSeq,
+		ToSeq:   &toSeq,
+	}
+
+	// Simulate an HTTP request context with only 10ms left after a slow session.items call.
+	callerCtx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	if err := s.historyRemember(callerCtx, st, "server", "main-chat", nil, historyParams{SessionID: "main-chat"}, page, 7); err != nil {
+		t.Fatalf("historyRemember failed under short caller deadline: %v", err)
+	}
+	if !errors.Is(callerCtx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("expected caller context to have expired during the 40ms upgrade, got %v", callerCtx.Err())
+	}
+
+	callMu.Lock()
+	gotItemCalls, gotVerifyCalls := itemCalls, verifyCalls
+	callMu.Unlock()
+	if gotItemCalls != 1 || gotVerifyCalls != 1 {
+		t.Fatalf("expected 1 session.item upgrade and 1 history verification, got item=%d verify=%d", gotItemCalls, gotVerifyCalls)
+	}
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.pages) != 1 || len(st.pages[0].Items) != 1 {
+		t.Fatalf("expected 1 persisted page with 1 item, got %+v", st.pages)
+	}
+	if got := st.pages[0].Items[0]; got.ID != "i1" || got.Text != fullText {
+		t.Fatalf("expected upgraded full item to be persisted, got %+v", got)
+	}
+	logMu.Lock()
+	defer logMu.Unlock()
+	for _, line := range logs {
+		if strings.Contains(line, "persist history page") {
+			t.Fatalf("unexpected persist error log: %s", line)
+		}
+	}
+}
+
+func TestHistoryRememberHonorsServiceShutdown(t *testing.T) {
+	f := newFakeHub().withMachine()
+	s := New(Options{Hub: f, Logf: testLogf(t)})
+	st := &deadlineHistoryStore{}
+
+	runCtx, cancelRun := context.WithCancel(t.Context())
+	cancelRun()
+	s.running.Store(&runCtx)
+
+	fromSeq, toSeq := 0, 1
+	page := historyPage{
+		Items:   []proto.Item{{ID: "i1", Seq: 1, Role: "assistant", Kind: proto.KindText, Text: "ok"}},
+		History: "h1",
+		FromSeq: &fromSeq,
+		ToSeq:   &toSeq,
+	}
+	err := s.historyRemember(t.Context(), st, "server", "main-chat", nil, historyParams{SessionID: "main-chat"}, page, 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled when service runCtx is canceled, got %v", err)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.pages) != 0 {
+		t.Fatalf("expected no page persisted after service shutdown, got %d", len(st.pages))
+	}
+}

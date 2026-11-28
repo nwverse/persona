@@ -20,6 +20,8 @@ const (
 	conversationHistoryKey      = "assistant.history"
 	historyProbeInterval        = 30 * time.Second
 	historyOfflineProbeInterval = 10 * time.Minute
+	historyPersistTimeout       = 15 * time.Second
+	historyUpgradeTimeout       = 10 * time.Second
 )
 
 var errHistoryGenerationUnavailable = errors.New("runtime did not provide a history generation")
@@ -470,7 +472,19 @@ func (s *Service) historyRemember(ctx context.Context, st conversationHistorySto
 	if page.History == "" {
 		return errHistoryGenerationUnavailable
 	}
-	if err := s.conversationAvailable(ctx, machine, sid); err != nil {
+	// Detach persistence from a nearly exhausted caller deadline (such as a slow
+	// session.items HTTP request) so an already-fetched page can finish item
+	// upgrades and DB persistence while still canceling promptly on service stop.
+	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), historyPersistTimeout)
+	defer cancelPersist()
+	if runCtx := s.runCtx(); runCtx.Done() != nil {
+		if err := runCtx.Err(); err != nil {
+			return err
+		}
+		stop := context.AfterFunc(runCtx, cancelPersist)
+		defer stop()
+	}
+	if err := s.conversationAvailable(persistCtx, machine, sid); err != nil {
 		return err
 	}
 	from, through := 0, 0
@@ -510,7 +524,7 @@ func (s *Service) historyRemember(ctx context.Context, st conversationHistorySto
 	}
 	tail := (p.Before == nil || *p.Before <= 0) && p.Through == nil && !page.MoreAfter
 	items := append([]proto.Item(nil), page.Items...)
-	upgradeCtx, cancelUpgrades := context.WithTimeout(ctx, 10*time.Second)
+	upgradeCtx, cancelUpgrades := context.WithTimeout(persistCtx, historyUpgradeTimeout)
 	defer cancelUpgrades()
 	upgrades := 0
 	for i := range items {
@@ -537,7 +551,7 @@ func (s *Service) historyRemember(ctx context.Context, st conversationHistorySto
 			return db.ErrConversationHistoryChanged
 		}
 	}
-	return st.PutConversationPage(ctx, db.ConversationPage{MachineID: machine, SessionID: sid, History: history, ExpectedHistory: expected,
+	return st.PutConversationPage(persistCtx, db.ConversationPage{MachineID: machine, SessionID: sid, History: history, ExpectedHistory: expected,
 		Revision: revision, FromSeq: from, ThroughSeq: through, Tail: tail, Items: items})
 }
 
