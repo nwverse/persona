@@ -156,6 +156,9 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 		return TaskBrief{}, fmt.Errorf("task %s has no brief", t.ID)
 	}
 	contract := c.taskContract.changesFrom(brief)
+	if c.WorkMode.Valid() && !brief.workModeDeclared() {
+		contract.WorkMode = c.WorkMode // a declaration also makes an already-effective default explicit
+	}
 	next := brief.Criteria
 	if c.DoneWhen != nil {
 		next = cleanDoneWhen(c.DoneWhen)
