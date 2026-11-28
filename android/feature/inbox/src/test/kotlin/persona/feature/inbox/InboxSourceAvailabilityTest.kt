@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.generated.InboxStoredSources
@@ -43,5 +44,28 @@ class InboxSourceAvailabilityTest {
         assertEquals(R.string.inbox_empty_text_lark, inboxEmptyText(InboxSourceVisibility(lark = true, mail = false)))
         assertEquals(R.string.inbox_empty_text_mail, inboxEmptyText(InboxSourceVisibility(lark = false, mail = true)))
         assertEquals(R.string.inbox_empty_text_generic, inboxEmptyText(InboxSourceVisibility(lark = false, mail = false)))
+    }
+
+    @Test fun mailKindFilterFollowsTheOfferedTimesStoredDecision() {
+        // offered × stored four combinations, plus unknown (null stored).
+        val shown = listOf(
+            inboxSourceVisibility(larkOffered = false, mailOffered = true, stored = InboxStoredSources(false, true)),
+            inboxSourceVisibility(larkOffered = false, mailOffered = true, stored = InboxStoredSources(false, false)),
+            inboxSourceVisibility(larkOffered = false, mailOffered = false, stored = InboxStoredSources(false, true)),
+            inboxSourceVisibility(larkOffered = false, mailOffered = false, stored = null),
+        )
+        for (visibility in shown) {
+            val kinds = visibleInboxFilterKinds(visibility)
+            assertTrue("Mail kind stays for $visibility", "mail" in kinds)
+            assertEquals(INBOX_FILTER_KIND_VALUES, kinds)
+        }
+
+        val hidden = inboxSourceVisibility(
+            larkOffered = false, mailOffered = false,
+            stored = InboxStoredSources(false, false),
+        )
+        val hiddenKinds = visibleInboxFilterKinds(hidden)
+        assertTrue("Mail kind hides only without an offer and without stored mail", "mail" !in hiddenKinds)
+        assertEquals(listOf("mention", "dm", "group", "agent"), hiddenKinds)
     }
 }
