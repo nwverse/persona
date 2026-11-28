@@ -6,9 +6,14 @@ import (
 )
 
 func TestSupervisionRoleInstructionsPreserveTheFullPolicy(t *testing.T) {
-	// Which parts a role gets is the assistant's (supervisionPolicy, from supervisionrole's IsLeader and IsBackground);
+	// Which parts a role gets is the assistant's (supervisionPolicy, from supervisionrole);
 	// here each combination a role can get is held to the full policy.
-	parts := map[string]SupervisionParts{"common": {}, "leader": {Leader: true}, "background": {Background: true}}
+	parts := map[string]SupervisionParts{
+		"main":       {Main: true, StartRemedies: true},
+		"leader":     {Leader: true, StartRemedies: true},
+		"background": {Background: true},
+		"side":       {StartRemedies: true},
+	}
 	rendered := make(map[string]string, len(parts))
 	for name, p := range parts {
 		text := RenderSupervisionInstructionsFor(p)
@@ -43,8 +48,18 @@ func TestSupervisionRoleInstructionsPreserveTheFullPolicy(t *testing.T) {
 		"- Background supervises for main",
 		"- Background's initial role notice",
 	}
+	mainOnly := []string{
+		"- `escalated`:",
+	}
+	mainOrLeaderOnly := []string{
+		"- `leader_stuck`:",
+	}
+	startRemediesOnly := []string{
+		"- `failed`:",
+		"- `started`:",
+	}
 	private := func(line string) bool {
-		for _, prefixes := range [][]string{leaderOnly, backgroundOnly} {
+		for _, prefixes := range [][]string{leaderOnly, backgroundOnly, mainOnly, mainOrLeaderOnly, startRemediesOnly} {
 			for _, prefix := range prefixes {
 				if strings.HasPrefix(line, prefix) {
 					return true
@@ -62,6 +77,21 @@ func TestSupervisionRoleInstructionsPreserveTheFullPolicy(t *testing.T) {
 		for _, prefix := range backgroundOnly {
 			if strings.Contains(text, prefix) != (role == "background") {
 				t.Errorf("%s: background-only rule %q leaked or disappeared", role, prefix)
+			}
+		}
+		for _, prefix := range mainOnly {
+			if strings.Contains(text, prefix) != (role == "main") {
+				t.Errorf("%s: main-only signal %q leaked or disappeared", role, prefix)
+			}
+		}
+		for _, prefix := range mainOrLeaderOnly {
+			if strings.Contains(text, prefix) != (role == "main" || role == "leader") {
+				t.Errorf("%s: main-or-leader signal %q leaked or disappeared", role, prefix)
+			}
+		}
+		for _, prefix := range startRemediesOnly {
+			if strings.Contains(text, prefix) != (role != "background") {
+				t.Errorf("%s: start-remedy signal %q leaked or disappeared", role, prefix)
 			}
 		}
 		for _, line := range fullLines {
@@ -86,7 +116,7 @@ func TestSupervisionRoleInstructionsPreserveTheFullPolicy(t *testing.T) {
 			t.Errorf("full policy is not reconstructible from its roles; missing %q", line)
 		}
 	}
-	if got := RenderSupervisionInstructionsFor(SupervisionParts{Leader: true, Background: true}); got != full {
-		t.Fatal("both role-private parts together differ from the full policy union")
+	if got := RenderSupervisionInstructionsFor(SupervisionParts{Main: true, Leader: true, Background: true, StartRemedies: true}); got != full {
+		t.Fatal("all role parts together differ from the full policy union")
 	}
 }

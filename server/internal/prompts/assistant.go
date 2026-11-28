@@ -69,6 +69,11 @@ type AssistantClaudeMD struct {
 	// PhoneTools reports a real device phone_* tool other than calendar, whose query guidance is gated separately.
 	// Always-available write-queue tools and a lone calendar tool do not enable unrelated iPhone procedures.
 	PhoneTools bool
+	// PhoneLocationReminders gates location-based reminder procedures on phone_reminders_create being available.
+	PhoneLocationReminders bool
+	// PhoneSystemOps gates iPhone system operation procedures (contacts, messages, calls, maps, media, alarms,
+	// shortcuts, home) on at least one corresponding device tool being available.
+	PhoneSystemOps bool
 	// PhoneCalendar keeps calendar-specific guidance conditional on that device tool being available.
 	PhoneCalendar bool
 	// PhoneCalendarWrite keeps the exact-occurrence safeguards when only calendar update/delete tools are mounted.

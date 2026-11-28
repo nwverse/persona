@@ -495,3 +495,61 @@ func TestSupervisionPolicySizeBudget(t *testing.T) {
 		t.Fatal("moving the policy raised the total instruction budget")
 	}
 }
+
+func TestSupervisionPolicyFiltersSignalsByRole(t *testing.T) {
+	mainPolicy := supervisionPolicy(supervisionrole.RoleMain())
+	leaderPolicy := supervisionPolicy(supervisionrole.RoleLeader())
+	bgPolicy := supervisionPolicy(supervisionrole.RoleBackground())
+	sidePolicy := supervisionPolicy(supervisionrole.RoleSide())
+
+	if !strings.Contains(mainPolicy, "- `escalated`:") {
+		t.Error("main policy missing - `escalated`:")
+	}
+	for name, policy := range map[string]string{"leader": leaderPolicy, "background": bgPolicy, "side": sidePolicy} {
+		if strings.Contains(policy, "- `escalated`:") {
+			t.Errorf("%s policy leaked main-only signal - `escalated`:", name)
+		}
+	}
+	for name, policy := range map[string]string{"main": mainPolicy, "leader": leaderPolicy} {
+		if !strings.Contains(policy, "- `leader_stuck`:") {
+			t.Errorf("%s policy missing - `leader_stuck`:", name)
+		}
+	}
+	for name, policy := range map[string]string{"background": bgPolicy, "side": sidePolicy} {
+		if strings.Contains(policy, "- `leader_stuck`:") {
+			t.Errorf("%s policy leaked main/leader signal - `leader_stuck`:", name)
+		}
+	}
+	for _, sig := range []string{"- `failed`:", "- `started`:"} {
+		if strings.Contains(bgPolicy, sig) {
+			t.Errorf("background policy leaked start-remedy signal %s", sig)
+		}
+		for name, policy := range map[string]string{"main": mainPolicy, "leader": leaderPolicy, "side": sidePolicy} {
+			if !strings.Contains(policy, sig) {
+				t.Errorf("%s policy missing start-remedy signal %s", name, sig)
+			}
+		}
+	}
+	for name, policy := range map[string]string{"main": mainPolicy, "leader": leaderPolicy, "background": bgPolicy, "side": sidePolicy} {
+		if !strings.Contains(policy, "- `decide`:") {
+			t.Errorf("%s policy missing shared signal decide", name)
+		}
+	}
+}
+
+func TestLeaderStuckTargetHasItsPolicy(t *testing.T) {
+	s, _, todo := newSupervisedService(t)
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Supervision.Supervisor = "lead1"
+	s.todos.todos[todo.ID].Supervision.SupervisorSource = "plan"
+	s.todos.mu.Unlock()
+	cfg := s.settings(context.Background())
+	to := s.digestTo(context.Background(), cfg, superviseSignal{Todo: todo.ID, Kind: sigLeaderStuck})
+	if to != "lead1" {
+		t.Fatalf("digestTo(leader_stuck) = %q, want lead1", to)
+	}
+	if !strings.Contains(supervisionPolicy(supervisionrole.RoleLeader()), "- `leader_stuck`:") {
+		t.Fatalf("leader_stuck goes to %q (a leader), whose policy has no leader_stuck rule", to)
+	}
+}

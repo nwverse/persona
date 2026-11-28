@@ -60,7 +60,12 @@ func supervisionRoleWord(role supervisionrole.Role) string {
 
 // supervisionPolicy is the supervision policy for role: the common policy with only that role's own paragraphs.
 func supervisionPolicy(role supervisionrole.Role) string {
-	return prompts.RenderSupervisionInstructionsFor(prompts.SupervisionParts{Leader: role.IsLeader(), Background: role.IsBackground()})
+	return prompts.RenderSupervisionInstructionsFor(prompts.SupervisionParts{
+		Main:          role.IsMain(),
+		Leader:        role.IsLeader(),
+		Background:    role.IsBackground(),
+		StartRemedies: !role.IsBackground(),
+	})
 }
 
 // supRolesLocked loads the supplement once; b.mu is held. Unknown roles are ignored by its readers and fail closed to

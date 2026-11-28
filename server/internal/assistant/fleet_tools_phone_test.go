@@ -81,15 +81,53 @@ func TestAssistantInstructionsRequireDevicePhoneTools(t *testing.T) {
 		}
 	}
 
-	h.set(0, "phone_reminders_create", "phone_reminders_list")
-	withReminders := s.claudeMD(context.Background(), "", false)
-	for _, want := range []string{"- **iPhone**", "phone_reminders_create", "快捷指令只能", "家庭设备先"} {
-		if !strings.Contains(withReminders, want) {
-			t.Errorf("device phone tools lost procedure %q", want)
+	// Android-style basic phone tools must not inject iPhone location-reminder or system-op procedures.
+	h.set(0, "phone_device_info", "phone_notify", "phone_notifications_list", "phone_health_summary", "phone_workouts_recent", "phone_workout_detail")
+	withAndroidBasic := s.claudeMD(context.Background(), "", false)
+	if !strings.Contains(withAndroidBasic, "- **iPhone**") {
+		t.Error("basic device phone tools lost phone overview line")
+	}
+	for _, unwanted := range []string{"phone_reminders_create", "phone_maps_route", "快捷指令只能", "家庭设备先", "occurrence_start"} {
+		if strings.Contains(withAndroidBasic, unwanted) {
+			t.Errorf("basic device phone tools injected unavailable iPhone procedure %q", unwanted)
 		}
 	}
-	if strings.Contains(withReminders, "iPhone 日历（`phone_calendar_events`）") {
-		t.Error("an unrelated phone tool injected the unavailable calendar tool")
+
+	h.set(0, "phone_reminders_create", "phone_reminders_list")
+	withReminders := s.claudeMD(context.Background(), "", false)
+	for _, want := range []string{"- **iPhone**", "phone_reminders_create"} {
+		if !strings.Contains(withReminders, want) {
+			t.Errorf("reminder phone tools lost procedure %q", want)
+		}
+	}
+	for _, unwanted := range []string{"iPhone 日历（`phone_calendar_events`）", "phone_maps_route", "快捷指令只能", "家庭设备先"} {
+		if strings.Contains(withReminders, unwanted) {
+			t.Errorf("reminder-only phone tools injected unrelated procedure %q", unwanted)
+		}
+	}
+
+	h.set(0, "phone_maps_route", "phone_shortcuts_run")
+	withSystemOps := s.claudeMD(context.Background(), "", false)
+	for _, want := range []string{"- **iPhone**", "phone_maps_route", "快捷指令只能", "家庭设备先"} {
+		if !strings.Contains(withSystemOps, want) {
+			t.Errorf("system-op phone tools lost procedure %q", want)
+		}
+	}
+	if strings.Contains(withSystemOps, "phone_reminders_create") {
+		t.Error("system-op phone tools injected unavailable location-reminder procedure")
+	}
+
+	h.set(0, "phone_device_info", "phone_calendar_events", "phone_calendar_update_event")
+	withBasicAndCalendarWrite := s.claudeMD(context.Background(), "", false)
+	for _, want := range []string{"- **iPhone**", "occurrence_start", "`span` 只在用户说了「以后都…」时用 `future`"} {
+		if !strings.Contains(withBasicAndCalendarWrite, want) {
+			t.Errorf("basic + calendar write lost safeguard %q", want)
+		}
+	}
+	for _, unwanted := range []string{"phone_reminders_create", "phone_maps_route", "快捷指令只能", "家庭设备先"} {
+		if strings.Contains(withBasicAndCalendarWrite, unwanted) {
+			t.Errorf("basic + calendar write injected unrelated iPhone procedure %q", unwanted)
+		}
 	}
 
 	h.set(0, "phone_calendar_events")

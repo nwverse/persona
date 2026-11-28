@@ -1,25 +1,33 @@
 package prompts
 
-// SupervisionParts are the role-private paragraphs a conversation's supervision policy carries beside the common
-// policy: a leader's, a background supervisor's, or neither (the main chat and a side supervisor). The assistant
-// fills them from the conversation's role (internal/assistant/supervisionrole).
+// SupervisionParts are the role-specific sections a conversation's supervision policy carries beside the common
+// policy. The assistant fills them from the conversation's role (internal/assistant/supervisionrole).
 type SupervisionParts struct {
-	Leader     bool
-	Background bool
+	Main          bool
+	Leader        bool
+	Background    bool
+	StartRemedies bool
 }
 
 type supervisionInstructionData struct {
-	Leader     bool
-	Background bool
+	Main          bool
+	Leader        bool
+	Background    bool
+	StartRemedies bool
 }
 
 // RenderSupervisionInstructions returns the full policy union for its golden and size budget.
 // Conversations use RenderSupervisionInstructionsFor instead.
 func RenderSupervisionInstructions() string {
-	return render("assistant/supervision_instructions", supervisionInstructionData{Leader: true, Background: true})
+	return render("assistant/supervision_instructions", supervisionInstructionData{Main: true, Leader: true, Background: true, StartRemedies: true})
 }
 
-// RenderSupervisionInstructionsFor keeps common supervision policy and only the given role-private paragraphs.
+// RenderSupervisionInstructionsFor keeps common supervision policy and only the given role-specific sections.
 func RenderSupervisionInstructionsFor(p SupervisionParts) string {
-	return render("assistant/supervision_instructions", supervisionInstructionData{Leader: p.Leader, Background: p.Background})
+	return render("assistant/supervision_instructions", supervisionInstructionData{
+		Main:          p.Main,
+		Leader:        p.Leader,
+		Background:    p.Background,
+		StartRemedies: p.StartRemedies,
+	})
 }

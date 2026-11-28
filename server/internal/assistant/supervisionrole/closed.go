@@ -42,6 +42,12 @@ func (x Role) Accept(v RoleVisitor) {
 	}
 }
 
+// IsMain says whether x is the owner's main chat, whose policy carries main-only escalation signals.
+func (x Role) IsMain() bool {
+	x.known("supervisionrole.Role.IsMain")
+	return x == RoleMain()
+}
+
 // IsLeader says whether x is a direction's leader, whose policy carries the leader's own paragraphs.
 func (x Role) IsLeader() bool {
 	x.known("supervisionrole.Role.IsLeader")
@@ -49,7 +55,7 @@ func (x Role) IsLeader() bool {
 }
 
 // IsBackground says whether x is a background supervisor, whose policy carries the background supervisor's own
-// paragraphs. The main chat and a side supervisor are neither leader nor background: they carry only the common policy.
+// paragraphs and omits start-remedy signals routed to main.
 func (x Role) IsBackground() bool {
 	x.known("supervisionrole.Role.IsBackground")
 	return x == RoleBackground()

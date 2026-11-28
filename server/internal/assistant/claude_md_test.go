@@ -46,7 +46,7 @@ func TestGoldenAssistantClaudeMD(t *testing.T) {
 	f.hello.OwnerNotes = "  我在示例公司做后端。\n常用 skills：demo-skill。  "
 	f.hello.KB = &KBSettings{ExtraDirs: []string{"/home/me/notes", "/home/me/facts"}} // manager.json's kb section
 	f.answerApp(assistantwire.AppPhone, assistantwire.PhoneTools, func(json.RawMessage) (any, error) {
-		return map[string]any{"tools": []map[string]string{{"name": "phone_calendar_events"}, {"name": "phone_reminders_create"}}}, nil
+		return map[string]any{"tools": []map[string]string{{"name": "phone_calendar_events"}, {"name": "phone_reminders_create"}, {"name": "phone_maps_route"}}}, nil
 	})
 	s := newTestService(t, f)
 	s.kb.dir = "<hub>/data"

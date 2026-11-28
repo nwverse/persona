@@ -60,6 +60,26 @@ var errWorkAssistant = i18n.Err("assistant-start.work_machine")
 // claudeMD is the assistant directory's CLAUDE.md (prompts/assistant/claude_md.md) for its machine here. Its machine
 // list identifies the local computer and the computers available for Agent work. The ssh_host aliases are only
 // meaningful from the hub machine.
+func isPhoneSystemOpTool(name string) bool {
+	for _, prefix := range []string{
+		"phone_contacts_",
+		"phone_messages_",
+		"phone_call_",
+		"phone_maps_",
+		"phone_media_",
+		"phone_alarm_",
+		"phone_alarms_",
+		"phone_timer_",
+		"phone_shortcuts_",
+		"phone_home_",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) claudeMD(ctx context.Context, here string, larkCLI bool) string {
 	return prompts.RenderAssistantClaudeMD(s.assistantPrompt(ctx, here, larkCLI, s.settings(ctx)))
 }
@@ -73,6 +93,12 @@ func (s *Service) assistantPrompt(ctx context.Context, here string, larkCLI bool
 		if strings.HasPrefix(tool.Name, "phone_") && !strings.HasPrefix(tool.Name, "phone_write_queue_") &&
 			!strings.HasPrefix(tool.Name, "phone_calendar_") {
 			d.PhoneTools = true
+		}
+		if tool.Name == "phone_reminders_create" {
+			d.PhoneLocationReminders = true
+		}
+		if isPhoneSystemOpTool(tool.Name) {
+			d.PhoneSystemOps = true
 		}
 		if tool.Name == "phone_calendar_events" {
 			d.PhoneCalendar = true

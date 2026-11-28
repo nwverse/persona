@@ -24,6 +24,7 @@ func raises(t *testing.T, want string, do func()) {
 func TestTheZeroRoleIsADefect(t *testing.T) {
 	var zero supervisionrole.Role
 	raises(t, "supervisionrole.Role.Accept: the zero Role", func() { zero.Accept(nil) })
+	raises(t, "supervisionrole.Role.IsMain: the zero Role", func() { zero.IsMain() })
 	raises(t, "supervisionrole.Role.IsLeader: the zero Role", func() { zero.IsLeader() })
 	raises(t, "supervisionrole.Role.IsBackground: the zero Role", func() { zero.IsBackground() })
 }
@@ -48,15 +49,18 @@ func TestRoleAcceptTellsEachRole(t *testing.T) {
 
 func TestOnlyALeaderAndABackgroundSupervisorCarryTheirOwnParagraphs(t *testing.T) {
 	for _, tc := range []struct {
-		name               string
-		role               supervisionrole.Role
-		leader, background bool
+		name                     string
+		role                     supervisionrole.Role
+		main, leader, background bool
 	}{
-		{"main", supervisionrole.RoleMain(), false, false},
-		{"leader", supervisionrole.RoleLeader(), true, false},
-		{"background", supervisionrole.RoleBackground(), false, true},
-		{"side", supervisionrole.RoleSide(), false, false},
+		{"main", supervisionrole.RoleMain(), true, false, false},
+		{"leader", supervisionrole.RoleLeader(), false, true, false},
+		{"background", supervisionrole.RoleBackground(), false, false, true},
+		{"side", supervisionrole.RoleSide(), false, false, false},
 	} {
+		if got := tc.role.IsMain(); got != tc.main {
+			t.Errorf("%s: IsMain = %v, want %v", tc.name, got, tc.main)
+		}
 		if got := tc.role.IsLeader(); got != tc.leader {
 			t.Errorf("%s: IsLeader = %v, want %v", tc.name, got, tc.leader)
 		}
