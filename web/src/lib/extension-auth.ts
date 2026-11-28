@@ -129,11 +129,23 @@ export function toolText(x: ExtensionTool): string {
   return x.reused ? t("lib-extension-auth.tool_reused", { version: x.version }) : x.version;
 }
 
-/** A link the page may open: https only. */
+function hasCtrlOrSpace(url: string): boolean {
+  for (let i = 0; i < url.length; i++) {
+    const c = url.charCodeAt(i);
+    if (c <= 0x20 || c === 0x7f) return true;
+  }
+  return /\s/.test(url);
+}
+
+/** A link the page may open: credential-free https with an explicit authority and host only (normalized). */
 export function safeLink(url?: string): string {
-  if (!url) return "";
+  const trimmed = url?.trim();
+  if (!trimmed || hasCtrlOrSpace(trimmed) || !/^https:\/\//i.test(trimmed)) return "";
+  const auth = trimmed.slice(8).split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return "";
   try {
-    return new URL(url).protocol === "https:" ? url : "";
+    const u = new URL(trimmed);
+    return u.protocol === "https:" && u.hostname !== "" && u.username === "" && u.password === "" ? u.href : "";
   } catch {
     return "";
   }

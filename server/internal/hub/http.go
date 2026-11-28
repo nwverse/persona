@@ -1341,7 +1341,7 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		_ = h.notifyBus(h.machineOwner(m.cfg.ID), assistantwire.EventAgentTabNameStarted, assistantwire.AgentTabNameStart{
 			MachineID: assistantwire.AgentMachineID(m.cfg.ID), SessionID: assistantwire.AgentSessionID(res.Session.SessionID),
 			TabID:           assistantwire.AgentTabID(cmp.Or(namingSession.SlotID, namingSession.TabID)),
-			ExpectedTabName: cmp.Or(namingSession.HerdrTabName(), requested), NameFrom: nameFrom,
+			ExpectedTabName: cmp.Or(namingSession.RenamableTabName(), requested), NameFrom: nameFrom,
 		})
 	}
 }

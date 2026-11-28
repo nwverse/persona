@@ -155,7 +155,8 @@ func (s *Service) planBriefsFromOrigin(ctx context.Context, machine, conversatio
 			if contract.changesFrom(current) != (taskContract{}) {
 				return fmt.Errorf("task %d: this to-do already has a task contract. Use task_scope to change work_mode or completion_mode", i+1)
 			}
-			rec.taskContract = taskContract{WorkMode: current.WorkModeNow, CompletionMode: current.CompletionModeNow}
+			rec.taskContract = taskContract{WorkMode: current.WorkModeNow, CompletionMode: current.CompletionModeNow,
+				WorkModeDeclared: current.workModeDeclared()}
 		} else {
 			rec.taskContract = contract.withDefaultWorkMode(t.Readonly)
 		}

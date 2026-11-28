@@ -49,10 +49,7 @@ func lastSendOnceSession(f *fakeHub) string {
 
 // boundThread is the conversation thread is bound to now ("" when none).
 func boundThread(s *Service, thread string) string {
-	if t := s.channelThreadOf(context.Background(), "examplechat", thread); t != nil {
-		return t.SessionID
-	}
-	return ""
+	return boundThreadFor(s, "examplechat", thread)
 }
 
 // A thread's first message starts a conversation of its own and later ones continue it; another thread gets another,
@@ -129,7 +126,7 @@ func TestChannelThreadIgnoredWithoutCapability(t *testing.T) {
 // A thread whose conversation is gone starts a new one and is bound to it.
 func TestChannelThreadWhoseConversationIsGoneStartsAnew(t *testing.T) {
 	s, f, _ := threadsChannelService(t, true)
-	s.bindChannelThread("examplechat", "chat_a:om_1", "server", "deleted")
+	s.bindChannelThread("examplechat", channelThreadKeys{primary: "chat_a:om_1"}, "server", "deleted")
 	if err := s.channelForward(context.Background(), "examplechat", channel.Message{ID: "om_2", Text: "hi", Thread: "chat_a:om_1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +139,7 @@ func TestChannelThreadWhoseConversationIsGoneStartsAnew(t *testing.T) {
 // the thread keeps its history for when the computer is back.
 func TestChannelThreadUnreachableKeepsItsConversation(t *testing.T) {
 	s, f, _ := threadsChannelService(t, true)
-	s.bindChannelThread("examplechat", "chat_a:om_1", "server", "s_topic")
+	s.bindChannelThread("examplechat", channelThreadKeys{primary: "chat_a:om_1"}, "server", "s_topic")
 	f.answerNode(DeviceSessionGet, func(string, json.RawMessage) (any, error) { return nil, errors.New("the computer did not answer") })
 	if err := s.channelForward(context.Background(), "examplechat", channel.Message{ID: "om_2", Text: "hi", Thread: "chat_a:om_1"}); err == nil {
 		t.Fatal("a thread whose conversation could not be looked up was sent on")
@@ -158,7 +155,7 @@ func TestChannelThreadCommands(t *testing.T) {
 	s, f, sent := threadsChannelService(t, true)
 	ctx := context.Background()
 	say := func(key string) string { return i18n.T(s.botLang(ctx), "assistant-channels_plugin."+key) }
-	s.bindChannelThread("examplechat", "chat_a:om_1", "server", "s_topic")
+	s.bindChannelThread("examplechat", channelThreadKeys{primary: "chat_a:om_1"}, "server", "s_topic")
 	f.setSessions("server", proto.Session{SessionID: "m1", MachineID: "server", Assistant: true},
 		proto.Session{SessionID: "s_topic", MachineID: "server", Assistant: true})
 	notes := func() string {
@@ -228,7 +225,7 @@ func TestChannelThreadsPruned(t *testing.T) {
 
 	s, _, _ := threadsChannelService(t, true)
 	s.chans.now = func() time.Time { return now }
-	s.bindChannelThread("examplechat", "old", "server", "s_old")
+	s.bindChannelThread("examplechat", channelThreadKeys{primary: "old"}, "server", "s_old")
 	s.chans.now = func() time.Time { return now.Add(channelThreadsKeepFor + time.Minute) }
 	if boundThread(s, "old") != "" {
 		t.Fatal("a thread quiet for longer than it is kept still has its conversation")

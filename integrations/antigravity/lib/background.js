@@ -2,6 +2,7 @@ const startPrefix = 'Tool is running as a background task with task id:'
 const endNotice = /\bTask id "([^"\n]+)" (?:was )?(finished|failed|canceled|cancelled|killed|stopped)\b/i
 const taskMessage = /^[ \t]*\[Message\] timestamp=(\S+) sender=(\S+) priority=\S+ content=([\s\S]*)/m
 const cronIteration = /\(iteration [0-9]+\)$/
+const heartbeatNotice = /^(?:\[Notice\]\s+)?Task(?:\s+id\s+"[^"\n]+")?\s+is\s+still\s+running\b/i
 const serverRestartNotice = /^(?:\[Notice\]\s+)?All your subagents and background tasks have been stopped due to server restart\b/i
 const genericHeaderRe = /^(?:Created At: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\r?\nCompleted At: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})(?:\r?\n|$))+/
 const emptyTaskList = 'No background tasks are currently running.'
@@ -219,7 +220,7 @@ export function extractBackground(steps, conversation) {
             if (!notice && task.oneShot) {
               const body = message[3].trim().replace(/<\/SYSTEM_MESSAGE>\s*$/, '').trim()
               if (cronIteration.test(body)) task.oneShot = false
-              else if (!body.toLowerCase().includes('still running')) finish(task, 'completed', step.created_at)
+              else if (!heartbeatNotice.test(body)) finish(task, 'completed', step.created_at)
             }
           }
         }

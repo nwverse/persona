@@ -6,11 +6,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import type { ChannelDetail, ChannelTestResult } from "../../lib/channels";
-import { useChannelController, type ChannelController } from "./useChannelController";
+import type { ScopedAssistantClient } from "../../lib/scoped-assistant-api";
+import { useChannelController, type ChannelController } from "./integrations/ChannelSection";
 
 type Asked = {
   kind: "get" | "put" | "unbind" | "test";
   id: string;
+  manager?: string;
   body?: unknown;
   answer: (d: ChannelDetail | ChannelTestResult) => void;
   reject: (err: unknown) => void;
@@ -19,26 +21,19 @@ type Asked = {
 const hub = vi.hoisted(() => ({
   asked: [] as Asked[],
   forgotten: 0,
-  pins: [] as Array<{ prefix: string; manager?: string }>,
 }));
 
 vi.mock("../../lib/channels", async (original) => ({
   ...(await original<typeof import("../../lib/channels")>()),
-  channelDetail: (id: string) => new Promise((resolve, reject) => hub.asked.push({ kind: "get", id, answer: resolve, reject })),
-  updateChannel: (id: string, body: unknown) => new Promise((resolve, reject) => hub.asked.push({ kind: "put", id, body, answer: resolve, reject })),
-  unbindChannel: (id: string) => new Promise((resolve, reject) => hub.asked.push({ kind: "unbind", id, answer: resolve, reject })),
-  testChannel: (id: string) => new Promise((resolve, reject) => hub.asked.push({ kind: "test", id, answer: resolve, reject })),
+  channelDetail: (id: string, client: ScopedAssistantClient) => new Promise((resolve, reject) => hub.asked.push({ kind: "get", id, manager: client.managerId, answer: resolve, reject })),
+  updateChannel: (id: string, body: unknown, client: ScopedAssistantClient) => new Promise((resolve, reject) => hub.asked.push({ kind: "put", id, manager: client.managerId, body, answer: resolve, reject })),
+  unbindChannel: (id: string, client: ScopedAssistantClient) => new Promise((resolve, reject) => hub.asked.push({ kind: "unbind", id, manager: client.managerId, answer: resolve, reject })),
+  testChannel: (id: string, client: ScopedAssistantClient) => new Promise((resolve, reject) => hub.asked.push({ kind: "test", id, manager: client.managerId, answer: resolve, reject })),
   forgetChannels: () => {
     hub.forgotten++;
   },
 }));
-vi.mock("../../lib/manager-choice", async (original) => ({
-  ...(await original<typeof import("../../lib/manager-choice")>()),
-  pinManager: (prefix: string, manager?: string) => {
-    hub.pins.push({ prefix, manager });
-    return () => {};
-  },
-}));
+vi.mock("../../lib/managers", async (original) => ({ ...(await original<typeof import("../../lib/managers")>()), useRoster: () => null }));
 vi.mock("../../ui/atoms", async (original) => ({
   ...(await original<typeof import("../../ui/atoms")>()),
   toast: vi.fn(),
@@ -84,7 +79,6 @@ const settle = async () => {
 beforeEach(() => {
   hub.asked = [];
   hub.forgotten = 0;
-  hub.pins = [];
   vi.mocked(toast).mockReset();
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -227,16 +221,18 @@ describe("useChannelController", () => {
     expect(toast).not.toHaveBeenCalled();
   });
 
-  it("pins the manager and runs reply-only tests cleanly", async () => {
+  it("binds reads and reply-only tests to the manager", async () => {
     await act(async () => root.render(<Harness channelId="alpha" manager="m-1" />));
-    expect(hub.pins[0]).toEqual({ prefix: "/channels/alpha", manager: "m-1" });
-    await act(async () => hub.asked.shift()!.answer(makeDetail("alpha", { capabilities: { reply_only: true }, name: "Alpha" })));
+    const read = hub.asked.shift()!;
+    expect(read).toMatchObject({ kind: "get", id: "alpha", manager: "m-1" });
+    await act(async () => read.answer(makeDetail("alpha", { capabilities: { reply_only: true }, name: "Alpha" })));
 
     let run!: Promise<void>;
     await act(async () => {
       run = latest.runTest();
     });
     const testReq = hub.asked.shift()!;
+    expect(testReq).toMatchObject({ kind: "test", id: "alpha", manager: "m-1" });
     await act(async () => {
       testReq.answer({ ok: true, reply_only: true });
       await run;
@@ -252,8 +248,8 @@ describe("useChannelController", () => {
 
   it("re-fences, clears state, and reloads when manager changes for the same channelId", async () => {
     await act(async () => root.render(<Harness channelId="wechat" manager="m-1" />));
-    expect(hub.pins.at(-1)).toEqual({ prefix: "/channels/wechat", manager: "m-1" });
     const m1Get = hub.asked.shift()!;
+    expect(m1Get.manager).toBe("m-1");
     await act(async () => m1Get.answer(makeDetail("wechat", { name: "M1 WeChat", enabled: true })));
     await settle();
     expect(latest.detail?.name).toBe("M1 WeChat");
@@ -264,16 +260,14 @@ describe("useChannelController", () => {
       m1PutPromise = latest.change("enabled", { enabled: false });
     });
     const m1Put = hub.asked.shift()!;
-    expect(m1Put.kind).toBe("put");
+    expect(m1Put).toMatchObject({ kind: "put", manager: "m-1" });
 
     await act(async () => root.render(<Harness channelId="wechat" manager="m-2" />));
-    expect(hub.pins.at(-1)).toEqual({ prefix: "/channels/wechat", manager: "m-2" });
     expect(latest.detail).toBeNull();
     expect(latest.busy).toBe("");
 
     const m2Get = hub.asked.shift()!;
-    expect(m2Get.kind).toBe("get");
-    expect(m2Get.id).toBe("wechat");
+    expect(m2Get).toMatchObject({ kind: "get", id: "wechat", manager: "m-2" });
     await act(async () => m2Get.answer(makeDetail("wechat", { name: "M2 WeChat", enabled: false })));
     await settle();
     expect(latest.detail?.name).toBe("M2 WeChat");
@@ -327,7 +321,7 @@ describe("useChannelController", () => {
     expect(latest.loading).toBe(false);
   });
 
-  it("shares the write lock with routing and discards a routing reply after reload", async () => {
+  it("shares the write lock with routing and acknowledges the write when a reload races it", async () => {
     await act(async () => root.render(<Harness channelId="alpha" />));
     const plugin = makeDetail("alpha", { source: "plugin", thread_mode: "channel_default" });
     await act(async () => hub.asked.shift()!.answer(plugin));
@@ -344,15 +338,17 @@ describe("useChannelController", () => {
     act(() => { void latest.load(); });
     const fresh = { ...plugin, thread_idle_hours: 72 };
     await act(async () => hub.asked.shift()!.answer(fresh));
+    const committed = { ...plugin, thread_mode: "per_topic" } satisfies ChannelDetail;
     await act(async () => {
-      put.answer({ ...plugin, thread_mode: "per_topic" });
-      expect(await routing).toBeNull();
+      put.answer(committed);
+      expect(await routing).toEqual(committed);
     });
-    expect(latest.detail).toEqual(fresh);
     expect(latest.busy).toBe("");
     const reconcile = hub.asked.shift()!;
     expect(reconcile.kind).toBe("get");
+    expect(latest.detail).toEqual(committed);
     await act(async () => reconcile.answer(fresh));
+    expect(latest.detail).toEqual(fresh);
     expect(await save({ thread_mode: "per_topic" })).toBeNull();
     expect(hub.asked).toHaveLength(0);
 

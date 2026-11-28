@@ -7,7 +7,7 @@ import { defaultManager, MANAGER_HEADER, sameManager, useShownManager } from "..
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
 import { api, apiBlob, credentialOwner, enc, errorText, getToken, subscribeCredentialOwner } from "../lib/api";
-import { ago, clock, sessionCan, shortPath, activityOf, tabLabel, uuid } from "../lib/format";
+import { ago, clock, safeWebURL, sessionCan, shortPath, activityOf, tabLabel, uuid } from "../lib/format";
 import { foldedState } from "../lib/child-sessions";
 import { sessionCard } from "../lib/folded-rows";
 import { byTime } from "../lib/times";
@@ -27,9 +27,9 @@ import { plainMarkdown } from "../lib/plain-markdown";
 import { composing } from "../lib/send-history";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
-import { useScoped } from "../lib/current-assistant";
+import { scoped, useScope } from "../lib/current-assistant";
 import { lazyPage } from "../lib/lazy-page";
-import { dropTodo, loadAllOlderClosed, loadOlderClosed, putTodo, refresh, refreshTodos, useStore } from "../lib/store";
+import { dropTodo, putTodo, refresh, refreshTodos, useStore } from "../lib/store";
 import {
   addTodoDecision,
   addTodoExternalPRBlocker,
@@ -46,6 +46,7 @@ import {
   isLegacySpacesRouteError,
   makeSessionLookup,
   mostUrgentAgent,
+  normalizedPR,
   orphanedLine,
   reportConcern,
   responsibleOf,
@@ -60,13 +61,16 @@ import {
   shownStatus,
   strikesThrough,
   todoRestLook,
+  todoAgentState,
   todoStatus,
+  todoSupervisorLabel,
   unlinkAgentFromTodo,
   unlinkSpaceFromTodo,
   unseeTodo,
   updateTodo,
   type Todo,
   type MergeTrainTodoBadge,
+  type PRFacts,
   type TodoActiveBlocker,
   type TodoAgent,
   type TodoImage,
@@ -84,11 +88,13 @@ import { SHEET_QUERY } from "../ui/overlay";
 import type { MenuAt } from "../ui/menu-model";
 import { SearchField } from "../ui/SearchField";
 import { StatusMark } from "../ui/StatusMark";
+import { scrollBehavior } from "../ui/stream/motion";
 import { Icon } from "../ui/icons";
 import { FoldAllButton } from "../ui/FoldAllButton";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { formatDate, t } from "../i18n";
-import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
+import { treeStateLabel, type TreeState } from "../lib/todo-tree";
+import { groupTodosByProject, type TodoProjectGroup } from "../features/todos/project-groups";
 import { cancellationReason, formatAgentSource, formatTodoContext } from "../lib/todo-details";
 import { useCachedDirectionNames } from "../lib/direction-names";
 import { directionTitle, groupsByDirection, refreshDirectionTree, useDirectionTree, type Direction } from "../lib/direction-tree";
@@ -102,6 +108,7 @@ import {
   TODO_LIST_SORTS,
   hiddenWaiting,
   isAgentTask,
+  isTodoKindFilter,
   isTodoListFilter,
   isTodoListSort,
   listFilterCounts,
@@ -141,11 +148,13 @@ import {
 } from "../lib/todo-slim-row";
 import { DecisionQueuePanel, decisionQueueCandidates } from "../features/todos/DecisionQueuePanel";
 import { TodoCausalTraceSection } from "../features/todos/TodoCausalTraceSection";
-import { boardSectionMap, consumeBoardDirectionGroups, consumeBoardStatusGroups } from "../features/todos/board-consumer";
-import { formatRowRepoGate, repoGateTone, shouldShowRowRepoGate, type RepoGateTone } from "../features/todos/repo-gate";
+import { boardAttention, boardSectionMap, consumeBoardDirectionGroups, consumeBoardStatusGroups, isBoardOpen } from "../features/todos/board-consumer";
+import { loadOlderClosed } from "../features/todos/closed-history";
+import { pref, setPref, useTodoPreference } from "../features/todos/preferences";
+import { formatRowRepoGate, repoGatePRLook, repoGateTone, shouldShowRowRepoGate, type RepoGateTone } from "../features/todos/repo-gate";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { stepsWords } from "../lib/todo-steps";
-import { useOwnerNeeds, useTodoLookup, useTodoMinute } from "../lib/todo-owner-needs";
+import { useOwnerNeeds, useTodoBoard, useTodoLookup, useTodoMinute } from "../lib/todo-owner-needs";
 import { ReviewChecklist } from "./assistant/ReviewChecklist";
 import { VerificationReport } from "./assistant/VerificationReport";
 export { ReviewChecklist } from "./assistant/ReviewChecklist";
@@ -181,6 +190,7 @@ import { AttachmentTray } from "../ui/AttachmentTray";
 const VIEW_KEY = "persona.todos.view";
 const MODE_KEY = "persona.todos.calendar.mode";
 const DONE_KEY = "persona.todos.calendar.showDone";
+const CALENDAR_DAY_KEY = "persona.todos.calendar.day";
 /** The list by status sections (default, #3156), by folder (#2526), by pinned direction (#4352) or as a graph of requests. */
 const GROUPING_KEY = "persona.todos.grouping";
 /** The list's filter by due date and its order inside each section (#3740), kept per browser like the view. */
@@ -201,7 +211,35 @@ type CompletedDirectionBucket = {
   label: string;
   uncategorized: boolean;
   todos: Todo[];
+  count: number;
 };
+
+function mergeTrainPRKey(url: string, pr?: PRFacts): string | undefined {
+  if (!url || (pr && (pr.state !== "open" || pr.draft))) return undefined;
+  return JSON.stringify([url, pr?.head_oid, pr?.review, pr?.checks, pr?.conflicts]);
+}
+
+function mergeTrainKey(todos: readonly Todo[], manager: string): string {
+  const keys: string[] = [];
+  for (const todo of todos) {
+    if (todo.done_at || isCancelled(todo) || !sameManager(todo.manager, manager)) continue;
+    const url = normalizedPR(todo.pr_url);
+    const facts = normalizedPR(todo.pr_status?.url) === url ? todo.pr_status : undefined;
+    const prs = [mergeTrainPRKey(url, facts)];
+    for (const pr of todo.other_prs ?? []) {
+      const earlier = normalizedPR(pr.url);
+      if (earlier !== url) prs.push(mergeTrainPRKey(earlier, pr));
+    }
+    const open = prs.filter((pr) => pr !== undefined).sort();
+    if (open.length) {
+      const blockers = (todo.active_blockers ?? [])
+        .filter((b) => b.kind === "merge_train")
+        .map((b) => JSON.stringify([b.target_ref, b.state, b.attempts])).sort();
+      keys.push(JSON.stringify([todo.id, open, blockers]));
+    }
+  }
+  return keys.length ? JSON.stringify(keys.sort()) : "";
+}
 
 type ClosedHistory = {
   hasMore: boolean;
@@ -215,35 +253,19 @@ function todoGrouping(saved: string | null): TodoGrouping {
   return saved === "folder" || saved === "direction" || saved === "request" ? saved : "status";
 }
 
-function pref(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function setPref(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // private mode, storage full: the choice lasts the page
-  }
-}
-
 /** The calendar's address: its mode, the day it shows, the to-do open beside it. */
-function calendarRoute(mode: CalendarMode, day: number, id?: string): Route {
-  return { name: "todos", view: "calendar", mode, date: dayKey(day), ...(id ? { id } : {}) };
+function calendarRoute(mode: CalendarMode, day: number, id?: string, manager?: string): Route {
+  return { name: "todos", view: "calendar", mode, date: dayKey(day), ...(id ? { id, manager } : {}) };
 }
 
-function boardRoute(id?: string): Route {
-  return { name: "todos", view: "board", ...(id ? { id } : {}) };
+function boardRoute(id?: string, manager?: string): Route {
+  return { name: "todos", view: "board", ...(id ? { id, manager } : {}) };
 }
 
 type TodosViewProps = {
   selectedId?: string;
   /** The calendar (#2029) or read-only progress board (#12713) rather than the list; calendar mode/day from the address. */
-  view?: "calendar" | "board";
+  view?: "list" | "calendar" | "board";
   mode?: CalendarMode;
   date?: string;
   onToggleSidebar?: () => void;
@@ -275,7 +297,12 @@ function TodoListView({
   // with several assistants, the current one's to-dos (docs/assistant/managers.md "Clients"); a link to another assistant's
   // to-do still opens it, without switching
   const everyTodo = useStore((s) => s.todos);
-  const ownTodos = useScoped(everyTodo);
+  const scope = useScope();
+  const assistant = useStore((s) => s.assistant);
+  const todosV2 = assistant?.todos_v2 === true && sameManager(assistant.manager ?? repositoryManager, repositoryManager);
+  const serverBoard = useTodoBoard(scope);
+  const legacyNeeds = useOwnerNeeds(!serverBoard);
+  const ownTodos = useMemo(() => scoped(everyTodo, scope), [everyTodo, scope]);
   const todos = useMemo(() => {
     if (selectedId && selectedManager) {
       const chosen = everyTodo.find((td) => td.id === selectedId && sameManager(td.manager, selectedManager));
@@ -297,8 +324,6 @@ function TodoListView({
   // its to-dos' Agents as the sidebar's badge reads them (lib/todo-owner-needs.ts): an open task's Agent outside the list's
   // window too, and a card answered here stops its agent's "Needs you" at once, not at the hub's next push (#4186)
   const lookup = useTodoLookup();
-  // the to-dos the sidebar's badge counts, each with why (#11838): their rows carry its mark, from the badge's own hook
-  const needs = useOwnerNeeds();
 
   const [activeId, setActiveId] = useState<string | undefined>(selectedId);
   const [search, setSearch] = useState("");
@@ -317,7 +342,8 @@ function TodoListView({
   const [deleting, setDeleting] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [showDone, setShowDone] = useState(false);
-  const [doneDirectionFilter, setDoneDirectionFilter] = useState<string | null>(null);
+  const [doneDirectionFilter, setDoneDirectionFilter] = useTodoPreference(`persona.todos.doneDirection:${repositoryManager}`, (value) => value);
+  const [doneDirectionOpen, setDoneDirectionOpen] = useTodoPreference(`persona.todos.doneDirectionOpen:${repositoryManager}`, (value) => value === "1" ? "1" : "0");
   const [doneScrollSeq, setDoneScrollSeq] = useState(0);
   const doneFoldRef = useRef<HTMLDivElement>(null);
   const [showCancelled, setShowCancelled] = useState(false);
@@ -330,20 +356,24 @@ function TodoListView({
   useEffect(() => setBoardOverride(undefined), [view]);
   const storedMode = pref(MODE_KEY);
   const calendarMode: CalendarMode = routeMode ?? (isCalendarMode(storedMode) ? storedMode : "week");
-  const anchor = parseDayKey(date) ?? startOfDay(Date.now());
+  const preferredDay = (todosV2 ? parseDayKey(pref(CALENDAR_DAY_KEY) ?? undefined) : undefined) ?? startOfDay(Date.now());
+  const anchor = parseDayKey(date) ?? preferredDay;
+  const listRoute = useCallback((id?: string, manager?: string): Route => ({
+    name: "todos", ...(todosV2 && { view: "list" }), ...(id && { id, manager }),
+  }), [todosV2]);
   const [calendarDone, setCalendarDone] = useState(() => pref(DONE_KEY) !== "0");
   const [newSlot, setNewSlot] = useState<CalendarSlot | undefined>();
   // /todos with no view: the one this browser was last on
   useEffect(() => {
     if (view || selectedId) return;
     const saved = pref(VIEW_KEY);
-    if (saved === "calendar") navigate(calendarRoute(calendarMode, startOfDay(Date.now())), true);
-    if (saved === "board") {
+    if (saved === "calendar") navigate(calendarRoute(calendarMode, preferredDay), true);
+    else if (saved === "board") {
       setBoardOverride(true);
       navigate(boardRoute(), true);
-    }
+    } else if (todosV2) navigate(listRoute(), true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, selectedId]);
+  }, [view, selectedId, todosV2]);
   // on the calendar a new to-do is due on the day shown
   const openNew = () => {
     setNewSlot(calendarOn ? { day: anchor } : undefined);
@@ -352,7 +382,8 @@ function TodoListView({
   const showView = (next: "list" | "calendar" | "board") => {
     setBoardOverride(next === "board");
     setPref(VIEW_KEY, next);
-    navigate(next === "calendar" ? calendarRoute(calendarMode, startOfDay(Date.now()), selectedId) : next === "board" ? boardRoute(selectedId) : { name: "todos", ...(selectedId ? { id: selectedId } : {}) });
+    const manager = todosV2 ? selectedManager : undefined;
+    navigate(next === "calendar" ? calendarRoute(calendarMode, preferredDay, selectedId, manager) : next === "board" ? boardRoute(selectedId, manager) : listRoute(selectedId, manager));
   };
 
   // Sync selectedId from URL; on Board, browser Back also closes the wide detail beside it.
@@ -367,7 +398,7 @@ function TodoListView({
   useEffect(() => {
     if (!linkGone) return;
     toast(t("not-found.todo_gone"));
-    navigate(boardOn ? boardRoute() : calendarOn ? calendarRoute(calendarMode, anchor) : { name: "todos" }, true);
+    navigate(boardOn ? boardRoute() : calendarOn ? calendarRoute(calendarMode, anchor) : listRoute(), true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per link that is gone
   }, [linkGone]);
 
@@ -377,28 +408,26 @@ function TodoListView({
   const [restored, restoreTodo] = useRestoredTodos();
   // whether a failed start was superseded by finished work (#3713) is decided on every to-do: a search or a filter that
   // leaves the finished one out must not put it back in Needs you
-  const superseded = useMemo(() => supersededFailedStarts(todos), [todos]);
-  // Unified Labs toggle for To-dos v2 (#14584, #14642): strictly gated on the selected assistant's `todos_v2 === true`.
-  const assistant = useStore((s) => s.assistant);
-  const todosV2 = Boolean(assistant && sameManager(assistant.manager ?? repositoryManager, repositoryManager) && assistant.todos_v2 === true);
-  // Server-owned board projection tree (#15800): strictly gated under todos_v2 === true; null when off or on older hubs.
-  const rawTodoBoard = useStore((s) => s.todoBoard);
-  const serverBoard = todosV2 ? rawTodoBoard : null;
+  const superseded = useMemo(() => serverBoard ? new Set<string>() : supersededFailedStarts(todos), [serverBoard, todos]);
+  const foldChildren = todosV2 && assistant?.todos_v2_fold_children !== false;
+  const todosById = useMemo(() => new Map(todos.map((td) => [td.id, td])), [todos]);
+  const olderClosed = useStore((s) => s.olderClosedTodos);
+  const olderClosedIds = useMemo(() => new Set(olderClosed.map((td) => td.id)), [olderClosed]);
+  const { windowTodos, historyTodos } = useMemo(() => {
+    if (!serverBoard || !olderClosedIds.size) return { windowTodos: todos, historyTodos: [] };
+    const windowTodos: Todo[] = [];
+    const historyTodos: Todo[] = [];
+    for (const td of todos) (olderClosedIds.has(td.id) ? historyTodos : windowTodos).push(td);
+    return { windowTodos, historyTodos };
+  }, [serverBoard, todos, olderClosedIds]);
   // Each to-do's own status section (docs/assistant/todo-status-sop.md), whatever the list is grouped by: its checkbox
   // and its page read a failed start waiting on the owner as open (audit item 13).
   const sectionOf = useMemo(() => {
-    if (serverBoard) {
-      const byId = new Map(todos.map((td) => [td.id, td]));
-      const fromBoard = boardSectionMap(serverBoard, byId);
-      for (const td of todos) {
-        if (!fromBoard.has(td.id)) {
-          fromBoard.set(td.id, triage(td, lookup, Date.now(), restored.get(td.id) ?? 0, superseded.has(td.id)).section);
-        }
-      }
-      return fromBoard;
-    }
+    if (serverBoard) return boardSectionMap(serverBoard, todosById, historyTodos);
     return new Map(todos.map((td) => [td.id, triage(td, lookup, Date.now(), restored.get(td.id) ?? 0, superseded.has(td.id)).section]));
-  }, [serverBoard, todos, lookup, restored, superseded, tick]);
+  }, [serverBoard, todosById, historyTodos, todos, lookup, restored, superseded, tick]);
+  const projectedNeeds = useMemo(() => serverBoard ? boardAttention(serverBoard, todosById) : undefined, [serverBoard, todosById]);
+  const needs = projectedNeeds ?? legacyNeeds;
   // open todos under the knowledge-base project they are in (#2581), else the one their agents work in (#2526)
   const kbProjects = useTodoProjects();
   const projectName = useMemo(() => projectNames(kbProjects), [kbProjects]);
@@ -419,7 +448,6 @@ function TodoListView({
       undefined,
     [reorganizeDirections, cachedDirectionNames, leaderTitles],
   );
-  const todosById = useMemo(() => new Map(todos.map((td) => [td.id, td])), [todos]);
   const knownDirectionIds = useMemo(() => {
     if (!todosV2) return new Set<string>();
     const ids = new Set<string>();
@@ -465,7 +493,7 @@ function TodoListView({
     return isTodoListSort(v) ? v : "recent";
   });
   // Lightweight All / To-dos / Tasks filter gated behind todos_v2 (#14642); turning todos_v2 off reverts immediately.
-  const [kindFilter, setKindFilter] = useState<TodoKindFilter>("all");
+  const [kindFilter, setKindFilter] = useTodoPreference<TodoKindFilter>("persona.todos.kindFilter", (value) => isTodoKindFilter(value) ? value : "all");
   const effectiveKindFilter: TodoKindFilter = todosV2 ? kindFilter : "all";
   // Shared external blockers summary strip gated behind todos_v2 (#14728).
   const rawSharedBlockers = useStore((s) => s.sharedBlockers);
@@ -487,19 +515,11 @@ function TodoListView({
     error: closedError,
     onLoad: () => { void loadOlderClosed(repositoryManager); },
   }), [hasOlderClosed, closedLoading, closedError, repositoryManager]);
-  // The calendar's Show done needs the otherwise-bounded dated history. This is an explicit, calendar-only read;
-  // the list and board remain bounded until it is asked for.
-  useEffect(() => {
-    if (calendarOn && calendarDone && hasOlderClosed) void loadAllOlderClosed(repositoryManager);
-  }, [calendarOn, calendarDone, hasOlderClosed, repositoryManager]);
-  const [selectedBlockerKey, setSelectedBlockerKey] = useState<string | null>(null);
+  const [selectedBlockerKey, setSelectedBlockerKey] = useTodoPreference(`persona.todos.sharedBlocker:${repositoryManager}`, (value) => value);
   const activeBlocker = useMemo(
     () => (todosV2 ? findSelectedBlocker(selectedBlockerKey, sharedBlockers) : undefined),
     [todosV2, selectedBlockerKey, sharedBlockers],
   );
-  useEffect(() => {
-    if (selectedBlockerKey !== null && !activeBlocker) setSelectedBlockerKey(null);
-  }, [selectedBlockerKey, activeBlocker]);
   // Batch reorganize mode strictly gated behind todos_v2 (#14758); turning todos_v2 off or leaving list mode resets immediately.
   const [reorganizeMode, setReorganizeMode] = useState(false);
   const [reorganizeSelected, setReorganizeSelected] = useState<ReadonlySet<string>>(() => new Set());
@@ -509,26 +529,26 @@ function TodoListView({
   // Decision Queue modal strictly gated behind todos_v2 (#15757).
   const [decisionQueueOpen, setDecisionQueueOpen] = useState(false);
   // Same-repo merge-train queue positions strictly gated behind todos_v2 (#16433); fires zero requests when off.
-  const [mergeTrainByTodo, setMergeTrainByTodo] = useState<Record<string, MergeTrainTodoBadge>>({});
+  const [mergeTrain, setMergeTrain] = useState<{ manager: string; owner: string; badges: Record<string, MergeTrainTodoBadge> }>();
   const mergeTrainFetchKey = useMemo(
-    () => (todosV2 ? `${repositoryManager}:${todos.map((td) => `${td.id}:${td.updated_at}`).join("|")}` : ""),
+    () => todosV2 ? mergeTrainKey(todos, repositoryManager) : "",
     [todosV2, repositoryManager, todos],
   );
+  const mergeTrainByTodo = mergeTrainFetchKey && mergeTrain?.manager === repositoryManager && mergeTrain.owner === owner
+    ? mergeTrain.badges : undefined;
   useEffect(() => {
-    if (!todosV2) {
-      setMergeTrainByTodo({});
+    if (!mergeTrainFetchKey) {
+      setMergeTrain(undefined);
       return;
     }
     const ac = new AbortController();
     void fetchTodoMergeTrain(ac.signal)
       .then((res) => {
-        if (!ac.signal.aborted) setMergeTrainByTodo(res.by_todo ?? {});
+        if (!ac.signal.aborted) setMergeTrain({ manager: repositoryManager, owner, badges: res.by_todo });
       })
-      .catch(() => {
-        if (!ac.signal.aborted) setMergeTrainByTodo({});
-      });
+      .catch(() => {}); // Keep the last queue positions if a follow-up read fails.
     return () => ac.abort();
-  }, [todosV2, mergeTrainFetchKey]);
+  }, [mergeTrainFetchKey, owner, repositoryManager]);
 
   const exitReorganizeMode = useCallback(() => {
     setReorganizeMode(false);
@@ -657,17 +677,8 @@ function TodoListView({
   // Under todos_v2 === true with server `board` (#15800), thinly consume `board.status_groups` & `board.counts`
   // directly without re-running client triage, wait-group ordering, or goal-folding heuristics.
   const boardStatus = useMemo(
-    () => (serverBoard ? consumeBoardStatusGroups(todos, serverBoard, hasAnyFilter ? filterTodo : undefined) : undefined),
-    [serverBoard, todos, hasAnyFilter, search, listFilter, effectiveKindFilter, activeBlocker, tick],
-  );
-  const boardStatusAll = useMemo(
-    () =>
-      !serverBoard
-        ? undefined
-        : !hasSearch
-          ? boardStatus
-          : consumeBoardStatusGroups(todos, serverBoard, hasNonSearchFilter ? inFilter : undefined),
-    [serverBoard, hasSearch, boardStatus, todos, hasNonSearchFilter, listFilter, effectiveKindFilter, activeBlocker, tick],
+    () => (serverBoard ? consumeBoardStatusGroups(windowTodos, serverBoard, hasAnyFilter ? filterTodo : undefined, historyTodos, sectionOf) : undefined),
+    [serverBoard, windowTodos, historyTodos, sectionOf, hasAnyFilter, search, listFilter, effectiveKindFilter, activeBlocker, tick],
   );
   const triaged = useMemo(
     () => {
@@ -680,22 +691,21 @@ function TodoListView({
   // Under todos_v2 (#14661), fold non-urgent `part_of` child tasks under their top-level parent goal while surfacing
   // `needs_you` / active-ask child blockers in `waiting`; when server `board` is present, reuse its folding directly.
   const goalFold = useMemo(
-    () => (boardStatus ? boardStatus.goalFold : todosV2 ? foldGoalTasks(triaged) : undefined),
-    [boardStatus, todosV2, triaged],
+    () => (boardStatus ? boardStatus.goalFold : foldChildren ? foldGoalTasks(triaged) : undefined),
+    [boardStatus, foldChildren, triaged],
   );
   const displayTriaged = goalFold ? goalFold.triaged : triaged;
   const statusSectionOrder = boardStatus ? boardStatus.sectionOrder : TRIAGE_SECTIONS;
-  // the header's counts: what the filter shows, whatever is searched
+  // The legacy header follows the filter but ignores search. The v2 attention total is for the whole board.
   const triageAll = useMemo(
     () => {
-      if (boardStatusAll) return boardStatusAll.goalFold.triaged;
-      if (!search.trim()) return triaged;
+      if (serverBoard || !hasSearch) return triaged;
       const r = orderWaitGroups(triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }), Date.now());
       return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
-    [boardStatusAll, todos, lookup, restored, search, listFilter, effectiveKindFilter, activeBlocker, superseded, triaged, tick, fromView],
+    [serverBoard, todos, lookup, restored, hasSearch, listFilter, effectiveKindFilter, activeBlocker, superseded, triaged, tick, fromView],
   );
-  const headerNeedsYouCount = boardStatusAll ? boardStatusAll.needsYouCount : sectionSize(triageAll, "waiting");
+  const headerNeedsYouCount = serverBoard?.counts.needs_you ?? sectionSize(triageAll, "waiting");
   // Where the status sections place each to-do the search and the filter leave: its row's section (a merged row takes
   // its most urgent member's), and whether it counts as open (countsAsOpen, the header's Not done, its own reading).
   // Folders and directions share this placement and one number for it; cancelled stays out of both open and Done (#5732).
@@ -707,14 +717,14 @@ function TodoListView({
         for (const g of boardStatus.goalFold.triaged.sections[sec]) {
           for (const m of g.members) {
             row.set(m.id, sec);
-            if (sec !== "done" && sec !== "cancelled" && sec !== "shelved") open.add(m.id);
+            if (isBoardOpen(sec)) open.add(m.id);
           }
         }
       }
       for (const summary of boardStatus.goalFold.goals.values()) {
         for (const child of summary.children) {
           if (!row.has(child.todo.id)) row.set(child.todo.id, child.section);
-          if (!child.done && child.section !== "shelved") open.add(child.todo.id);
+          if (isBoardOpen(child.section)) open.add(child.todo.id);
         }
       }
       return { row, open };
@@ -728,29 +738,31 @@ function TodoListView({
     return { row, open };
   }, [boardStatus, statusSectionOrder, triaged, fromView]);
 
-  // Board shows every open to-do, independently of an invisible List search or due-date filter. It uses the same
-  // placement rule, including Developing Persona's hub-view path, and the page's ordinary row order.
-  const boardTriaged = useMemo(() => {
-    if (!boardOn) return undefined;
-    const result = orderWaitGroups(triageTodos(todos, lookup, Date.now(), restored, { superseded }), Date.now());
-    return fromView ? drawnFromView(result, Date.now()) : result;
-  }, [boardOn, todos, lookup, restored, superseded, tick, fromView]);
+  // The progress board always shows the open projection, independently of the List's filters.
   const boardProjection = useMemo(() => {
-    const open = new Set<string>();
+    if (!boardOn) return undefined;
+    if (serverBoard) {
+      const open = [...sectionOf].flatMap(([id, section]) => {
+        const todo = todosById.get(id);
+        return todo && isBoardOpen(section) ? [todo] : [];
+      });
+      return { todos: open };
+    }
+    const triaged = orderWaitGroups(triageTodos(todos, lookup, Date.now(), restored, { superseded }), Date.now());
+    const result = fromView ? drawnFromView(triaged, Date.now()) : triaged;
     const triages = new Map<string, Triage>();
-    if (boardTriaged) {
-      for (const section of TRIAGE_SECTIONS) {
-        for (const group of boardTriaged.sections[section]) {
-          for (const member of group.members) {
-            const placement = group.triage.get(member.id)!;
-            triages.set(member.id, placement);
-            if ((fromView ? openAsDrawn : countsAsOpen)(member, placement)) open.add(member.id);
-          }
+    const open = new Set<string>();
+    for (const sec of TRIAGE_SECTIONS) {
+      for (const group of result.sections[sec]) {
+        for (const member of group.members) {
+          const placement = group.triage.get(member.id)!;
+          triages.set(member.id, placement);
+          if ((fromView ? openAsDrawn : countsAsOpen)(member, placement)) open.add(member.id);
         }
       }
     }
     return { todos: sortTodos(todos.filter((todo) => open.has(todo.id)), lookup), triages };
-  }, [boardTriaged, todos, lookup, fromView]);
+  }, [boardOn, serverBoard, sectionOf, todosById, todos, lookup, restored, superseded, tick, fromView]);
 
   const filteredUncompleted = useSteady(
     useMemo(() => sortTodos(todos.filter((td) => {
@@ -767,6 +779,7 @@ function TodoListView({
     useMemo(() => sortTodos(todos.filter((td) => placed.row.get(td.id) === "cancelled"), lookup), [todos, placed, lookup]),
     sameList,
   );
+  const cancelledCount = boardStatus?.goalFold.triaged.cancelled ?? filteredCancelled.length;
   const projectGroups = useSteady(
     // a folder holding a to-do in Needs you says so, a failed start waiting on the owner too (audit item 13)
     useMemo(() => groupTodosByProject(filteredUncompleted, lookup, Date.now(), projectName, (td) => sectionOf.get(td.id) === "waiting"), [filteredUncompleted, lookup, projectName, sectionOf]),
@@ -808,16 +821,18 @@ function TodoListView({
     }
   }, [reorganizeMode, todosV2, calendarOn, requestMode, exitReorganizeMode]);
 
-  // Decision Queue candidates strictly from `needs_you` (`waiting` section) when todos_v2 is enabled (#15757).
-  const decisionQueueItems = useMemo(
-    () => (todosV2 ? decisionQueueCandidates(triageAll.sections.waiting.flatMap((g) => g.members)) : []),
-    [todosV2, triageAll.sections.waiting],
-  );
+  const decisionQueueItems = useMemo(() => {
+    if (!todosV2) return [];
+    const pending = projectedNeeds
+      ? [...projectedNeeds.keys()].map((id) => todosById.get(id)!)
+      : triageAll.sections.waiting.flatMap((g) => g.members);
+    return decisionQueueCandidates(pending);
+  }, [todosV2, projectedNeeds, todosById, triageAll.sections.waiting]);
   useEffect(() => {
-    if (decisionQueueOpen && (!todosV2 || boardOn || requestMode)) {
+    if (decisionQueueOpen && (!todosV2 || boardOn || calendarOn || requestMode)) {
       setDecisionQueueOpen(false);
     }
-  }, [decisionQueueOpen, todosV2, boardOn, requestMode]);
+  }, [decisionQueueOpen, todosV2, boardOn, calendarOn, requestMode]);
 
   const reorganizeProps = useMemo(
     () =>
@@ -834,7 +849,7 @@ function TodoListView({
     if (grouping !== "direction" || !byDirection) return [];
     if (serverBoard) {
       return consumeBoardDirectionGroups({
-        todos,
+        todos: windowTodos,
         board: serverBoard,
         matchesFilter: hasAnyFilter ? filterTodo : undefined,
         resolveFallbackName: directionLabel,
@@ -853,11 +868,28 @@ function TodoListView({
           : directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title),
       resolveFallbackName: directionLabel,
     });
-  }, [grouping, byDirection, serverBoard, todos, hasAnyFilter, search, listFilter, effectiveKindFilter, activeBlocker, tick, hasTreeDirections, directionTree, filteredUncompleted, placed, todosV2, leaderTitles, directionLabel]);
+  }, [grouping, byDirection, serverBoard, windowTodos, hasAnyFilter, search, listFilter, effectiveKindFilter, activeBlocker, tick, hasTreeDirections, directionTree, filteredUncompleted, placed, todosV2, leaderTitles, directionLabel]);
   // Group completed to-dos by effective direction under todos_v2 By-direction view (#17181).
   const completedDirectionBuckets = useMemo((): CompletedDirectionBucket[] => {
-    if (!todosV2 || grouping !== "direction" || filteredCompleted.length === 0) return [];
+    if (!todosV2 || grouping !== "direction") return [];
     const buckets = new Map<string, CompletedDirectionBucket>();
+    const serverCounts = new Map<string, number>();
+    const localDirections = new Set([
+      ...reorganizeDirections.map((d) => d.id),
+      ...directionSections.filter((s) => !s.d.secretary).map((s) => s.d.id),
+    ]);
+    // The board counts the full history. A local search or filter can only count its loaded matches.
+    for (const group of hasAnyFilter ? [] : serverBoard?.direction_groups ?? []) {
+      // A merged board's ungrouped total spans assistants, and some named groups belong to other assistants.
+      if (scope.several && !localDirections.has(group.direction_id)) continue;
+      const id = group.direction_id || DONE_UNCATEGORIZED_ID;
+      const uncategorized = id === DONE_UNCATEGORIZED_ID;
+      const count = group.counts.done;
+      serverCounts.set(id, count);
+      if (count === 0) continue;
+      const label = uncategorized ? t("todos.direction_uncategorized") : group.label?.trim() || directionLabel(id) || id;
+      buckets.set(id, { id, label, uncategorized, count, todos: [] });
+    }
     for (const td of filteredCompleted) {
       const dir = resolveDirection?.(td);
       const id = dir?.id || DONE_UNCATEGORIZED_ID;
@@ -869,10 +901,12 @@ function TodoListView({
           label: uncategorized ? t("todos.direction_uncategorized") : dir!.label,
           uncategorized,
           todos: [],
+          count: 0,
         };
         buckets.set(id, bucket);
       }
       bucket.todos.push(td);
+      bucket.count = serverCounts.get(id) ?? bucket.todos.length;
     }
     const activeOrder = new Map<string, number>();
     directionSections.forEach((sec, idx) => {
@@ -889,15 +923,19 @@ function TodoListView({
       if (rankB !== undefined) return 1;
       return a.label.localeCompare(b.label);
     });
-  }, [todosV2, grouping, filteredCompleted, resolveDirection, directionSections]);
+  }, [todosV2, grouping, filteredCompleted, resolveDirection, directionSections, reorganizeDirections, hasAnyFilter, serverBoard, directionLabel, scope.several]);
 
   const completedCountByDirection = useMemo(() => {
     const counts = new Map<string, number>();
     for (const bucket of completedDirectionBuckets) {
-      counts.set(bucket.id, bucket.todos.length);
+      counts.set(bucket.id, bucket.count);
     }
     return counts;
   }, [completedDirectionBuckets]);
+  const completedCount = todosV2 && grouping === "direction"
+    ? completedDirectionBuckets.reduce((total, bucket) => total + bucket.count, 0)
+    : boardStatus?.goalFold.triaged.finished ?? filteredCompleted.length;
+  const hasCompleted = completedCount > 0 || filteredCompleted.length > 0;
 
   const activeDoneDirection = useMemo(
     () =>
@@ -910,30 +948,18 @@ function TodoListView({
     [todosV2, grouping, doneDirectionFilter, completedDirectionBuckets],
   );
 
-  useEffect(() => {
-    if (doneDirectionFilter === null) return;
-    if (
-      !todosV2 ||
-      grouping !== "direction" ||
-      (!closedHistory.loading && !completedDirectionBuckets.some((b) => b.id === doneDirectionFilter))
-    ) {
-      setDoneDirectionFilter(null);
-    }
-  }, [todosV2, grouping, doneDirectionFilter, closedHistory.loading, completedDirectionBuckets]);
-
-  const reviewDirectionCompleted = useCallback(
-    (directionKey: string) => {
-      setDoneDirectionFilter(directionKey);
-      setShowDone(true);
-      if (closedHistory.hasMore && !closedHistory.loading) closedHistory.onLoad();
-      setDoneScrollSeq((n) => n + 1);
-    },
-    [closedHistory],
-  );
+  const directionDoneFold = todosV2 && grouping === "direction";
+  const doneOpen = directionDoneFold ? doneDirectionOpen === "1" : showDone;
+  const reviewDirectionCompleted = useCallback((directionKey: string) => {
+    setDoneDirectionFilter(directionKey);
+    setDoneDirectionOpen("1");
+    if (closedHistory.hasMore && !closedHistory.loading) closedHistory.onLoad();
+    setDoneScrollSeq((n) => n + 1);
+  }, [setDoneDirectionFilter, setDoneDirectionOpen, closedHistory]);
 
   useEffect(() => {
     if (doneScrollSeq === 0) return;
-    doneFoldRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+    doneFoldRef.current?.scrollIntoView?.({ behavior: scrollBehavior(), block: "nearest" });
   }, [doneScrollSeq]);
 
   // open to-dos no 常驻 section lists: the hub nests a worker's to-do under its leader's Agent instead of listing it
@@ -963,8 +989,15 @@ function TodoListView({
   }, [grouping, byDirection, triaged, placed, listSort]);
   // what waits on the user that the filter leaves out: the line over the sections says how many (#3740)
   const hiddenWaitingCount = useMemo(
-    () => (listFilter === "all" ? 0 : hiddenWaiting(todos.filter((td) => matchesSearch(td) && matchesKindFilter(td, effectiveKindFilter)), (td) => matchesListFilter(td, listFilter, tick), lookup, Date.now(), restored, superseded)),
-    [todos, lookup, restored, search, listFilter, effectiveKindFilter, superseded, tick],
+    () => {
+      if (listFilter === "all") return 0;
+      const searched = todos.filter((td) => matchesSearch(td) && matchesKindFilter(td, effectiveKindFilter));
+      const shown = (td: Todo) => matchesListFilter(td, listFilter, tick);
+      return projectedNeeds
+        ? searched.filter((td) => projectedNeeds.has(td.id) && matchesSharedBlocker(td, activeBlocker) && !shown(td)).length
+        : hiddenWaiting(searched, shown, lookup, Date.now(), restored, superseded);
+    },
+    [todos, lookup, restored, search, listFilter, effectiveKindFilter, superseded, tick, projectedNeeds, activeBlocker],
   );
   const filterCounts = useMemo(() => listFilterCounts(todos.filter((td) => matchesSearch(td) && matchesKindFilter(td, effectiveKindFilter)), tick), [todos, search, effectiveKindFilter, tick]);
   const onRestore = useCallback(
@@ -1077,15 +1110,15 @@ function TodoListView({
       if (id === selectedId) return; // already this entry (a deep link stays a deep link)
       pushedId.current = id;
       fromList.current = { id, top: listBox.current?.scrollTop ?? 0 };
-      navigate(boardOn ? boardRoute(id) : `/todos?id=${encodeURIComponent(id)}`);
+      navigate(boardOn ? boardRoute(id) : listRoute(id));
     },
-    [selectedId, boardOn],
+    [selectedId, boardOn, listRoute],
   );
   const backToList = () => {
     if (selectedId && pushedId.current === selectedId) {
       pushedId.current = undefined;
       history.back();
-    } else navigate(boardOn ? boardRoute() : "/todos", true);
+    } else navigate(boardOn ? boardRoute() : listRoute(), true);
   };
   const back = useRef(backToList);
   back.current = backToList;
@@ -1130,7 +1163,7 @@ function TodoListView({
   // "By request" and Board: the detail closes and the graph or board has the page again
   const closeDetail = () => {
     setActiveId(undefined);
-    navigate(boardOn ? boardRoute() : "/todos", true);
+    navigate(boardOn ? boardRoute() : listRoute(), true);
   };
 
   // `open`: the row's checkbox shows it open (`checksAsOpen`): a failed start waiting on the owner is ticked to close it
@@ -1226,7 +1259,7 @@ function TodoListView({
       setActiveId(undefined);
       pushedId.current = undefined;
       // replace: Back must not land on ?id=<the deleted todo>
-      navigate(boardOn ? boardRoute() : calendarOn ? calendarRoute(calendarMode, anchor) : { name: "todos" }, true);
+      navigate(boardOn ? boardRoute() : calendarOn ? calendarRoute(calendarMode, anchor) : listRoute(), true);
     }
     toast(t("todos.deleted"), "ok");
     // the rest of the page catches up in the background; a failed refresh leaves the list as dropped, the next push fixes it
@@ -1242,7 +1275,7 @@ function TodoListView({
           <div className={cx("flex gap-2", todosV2 ? "items-center" : "items-baseline")}>
             <h1 className="text-[16px] font-semibold whitespace-nowrap text-ink">{t("todos.title")}</h1>
             {/* the counts once the list has its to-dos (audit item 83): not while it loads, nor after an empty failed read */}
-            {!boardOn && (todosLoaded || todos.length > 0) && !(todos.length === 0 && todosError) && (
+            {(!boardOn || serverBoard) && (todosLoaded || todos.length > 0) && !(todos.length === 0 && todosError) && (
               todosV2 ? (
                 headerNeedsYouCount > 0 ? (
                   <span
@@ -1328,12 +1361,17 @@ function TodoListView({
               mode={calendarMode}
               anchor={anchor}
               showDone={calendarDone}
+              todosV2={todosV2}
               selectedId={selectedId}
               onMode={(m, day) => {
                 setPref(MODE_KEY, m);
-                navigate(calendarRoute(m, day ?? anchor, selectedId));
+                if (todosV2) setPref(CALENDAR_DAY_KEY, dayKey(day ?? anchor));
+                navigate(calendarRoute(m, day ?? anchor, selectedId, todosV2 ? selectedManager : undefined));
               }}
-              onAnchor={(day) => navigate(calendarRoute(calendarMode, day, selectedId), true)}
+              onAnchor={(day) => {
+                if (todosV2) setPref(CALENDAR_DAY_KEY, dayKey(day));
+                navigate(calendarRoute(calendarMode, day, selectedId, todosV2 ? selectedManager : undefined), true);
+              }}
               onShowDone={(on) => {
                 setPref(DONE_KEY, on ? "1" : "0");
                 setCalendarDone(on);
@@ -1380,7 +1418,7 @@ function TodoListView({
                 directions={todosV2 ? reorganizeDirections : undefined}
                 onReorganizeDirection={todosV2 ? applyDetailReorganize : undefined}
                 onUnseen={todosV2 ? markDecidedUnseen : undefined}
-                mergeTrainBadge={todosV2 ? mergeTrainByTodo[selectedTodo.id] : undefined}
+                mergeTrainBadge={mergeTrainByTodo?.[selectedTodo.id]}
               />
             </div>
           )}
@@ -1555,11 +1593,13 @@ function TodoListView({
                 </Empty>
               ) : offline && todos.length === 0 ? (
                 <OfflineState offline={offline} ring="ring-surface" className="py-14" />
-              ) : (
+              ) : boardProjection && (
                 <TodoBoard
                   todos={boardProjection.todos}
                   lookup={lookup}
                   triages={boardProjection.triages}
+                  serverBoard={serverBoard}
+                  projectedNeeds={projectedNeeds}
                   projectName={projectName}
                   tick={tick}
                   onOpen={openFromList}
@@ -1591,7 +1631,7 @@ function TodoListView({
               >
                 {todosError}
               </Empty>
-            ) : (filteredUncompleted.length === 0 || (grouping === "direction" && directionSections.length === 0 && directionUnlisted === 0 && directionRest.length === 0)) && filteredCompleted.length === 0 && filteredCancelled.length === 0 && !hasOlderClosed ? (
+            ) : (filteredUncompleted.length === 0 || (grouping === "direction" && directionSections.length === 0 && directionUnlisted === 0 && directionRest.length === 0)) && !hasCompleted && filteredCancelled.length === 0 && !hasOlderClosed ? (
               offline && todos.length === 0 ? (
                 <OfflineState offline={offline} ring="ring-surface" className="py-14" />
               ) : search.trim() ? (
@@ -1699,6 +1739,7 @@ function TodoListView({
                           sectionOf={todosV2 ? sectionOf : undefined}
                           reorganize={reorganizeProps}
                           slim={todosV2}
+                          foldChildren={foldChildren}
                           mergeTrainByTodo={todosV2 ? mergeTrainByTodo : undefined}
                           completedCount={todosV2 ? (completedCountByDirection.get(dirKey) ?? 0) : 0}
                           onReviewCompleted={todosV2 ? reviewDirectionCompleted : undefined}
@@ -1744,6 +1785,7 @@ function TodoListView({
                     sectionOf={todosV2 ? sectionOf : undefined}
                     reorganize={reorganizeProps}
                     slim={todosV2}
+                    foldChildren={foldChildren}
                     mergeTrainByTodo={todosV2 ? mergeTrainByTodo : undefined}
                     selectedId={activeTodo?.id}
                     hideUnsortedHeader={todosV2}
@@ -1755,25 +1797,26 @@ function TodoListView({
                 ))}
 
                 {/* Completed Fold */}
-                {(filteredCompleted.length > 0 || hasOlderClosed) && (
+                {(hasCompleted || hasOlderClosed) && (
                   <div ref={doneFoldRef} className="mt-2 border-t border-line/60 pt-2">
                     <button
                       type="button"
                       data-testid="todos-done-fold"
                       onClick={() => {
-                        if (!showDone && closedHistory.hasMore) closedHistory.onLoad();
-                        setShowDone((v) => !v);
+                        if (!doneOpen && closedHistory.hasMore) closedHistory.onLoad();
+                        if (directionDoneFold) setDoneDirectionOpen(doneOpen ? "0" : "1");
+                        else setShowDone((v) => !v);
                       }}
                       className="flex h-8 w-full items-center justify-between rounded-control px-2.5 text-[12px] text-ink-3 transition-colors hover:bg-hover hover:text-ink-2"
                     >
-                      <span>{t("todos.done_section", { count: filteredCompleted.length })}</span>
+                      <span>{t("todos.done_section", { count: completedCount })}</span>
                       <Icon
                         name="chevron"
                         size={12}
-                        className={cx("transition-transform duration-200", showDone ? "rotate-180" : "")}
+                        className={cx("transition-transform duration-200", doneOpen ? "rotate-180" : "")}
                       />
                     </button>
-                    {showDone && (
+                    {doneOpen && (
                       <div className="flex flex-col gap-1 pt-1">
                         {todosV2 && grouping === "direction" && completedDirectionBuckets.length > 0 ? (
                           <>
@@ -1797,7 +1840,7 @@ function TodoListView({
                                 )}
                               >
                                 <span>{t("todos.filter_all")}</span>
-                                <span className="shrink-0 opacity-70">{" · "}{filteredCompleted.length}</span>
+                                <span className="shrink-0 opacity-70">{" · "}{completedCount}</span>
                               </button>
                               {completedDirectionBuckets.map((bucket) => {
                                 const selected = activeDoneDirection === bucket.id;
@@ -1808,7 +1851,7 @@ function TodoListView({
                                     data-testid="todos-done-direction-chip"
                                     data-direction-id={bucket.id}
                                     aria-pressed={selected}
-                                    title={`${bucket.label} · ${bucket.todos.length}`}
+                                    title={`${bucket.label} · ${bucket.count}`}
                                     onClick={() => setDoneDirectionFilter(selected ? null : bucket.id)}
                                     className={cx(
                                       "touch-hit inline-flex h-6 max-w-36 shrink-0 items-center gap-1 rounded-full px-2 text-submeta whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-accent",
@@ -1818,13 +1861,13 @@ function TodoListView({
                                     )}
                                   >
                                     <span className="truncate">{bucket.label}</span>
-                                    <span className="shrink-0 tabular-nums opacity-70">{" · "}{bucket.todos.length}</span>
+                                    <span className="shrink-0 tabular-nums opacity-70">{" · "}{bucket.count}</span>
                                   </button>
                                 );
                               })}
                             </div>
                             {activeDoneDirection === null ? (
-                              completedDirectionBuckets.map((bucket) => (
+                              completedDirectionBuckets.filter((bucket) => bucket.todos.length > 0).map((bucket) => (
                                 <div
                                   key={bucket.id}
                                   data-testid="todos-done-direction-group"
@@ -1839,7 +1882,7 @@ function TodoListView({
                                       className="shrink-0 opacity-70"
                                     />
                                     <span className="min-w-0 flex-1 truncate">{bucket.label}</span>
-                                    <span className="shrink-0 tabular-nums">{bucket.todos.length}</span>
+                                    <span className="shrink-0 tabular-nums">{bucket.count}</span>
                                   </div>
                                   {bucket.todos.map((todo) => (
                                     <TodoListItem
@@ -1905,13 +1948,13 @@ function TodoListView({
                             />
                           ))
                         )}
-                        <ClosedHistoryMore active={showDone} {...closedHistory} />
+                        <ClosedHistoryMore active={doneOpen} {...closedHistory} />
                       </div>
                     )}
                   </div>
                 )}
                 {/* Cancelled Fold: its own outcome and reason, never inside Completed (#5732) */}
-                {(filteredCancelled.length > 0 || hasOlderClosed) && (
+                {(cancelledCount > 0 || hasOlderClosed) && (
                   <div className="mt-2 border-t border-line/60 pt-2" data-testid="todos-cancelled-fold">
                     <button
                       type="button"
@@ -1922,7 +1965,7 @@ function TodoListView({
                       }}
                       className="flex h-8 w-full items-center justify-between rounded-control px-2.5 text-xs text-ink-3 transition-colors hover:bg-hover hover:text-ink-2"
                     >
-                      <span>{t("todos.cancelled_section", { count: filteredCancelled.length })}</span>
+                      <span>{t("todos.cancelled_section", { count: cancelledCount })}</span>
                       <Icon name="chevron" size={12} className={cx("transition-transform duration-200", showCancelled ? "rotate-180" : "")} />
                     </button>
                     {showCancelled && (
@@ -2000,7 +2043,7 @@ function TodoListView({
               directions={todosV2 ? reorganizeDirections : undefined}
               onReorganizeDirection={todosV2 ? applyDetailReorganize : undefined}
               onUnseen={todosV2 ? markDecidedUnseen : undefined}
-              mergeTrainBadge={todosV2 ? mergeTrainByTodo[activeTodo.id] : undefined}
+              mergeTrainBadge={mergeTrainByTodo?.[activeTodo.id]}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-[13px] text-ink-3">
@@ -2267,6 +2310,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
   sectionOf,
   reorganize,
   slim,
+  foldChildren,
   mergeTrainByTodo,
   selectedId,
   hideUnsortedHeader,
@@ -2282,6 +2326,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
   sectionOf?: ReadonlyMap<string, TriageSection>;
   reorganize?: TodoReorganizeSelection;
   slim?: boolean;
+  foldChildren?: boolean;
   mergeTrainByTodo?: Readonly<Record<string, MergeTrainTodoBadge>>;
   selectedId: string | undefined;
   /** Under todos_v2 (#14642), omit the noisy "Unsorted / 未归类" placeholder header for uncategorized rows. */
@@ -2295,12 +2340,12 @@ const TodoProjectSection = memo(function TodoProjectSection({
   const holds = group.todos.some((td) => td.id === selectedId);
   const [folded, toggle] = useFolded(group.key, group.folded, { follow: true, holds });
   const viewById = useMemo(
-    () => (slim ? new Map(group.todos.map((td, i) => [td.id, views[i]])) : undefined),
-    [slim, group.todos, views],
+    () => (foldChildren ? new Map(group.todos.map((td, i) => [td.id, views[i]])) : undefined),
+    [foldChildren, group.todos, views],
   );
   const hierarchy = useMemo(
-    () => (slim ? nestSectionHierarchy(group.todos, allTodosById, sectionOf) : undefined),
-    [slim, group.todos, allTodosById, sectionOf],
+    () => (foldChildren ? nestSectionHierarchy(group.todos, allTodosById, sectionOf) : undefined),
+    [foldChildren, group.todos, allTodosById, sectionOf],
   );
   const renderRows = () =>
     slim && hierarchy && viewById
@@ -2328,6 +2373,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
             reorganizeSelected={reorganize?.selectedIds.has(todo.id)}
             onToggleReorganize={reorganize?.onToggle}
             slim={slim}
+            parentGoalTitle={todo.part_of ? allTodosById?.get(todo.part_of)?.title : undefined}
             mergeTrainBadge={mergeTrainByTodo?.[todo.id]}
             onSelect={onSelect}
             onToggleDone={onToggleDone}
@@ -2499,6 +2545,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
   sectionOf,
   reorganize,
   slim,
+  foldChildren,
   mergeTrainByTodo,
   completedCount = 0,
   onReviewCompleted,
@@ -2515,6 +2562,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
   sectionOf?: ReadonlyMap<string, TriageSection>;
   reorganize?: TodoReorganizeSelection;
   slim?: boolean;
+  foldChildren?: boolean;
   mergeTrainByTodo?: Readonly<Record<string, MergeTrainTodoBadge>>;
   completedCount?: number;
   onReviewCompleted?: (directionKey: string) => void;
@@ -2526,8 +2574,8 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
   const holds = todos.some((td) => td.id === selectedId);
   const [folded, toggle] = useFolded(`todos-direction:${direction.id}`, false, { holds });
   const hierarchy = useMemo(
-    () => (slim ? nestSectionHierarchy(todos, allTodosById, sectionOf) : undefined),
-    [slim, todos, allTodosById, sectionOf],
+    () => (foldChildren ? nestSectionHierarchy(todos, allTodosById, sectionOf) : undefined),
+    [foldChildren, todos, allTodosById, sectionOf],
   );
   const directionKey = direction.secretary ? DONE_UNCATEGORIZED_ID : direction.id;
   return (
@@ -2584,6 +2632,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
                   reorganizeSelected={reorganize?.selectedIds.has(todo.id)}
                   onToggleReorganize={reorganize?.onToggle}
                   slim={slim}
+                  parentGoalTitle={todo.part_of ? allTodosById?.get(todo.part_of)?.title : undefined}
                   mergeTrainBadge={mergeTrainByTodo?.[todo.id]}
                   onSelect={onSelect}
                   onToggleDone={onToggleDone}
@@ -2600,10 +2649,12 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
 
 const SECTION_TONE: Record<TriageSection, string> = {
   waiting: "text-attention",
+  can_wait: "text-ink-2",
   working: "text-orange",
   parked: "text-ink-2",
   just_done: "text-green",
   other: "text-ink-2",
+  todo: "text-ink-2",
   shelved: "text-ink-3",
   done: "text-ink-3",
   cancelled: "text-ink-3",
@@ -2989,6 +3040,7 @@ export type TodoRowView = {
   section?: TriageSection;
   /** What it waits on while its status is Waiting (#11090, lib/todo-wait-reason.ts waitOf): its label says so. */
   wait?: WaitReason;
+  supervisorLabel?: string;
   /** Why the sidebar's To-dos badge counts it (#11838, lib/todo-owner-needs.ts), unset when it does not: its mark. */
   owner?: OwnerNeed;
   /** Under todos_v2 (#14642), the resolved project name when assigned; undefined when unset or todos_v2 is off. */
@@ -3045,7 +3097,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   const status = todoStatus(todo, lookup);
   const urgent = mostUrgentAgent(todo, lookup);
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
-  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup), wait: waitOf(todo, status, lookup) };
+  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup), wait: waitOf(todo, status, lookup), supervisorLabel: todoSupervisorLabel(todo, status, lookup) };
   if (todo.wait != null || todo.done_at || !urgent?.session) return view;
   const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
   if (limit) {
@@ -3055,7 +3107,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   }
   const urgentNow = taskNow(urgent.session, foldedState(urgent.session) === "working");
   // its own card, else one of its child sessions' (#5120: their cards wait on its page)
-  const urgentIx = sessionCard(interactions, urgent.agent.machine_id, urgent.agent.session_id);
+  const urgentIx = urgent.status === "needs_you" ? ownerCard(interactions, urgent.agent, lookup) : undefined;
   // what it waits on, from its card (#4111): the question, the command; not its last words
   const urgentAsk = urgent.status === "needs_you" ? askText(urgentIx) : "";
   if (!urgentAsk && !urgentNow) return view;
@@ -3064,6 +3116,12 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   if (urgent.status === "needs_you") view.urgentLead = t("todos.urgent_line", { name: urgent.agent.title || urgent.session.title || "Agent", kicker });
   view.urgentText = urgentAsk || (urgentNow ? (urgentNow.kind === "words" ? plainMarkdown(urgentNow.text) : urgentNow.text) : "");
   return view;
+}
+
+function ownerCard(interactions: Interaction[], agent: TodoAgent, lookup: SessionLookup): Interaction | undefined {
+  const { machine_id: mid, session_id: sid } = agent;
+  const pending = lookup.pendingCards ? lookup.pendingCards(mid, sid) ?? [] : interactions;
+  return sessionCard(pending.filter((ix) => !ix.delegating && !ix.mirror_of), mid, sid);
 }
 
 /** Every todo's row view by id, with its status section and why the sidebar's badge counts it (`needs`, its own set). */
@@ -3138,9 +3196,7 @@ function mergeTrainBadgeText(badge: MergeTrainTodoBadge): string {
 }
 
 function safeHttpUrl(raw?: string): string | undefined {
-  const s = raw?.trim();
-  if (!s) return undefined;
-  return /^https?:\/\//i.test(s) ? s : undefined;
+  return safeWebURL(raw);
 }
 
 const TodoListItem = memo(function TodoListItem({
@@ -3190,8 +3246,9 @@ const TodoListItem = memo(function TodoListItem({
   const legacyMerges = todo.wait == null && parkedRow ? openMergePRs(todo, Date.now()) : [];
   const openPR = todo.wait?.kind === "pr_merge" || legacyMerges.length > 0;
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
-  const look = todoLook(todo, status, view.wait);
-  const hasRestStatus = todo.wait != null || Boolean(todoRestLook(todo, status));
+  const repoGateLook = slim ? repoGatePRLook : undefined;
+  const look = todoLook(todo, status, view.wait, undefined, undefined, repoGateLook);
+  const hasRestStatus = todo.wait != null || Boolean(todoRestLook(todo, status, undefined, repoGateLook));
   // its steps as the hub counts them (#11858, lib/todo-steps.ts): in place of Not started, or after its Agent count
   const steps = goalSummary ? undefined : stepsWords(todo, status);
   const held = heldDelivery(todo);
@@ -3715,7 +3772,7 @@ const TodoListItem = memo(function TodoListItem({
         {!parkedRow && (
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]" data-testid="todo-status-line">
             {open && <StatusMark state={dotState} size="sm" />}
-            <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? look.label}</span>
+            <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? view.supervisorLabel ?? look.label}</span>
             {!todo.done_at && activeCount > 0 && (
               <>
                 <span className="text-ink-3">·</span>
@@ -3832,10 +3889,25 @@ function SeenButton({ onClick }: { onClick: () => void }) {
 const PLAN_FIELD = "rounded-control border border-line bg-canvas px-2 py-1 text-[12.5px] text-ink outline-none focus:border-accent";
 
 /** "YYYY-MM-DD", "HH:MM" and "YYYY-MM-DDTHH:MM" of a moment in local time, as date / time inputs take them. */
-function localParts(ms: number): { day: string; time: string } {
+export function localParts(ms: number): { day: string; time: string } {
   const d = new Date(ms);
+  if (!Number.isFinite(d.getTime())) return { day: "", time: "" };
+  const y = d.getFullYear();
+  if (y < 0 || y > 9999) return { day: "", time: "" };
   const p = (n: number) => String(n).padStart(2, "0");
-  return { day: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: `${p(d.getHours())}:${p(d.getMinutes())}` };
+  return { day: `${String(y).padStart(4, "0")}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: `${p(d.getHours())}:${p(d.getMinutes())}` };
+}
+
+const LOCAL_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/;
+
+/** Validates a 4-digit calendar YYYY-MM-DD string, rejecting rollover dates (e.g. 2026-02-30) and out-of-range years. */
+export function validDay(day: string): boolean {
+  const ms = parseDayKey(day);
+  if (ms === undefined) return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return false;
+  const d = new Date(ms);
+  return d.getFullYear() === Number(m[1]) && d.getMonth() + 1 === Number(m[2]) && d.getDate() === Number(m[3]);
 }
 
 /**
@@ -3845,8 +3917,26 @@ function localParts(ms: number): { day: string; time: string } {
  * changes save when the field is left or on Enter; a change made without typing (a pick in the browser's picker) saves
  * at once. What was typed shows until the save is through.
  */
+export function safeISO(raw: string): string | undefined {
+  const s = raw.trim();
+  const m = LOCAL_DATETIME_RE.exec(s);
+  if (!m) return undefined;
+  const y = Number(m[1]), mo = Number(m[2]), da = Number(m[3]), hh = Number(m[4]), mi = Number(m[5]), ss = Number(m[6] ?? "0");
+  if (hh > 23 || mi > 59 || ss > 59) return undefined;
+  const d = new Date(s);
+  if (!Number.isFinite(d.getTime()) || d.getFullYear() !== y || d.getMonth() + 1 !== mo || d.getDate() !== da) return undefined;
+  return d.toISOString();
+}
+
 function PlanField({ value, onCommit, ...field }: { value: string; onCommit: (value: string) => Promise<void> } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
   const [draft, setDraft] = useState<string>();
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   // the change comes from the keyboard: it waits to be committed
   const typed = useRef(false);
   // the value on its way to the hub: Enter, then the field left before the save is through, sends it once
@@ -3862,8 +3952,8 @@ function PlanField({ value, onCommit, ...field }: { value: string; onCommit: (va
       await onCommit(next);
     } finally {
       if (saving.current === next) saving.current = undefined;
+      if (mountedRef.current) setDraft((d) => (d === next ? undefined : d));
     }
-    setDraft((d) => (d === next ? undefined : d));
   };
   return (
     <input
@@ -3898,10 +3988,11 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
     }
   };
   const at = todo.due_at ? Date.parse(todo.due_at) : NaN;
-  const due = Number.isNaN(at) ? { day: todoDueDay(todo) === undefined ? "" : (todo.due_date ?? ""), time: "" } : localParts(at);
+  const due = !Number.isFinite(at) ? { day: todoDueDay(todo) === undefined ? "" : (todo.due_date ?? ""), time: "" } : localParts(at);
   const remindAt = todo.remind_at ? Date.parse(todo.remind_at) : NaN;
-  const remind = Number.isNaN(remindAt) ? "" : `${localParts(remindAt).day}T${localParts(remindAt).time}`;
-  const moment = (day: string, time: string) => new Date(`${day}T${time}`).toISOString();
+  const remindParts = Number.isFinite(remindAt) ? localParts(remindAt) : undefined;
+  const remind = remindParts?.day ? `${remindParts.day}T${remindParts.time}` : "";
+  const moment = (day: string, time: string) => safeISO(`${day}T${time}`);
   return (
     <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2.5 text-[12.5px] text-ink-2" data-testid="todo-plan" aria-busy={busy}>
       <span className="inline-flex items-center gap-1.5">
@@ -3911,7 +4002,14 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
           type="date"
           aria-label={t("todos.due_label")}
           value={due.day}
-          onCommit={(day) => save(!day ? { due_at: null } : due.time ? { due_at: moment(day, due.time) } : { due_date: day })}
+          onCommit={async (day) => {
+            if (!day) return save({ due_at: null });
+            if (!validDay(day)) return;
+            if (!due.time) return save({ due_date: day });
+            const iso = moment(day, due.time);
+            if (!iso) return;
+            return save({ due_at: iso });
+          }}
           data-testid="todo-plan-due"
         />
         {due.day && (
@@ -3919,7 +4017,12 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
             type="time"
             aria-label={t("todos.due_time")}
             value={due.time}
-            onCommit={(time) => save(time ? { due_at: moment(due.day, time) } : { due_date: due.day })}
+            onCommit={async (time) => {
+              if (!time) return save({ due_date: due.day });
+              const iso = moment(due.day, time);
+              if (!iso) return;
+              return save({ due_at: iso });
+            }}
             data-testid="todo-plan-due-time"
           />
         )}
@@ -3931,7 +4034,12 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
           type="datetime-local"
           aria-label={t("todos.remind_label")}
           value={remind}
-          onCommit={(v) => save({ remind_at: v ? new Date(v).toISOString() : null })}
+          onCommit={async (v) => {
+            if (!v) return save({ remind_at: null });
+            const iso = safeISO(v);
+            if (!iso) return;
+            return save({ remind_at: iso });
+          }}
           data-testid="todo-plan-remind"
         />
       </span>
@@ -4208,16 +4316,10 @@ function activeBlockerKindLabel(kind: string): string {
   }
 }
 
-function activeBlockerLink(raw: string): { url: string; label: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith("https://")) return null;
-  let u: URL;
-  try {
-    u = new URL(trimmed);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "https:") return null;
+export function activeBlockerLink(raw: string): { url: string; label: string } | null {
+  const safe = safeWebURL(raw, true);
+  if (!safe) return null;
+  const u = new URL(safe);
   const ghPr = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(u.pathname);
   if (ghPr) return { url: u.href, label: `${ghPr[1]}/${ghPr[2]}#${ghPr[3]}` };
   const ghIssue = /^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/.exec(u.pathname);
@@ -4228,17 +4330,8 @@ function activeBlockerLink(raw: string): { url: string; label: string } | null {
   return { url: u.href, label: path ? `${u.host}${path}` : u.host };
 }
 
-function validateExternalPRUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  let u: URL;
-  try {
-    u = new URL(trimmed);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "https:" || !u.hostname) return null;
-  return u.href;
+export function validateExternalPRUrl(raw: string): string | null {
+  return safeWebURL(raw, true) ?? null;
 }
 
 /** Compact inline form to add an external PR blocker edge under todos_v2 (#16199). */
@@ -4693,7 +4786,8 @@ function TodoDetail({
     (launcher ? retryOnLauncher(todo, launcher) : retryTask(todo)).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
   const status = todoStatus(todo, lookup);
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
-  const look = todoLook(todo, status, waitOf(todo, status, lookup));
+  const look = todoLook(todo, status, waitOf(todo, status, lookup), undefined, undefined, todosV2 ? repoGatePRLook : undefined);
+  const statusLabel = todoSupervisorLabel(todo, status, lookup) ?? look.label;
   // its steps as the hub counts them (#11858), as its row says them
   const steps = stepsWords(todo, status);
   const responsible = responsibleOf(todo);
@@ -4882,7 +4976,7 @@ function TodoDetail({
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <StatusMark state={dotState} size="sm" />
               <span data-testid="todo-detail-summary-status" className="font-semibold text-ink">
-                {steps?.label ?? look.label}
+                {steps?.label ?? statusLabel}
               </span>
               {activeAgents.length > 0 && (
                 <>
@@ -5030,7 +5124,7 @@ function TodoDetail({
       <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[12.5px] text-ink-2">
         <span className={cx("inline-flex h-5.5 items-center gap-1.5 rounded-md px-2 text-[12px] font-semibold", toneClass)}>
           <StatusMark state={dotState} size="sm" />
-          <span data-testid="todo-detail-status">{steps?.label ?? look.label}</span>
+          <span data-testid="todo-detail-status">{steps?.label ?? statusLabel}</span>
         </span>
         {steps?.tail && (
           <>
@@ -5224,7 +5318,7 @@ function TodoDetail({
           const childDone = Boolean(child.done_at);
           const childStatus = todoStatus(child, lookup);
           const childShown = shownStatus(child, childStatus);
-          const childLook = todoLook(child, childStatus, waitOf(child, childStatus, lookup));
+          const childLook = todoLook(child, childStatus, waitOf(child, childStatus, lookup), undefined, undefined, repoGatePRLook);
           const childDot =
             childShown === "needs_you" || childShown === "interrupted"
               ? "needs_you"
@@ -5270,7 +5364,7 @@ function TodoDetail({
                 data-testid="todo-detail-subtask-status"
                 className={cx("shrink-0 text-submeta whitespace-nowrap", TONE_CLASS[childLook.tone])}
               >
-                {childLook.label}
+                {todoSupervisorLabel(child, childStatus, lookup) ?? childLook.label}
               </span>
               <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
             </button>
@@ -5384,7 +5478,7 @@ function TodoDetail({
           <div className="flex flex-col gap-2">
             {activeAgents.map((agent) => {
               const session = lookup(agent.machine_id, agent.session_id);
-              const st = session ? foldedState(session) : "offline";
+              const st = todoAgentState(agent, session, lookup);
               const now = taskNow(session, st === "working");
               const isExpired = !session && !agent.start_error;
               const displayTitle = session?.title || agent.title || t("lib-format.untitled_session");
@@ -5396,7 +5490,7 @@ function TodoDetail({
                 ? `${mName} · ${spaceTab}`
                 : `${mName} · ${shortPath(session?.cwd || agent.cwd)}`;
 
-              const ix = sessionCard(interactions, agent.machine_id, agent.session_id);
+              const ix = st === "needs_you" ? ownerCard(interactions, agent, lookup) : undefined;
               const kicker = ix?.kind === "plan" ? t("todos.kicker_plan") : ix?.kind === "permission" ? t("todos.kicker_permission") : ix?.kind === "screen" ? t("todos.kicker_screen") : ix?.kind === "elicitation" ? t("todos.kicker_elicitation") : t("todos.kicker_question");
               const sourceLabel = formatAgentSource(agent, todo.spaces, lookup);
 
@@ -6503,6 +6597,22 @@ export function HandoverDialog({
   const [tab, setTab] = useState<"new" | "existing">("new");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const mountedRef = useRef(true);
+  const sessionGenRef = useRef(0);
+  const inFlightGenRef = useRef(-1);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      sessionGenRef.current += 1;
+      inFlightGenRef.current = -1;
+    };
+  }, []);
+  useEffect(() => {
+    sessionGenRef.current += 1;
+    inFlightGenRef.current = -1;
+    setBusy(false);
+  }, [open, todo.id]);
   const phone = useMedia(SHEET_QUERY);
   const pickLabel = useId();
 
@@ -6587,10 +6697,14 @@ export function HandoverDialog({
   };
 
   const submitNew = async () => {
-    if (!machine) return;
+    const gen = sessionGenRef.current;
+    if (!machine || inFlightGenRef.current === gen) return;
+    inFlightGenRef.current = gen;
     setBusy(true);
+    let succeeded = false;
     try {
       await reopenFailed();
+      if (!mountedRef.current || sessionGenRef.current !== gen) return;
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
       // It only queues the start and opens the new agent's page, which says how it went: no success toast before the hub
       // has answered (#1856).
@@ -6606,20 +6720,28 @@ export function HandoverDialog({
         todoId: todo.id,
         ...inline,
       });
+      succeeded = true;
       onClose();
     } catch (e) {
-      toast(t("todos.launch_failed", { error: errorText(e) }), "error");
+      if (mountedRef.current && sessionGenRef.current === gen) toast(t("todos.launch_failed", { error: errorText(e) }), "error");
     } finally {
-      setBusy(false);
+      if (!succeeded) {
+        if (inFlightGenRef.current === gen) inFlightGenRef.current = -1;
+        if (mountedRef.current && sessionGenRef.current === gen) setBusy(false);
+      }
     }
   };
 
   const submitExisting = async () => {
+    const gen = sessionGenRef.current;
     const s = eligibleSessions.find((x) => `${x.machine_id}/${x.session_id}` === selectedKey);
-    if (!s) return;
+    if (!s || inFlightGenRef.current === gen) return;
+    inFlightGenRef.current = gen;
     setBusy(true);
+    let succeeded = false;
     try {
       await reopenFailed();
+      if (!mountedRef.current || sessionGenRef.current !== gen) return;
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
       const clientMsgId = uuid();
       await api(`/sessions/${enc(s.machine_id)}/${enc(s.session_id)}/messages`, {
@@ -6632,13 +6754,18 @@ export function HandoverDialog({
       });
       await refreshTodos();
       await refresh();
+      if (!mountedRef.current || sessionGenRef.current !== gen) return;
+      succeeded = true;
       toast(t("todos.sent"), "ok");
       onClose();
       openFromPage({ name: "session", mid: s.machine_id, sid: s.session_id });
     } catch (e) {
-      toast(t("todos.send_failed", { error: errorText(e) }), "error");
+      if (mountedRef.current && sessionGenRef.current === gen) toast(t("todos.send_failed", { error: errorText(e) }), "error");
     } finally {
-      setBusy(false);
+      if (!succeeded) {
+        if (inFlightGenRef.current === gen) inFlightGenRef.current = -1;
+        if (mountedRef.current && sessionGenRef.current === gen) setBusy(false);
+      }
     }
   };
 

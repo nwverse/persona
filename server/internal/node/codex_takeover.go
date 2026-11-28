@@ -383,8 +383,12 @@ func (n *Node) prepareCodexTakeover(ctx context.Context, id string) (*codexTakeo
 	return &p, nil
 }
 
-func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confirm bool) (session *proto.Session, err error) {
+func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confirm bool) (*proto.Session, error) {
 	defer n.typing.lock(id)()
+	return n.commitCodexTakeoverLocked(ctx, id, token, confirm, nil)
+}
+
+func (n *Node) commitCodexTakeoverLocked(ctx context.Context, id, token string, confirm bool, sharedRemote *codexRemote) (session *proto.Session, err error) {
 	defer func() {
 		if err != nil && encryptedCodexFailure(err.Error()) {
 			n.takeovers.mu.Lock()
@@ -429,8 +433,7 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 		return nil, takeoverRefusal("writer_busy")
 	}
 	hostCtx, hostErr := n.takeoverHost(ctx)
-	var sharedRemote *codexRemote
-	if hostErr != nil {
+	if sharedRemote == nil && hostErr != nil {
 		sharedRemote = n.codexSharedRemote(src.home)
 		if sharedRemote == nil {
 			return nil, hostErr
@@ -460,7 +463,7 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 		return nil, takeoverRefusal("changed")
 	}
 	var argv []string
-	if hostErr == nil {
+	if sharedRemote == nil {
 		// Prove that a shared entry can be used before interrupting the old terminal.
 		shared := n.takeovers.shared
 		if shared == nil {
@@ -511,8 +514,8 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	if current, err = n.takeoverWriters(src); err != nil || len(current) != 0 || n.codexWriterLockHeld(src) || desktopConflict() {
 		return nil, takeoverRefusal("writer_busy")
 	}
-	if hostErr != nil {
-		// No terminal engine launcher is available: cold-activate directly on the shared app-server.
+	if sharedRemote != nil {
+		// Cold-activate directly on the shared app-server.
 		if err := sharedRemote.coldResume(ctx, id, src, p.Cwd); err != nil {
 			return nil, err
 		}

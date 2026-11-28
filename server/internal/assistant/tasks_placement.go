@@ -298,6 +298,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := s.checkRequestStart(ctx, *t); err != nil {
 		return "", "", err
 	}
+	if err := s.checkTodoStartReadiness(ctx, *t); err != nil {
+		return "", "", err
+	}
 	if (t.HandoffID != "" || t.HandoffOperationID != "") && (t.Permission != "" || t.Readonly) {
 		t.preservePermission = true
 	}
@@ -418,6 +421,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}()
 	if err != nil {
 		return "", "", err
+	}
+	if t.Parent != "" && params["host"] == nil && s.taskWorktreeKind(ctx, t) == proto.EngineOrca {
+		params["host"] = proto.EngineOrca
 	}
 	// On the computer it landed on (a flexible task may have moved): a default it lacks gives way to one it has, a
 	// launcher the plan named that it lacks is refused before any tab opens (#2640). Before the health check below,
@@ -738,6 +744,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		if err := s.checkClaimedGatewayStart(ctx, *t); err != nil {
 			return err
 		}
+		if err := s.checkTodoStartReadiness(ctx, *t); err != nil {
+			return err
+		}
 		bindCtx := context.WithValue(ctx, placementBindKey{}, p)
 		if !t.usesPreparedWorkspace() {
 			return s.call(bindCtx, m.ID, DeviceSessionStart, params, &res)
@@ -788,7 +797,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	if err != nil {
 		var stateErr *gatewayQueueStateError
-		if err == errGatewayTaskHandled || errors.As(err, &stateErr) {
+		var blocked *todoStartBlocked
+		if err == errGatewayTaskHandled || errors.As(err, &stateErr) || errors.As(err, &blocked) {
 			return "", "", err
 		}
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)

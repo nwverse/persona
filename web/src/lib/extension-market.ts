@@ -105,6 +105,10 @@ export interface CatalogItem {
   permissions?: ExtensionPermission[];
   /** Why this hub cannot install it (no package for its platform, needs a newer hub). */
   problem?: string;
+  /** A newer release in this market that requires a newer Persona hub build. */
+  latest_incompatible_version?: string;
+  /** Localized reason why `latest_incompatible_version` cannot run on this hub. */
+  latest_incompatible_reason?: string;
   /** The installed version, if any. */
   installed?: string;
   installed_source?: string;
@@ -279,6 +283,16 @@ export function itemState(it: CatalogItem): ItemState {
 
 /** Uninstalling from here: only an extension this market installed. */
 export const canUninstall = (it: CatalogItem) => Boolean(it.installed && it.from_this_market);
+
+/** Newer release blocked by the hub build, surfaced only when the active release is not already blocked by `problem`. */
+export function newerIncompatibleHint(
+  it: Pick<CatalogItem, "problem" | "latest_incompatible_version" | "latest_incompatible_reason">,
+): { version: string; reason: string } | null {
+  if (it.problem?.trim()) return null;
+  const version = it.latest_incompatible_version?.trim() ?? "";
+  if (!version) return null;
+  return { version, reason: it.latest_incompatible_reason?.trim() ?? "" };
+}
 
 /** A market's line under its name: how many extensions, when it was read, whether it has a token. */
 export function marketLine(m: Market, ago: (iso?: string) => string): string {

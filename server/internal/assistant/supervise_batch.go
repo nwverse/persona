@@ -79,7 +79,7 @@ func supervisionBatchImmediate(g superviseSignal) bool {
 	case sigReport:
 		return g.Report == upReportQuestion || g.Report == upReportBlocked
 	}
-	return false
+	return g.todoV2Wake()
 }
 
 // digestWaitWithBatch is digestWait while optional batching is off. With it on, recipient batch deadlines replace the

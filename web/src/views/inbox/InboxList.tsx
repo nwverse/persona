@@ -18,7 +18,9 @@ import { useInboxSources } from "../../lib/inbox-sources";
 import { subscriptionsHref, useInboxSourcesShown, useSubscriptionsShown } from "../../lib/subscriptions";
 import { type Manager } from "../../lib/managers";
 import { scoped, useScope, useScoped } from "../../lib/current-assistant";
-import { useStore } from "../../lib/store";
+import { useStore, useLarkOn } from "../../lib/store";
+import { hubServes, moduleFeature, useModuleStates } from "../../core/module-host";
+import { inboxSourceVisibility } from "../../lib/inbox-source-availability";
 import { directoryVisibleCards } from "../../lib/sessions";
 import type { Interaction } from "../../lib/types";
 import { t } from "../../i18n";
@@ -128,12 +130,27 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
   const loading = useInbox((s) => s.loading);
   const error = useInbox((s) => s.error);
   const triage = useInbox((s) => s.triage);
+  const storedSources = useInbox((s) => s.storedSources);
+  const larkExtension = useLarkOn();
+  useModuleStates();
+  const sourceVisibility = inboxSourceVisibility({
+    lark: larkExtension || hubServes(moduleFeature("lark")),
+    mail: hubServes(moduleFeature("mail")),
+  }, storedSources);
+  const emptyDoneHint = sourceVisibility.lark && sourceVisibility.mail ? "inbox-inboxlist.empty_all_done_hint"
+    : sourceVisibility.lark ? "inbox-inboxlist.empty_all_done_hint_lark"
+    : sourceVisibility.mail ? "inbox-inboxlist.empty_all_done_hint_mail"
+    : "inbox-inboxlist.empty_all_done_hint_generic";
   const storeLoaded = useStore((s) => s.loaded);
   // The waiting agents come with the store, often after the items: painting the items first and then the agents over
   // them pushed every row down (a layout shift of 600px on a phone), so the list waits for both and paints once.
   const ready = loaded && storeLoaded;
   const [source, setSource] = useStored("inbox.source");
   const [kind, setKind] = useStored("inbox.kind");
+  // A hidden source must not remain as an invisible persisted filter (#17399).
+  useEffect(() => {
+    if (!sourceVisibility.lark && source === "feishu") setSource("");
+  }, [sourceVisibility.lark, source]);
   // Needs you, FYI and Collapsed by source or by time (#2059), kept on this device; Done is always by time
   const [groupingSaved, setGrouping] = useStored("inbox.grouping");
   const grouping: Grouping = groupingSaved === "time" ? "time" : "source";
@@ -228,7 +245,8 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
   const [filtersExpanded, setFiltersExpanded] = useStoredFlag(FILTERS_EXPANDED_KEY);
   const [filtersOverflow, setFiltersOverflow] = useState(false);
   const [filtersFade, setFiltersFade] = useState({ left: 0, right: 0 });
-  const filtersKey = `${chips.map((a) => `${a.id}:${a.email}`).join("\0")}|${connectors.map((c) => `${c.id}:${c.name}`).join("\0")}`;
+  const filtersKey = `${sourceVisibility.lark}|${chips.map((a) => `${a.id}:${a.email}`).join("\0")}|${connectors.map((c) => `${c.id}:${c.name}`).join("\0")}`;
+  const hasSourceChips = sourceVisibility.lark || chips.length > 0 || connectors.length > 0;
   const measureFilters = useCallback(() => {
     if (filtersExpanded) {
       setFiltersFade((prev) => (prev.left === 0 && prev.right === 0 ? prev : { left: 0, right: 0 }));
@@ -579,14 +597,14 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
               {t("inbox-inboxlist.clear")}
             </button>
           )}
-          <Chip on={source === "feishu"} onClick={() => pickSource("feishu")}>{t("inbox-inboxlist.source_lark")}</Chip>
+          {sourceVisibility.lark && <Chip on={source === "feishu"} onClick={() => pickSource("feishu")}>{t("inbox-inboxlist.source_lark")}</Chip>}
           {chips.map((a) => (
             <Chip key={a.id} on={source === a.id} onClick={() => pickSource(a.id)} title={a.email}>{mailShort(a.email)}</Chip>
           ))}
           {connectors.map((c) => (
             <Chip key={`c:${c.id}`} on={source === c.id} onClick={() => pickSource(c.id)}>{c.name}</Chip>
           ))}
-          {!filtersExpanded && <span aria-hidden className="mx-0.5 h-4 w-px bg-line-strong" />}
+          {!filtersExpanded && hasSourceChips && <span aria-hidden data-source-kind-divider className="mx-0.5 h-4 w-px bg-line-strong" />}
           {KIND_FILTERS.map((k) => (
             <Chip key={k.key} on={kind === k.key} onClick={() => pickKind(k.key)}>{k.label}</Chip>
           ))}
@@ -695,7 +713,7 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
             </span>
             <p className="text-[13.5px] font-medium text-ink">{emptyKind === "section" ? choice !== "all" && t(SECTION_EMPTY[choice]) : t(emptyKind === "caught_up" ? "inbox-inboxlist.empty_all_done" : emptyKind === "filtered" ? "inbox-inboxlist.empty_filtered" : "inbox-inboxlist.empty_no_match")}</p>
             {/* a chosen section's: where the rest are, or (Done) what comes to it */}
-            {(emptyKind !== "section" || choice !== "all") && <p className={cx("text-[12.5px] text-ink-3", emptyKind !== "caught_up" && "max-w-80")} data-inbox-empty-hint>{t(emptyKind === "section" ? (choice === "done" ? "inbox-inboxlist.empty_done_hint" : "inbox-inboxlist.empty_section_hint") : emptyKind === "caught_up" ? "inbox-inboxlist.empty_all_done_hint" : emptyKind === "filtered" ? "inbox-inboxlist.empty_filtered_hint" : "inbox-inboxlist.empty_no_match_hint")}</p>}
+            {(emptyKind !== "section" || choice !== "all") && <p className={cx("text-[12.5px] text-ink-3", emptyKind !== "caught_up" && "max-w-80")} data-inbox-empty-hint>{t(emptyKind === "section" ? (choice === "done" ? "inbox-inboxlist.empty_done_hint" : "inbox-inboxlist.empty_section_hint") : emptyKind === "caught_up" ? emptyDoneHint : emptyKind === "filtered" ? "inbox-inboxlist.empty_filtered_hint" : "inbox-inboxlist.empty_no_match_hint")}</p>}
             {emptyCleared && <Button tone="secondary" onClick={clearFilters} className="mt-2 touch-hit">{t(emptyKind === "filtered" ? "inbox-inboxlist.clear_filters" : "inbox-inboxlist.clear_search")}</Button>}
           </div>
         )}

@@ -458,28 +458,22 @@ func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantw
 // ---- on the bus: what the assistant calls ----
 
 func init() {
-	for _, method := range []string{assistantwire.MethodDevice, assistantwire.MethodDeviceRetire} {
-		handleBus(method, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-			var p assistantwire.DeviceCall
-			if err := json.Unmarshal(params, &p); err != nil {
-				return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": " + err.Error()}
-			}
-			if method == assistantwire.MethodDeviceRetire && p.Method != nodeproto.StopIfIdle {
-				return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "device.retire requires session.stop_if_idle"}
-			}
-			// A manager acts only on its own machines (ownership.go deviceCallAllowed); the list of them is its own too.
-			if err := h.deviceCallAllowed(c.managerID(), p); err != nil {
-				return nil, err
-			}
-			out, err := assistantLink{h}.deviceCallFrom(ctx, c.managerID(), p)
-			return out, busCodedError(err)
-		})
-	}
-	handleBus(assistantwire.MethodApp, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p assistantwire.AppCall
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodApp + ": " + err.Error()}
+	deviceCall := func(h *Hub, ctx context.Context, c *busConn, p assistantwire.DeviceCall) (json.RawMessage, error) {
+		// A manager acts only on its own machines (ownership.go deviceCallAllowed); the list of them is its own too.
+		if err := h.deviceCallAllowed(c.managerID(), p); err != nil {
+			return nil, err
 		}
+		out, err := assistantLink{h}.deviceCallFrom(ctx, c.managerID(), p)
+		return out, busCodedError(err)
+	}
+	handleTypedBus(assistantwire.DeviceMethod, assistantwire.MethodDevice+": ", deviceCall)
+	handleTypedBus(assistantwire.DeviceRetireMethod, assistantwire.MethodDeviceRetire+": ", func(h *Hub, ctx context.Context, c *busConn, p assistantwire.DeviceCall) (json.RawMessage, error) {
+		if p.Method != nodeproto.StopIfIdle {
+			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "device.retire requires session.stop_if_idle"}
+		}
+		return deviceCall(h, ctx, c, p)
+	})
+	handleTypedBus(assistantwire.AppMethod, assistantwire.MethodApp+": ", func(h *Hub, ctx context.Context, c *busConn, p assistantwire.AppCall) (json.RawMessage, error) {
 		if p.TimeoutMS > 0 { // the assistant stops waiting then: so does the hub (a model call)
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, time.Duration(p.TimeoutMS)*time.Millisecond)

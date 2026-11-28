@@ -189,7 +189,8 @@ func (s *Service) channelDetail(ctx context.Context, id string) (channel.Detail,
 	}
 	ov, hasOverrides := c.overrides[id], c.hasOverrides
 	c.mu.Unlock()
-	if !d.ReadOnly && d.Source != channel.SourceMarket && d.Target != nil {
+	// A reported map without an override for this channel explicitly suppresses the hint.
+	if !d.ReadOnly && d.Source != channel.SourceMarket && d.Target != nil && (!hasOverrides || ov != nil) {
 		if v.Source == channel.SourcePlugin && v.Installed && v2 {
 			switch d.ThreadMode {
 			case channel.ThreadModePerGroupAndTopic:
@@ -199,11 +200,9 @@ func (s *Service) channelDetail(ctx context.Context, id string) (channel.Detail,
 			}
 		} else {
 			switch {
-			case hasOverrides:
-				if ov != nil {
-					cp := *ov
-					d.TargetOverride = &cp
-				}
+			case ov != nil:
+				cp := *ov
+				d.TargetOverride = &cp
 			case v.Source == channel.SourcePlugin && v.Installed && v.Capabilities.Threads:
 				d.TargetOverride = &channel.TargetOverride{Mode: channel.TargetOverrideThreads}
 			}
