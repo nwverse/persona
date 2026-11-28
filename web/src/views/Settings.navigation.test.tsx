@@ -207,6 +207,33 @@ describe("Settings category navigation", () => {
     }
   });
 
+  it("controls Needs you auto-open with an off-by-default browser setting (#17061)", async () => {
+    await initI18n("en");
+    try {
+      await mount("/settings?tab=general");
+      const row = () => host.querySelector<HTMLElement>('[data-settings-row="needs-you-auto-open"]');
+      const toggle = () => row()?.querySelector<HTMLButtonElement>('[role="switch"]');
+      expect(row(), 'Auto-open "Needs you" on entering main chat').not.toBeNull();
+      expect(row()?.textContent).toContain('Auto-open "Needs you" on entering main chat');
+      expect(toggle()?.getAttribute("aria-checked")).toBe("false");
+      expect(localStorage.getItem("persona.needsYouAutoOpen")).toBeNull();
+
+      await act(async () => toggle()!.click());
+      expect(toggle()?.getAttribute("aria-checked")).toBe("true");
+      expect(localStorage.getItem("persona.needsYouAutoOpen")).toBe("1");
+
+      await act(async () => root.render(null));
+      await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+      expect(toggle()?.getAttribute("aria-checked")).toBe("true");
+
+      await act(async () => toggle()!.click());
+      expect(toggle()?.getAttribute("aria-checked")).toBe("false");
+      expect(localStorage.getItem("persona.needsYouAutoOpen")).toBeNull();
+    } finally {
+      await initI18n("zh-Hans");
+    }
+  });
+
   // audit item 17: General's hints were cut at one line ("切换后页面会重新载…"), at every width
   it.each([false, true])("lets General's hints wrap rather than cutting them (phone: %s)", async (phone) => {
     viewport.phone = phone;
@@ -215,6 +242,7 @@ describe("Settings category navigation", () => {
       ["language", t("language.hint")],
       ["text-size", t("ui-look.text_size_hint")],
       ["reply-motion", t("settings.reply_motion_hint")],
+      ["needs-you-auto-open", t("settings.needs_you_auto_open_hint")],
       ["agent-details", t("context.details_hint")],
       ["install-app", t("settings.install_installed")],
     ];

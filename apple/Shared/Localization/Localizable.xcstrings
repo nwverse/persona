@@ -83965,6 +83965,28 @@
         }
       }
     },
+    "Full Reply": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Reply"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "返信全体"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "整条回复"
+          }
+        }
+      }
+    },
     "Full Screen": {
       "localizations": {
         "en": {
@@ -136280,6 +136302,28 @@
       },
       "extractionState": "manual"
     },
+    "Opening Only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opening Only"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "冒頭のみ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只读开头"
+          }
+        }
+      }
+    },
     "Opening the link doesn't finish it. Complete the page, then come back and tap Continue.": {
       "extractionState": "manual",
       "localizations": {
@@ -138902,6 +138946,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Part omitted.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Part omitted."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "途中を省略しました。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中间部分已省略。"
+          }
+        }
+      }
     },
     "Partly staged": {
       "localizations": {
@@ -150455,6 +150521,28 @@
       },
       "extractionState": "manual"
     },
+    "Read Replies Aloud": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read Replies Aloud"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "返信を読み上げる"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "朗读回复"
+          }
+        }
+      }
+    },
     "Read the recent messages in my Lark chat “%@” (Lark gateway feedId %@), summarize the key points, list what I need to reply to or handle, and suggest replies.": {
       "localizations": {
         "zh-Hans": {
@@ -150708,6 +150796,28 @@
         }
       }
     },
+    "Reading Length": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading Length"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "読み上げる範囲"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "朗读范围"
+          }
+        }
+      }
+    },
     "Reading models…": {
       "extractionState": "manual",
       "localizations": {
@@ -150820,6 +150930,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Reads new Main Chat replies while the chat is open on this iPhone.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reads new Main Chat replies while the chat is open on this iPhone."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この iPhone でメインチャットを開いている間、新しい返信を読み上げます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在这台 iPhone 上打开主对话时，朗读收到的新回复。"
+          }
+        }
+      }
     },
     "Reads steps, heart rate, sleep, and more from Apple Health; saves to it once you confirm": {
       "localizations": {
@@ -176607,6 +176739,28 @@
       },
       "extractionState": "manual"
     },
+    "Speaking Rate": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaking Rate"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "読み上げ速度"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "语速"
+          }
+        }
+      }
+    },
     "Speaks only when you tap Ask Persona, and only when it takes part.": {
       "extractionState": "manual",
       "localizations": {
@@ -197342,6 +197496,28 @@
         }
       }
     },
+    "The rest is on screen.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The rest is on screen."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "続きは画面で確認できます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其余内容请看屏幕。"
+          }
+        }
+      }
+    },
     "The same full access as this iPhone": {
       "localizations": {
         "en": {
@@ -214843,6 +215019,28 @@
       },
       "extractionState": "manual"
     },
+    "Unavailable Extension": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable Extension"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用できない拡張機能"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此扩展不可用"
+          }
+        }
+      }
+    },
     "Unavailable here": {
       "extractionState": "manual",
       "localizations": {
@@ -214907,6 +215105,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "这台电脑上用不了"
+          }
+        }
+      }
+    },
+    "Unavailable Voice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable Voice"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用できない声"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此音色不可用"
           }
         }
       }
@@ -222954,6 +223174,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Voice Source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Source"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音声の提供元"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "语音来源"
+          }
+        }
+      }
     },
     "Voice · This call only": {
       "localizations": {
@@ -236030,6 +236272,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "手机发热或在省电"
+          }
+        }
+      }
+    },
+    "iPhone Voice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhone Voice"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhone の声"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhone 音色"
           }
         }
       }

@@ -189,6 +189,9 @@ struct ChatView: View {
     @Environment(\.sideColumn) private var sideColumn
     /// The page draws this chat's lifted message (`MessageLiftHost`).
     @Environment(\.messageLiftHost) private var liftHost
+    #if os(iOS)
+    @Environment(\.replySpeechContext) private var replySpeechContext
+    #endif
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
     /// style (#1091). Other platforms retain `ComposerRow` / `PromptComposer` and their mode chips. On the Mac
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
@@ -728,6 +731,15 @@ struct ChatView: View {
         .stackSegment()
     }
 
+    #if os(iOS)
+    /// A page opened from a message covers the main chat even while its underlying view stays mounted.
+    private var coveredMainChat: Bool? {
+        guard replySpeechContext != nil, style == .assistant, !backgroundActivity, key == model.assistantMain else { return nil }
+        return link != nil || viewingImages != nil || file != nil || openedKnowledge != nil || linkedTodo != nil
+            || hubSheet != nil || previewing || planOpen || showAssistantModel || readinessRoute != nil || showTodoDetail
+    }
+    #endif
+
     @inline(never) private func applyChatLifecycleTop(_ base: AnyView) -> AnyView {
         base
         .environment(\.openFile, actions.openFile)
@@ -755,6 +767,11 @@ struct ChatView: View {
         .environment(\.openPort, actions.openPort)
         // Web links open in the in-app sheet (Feishu docs in the native reader); local paths open the machine's file viewer.
         .environment(\.openURL, actions.openURL)
+        #if os(iOS)
+        .onChange(of: coveredMainChat, initial: true) { _, covered in
+            if let covered { replySpeechContext?.chatSheetOpen = covered }
+        }
+        #endif
         .sheet(item: $link) { t in LinkSheet(target: t, key: key, choosePreview: { openPort($0.link, name: $0.name) }) }
         .readinessSheets($readinessRoute)
         .onChange(of: showAssistantModel) { _, on in
@@ -5773,6 +5790,9 @@ struct Composer: View, Equatable {
     }
 
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    @Environment(\.replySpeechContext) private var replySpeechContext
+    #endif
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
@@ -6758,6 +6778,9 @@ struct Composer: View, Equatable {
         // On screen at once; the request runs in the background (a failure turns the bubble into "Resend").
         guard model.sendNow(key, text: message, images: images.map(\.1)) else { return false }
         if raw == text { text = "" }
+        #if os(iOS)
+        if text.isEmpty, key == model.assistantMain { replySpeechContext?.sentDraft() }
+        #endif
         images = []
         held.sentFiles()
         model.composerContexts[key] = nil

@@ -54,6 +54,7 @@ import { personalHideDeps, personalOrder, personalSessions, removeAgentSession, 
 import { BADGE_CLASS, CURRENT_ROW, type GoFn, GroupCount, pageIconStyle, type RegFn, ROW_TITLE_MIN, type RowMenuFn, Section } from "./SidebarParts";
 import { sidebarRowHover } from "./SidebarRowHover";
 import { requestDirectWaiting } from "../lib/direct-waiting";
+import { needsYouAutoOpen } from "../lib/needs-you-auto-open";
 import type { UIColor } from "../lib/extension-ui-v6";
 
 // The main conversation uses the home symbol (Back to main chat's) and one Main conversation line.
@@ -73,7 +74,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
   const open = (e: React.MouseEvent) => {
     // set to Full page, picked from another place it opens the page the conversation kept over it (#13164)
     go(to, () => pickMainChat(active))(e);
-    if (e.defaultPrevented && main && pending > 0) requestDirectWaiting(main.session_id);
+    if (e.defaultPrevented && main && pending > 0 && needsYouAutoOpen()) requestDirectWaiting(main.session_id);
   };
   const link = (
     <a
