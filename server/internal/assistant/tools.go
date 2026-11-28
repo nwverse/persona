@@ -538,20 +538,20 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := s.ensureTodosLoaded(ctx); err != nil {
 			return "", err
 		}
-		inboxTodo, onTask := s.openTodoOfAgent(am.ID, c.SessionID)
-		mayLink := a.Task != nil || onTask && othersTask(c, inboxTodo, self) == nil
-		if handoff != nil {
-			inboxTodo, mayLink = s.todoNow(handoff.origin)
-		}
-		if !exitText(a.Text) && mayLink {
-			if err := s.planInboxSource(ctx, machine, self, &source); err != nil {
+		var inboxTodo Todo
+		if source.InboxItem != "" {
+			var onTask bool
+			inboxTodo, onTask = s.openTodoOfAgent(am.ID, c.SessionID)
+			mayLink := a.Task != nil || onTask && othersTask(c, inboxTodo, self) == nil
+			if handoff != nil {
+				inboxTodo, mayLink = s.todoNow(handoff.origin)
+			}
+			if exitText(a.Text) || !mayLink {
+				return "", fmt.Errorf("inbox_item requires work on your own open task; nothing was sent")
+			}
+			if err := s.planExistingTaskInbox(ctx, machine, self, &source, inboxTodo); err != nil {
 				return "", err
 			}
-			if err := s.checkExistingTaskInbox(self, source, inboxTodo); err != nil {
-				return "", err
-			}
-		} else if source.InboxItem != "" {
-			return "", fmt.Errorf("inbox_item requires work on your own open task; nothing was sent")
 		}
 		summary := agentLabel(c) + " · " + am.Name + "\n\n" + a.Text
 		if resume != "" { // the phone says it resumes the agent, and why
@@ -594,16 +594,20 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := s.externalSessionRefusal(ctx, self, am, c); err != nil {
 			return "", err
 		}
-		if err := s.checkExistingTaskInbox(self, source, inboxTodo); err != nil {
-			return "", fmt.Errorf("%w; nothing was sent", err)
+		if source.InboxItem != "" {
+			if err := s.checkExistingTaskInbox(self, source, inboxTodo); err != nil {
+				return "", fmt.Errorf("%w; nothing was sent", err)
+			}
 		}
 		var task *handedTask
 		if a.Task != nil {
 			if task, err = s.handTask(ctx, self, am, c, *a.Task, a.Text); err != nil {
 				return "", err
 			}
-			if err := s.checkExistingTaskInbox(self, source, task.todo); err != nil {
-				return "", task.sendFailed(ctx, s, fmt.Errorf("%w; nothing was sent", err))
+			if source.InboxItem != "" {
+				if err := s.checkExistingTaskInbox(self, source, task.todo); err != nil {
+					return "", task.sendFailed(ctx, s, fmt.Errorf("%w; nothing was sent", err))
+				}
 			}
 		}
 		persistInbox := func(ctx context.Context, result string) (string, error) {
