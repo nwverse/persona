@@ -48,16 +48,9 @@ func (rec agentArchive) activeAfter() time.Time {
 	return at
 }
 
-// archiveSessionOf is the id a row's archive record is kept under, its archive key: for an Antigravity CLI pane's row,
-// the id its conversation is listed under once no pane shows it, agy-<conversation id>, which the row names first among
-// its aliases (docs/protocol/protocol.md "Agent session archives"); else its own (#14520). The archive then follows the
-// conversation to whichever row lists it next, and is not kept under a pane's id, which the engine gives to another
-// conversation later.
+// archiveSessionOf is the machine-local key shared by archive and deletion records.
 func archiveSessionOf(s proto.Session) string {
-	if aliases := s.Aliases(); s.Agent == "agy" && s.PaneID != "" && len(aliases) > 0 {
-		return aliases[0]
-	}
-	return s.SessionID
+	return s.ConversationID()
 }
 
 // A just-closed confirmation can remain in a node's cached list until its next push.

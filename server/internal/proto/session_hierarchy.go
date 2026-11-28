@@ -537,6 +537,16 @@ func (s *Session) SetEngineHistory(legs []EngineLeg) {
 	s.setHierarchy(h)
 }
 
+// ConversationID is the machine-local ID used for archive and deletion records.
+// An identified Antigravity pane lists its conversation's own ID first among its aliases.
+// Other rows, including panes from older nodes without aliases, use their exact session ID.
+func (s *Session) ConversationID() string {
+	if aliases := s.Aliases(); s.Agent == "agy" && s.PaneID != "" && len(aliases) > 0 {
+		return aliases[0]
+	}
+	return s.SessionID
+}
+
 // Aliases are the other session ids the row's conversation is known by on its machine (SessionHierarchy.Aliases);
 // nil when none. Shared with the row's other copies: not to be changed.
 func (s *Session) Aliases() []string {

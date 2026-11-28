@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/sessionhistory"
 )
 
 // Deleting a conversation takes an offline one out of what the apps get (the list, the pushes), kept across a
@@ -123,6 +125,90 @@ func TestDeleteSessions(t *testing.T) {
 	})
 	if got := listed(); !strings.Contains(got, "old-0007") || strings.Contains(got, "fail-0008") {
 		t.Fatalf("a session used again is back: %s", got)
+	}
+}
+
+// A deletion made on a terminal row survives a Hub restart and follows the
+// conversation to its companion row or a new pane. The old pane can be reused.
+func TestAgyDeleteFollowsConversation(t *testing.T) {
+	h := newTestHub(t)
+	h.store = &settingsStore{vals: map[string][]byte{}}
+	const machine = "desk"
+	m := newMachine(h, MachineConfig{ID: machine})
+	registerMachine(h, m)
+	pane := proto.Session{MachineID: machine, SessionID: "agy-w1-p1", PaneID: "w1:p1", Agent: "agy",
+		Title: "Notes", Cwd: "/work", Status: proto.StatusIdle}
+	const conversation = "agy-conversation-c"
+	pane.SetAliases([]string{conversation})
+	editSessions(m, func([]proto.Session) []proto.Session { return []proto.Session{pane} })
+	srv := httptest.NewServer(h.routes())
+	defer srv.Close()
+	if code, body := ownershipGet(t, h, srv, http.MethodDelete, "/api/v1/sessions/desk/"+pane.SessionID, nil); code != http.StatusOK {
+		t.Fatalf("delete: %d %v", code, body)
+	}
+
+	restarted := newTestHub(t)
+	restarted.store = h.store
+	own := pane
+	own.SessionID, own.PaneID, own.Status = conversation, "", proto.StatusDone
+	own.SetAliases(nil) // the restarted node has no memory of the pane
+	own.UpdatedAt = time.Now().UTC().Add(-time.Hour)
+	reused := pane // same name and workspace, different conversation
+	reused.SetAliases([]string{"agy-conversation-d"})
+	reused.UpdatedAt = own.UpdatedAt
+	m, _ = historyNode(t, restarted, machine, nodeHistory([]sessionhistory.Row{
+		{Session: own, Source: sessionhistory.SourceRuntime}, {Session: reused, Source: sessionhistory.SourceRuntime},
+	}))
+	editSessions(m, func([]proto.Session) []proto.Session { return []proto.Session{own, reused} })
+	restarted.bus.idents = &memIdents{}
+	after := httptest.NewServer(restarted.routes())
+	defer after.Close()
+	manager := connectGuardManager(t, restarted, after.URL, assistantwire.AssistantID, func(method string, _ json.RawMessage) (any, error) {
+		if method != assistantwire.MethodHTTP {
+			return nil, fmt.Errorf("unexpected manager call %s", method)
+		}
+		rows := []proto.Session{own, reused}
+		for i := range rows {
+			rows[i].Archived = true
+		}
+		body, err := json.Marshal(map[string]any{"sessions": rows})
+		return assistantwire.HTTPResponse{Status: http.StatusOK, Body: body}, err
+	})
+	archiveManagerCapability(t, manager, true)
+	for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions/archived?machine_id=desk",
+		"/api/v1/sessions?include_inactive=1&since=" + own.UpdatedAt.Add(-time.Hour).Format(time.RFC3339Nano)} {
+		code, body := ownershipGet(t, restarted, after, http.MethodGet, path, nil)
+		rows := archiveReplyRows(t, body)
+		if code != http.StatusOK || len(rows) != 1 || rows[0].SessionID != reused.SessionID {
+			t.Errorf("%s: %d, listed %q, want only %s", path, code, ids(rows), reused.SessionID)
+		}
+	}
+	if restarted.publicSessionForControl(m, own.SessionID) || !restarted.publicSessionForControl(m, reused.SessionID) {
+		t.Error("extension controls must allow only the new conversation")
+	}
+	newPane := pane
+	newPane.SessionID, newPane.PaneID = "agy-w2-p2", "w2:p2"
+	if got := restarted.shown(machine, []proto.Session{newPane}); len(got) != 0 {
+		t.Errorf("same conversation in a new pane is visible: %s", ids(got))
+	}
+	if got := restarted.shown("laptop", []proto.Session{own}); len(got) != 1 {
+		t.Error("deletion hid the conversation ID on another machine")
+	}
+	own.UpdatedAt = time.Now().Add(time.Second)
+	if got := restarted.shown(machine, []proto.Session{own}); len(got) != 1 {
+		t.Error("a new turn in the original conversation must restore it")
+	}
+}
+
+func TestAgyDeleteWithoutKnownConversation(t *testing.T) {
+	pane := proto.Session{SessionID: "agy-w1-p1", Agent: "agy", PaneID: "w1:p1", Status: proto.StatusIdle}
+	deleted := map[string]time.Time{pane.SessionID: time.Now()}
+	if !sessionHiddenByDeletion(pane, deleted) {
+		t.Error("a pane without aliases still uses its exact ID")
+	}
+	pane.SetAliases([]string{"agy-conversation-d"})
+	if sessionHiddenByDeletion(pane, deleted) {
+		t.Error("a legacy pane deletion cannot identify the conversation now in that pane")
 	}
 }
 

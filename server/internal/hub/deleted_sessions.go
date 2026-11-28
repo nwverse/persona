@@ -15,7 +15,7 @@ import (
 )
 
 // Deleting a conversation (issue #801) only takes it out of the apps' lists: the hub notes when (settings
-// sessions.deleted, by "machine/session id") and leaves out of what it sends the apps an offline session that has
+// sessions.deleted, by "machine/conversation id") and leaves out of what it sends the apps an offline session that has
 // not been used since. The transcript stays on its computer; once the session is used again (resumed, a new
 // message) it is listed again. A start that failed (start_error) goes the same way, right away instead of when the
 // node forgets it. A finished one that is still open (idle, seen) goes too. Running sessions and the assistant's
@@ -105,7 +105,7 @@ func stillDeleted(s proto.Session, at time.Time) bool {
 
 // sessionHiddenByDeletion applies the same precedence to normal and archived lists.
 func sessionHiddenByDeletion(s proto.Session, deleted map[string]time.Time) bool {
-	at, ok := deleted[s.SessionID]
+	at, ok := deleted[s.ConversationID()]
 	return ok && (s.ArchiveChangedAt == nil || !s.ArchiveChangedAt.After(at)) && stillDeleted(s, at)
 }
 
@@ -164,7 +164,7 @@ func (h *Hub) deleteSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 		writeErr(w, http.StatusConflict, errDeleteHeld)
 		return
 	}
-	if err := h.noteDeleted(r.Context(), m.cfg.ID, id, time.Now().UTC()); err != nil {
+	if err := h.noteDeleted(r.Context(), m.cfg.ID, s.ConversationID(), time.Now().UTC()); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
