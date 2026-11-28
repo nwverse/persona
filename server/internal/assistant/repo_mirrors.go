@@ -30,7 +30,7 @@ type repoMirrorStore interface {
 
 const (
 	repoMirrorLoopIdleWait   = time.Minute
-	repoMirrorCallTimeout    = 3 * time.Minute
+	repoMirrorCallTimeout    = repository.MirrorColdFetchTimeout + time.Minute
 	repoMirrorMaxBackoff     = 6 * time.Hour
 	repoMirrorErrorMaxRunes  = 300
 	repoMirrorJitterFraction = 0.15

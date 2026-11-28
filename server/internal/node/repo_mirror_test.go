@@ -300,6 +300,46 @@ func TestConcurrentBackendWorkspacePreparesShareOneColdMirrorFetch(t *testing.T)
 	}
 }
 
+func TestRepoMirrorFetchDeadlines(t *testing.T) {
+	home := workspaceTemp(t)
+	remote := workspaceRemote(t, "main")
+	var remaining time.Duration
+	n := &Node{
+		home: home,
+		dir:  filepath.Join(home, ".persona"),
+		repoMirrors: repoMirrorManager{
+			beforeFetch: func(ctx context.Context, _ string) error {
+				deadline, _ := ctx.Deadline()
+				remaining = time.Until(deadline)
+				return nil
+			},
+		},
+	}
+	for _, tc := range []struct {
+		name, repoID string
+		override     time.Duration
+		min, max     time.Duration
+	}{
+		{"cold creation", "repo_web", 0, 9 * time.Minute, 10 * time.Minute},
+		{"incremental refresh", "repo_web", 0, time.Minute, 2 * time.Minute},
+		{"cold override", "repo_api", 30 * time.Second, 20 * time.Second, 30 * time.Second},
+		{"incremental override", "repo_api", 30 * time.Second, 20 * time.Second, 30 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n.repoMirrors.fetchTimeout = tc.override
+			info := repoMirrorCall[repository.MirrorInfo](t, n, repository.MethodRepoMirrorEnsure, repository.MirrorEnsureRequest{
+				RepoID:   tc.repoID,
+				Identity: testRepoIdentity(t, "web"),
+				CloneURL: remote,
+				Force:    true,
+			})
+			if !info.Fetched || remaining < tc.min || remaining > tc.max {
+				t.Fatalf("fetch with %v remaining, want a completed fetch with deadline in [%v, %v]", remaining, tc.min, tc.max)
+			}
+		})
+	}
+}
+
 func TestRepoMirrorValidationRejectsTraversalAndSymlinks(t *testing.T) {
 	home := workspaceTemp(t)
 	n := &Node{home: home, dir: filepath.Join(home, ".persona")}

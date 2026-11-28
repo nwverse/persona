@@ -1253,7 +1253,12 @@ func (s *Service) parkActiveTodoBlockers(ctx context.Context, planID string, i i
 // runPlanTaskStart is the shared start body; its caller owns the idle reservation through every return path.
 func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTask, retry bool) {
 	t.planID, t.planIndex = planID, i
-	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
+	startTimeout := taskStartTimeout
+	if t.backendWorkspace() {
+		// Mirror preparation happens before workspace creation and engine start.
+		startTimeout += repoMirrorCallTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
 	defer cancel()
 	if t.RequestGate != "" {
 		queued := t.Queue
@@ -1296,7 +1301,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		// a whole start's time of its own (the first may have spent its own on the dead link). Not counted against
 		// the launcher (#7511).
 		s.logf("task %s: start: %v; the link to %s dropped and came back without the agent; starting once more", t.TodoID, err, t.Machine)
-		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartTimeout)
+		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), startTimeout)
 		defer rcancel()
 		ctx = rctx
 		mid, sid, err = s.startTaskAgent(ctx, &t, retry)

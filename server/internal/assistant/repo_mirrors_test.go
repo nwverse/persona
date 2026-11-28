@@ -613,6 +613,40 @@ func TestPrepareWorkspaceDoesNotEnrollLocalOrLinkOnlyRepositories(t *testing.T) 
 	}
 }
 
+func TestTaskPlanContainerAllowsColdRepoMirrorBudget(t *testing.T) {
+	h := newWorkspaceTestHarness(t, newMemRepoMirrorStore())
+	setHub(h.s, &firstToolsTimingHub{Hub: h.f, beforeCall: func(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
+		if call.Method != repository.MethodRepoMirrorEnsure {
+			return h.f.DeviceCall(ctx, call)
+		}
+		deadline, ok := ctx.Deadline()
+		remaining := time.Until(deadline)
+		if !ok || remaining <= repository.MirrorColdFetchTimeout || remaining > repoMirrorCallTimeout {
+			t.Errorf("mirror RPC has %v remaining, want the cold fetch budget plus time for the reply", remaining)
+		}
+		return json.Marshal(repository.MirrorInfo{RepoID: "repo_web", Exists: true, Fetched: true})
+	}})
+
+	ctx := t.Context()
+	args := `{"tasks":[{"title":"Prepare workspace","prompt":"Update the example repository","role":"worker","machine":"box","permission":"bypassPermissions","done_when":["Tests pass"],"workspace":{"container":{"selected_repo_ids":["repo_web"]}}}]}`
+	if _, err := h.s.toolTaskPlan(ctx, "mirror-chat", json.RawMessage(args)); err != nil {
+		t.Fatal(err)
+	}
+	p := readonlyFeedPlan(t, h.s, "mirror-chat")
+	if _, err := h.s.startPlan(ctx, p.ID, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "workspace agent link", func() bool {
+		todo, ok := h.s.todoNow(p.Tasks[0].ReservedTodoID)
+		return ok && len(todo.Agents) == 1
+	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !slices.Equal(h.lastPrepare.MirrorRepos, []string{"repo_web"}) {
+		t.Fatalf("workspace did not use the enrolled mirror: %v", h.lastPrepare.MirrorRepos)
+	}
+}
+
 func TestPrepareBackendWorkspaceFreshRefreshPreservesAutoSyncSchedule(t *testing.T) {
 	st := newMemRepoMirrorStore()
 	seedMirrorRepo(t, st, "repo_web", "https://github.com/example/web")

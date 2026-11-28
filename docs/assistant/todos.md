@@ -1993,9 +1993,11 @@ configuration lets the next workspace prepare enroll the pair again.
   - `repo.mirror.ensure`: initializes `~/.persona/repos/<repo_id>.git` as a bare
     mirror if missing, or refreshes it with `git fetch --prune --tags` when
     older than the requested TTL (default 5 minutes, overridable with
-    `ttl_seconds` or `force: true`). Per-repository single-flight locking
-    coalesces concurrent calls, with bounded timeouts, empty hooks
-    (`core.hooksPath`), and symlink/path guards (`~/.persona/repos` is also
+    `ttl_seconds` or `force: true`). A cold build gets up to 10 minutes and
+    an incremental refresh gets up to 2 minutes. The Manager gives the RPC
+    11 minutes, including time to return the result. Per-repository single-flight
+    locking coalesces concurrent calls. Git runs with empty hooks
+    (`core.hooksPath`) and symlink/path guards (`~/.persona/repos` is also
     protected from remote file-browsing APIs in `server/internal/node/pathguard.go`).
   - `repo.mirror.status`: reports one mirror or lists all mirrors with
     `default_ref`, `head_commit`, `last_synced_at` and recursive `disk_bytes`.
