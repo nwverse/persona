@@ -244,6 +244,7 @@
     <string name="agents_herdr_starting">正在启动 herdr…</string>
     <string name="agents_herdr_stopped">这台电脑的 herdr 没在运行</string>
     <string name="agents_herdr_start">启动</string>
+    <string name="agents_orca_stopped">这台电脑的 Orca 没在运行。在那台电脑上打开 Orca，它的 Agent 就会回来，也能新开。</string>
     <string name="agents_hub_notice_turn_off">关闭</string>
     <string name="agents_hub_notice_got_it">知道了</string>
     <string name="agents_hub_notice_update">更新</string>

@@ -244,6 +244,7 @@
     <string name="agents_herdr_starting">herdrを起動中…</string>
     <string name="agents_herdr_stopped">このコンピューターではherdrが動いていません</string>
     <string name="agents_herdr_start">起動</string>
+    <string name="agents_orca_stopped">このコンピューターではOrcaが動いていません。そのコンピューターでOrcaを開くと、Agentが再び表示され、新しく開始できます。</string>
     <string name="agents_hub_notice_turn_off">オフにする</string>
     <string name="agents_hub_notice_got_it">了解</string>
     <string name="agents_hub_notice_update">更新</string>

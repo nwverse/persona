@@ -28,5 +28,8 @@
   "also_open": "同时在 {engines} 中打开：消息仅发送至此处",
   "start_in": "启动位置",
   "none": "不启用终端引擎",
-  "list_separator": "、"
+  "list_separator": "、",
+  "detection_stopped": "已安装，未运行",
+  "detection_stopped_version": "已安装，未运行 · {version}",
+  "detection_incompatible_version": "不兼容 · {version}"
 }
