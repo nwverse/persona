@@ -545,12 +545,13 @@ func (c *agyChange) describe(bin agyBinary) string {
 	return fmt.Sprintf("agy at %s was replaced", bin.path)
 }
 
-// logWait says once per change that the restart waits for the companion's work: an agy turn in flight, or a call the
-// node is waiting on, would be cut by it. The old file keeps running until then.
+// logWait says once per change that the restart waits for the companion's work: an agy turn in flight, finite
+// background work a session left running, or a call the node is waiting on, would be cut by it. The old file keeps
+// running until then, with no deadline: a background command that never ends holds the restart until it is stopped.
 func (c *agyChange) logWait(logger *log.Logger, bin agyBinary) {
 	if !c.logged {
 		c.logged = true
-		logger.Printf("agy runtime: %s; restarting once no agy session is working", c.describe(bin))
+		logger.Printf("agy runtime: %s; restarting once no agy session is working or running background work", c.describe(bin))
 	}
 }
 
@@ -577,6 +578,9 @@ func (rh *RuntimeHost) agyPeers(instance string) (builtin *runtimeConn, external
 	return builtin, external
 }
 
+// waitAgyIdle waits until no call to the companion is pending and agyWorking is false, the companion's connection
+// ends, or ctx does: the external-runtime handoff bounds it by its yield grace, so background work that runs longer is
+// cut then, as a long turn is.
 func (h *runtimeConn) waitAgyIdle(ctx context.Context) {
 	if h.peer.WaitPending(ctx) != nil {
 		return
@@ -599,11 +603,43 @@ func (h *runtimeConn) agyBusy() bool {
 	return h.peer.Pending() > 0 || h.agyWorking()
 }
 
+// agyWorking: one of the companion's sessions has a turn in flight, or its turn ended while finite background work it
+// started still runs in the companion's `agy acp` (agyFiniteBackground, #17200): stopping the companion now would cut
+// either one.
 func (h *runtimeConn) agyWorking() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, session := range h.sessions {
-		if session.Status == proto.StatusWorking {
+		if session.Status == proto.StatusWorking || agyFiniteBackground(session) {
+			return true
+		}
+	}
+	return false
+}
+
+// agyFiniteBackground: s lists background work that ends by itself, which a companion restart would stop ("All your
+// subagents and background tasks have been stopped due to server restart"): a command, workflow or subagent
+// (Background of kind shell / workflow / agent), or a running entry in Subagents or Workflows. A schedule (kind
+// monitor: agy's `schedule`, a cron job or a one-shot timer, which the row does not tell apart) is left out: a cron job
+// never ends, so a restart that waited on it would never come.
+// The rows are the companion's runtime.sessions: Background lists only tasks running in a session its `agy acp` has
+// loaded (a terminal's tasks come separately, in agyPaneBackground, and a restart does not stop them), and the
+// hub-derived BackgroundWorking / BackgroundWaiting are not read, as they count a monitor too. Unlike
+// agySessionRowSafeIdle, which keeps idle compaction off every session with any background entry, this only decides
+// whether a restart must wait.
+func agyFiniteBackground(s proto.Session) bool {
+	for _, task := range s.Background {
+		if task.Kind != "monitor" {
+			return true
+		}
+	}
+	for _, sub := range s.Subagents {
+		if sub.Running {
+			return true
+		}
+	}
+	for _, wf := range s.Workflows {
+		if wf.Running {
 			return true
 		}
 	}

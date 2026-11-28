@@ -753,7 +753,11 @@ package and supervises `antigravity/companion.mjs` (passing `--no-update --paren
 generations or changes their `current`. The sibling layout also keeps built-in files out of legacy external-store pruning. Go writes and pruning use the same `.install.lock` and process-start identity format as JavaScript registration, so a reused PID cannot strand a lock or inherit a lease. The node reserves the generation with its own process lease before launching the companion; a cached launch refreshes that reservation and retries cleanup. Once the companion registers its own lease, it releases the node's reservation for that generation. Reserving a newly launched generation also removes this node's reservations from other generations, which is necessary after a Unix `exec` upgrade retains both PID and start identity. This closes the window before the companion can register its own lease, while idle generations and dead-process leases remain reclaimable. The node resolves `agy` when it starts the companion and
 looks again every 30 seconds while it runs (#14533): when the path or the file there changed (replaced by an update,
 installed elsewhere, removed) and two looks in a row agree, it restarts the companion on the `agy` found now, waiting
-while one of its sessions is working or a call to it is pending (the old file keeps running until then). You can also start
+while one of its sessions is working or a call to it is pending (the old file keeps running until then). A session whose
+turn ended still counts as working while finite background work it started runs in the companion's `agy acp` (a
+command, workflow or subagent, #17200); an agy `schedule` (kind `monitor`) does not, as a cron job never ends. That wait has
+no deadline, so a background command that never exits holds the restart until it is stopped; the handoff to an external
+`agy` runtime waits for the same work at most 5 seconds, as for a working turn, then stops the companion. You can also start
 `node integrations/antigravity/companion.mjs` manually from the repository root, or install into the runtime package store
 with `node integrations/antigravity/install.mjs` and supervise
 `node ~/.persona/runtime-packages/persona-antigravity-runtime/current/antigravity/companion.mjs` under launchd / systemd.
