@@ -22,10 +22,11 @@ import (
 
 type workspaceJournal struct {
 	taskworkspace.Record
-	Identities       map[string]string `json:"identities"`
-	Tombstones       []string          `json:"tombstones"`
-	InFlight         bool              `json:"in_flight"`
-	LocalGitIdentity string            `json:"local_git_identity,omitempty"`
+	Identities           map[string]string `json:"identities"`
+	Tombstones           []string          `json:"tombstones"`
+	InFlight             bool              `json:"in_flight"`
+	LocalGitIdentity     string            `json:"local_git_identity,omitempty"`
+	LastGitStderrSummary string            `json:"last_git_stderr_summary,omitempty"`
 }
 type workspaceExecutor struct {
 	n                *Node
@@ -163,11 +164,15 @@ func (e *workspaceExecutor) gitWithTimeout(ctx context.Context, timeout time.Dur
 	}
 	workspaceInheritLocks(cmd, e.locks)
 	var out workspaceOutput
+	stderr := keptOutput{tailMost: workspaceGitStderrTail}
 	cmd.Stdout = &out
-	cmd.Stderr = io.Discard
+	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil && ctx.Err() != nil {
 		err = ctx.Err()
+	}
+	if err != nil {
+		e.journal.LastGitStderrSummary = workspaceGitStderrSummary(stderr.String())
 	}
 	e.journal.InFlight = false
 	if saveErr := e.save(); saveErr != nil {
@@ -516,9 +521,11 @@ func (e *workspaceExecutor) adopt(ctx context.Context, req taskworkspace.Request
 	j.Error = nil
 	return e.save()
 }
+
 func (e *workspaceExecutor) prepare(ctx context.Context) taskworkspace.Record {
 	j := &e.journal
 	j.State = "preparing"
+	j.LastGitStderrSummary = ""
 	if !e.owned(j.Plan.RootPath) {
 		if len(j.Plan.Repositories) == 0 && j.Identities[j.Plan.RootPath] != "" {
 			return e.fail("identity_mismatch", "reserve", "", j.Plan.RootPath)
