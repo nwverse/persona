@@ -226,6 +226,8 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 	switch method {
 	case "status.get":
 		return f.status
+	case "agentSession.agents":
+		return Fail{"method_not_found"} // an Orca before 1.4.277 (Handle answers as a newer one)
 	case "repo.add":
 		path, _ := p["path"].(string)
 		return map[string]any{"repo": map[string]any{"path": path, "ok": true}}

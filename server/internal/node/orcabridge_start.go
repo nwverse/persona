@@ -61,8 +61,8 @@ func orcaProviderName(agent string) string {
 }
 
 // installed is the agents Orca found installed (preflight.installedAgents) that it runs as chats on this computer
-// (agentSession.agents; every one on an Orca without it), read again at most every orcaAgentsMaxAge; the last ones
-// while they cannot be read, none from an Orca without preflight.installedAgents.
+// (agentSession.agents; every one while that can't be read, as on an Orca without it), read again at most every
+// orcaAgentsMaxAge; the last ones while the installed agents can't be read, none from an Orca without the method.
 func (b *orcaBridge) installed(ctx context.Context) []string {
 	b.mu.Lock()
 	agents, at := b.agents, b.agentsAt
@@ -72,12 +72,8 @@ func (b *orcaBridge) installed(ctx context.Context) []string {
 	}
 	got, err := b.c.InstalledAgents(ctx)
 	if err == nil {
-		var chats []string
-		switch chats, err = b.c.ChatAgents(ctx); {
-		case err == nil:
+		if chats, cerr := b.c.ChatAgents(ctx); cerr == nil {
 			got = slices.DeleteFunc(got, func(a string) bool { return !slices.Contains(chats, a) })
-		case orcaNoMethod(err):
-			err = nil // an older Orca: it says only what it found installed
 		}
 	}
 	b.mu.Lock()
