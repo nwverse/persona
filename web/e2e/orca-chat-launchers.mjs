@@ -1,4 +1,4 @@
-// Screenshots and checks of New Agent with the Orca bridge's chat launchers (#17047, docs/plans/plan-orca-support.md
+// Screenshots and checks of New Agent with the Orca bridge's chat launchers (#17047, docs/integrations/orca.md
 // "Structured sessions"): on a computer whose Orca can start chats, the model panel has an "Orca chat · <provider>"
 // group for each provider Orca has installed, and New Agent's default (its pill, its Start) is what it was. With
 // --without (the fake hub run without MOCK_ORCA_CHAT_LAUNCHERS) it checks the panel has no such group: a computer

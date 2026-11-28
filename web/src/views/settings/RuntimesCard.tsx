@@ -1,4 +1,4 @@
-// Settings › Models › Engines (docs/web/web.md "Engines and channels"): the runtimes the hub declares (GET
+// Settings › Models › Engines (docs/web/web.md "Four dimensions in the Web"): the runtimes the hub declares (GET
 // /execution/catalog) — what each speaks, its thinking efforts, what it switches without a restart — and which of the
 // user's computers have it, online or not. Read only: a runtime comes with a computer's install, not from here.
 import { t } from "../../i18n";
