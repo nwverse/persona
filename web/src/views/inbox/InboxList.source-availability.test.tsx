@@ -88,6 +88,8 @@ beforeEach(async () => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  reset();
+  listeners.clear();
   resetInboxForTests();
   resetModulesForTest();
   forgetModuleSwitches();
