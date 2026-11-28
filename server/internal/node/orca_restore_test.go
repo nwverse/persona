@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -54,6 +55,13 @@ func TestOrcaAfterARebootAPersonaAgentIsShownAsItIs(t *testing.T) {
 	}
 	t.Cleanup(func() { processAlive = was })
 	rescan()
+	// What the Orca host keeps from its last look goes, as it would in the time a reboot and reopening a tab take.
+	forget := func() {
+		h := n.hosts.Get(host.Orca).(*orcaHost)
+		h.mu.Lock()
+		h.view, h.viewAt, h.procsAt = nil, time.Time{}, time.Time{}
+		h.mu.Unlock()
+	}
 
 	// Orca lists none of its kept tabs: the session is interrupted, stopped by the restart.
 	if row := byID(listSessions(t, n))[sidA]; row.Status != proto.StatusInterrupted {
@@ -74,6 +82,7 @@ func TestOrcaAfterARebootAPersonaAgentIsShownAsItIs(t *testing.T) {
 	o.SetWorktrees(orcarttest.Worktree("repo::"+cwd, cwd, "refs/heads/main", orcarttest.Agent("tab1:leaf1", "claude", "done")))
 	procs.set("tab1:leaf1", orcaProc{pid: orcasPID, agent: "claude"})
 	o.SetScreen("term_1", orcaClaudeScreen(orcaManualFooter))
+	forget()
 	if row := byID(listSessions(t, n))[sidA]; row.PaneID != "orca:tab1:leaf1" || row.Status == proto.StatusInterrupted ||
 		row.Launcher != "work" || !row.OffLauncher {
 		t.Fatalf("resumed by Orca: pane %q, status %q, launcher %q, off_launcher %v", row.PaneID, row.Status, row.Launcher, row.OffLauncher)
@@ -134,6 +143,7 @@ func TestOrcaAfterARebootAPersonaAgentIsShownAsItIs(t *testing.T) {
 		}
 	}
 	rescan()
+	forget()
 	if row := byID(listSessions(t, n))[sidA]; row.Launcher != "work" || row.OffLauncher {
 		t.Errorf("started by Persona's command: launcher %q, off_launcher %v", row.Launcher, row.OffLauncher)
 	}
