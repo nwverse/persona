@@ -18,6 +18,9 @@ const DefaultTimeout = 5 * time.Second
 // machine, loopback, the very trust the header exists to take away from relayed connections. Refused instead.
 var ErrNoAddress = errors.New("proxyproto: the header names no client address")
 
+// ErrLocalAddress is the refusal of a LOCAL header or loopback source when RejectLocal is set.
+var ErrLocalAddress = errors.New("proxyproto: LOCAL and loopback sources are refused on this listener")
+
 // Listener reads a PROXY protocol header first on every connection whose peer is in Trusted, and on no other.
 //
 //   - A connection from a trusted upstream must start with a valid header, or it is closed: were it served, anything
@@ -32,6 +35,8 @@ type Listener struct {
 	net.Listener
 	Trusted []netip.Prefix
 	Timeout time.Duration
+	// RejectLocal requires a client address that cannot confer loopback trust. It refuses v2 LOCAL and loopback sources.
+	RejectLocal bool
 	// Report, when set, hears once about each connection from a trusted upstream: its header, or why it was refused
 	// (err != nil; the connection is closed by then).
 	Report func(peer netip.AddrPort, h Header, err error)
@@ -51,7 +56,7 @@ func (l *Listener) Accept() (net.Conn, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	return &Conn{Conn: c, peer: peer, timeout: timeout, report: l.Report}, nil
+	return &Conn{Conn: c, peer: peer, timeout: timeout, rejectLocal: l.RejectLocal, report: l.Report}, nil
 }
 
 func (l *Listener) trusts(ip netip.Addr) bool {
@@ -75,9 +80,10 @@ func addrPort(a net.Addr) netip.AddrPort {
 // Conn is a connection from a trusted upstream; RemoteAddr is the client its header names.
 type Conn struct {
 	net.Conn
-	peer    netip.AddrPort
-	timeout time.Duration
-	report  func(netip.AddrPort, Header, error)
+	peer        netip.AddrPort
+	timeout     time.Duration
+	rejectLocal bool
+	report      func(netip.AddrPort, Header, error)
 
 	once   sync.Once
 	header Header
@@ -112,6 +118,9 @@ func (c *Conn) readHeader() {
 	h, err := Read(br)
 	if err == nil && !h.Local && !h.Source.IsValid() {
 		err = ErrNoAddress
+	}
+	if err == nil && c.rejectLocal && (h.Local || h.Source.Addr().Unmap().IsLoopback()) {
+		err = ErrLocalAddress
 	}
 
 	c.mu.Lock()

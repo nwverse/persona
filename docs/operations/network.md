@@ -251,16 +251,20 @@ TLS passthrough cannot add HTTP headers, and forwarding headers must not grant a
 | --- | --- | --- |
 | `from` | Required | Trusted upstream CIDRs or single addresses, as seen by hub (typically `127.0.0.1/32` for same-machine). Include only the proxy itself; `0.0.0.0/0` / `::/0` rejected |
 | `listeners` | `["tls"]` | Applies to `tls` (`public.tls_listen`) / `http` (`listen`). If `from` includes loopback, `http` is forbidden: local `personad hub pair`, `hub admin`, and plugins use plaintext loopback without headers and would be rejected |
+| `public` | `false` | Treats every relayed client as public, including private, ULA, and `security.trusted_cidrs` addresses. Direct connections outside `from` keep their usual classification |
+
+Set `"public": true` if the proxy serves a network you do not control, such as a shared VPN. The hub refuses the main token, counts failed API authentication by the reported client address, redacts health responses, and applies its public plaintext rules. The admin UI requires either `admin.access: any` over TLS or an explicit `admin.access: cidrs` match. The reported client address still applies to rate limits and CIDR checks. To restore address-based classification, remove `public` or set it to `false`, then restart.
 
 Without `proxy_protocol`, hub reads no PROXY headers and behaves exactly as before. Invalid configuration (empty / nonaddress `from`, unknown `listeners`, HTTP with loopback) prevents startup; `personad hub doctor` identifies the field. TLS-only without `public.tls_listen` logs a notice. Restart after changing.
 
 **Rules** (`server/internal/proxyproto`):
 
-- **Connections from `from` require valid headers**; header source becomes the peer for source classification, admin access, main-token restrictions, rate limits, and logs. Missing, invalid, or timed-out headers close without response; otherwise bypassing the proxy (or a misconfigured proxy without PROXY support) would again become loopback.
+- **Connections from `from` require valid headers**. Missing, invalid, or timed-out headers close without response. The reported client address is used for rate limits, admin address checks, logs, and, by default, source classification.
+- **Public relay mode** also rejects v2 `LOCAL` and IPv4 or IPv6 loopback sources, including IPv4-mapped IPv6. Configure upstream health checks to send a valid client address or use a separate listener.
 - **PROXY headers from other sources are not accepted**: hub does not read them; bytes remain the connection prefix, causing TLS failure or HTTP 400. Existing clients unaffected; sources outside `from` cannot impersonate addresses.
-- **v2 `LOCAL`** (proxy-originated connections, such as health checks) uses the socket's source, the upstream address, per specification.
+- **v2 `LOCAL`** (proxy-originated connections, such as health checks) uses the socket's source when `public` is off.
 - **v1 `UNKNOWN`, v2 `PROXY` with `UNSPEC` family** (upstream does not know the source, e.g. received over Unix socket) are rejected. Although the specification permits socket-address fallback, that would use upstream loopback and trust forwarded traffic as local. v2 UDP / Unix families also rejected.
-- **Loopback header source with nonloopback upstream** (another machine forwarding its local programs) uses the upstream address; that machine's "local" is not hub-local.
+- **Loopback header source with nonloopback upstream** (another machine forwarding its local programs) uses the upstream address when `public` is off.
 - **Timeout / size**: complete header within 5 seconds (unmeasured policy default); v1 at most 107 bytes (spec limit), v2 address + TLV at most 4096 bytes, TLVs discarded after reading. Read on the connection's own goroutine at first read / write / peer lookup, never in Accept, so slow / silent connections do not block others.
 - **Local address remains the socket's**, not header destination, which belongs to the upstream (proxy listener, possibly another machine). Hub uses local address to determine entry through a local VPN interface (`100.64.0.0/10` classification). Proxied shared-space sources are therefore public—stricter, never looser; add `trusted_cidrs` if needed.
 - Apply equally to systemd `personad.socket` listeners and hub-created listeners.
@@ -289,8 +293,8 @@ See the previous layer's docs for enabling PROXY (often "proxy protocol" / "send
 
 1. Restart hub; logs include `hub: PROXY protocol on the TLS listener, from 127.0.0.1/32`; `security.proxy_protocol` is "OK" in `personad hub doctor`.
 2. Connect publicly on phone cellular. Authentication-failure / admin-login source logs should no longer be `127.0.0.0/24`. With `admin.access: cidrs`, public `/admin` opens the ordinary web app.
-3. `proxy protocol: refused a connection from …` logs (at most one per minute, cumulative count) mean an upstream sent no header. Check `proxy_protocol on;` took effect, or other programs bypass the proxy to TLS.
-4. `passed on a connection from loopback` (logged once) means source remains loopback: previous hop failed to pass it through. Fix the full chain above.
+3. `proxy protocol: refused a connection from …` logs (at most one per minute, cumulative count) include the reason for refusal. If the header is missing, check `proxy_protocol on;` or whether other programs bypass the proxy to TLS.
+4. `passed on a connection from loopback` (logged once with `public` off) means a previous hop failed to preserve the source. With `public` on, the hub refuses that connection. Fix the full chain above.
 
 **Important**: once enabled, every connection from `from` to this port needs a header. Other local programs connecting directly to TLS (`https://127.0.0.1:<TLS-port>`) are rejected; use plaintext or a LAN address. In Docker with userspace docker-proxy port mapping, every mapped connection may appear from the gateway. Adding that gateway to `from` means this port is proxy-only.
 

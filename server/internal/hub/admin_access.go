@@ -234,6 +234,9 @@ func (h *Hub) adminInScope(r *http.Request) bool {
 }
 
 func (h *Hub) addrsInScope(scope adminScope, r *http.Request) bool {
+	if fromPublicProxy(r) && scope.access != accessCIDRs {
+		return false
+	}
 	addrs, ok := requestAddrs(r)
 	if !ok {
 		return false

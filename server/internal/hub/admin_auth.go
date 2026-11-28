@@ -221,7 +221,7 @@ func (h *Hub) adminFailed(r *http.Request) {
 }
 
 func (h *Hub) adminLANSource(r *http.Request) bool {
-	return h.addrInScope(adminScope{access: accessLAN, trusted: h.adminScope().trusted}, remoteIP(r))
+	return !fromPublicProxy(r) && h.addrInScope(adminScope{access: accessLAN, trusted: h.adminScope().trusted}, remoteIP(r))
 }
 
 func (h *Hub) publicAdminLimits() SecurityConfig {

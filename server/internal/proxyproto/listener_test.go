@@ -132,6 +132,31 @@ func TestListenerLocalKeepsTheSocketAddress(t *testing.T) {
 	}
 }
 
+func TestListenerRejectLocal(t *testing.T) {
+	l, reports := listen(t, 0, "127.0.0.1/32")
+	l.RejectLocal = true
+	for _, tc := range []struct{ name, header string }{
+		{"v1 IPv4", "PROXY TCP4 127.0.0.2 192.0.2.1 1 443\r\n"},
+		{"v1 IPv6", "PROXY TCP6 ::1 2001:db8::1 1 443\r\n"},
+		{"v2 mapped IPv4", string(AppendV2(nil, netip.MustParseAddrPort("[::ffff:127.0.0.1]:1"), netip.MustParseAddrPort("[2001:db8::1]:443")))},
+		{"v2 LOCAL", string(v2(0, 0x00, nil))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := dial(t, l, tc.header+"client bytes")
+			if n, err := server.Read(make([]byte, 1)); n != 0 || !errors.Is(err, ErrLocalAddress) {
+				t.Fatalf("Read = %d, %v; want refusal before delivering client bytes", n, err)
+			}
+			if r := <-reports; !errors.Is(r.err, ErrLocalAddress) {
+				t.Fatalf("report = %+v", r)
+			}
+			_ = client.SetReadDeadline(time.Now().Add(time.Second))
+			if n, err := client.Read(make([]byte, 1)); n != 0 || err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("client read = %d, %v; want the connection closed", n, err)
+			}
+		})
+	}
+}
+
 func TestListenerRefusesTrustedWithoutHeader(t *testing.T) {
 	l, reports := listen(t, 0, "127.0.0.1/32")
 	for _, tc := range []struct {

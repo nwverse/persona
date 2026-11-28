@@ -1,9 +1,12 @@
 package hub
 
 import (
+	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
 	"strings"
 	"sync"
@@ -23,6 +26,8 @@ type ProxyProtocolConfig struct {
 	// Listeners are where: "tls" (public.tls_listen; the default) and "http" (listen). "http" is refused with a
 	// loopback upstream: the hub's own tools (hub pair, hub admin, plugins) call that port over loopback, headerless.
 	Listeners []string `json:"listeners,omitempty"`
+	// Public applies public ingress rules to every relayed client, regardless of its address.
+	Public bool `json:"public,omitempty"`
 }
 
 const (
@@ -34,6 +39,7 @@ const (
 type proxyPolicy struct {
 	from      []netip.Prefix
 	tls, http bool
+	public    bool
 }
 
 func (c *ProxyProtocolConfig) policy() (*proxyPolicy, error) {
@@ -47,7 +53,7 @@ func (c *ProxyProtocolConfig) policy() (*proxyPolicy, error) {
 	if len(from) == 0 {
 		return nil, errors.New("security.proxy_protocol.from is empty: list the addresses the proxy connects to the hub from, e.g. 127.0.0.1/32")
 	}
-	p := &proxyPolicy{from: from}
+	p := &proxyPolicy{from: from, public: c.Public}
 	for _, prefix := range from {
 		if prefix.Bits() == 0 {
 			return nil, fmt.Errorf("security.proxy_protocol.from: %s would let anyone name any address, loopback included: list the proxy's own address", prefix)
@@ -104,7 +110,26 @@ func (h *Hub) proxyListener(ln net.Listener, on func(*proxyPolicy) bool) net.Lis
 	if p == nil || !on(p) {
 		return ln
 	}
-	return &proxyproto.Listener{Listener: ln, Trusted: p.from, Report: h.proxyReport}
+	return &proxyproto.Listener{Listener: ln, Trusted: p.from, RejectLocal: p.public, Report: h.proxyReport}
+}
+
+type publicProxyKey struct{}
+
+// publicProxyConnContext runs in the accept loop. The wrapper identifies the trusted upstream without reading its
+// header here. The connection itself validates the header before any request can be served.
+func publicProxyConnContext(ctx context.Context, conn net.Conn) context.Context {
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		conn = tlsConn.NetConn()
+	}
+	if _, ok := conn.(*proxyproto.Conn); ok {
+		return context.WithValue(ctx, publicProxyKey{}, true)
+	}
+	return ctx
+}
+
+func fromPublicProxy(r *http.Request) bool {
+	public, _ := r.Context().Value(publicProxyKey{}).(bool)
+	return public
 }
 
 // proxyLog keeps the log readable when a proxy keeps sending connections without a header (it was not switched on

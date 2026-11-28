@@ -23,6 +23,9 @@ func (h *Hub) sourceOf(r *http.Request) source {
 	if f, ok := forwardedOf(r); ok { // a member passed it on, having judged it (peer_http.go)
 		return f.src
 	}
+	if fromPublicProxy(r) {
+		return sourcePublic
+	}
 	ip := remoteIP(r)
 	if !ip.IsValid() {
 		return sourcePublic

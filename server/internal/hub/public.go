@@ -282,10 +282,14 @@ func (h *Hub) serveHTTP(ctx context.Context) error {
 	handler := idleBodies(h.routes()) // a body that stops coming is answered and let go (bodyidle.go)
 	plain := newHubHTTPServer(h.cfg.Listen, handler)
 	plain.BaseContext = func(net.Listener) context.Context { return requestCtx }
+	if p := h.public.proxy; p != nil && p.public {
+		plain.ConnContext = publicProxyConnContext
+	}
 	errs := make(chan error, 2)
 	if srv := h.public.server; srv != nil {
 		srv.Handler = handler
 		srv.BaseContext = plain.BaseContext
+		srv.ConnContext = plain.ConnContext
 		servers = append(servers, srv)
 		go func() { errs <- srv.ServeTLS(h.public.listener, "", "") }()
 	}

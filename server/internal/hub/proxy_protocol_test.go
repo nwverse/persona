@@ -10,7 +10,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +23,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proxyproto"
 )
 
 func TestProxyProtocolPolicy(t *testing.T) {
@@ -185,10 +189,18 @@ func reserveProxyPlaintext(t *testing.T, h *Hub) {
 // It returns the TLS and plaintext base URLs, the pin and the hub's log.
 func proxyTestHub(t *testing.T, pp *ProxyProtocolConfig) (h *Hub, tlsURL, plainURL, pin string, logs *syncBuffer) {
 	t.Helper()
+	h, logs = prepareProxyTestHub(t, pp)
+	runPublicTestHub(t, h)
+	port, pin := h.tlsPin()
+	return h, fmt.Sprintf("https://127.0.0.1:%d", port), "http://" + h.cfg.Listen, pin, logs
+}
+
+func prepareProxyTestHub(t *testing.T, pp *ProxyProtocolConfig) (*Hub, *syncBuffer) {
+	t.Helper()
 	t.Setenv("PERSONA_ADMIN_ACCESS", "")
-	h = newPublicTestHub(t)
+	h := newPublicTestHub(t)
 	reserveProxyPlaintext(t, h)
-	logs = &syncBuffer{}
+	logs := &syncBuffer{}
 	h.logger = log.New(logs, "", 0)
 	h.cfg.Security = SecurityConfig{AuthFailures: 2, ProxyProtocol: pp}
 	h.cfg.Admin = AdminConfig{Access: accessCIDRs, CIDRs: []string{"192.0.2.0/24"}}
@@ -201,9 +213,7 @@ func proxyTestHub(t *testing.T, pp *ProxyProtocolConfig) (h *Hub, tlsURL, plainU
 	}
 	_ = os.WriteFile(filepath.Join(web, "index.html"), []byte("CLIENT"), 0o644)
 	_ = os.WriteFile(filepath.Join(web, "admin", "index.html"), []byte("ADMIN"), 0o644)
-	runPublicTestHub(t, h)
-	port, pin := h.tlsPin()
-	return h, fmt.Sprintf("https://127.0.0.1:%d", port), "http://" + h.cfg.Listen, pin, logs
+	return h, logs
 }
 
 // proxiedClient talks to the hub over TLS pinned to pin, each connection starting with header (none when empty), as
@@ -216,7 +226,9 @@ func proxiedClient(t *testing.T, pin string, header []byte) *http.Client {
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
 		if err == nil && len(header) > 0 {
-			_, err = conn.Write(header)
+			if _, err = conn.Write(header); err != nil {
+				_ = conn.Close()
+			}
 		}
 		return conn, err
 	}
@@ -249,6 +261,7 @@ type probe struct {
 	code   string
 	body   string
 	fields int // a JSON object's number of keys
+	proto  int // HTTP major version
 }
 
 func get(t *testing.T, c *http.Client, url, token string) (probe, error) {
@@ -263,7 +276,7 @@ func get(t *testing.T, c *http.Client, url, token string) (probe, error) {
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
-	p := probe{status: resp.StatusCode, body: string(b)}
+	p := probe{status: resp.StatusCode, body: string(b), proto: resp.ProtoMajor}
 	var obj map[string]any
 	if json.Unmarshal(b, &obj) == nil {
 		p.fields = len(obj)
@@ -346,10 +359,200 @@ func TestProxyProtocolEndToEnd(t *testing.T) {
 	}
 }
 
+func TestProxyProtocolPublicTLS(t *testing.T) {
+	private := netip.AddrFrom4([4]byte{10, 20, 30, 7})
+	ula := netip.AddrFrom16([16]byte{0xfd, 1, 0, 1, 0, 1, 0, 1, 15: 7})
+	for _, tc := range []struct {
+		name, config string
+		public       bool
+		masterStatus int
+		masterCode   string
+		failureLimit int
+	}{
+		{"default", `{"from":["127.0.0.1/32"]}`, false, 200, "", 401},
+		{"public", `{"from":["127.0.0.1/32"],"public":true}`, true, 403, "master_token_local_only", 429},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var pp ProxyProtocolConfig
+			if err := json.Unmarshal([]byte(tc.config), &pp); err != nil {
+				t.Fatal(err)
+			}
+			h, _ := prepareProxyTestHub(t, &pp)
+			h.cfg.Admin.CIDRs = []string{netip.PrefixFrom(private, 24).Masked().String()}
+			h.cfg.Security.TrustedCIDRs = []string{netip.PrefixFrom(ula, 64).Masked().String()}
+			runPublicTestHub(t, h)
+			port, pin := h.tlsPin()
+			base := fmt.Sprintf("https://127.0.0.1:%d", port)
+			ipv4 := proxiedClient(t, pin, v1Header(private.String()))
+			ipv6 := proxiedClient(t, pin, proxyproto.AppendV2(nil, netip.AddrPortFrom(ula, 50000), netip.MustParseAddrPort("[2001:db8::1]:443")))
+			ipv6.Transport.(*http.Transport).ForceAttemptHTTP2 = true
+
+			for _, c := range []*http.Client{ipv4, ipv6} {
+				p := mustGet(t, c, base+"/api/v1/health", "")
+				if p.status != 200 || (p.fields == 5) != tc.public || (c == ipv6 && p.proto != 2) {
+					t.Fatalf("health: %+v", p)
+				}
+				p = mustGet(t, c, base+"/api/v1/machines", h.cfg.Token)
+				if p.status != tc.masterStatus || p.code != tc.masterCode {
+					t.Fatalf("master token: %+v", p)
+				}
+			}
+			if p := mustGet(t, ipv4, base+"/admin", ""); p.body != "ADMIN" {
+				t.Fatalf("client in admin CIDR: %+v", p)
+			}
+			if p := mustGet(t, ipv6, base+"/admin", ""); p.body != "CLIENT" {
+				t.Fatalf("client outside admin CIDR: %+v", p)
+			}
+			var last probe
+			for range 3 {
+				last = mustGet(t, ipv4, base+"/api/v1/machines", "bad-token")
+			}
+			if last.status != tc.failureLimit {
+				t.Fatalf("repeated authentication failures: %+v, want %d", last, tc.failureLimit)
+			}
+			if p := mustGet(t, ipv6, base+"/api/v1/machines", "bad-token"); p.status != 401 {
+				t.Fatalf("another client through the same proxy: %+v", p)
+			}
+			for _, header := range [][]byte{
+				v1Header("127.0.0.1"),
+				proxyproto.AppendV2(nil, netip.AddrPort{}, netip.AddrPort{}),
+			} {
+				p, err := get(t, proxiedClient(t, pin, header), base+"/api/v1/health", "")
+				if tc.public && err == nil || !tc.public && (err != nil || p.status != 200 || p.fields <= 5) {
+					t.Fatalf("local connection: %+v, %v", p, err)
+				}
+			}
+		})
+	}
+}
+
+type proxyTestListener struct {
+	net.Listener
+	peer net.Addr
+}
+
+func (l proxyTestListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return proxyTestPeer{Conn: conn, peer: l.peer}, nil
+}
+
+type proxyTestPeer struct {
+	net.Conn
+	peer net.Addr
+}
+
+func (c proxyTestPeer) RemoteAddr() net.Addr { return c.peer }
+
+func TestProxyProtocolPublicPlaintext(t *testing.T) {
+	pp := &ProxyProtocolConfig{From: []string{"192.0.2.10"}, Listeners: []string{"http"}, Public: true}
+	h, _ := prepareProxyTestHub(t, pp)
+	// Give the plaintext listener a nonloopback proxy peer without requiring a second network interface.
+	h.public.testPlaintext = proxyTestListener{
+		Listener: h.public.testPlaintext,
+		peer:     net.TCPAddrFromAddrPort(netip.MustParseAddrPort("192.0.2.10:50000")),
+	}
+	runPublicTestHub(t, h)
+	_, pin := h.tlsPin()
+	client := proxiedClient(t, pin, v1Header(ip4(10, 20, 30, 7)))
+	if p := mustGet(t, client, "http://"+h.cfg.Listen+"/api/v1/machines", h.cfg.Token); p.status != 403 || p.code != "tls_required" {
+		t.Fatalf("relayed plaintext: %+v", p)
+	}
+}
+
+func TestProxyProtocolPublicAdminScope(t *testing.T) {
+	t.Setenv("PERSONA_ADMIN_ACCESS", "")
+	clientIP := ip4(10, 20, 30, 7)
+	clientRange := clientIP + "/32"
+	for _, tc := range []struct {
+		name    string
+		access  string
+		cidrs   []string
+		url     string
+		inScope bool
+	}{
+		{"loopback", accessLoopback, nil, "https://example.com/admin", false},
+		{"lan", accessLAN, nil, "https://example.com/admin", false},
+		{"any with TLS", accessAny, nil, "https://example.com/admin", true},
+		{"any on plaintext", accessAny, nil, "http://example.com/admin", false},
+		{"matching CIDR", accessCIDRs, []string{clientRange}, "https://example.com/admin", true},
+		{"different CIDR", accessCIDRs, []string{"192.0.2.0/24"}, "https://example.com/admin", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPublicTestHub(t)
+			h.cfg.Admin = AdminConfig{Access: tc.access, CIDRs: tc.cidrs}
+			h.cfg.Security.TrustedCIDRs = []string{clientRange}
+			r := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			r.RemoteAddr = net.JoinHostPort(clientIP, "50000")
+			if !h.adminLANSource(r) {
+				t.Fatal("direct trusted source is outside the admin LAN")
+			}
+			r = r.WithContext(context.WithValue(r.Context(), publicProxyKey{}, true))
+			if got := h.adminInScope(r); got != tc.inScope {
+				t.Fatalf("adminInScope = %t, want %t", got, tc.inScope)
+			}
+			if h.adminLANSource(r) {
+				t.Fatal("relayed source is exempt from shared public admin limits")
+			}
+			if h.adminCanSetup(r) != (tc.access == accessCIDRs && tc.inScope) {
+				t.Fatal("setup must require an explicit CIDR match")
+			}
+			if tc.access == accessCIDRs && tc.inScope {
+				r.Header.Set("X-Forwarded-For", "192.0.2.7")
+				if h.adminInScope(r) {
+					t.Fatal("an out-of-scope forwarding address did not narrow access")
+				}
+			}
+		})
+	}
+}
+
+func TestProxyProtocolPublicMemberForwarding(t *testing.T) {
+	center := newPublicTestHub(t)
+	clientIP := ip4(10, 20, 30, 7)
+	center.mesh.centerAPI.Store(center.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(hdrPeerSource); got != "public "+clientIP+" tls" {
+			t.Errorf("forwarded source = %q", got)
+		}
+		center.servePeerHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkProxy := httputil.NewSingleHostReverseProxy(target)
+	linkProxy.Director = func(r *http.Request) {
+		r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
+		r.Header.Set(hdrPeerTTL, "1")
+	}
+	member := newPublicTestHub(t)
+	centerID := center.hubID()
+	member.mesh.running = true
+	member.mesh.group = meshGroup{Center: centerID}
+	member.mesh.links = map[string]*peerLink{centerID: {ctx: t.Context(), proxy: linkProxy}}
+	member.mesh.view.Store(&meshView{self: member.hubID(), hubs: map[string]*viewHub{centerID: {reachable: true, next: centerID}}})
+	r := httptest.NewRequest(http.MethodGet, "https://example.com/api/v1/machines", nil)
+	r.RemoteAddr = net.JoinHostPort(clientIP, "50000")
+	r.Header.Set("Authorization", "Bearer "+center.cfg.Token)
+	r.Header.Set(hdrPeerSource, "lan "+clientIP+" tls")
+	r = r.WithContext(context.WithValue(r.Context(), publicProxyKey{}, true))
+	w := httptest.NewRecorder()
+	member.memberForward(http.NotFoundHandler()).ServeHTTP(w, r)
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "master_token_local_only") {
+		t.Fatalf("master token through a member: %d %s", w.Code, w.Body)
+	}
+}
+
 // Without security.proxy_protocol nothing changes: a header is garbage to the TLS server, and loopback is loopback.
 // The same holds for a header from an address not in from.
 func TestProxyProtocolOffOrUntrusted(t *testing.T) {
-	for _, pp := range []*ProxyProtocolConfig{nil, {From: []string{"192.0.2.10/32"}}} {
+	for _, pp := range []*ProxyProtocolConfig{nil, {From: []string{"192.0.2.10/32"}}, {From: []string{"192.0.2.10/32"}, Public: true}} {
 		_, base, _, pin, _ := proxyTestHub(t, pp)
 		if _, err := get(t, proxiedClient(t, pin, v1Header("192.0.2.7")), base+"/api/v1/health", ""); err == nil {
 			t.Fatalf("%+v: a header from an untrusted address was read", pp)
