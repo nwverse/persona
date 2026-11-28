@@ -100,12 +100,71 @@ describe("botmux sessions in the chat", () => {
     expect(lineBreak?.nextSibling?.textContent?.trim()).toBe("line two");
   });
 
+  it("reads a decoded reply line by line without breaking its tables and code blocks", async () => {
+    const text = "Title\nField: value\n\n| Field | Meaning |\n| --- | --- |\n| a | b |\n\n```\nline 1\nline 2\n```";
+    const html = await render([items[0], { ...items[1], botmux: { kind: "reply", text } }, items[2]]);
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    const reply = host.querySelector("[data-botmux-reply]")!;
+    expect(reply.querySelector("p br")?.previousSibling?.textContent).toBe("Title");
+    expect(Array.from(reply.querySelectorAll("table td"), (td) => td.textContent)).toEqual(["a", "b"]);
+    expect(reply.querySelector("table br")).toBeNull();
+    expect(reply.querySelector("pre")?.textContent).toContain("line 1\nline 2");
+    expect(reply.querySelector("pre br")).toBeNull();
+  });
+
   it("as they are: the transcript's words, no tags, no reply block", async () => {
     setBotmuxMode("all");
     const html = await render();
     expect(html).not.toContain("data-botmux-message");
     expect(html).not.toContain("data-botmux-reply");
     expect(html).toContain("user_message");
+  });
+
+  // A Codex botmux turn that answered with a card (`botmux send --card-file … --response-kind final`) and ended on
+  // BotMux's control line: the reply carries no words when BotMux's record has none.
+  const card = (text: string, last = "BOTMUX_NOTHING_TO_SEND"): Item[] => [
+    items[0],
+    { ...items[1], tool_input: { command: "botmux send --card-file /tmp/card.json --response-kind final" }, botmux: { kind: "reply", text, final: true } },
+    { ...items[2], text: "{\"success\":true,\"messageId\":\"om_example_card\"}" },
+    { id: "m1#0", seq: 4, role: "assistant", kind: "text", text: last },
+  ];
+
+  it("decoded: a card reply without words reads as sent, and the bare sentinel is not drawn", async () => {
+    const html = await render(card(""));
+    expect(html).toContain("data-botmux-reply");
+    expect(html).toContain("飞书最终回复");
+    expect(html).toContain("data-botmux-no-text");
+    expect(html).toContain("已发送非文字内容（如卡片），请在飞书中查看。");
+    expect(html).not.toContain("BOTMUX_NOTHING_TO_SEND");
+    expect(html).not.toContain("data-latest-text");
+  });
+
+  it("decoded: a card reply with words draws them, without the sentinel", async () => {
+    const html = await render(card("Cart fields: **extra_interactive_area**"));
+    expect(html).toContain("<strong>extra_interactive_area</strong>");
+    expect(html).not.toContain("data-botmux-no-text");
+    expect(html).not.toContain("BOTMUX_NOTHING_TO_SEND");
+  });
+
+  it("decoded: last words beside the sentinel stay as written", async () => {
+    const html = await render(card("", "Sent the card.\nBOTMUX_NOTHING_TO_SEND"));
+    expect(html).toContain("data-latest-text");
+    expect(html).toContain("Sent the card.");
+    expect(html).toContain("BOTMUX_NOTHING_TO_SEND");
+  });
+
+  it("raw: the sentinel and the transcript stay whole, no reply block", async () => {
+    setBotmuxMode("all");
+    const html = await render(card(""));
+    expect(html).toContain("data-latest-text");
+    expect(html).toContain("BOTMUX_NOTHING_TO_SEND");
+    expect(html).not.toContain("data-botmux-reply");
+  });
+
+  it("another session's bare sentinel is not hidden", async () => {
+    const html = await render([{ id: "u9#0", seq: 1, role: "user", kind: "text", text: "explain the marker" }, { id: "m9#0", seq: 2, role: "assistant", kind: "text", text: "BOTMUX_NOTHING_TO_SEND" }]);
+    expect(html).toContain("BOTMUX_NOTHING_TO_SEND");
   });
 
   it("shows a one-line composer notice when botmux falls back to external-event trigger", async () => {

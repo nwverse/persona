@@ -9,6 +9,7 @@
   "attachments_one": "{count} attachment",
   "attachments_other": "{count} attachments",
   "voice": "Voice",
+  "sent_without_text": "Sent without text, such as a card. See it in Lark.",
   "truncated": "Cut short",
   "original": "Original",
   "hide_original": "Hide original",

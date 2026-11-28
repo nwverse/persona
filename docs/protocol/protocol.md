@@ -7217,7 +7217,7 @@ per-turn fallback** — while `text` always keeps the transcript's words so clie
 | Field | Meaning |
 | --- | --- |
 | `kind` | `message`: a Lark or `owner_actor` message; `trigger`: a turn handed to botmux's `/api/trigger` as an external event (`source` names who); `reply`: the agent's `botmux send` (on a `tool_use` item) |
-| `text` | The words without botmux's blocks and hint lines |
+| `text` | The words without botmux's blocks and hint lines. Empty on a reply botmux confirmed by its receipt's `messageId` but recorded without words (a `--card-file` / `--card-json` card, or a record from before botmux kept them): it was still delivered, and clients show it as sent with no text |
 | `sender`, `sender_type` | The Lark sender's display name and kind; never its `open_id` or email |
 | `quoted`, `topic_context` | The message quoted another one; the topic had messages before the agent joined it (botmux's hint lines, Chinese or English) |
 | `thread`, `attachments`, `attachment_meta`, `mentions` | Posted in a topic (`placement.kind: "thread"` / `<message_location placement="thread">`); attachment count and safe `{kind, name?, mime_type?}` metadata (no local paths or IDs); mentioned display names |
@@ -7225,7 +7225,7 @@ per-turn fallback** — while `text` always keeps the transcript's words so clie
 | `truncated` | The item was clipped inside the words: `text` is their start |
 
 A fold that hides `botmux send` calls lists their replies in `fold.botmux`, in order (structured turns are applied before `FoldWork`, so file/card
-replies also appear in `fold.botmux`).
+replies also appear in `fold.botmux`). A reply is matched by the `messageId` of the `{"success":true,…}` receipt `botmux send` prints; a page carries only the start of a long output, so the receipt is also read from `outcome.tail` when the page cut the result (`full_size`).
 
 **Version probe and sending (`botmux_external_trigger`).** The node probes capabilities through the read-only `GET /api/sessions/:id/turns` endpoint
 and caches the result per botmux instance (invalidated on dashboard restart, token rotation, or CLI binary upgrade). Session listing starts a

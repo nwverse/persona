@@ -6,6 +6,16 @@ export type BotmuxMode = "decode" | "all";
 export const BOTMUX_MODE_KEY = "persona.agentBotmuxMode";
 export const LEGACY_BOTMUX_HIDDEN_KEY = "persona.agentHideBotmux";
 
+/** BotMux's control line for "the replies already went to Lark" (the hub's transcript.BotmuxSentinel). */
+export const BOTMUX_SENTINEL = "BOTMUX_NOTHING_TO_SEND";
+
+/** The words say nothing but the sentinel: every line blank or only it (the hub's transcript.WithoutBotmuxSentinel is
+ *  empty). Decoded, such last words are not drawn; words around the line, and raw mode, keep them as written. */
+export function botmuxSentinelOnly(text: string | undefined): boolean {
+  if (!text?.includes(BOTMUX_SENTINEL)) return false;
+  return text.split("\n").every((line) => line.trim() === "" || line.trim() === BOTMUX_SENTINEL);
+}
+
 /** The stored mode; the default where there is no storage (a server render) or it cannot be read. */
 export function readBotmuxMode(store?: Storage): BotmuxMode {
   try {

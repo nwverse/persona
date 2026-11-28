@@ -65,7 +65,10 @@ export const BotmuxReplies = memo(function BotmuxReplies({ steps, mid }: { steps
       {replies.map(({ id, reply }) => (
         <div key={id} className="flex min-w-0 flex-col gap-1" data-botmux-reply>
           <BotmuxTags b={reply} />
-          <Markdown text={reply.text} mid={mid} lineBreaks />
+          {reply.text?.trim() ? <Markdown text={reply.text} mid={mid} lineBreaks /> : !reply.attachments && !reply.voice && (
+            // delivered, but neither botmux's record nor the command has its words (a card): it is read in Lark
+            <p className="text-[length:var(--chat-secondary)] text-ink-3" data-botmux-no-text>{t("chat-botmux.sent_without_text")}</p>
+          )}
         </div>
       ))}
     </div>
