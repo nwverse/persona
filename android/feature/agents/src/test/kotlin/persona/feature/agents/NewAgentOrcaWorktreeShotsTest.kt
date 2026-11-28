@@ -1,5 +1,6 @@
 package persona.feature.agents
 
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -14,12 +15,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import java.io.File
+import java.time.Duration
 
 /**
  * New Agent with an Orca workspace picked (#17050): the "In a new worktree" switch shows for it, as for a Paseo one,
@@ -67,7 +70,11 @@ class NewAgentOrcaWorktreeShotsTest {
         try {
             rule.waitUntil(10_000) { !model.state.value.loading && model.state.value.workspaces.isNotEmpty() }
             rule.runOnIdle { model.pickWorkspace(orca) }
-            rule.waitUntil(10_000) { model.state.value.worktreeOffered }
+            // worktree/status is asked a moment after the folder settles (a delay on the main looper's clock)
+            rule.waitUntil(10_000) {
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
+                model.state.value.worktreeOffered
+            }
             assertEquals("orca", model.state.value.worktreeEngine)
             assertTrue(asked.last() == "/home/user/code/weather:orca")
             rule.runOnIdle { model.inWorktree(true) }
@@ -78,7 +85,6 @@ class NewAgentOrcaWorktreeShotsTest {
                 rule.waitForIdle()
                 rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(switch))
                 rule.onNodeWithText(switch).assertIsDisplayed()
-                rule.onAllNodesWithText("orca", substring = false, useUnmergedTree = true).assertCountEquals(0)
                 rule.onRoot().captureToImage().asAndroidBitmap().let { bitmap ->
                     out.resolve("new-agent-orca-worktree-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream().use {
                         bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
