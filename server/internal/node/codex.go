@@ -520,13 +520,13 @@ func rolloutPathIn(home, id string, pass *codexListPass) string {
 		return ""
 	}
 	matches, _ := rolloutGlob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+id+"*.jsonl*"))
-	matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadIDIn(home, path, pass) != id })
+	matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutID(path) == "" || rolloutThreadIDIn(home, path, pass) != id })
 	if pass.homeUnavailable(home) {
 		return ""
 	}
 	if len(matches) == 0 {
 		matches, _ = rolloutGlob(filepath.Join(home, "archived_sessions", "rollout-*-"+id+"*.jsonl*"))
-		matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadIDIn(home, path, pass) != id })
+		matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutID(path) == "" || rolloutThreadIDIn(home, path, pass) != id })
 		if pass.homeUnavailable(home) {
 			return ""
 		}

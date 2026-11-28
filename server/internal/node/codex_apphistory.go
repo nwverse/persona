@@ -729,7 +729,7 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 			item["action"] = v.Action
 		}
 	case "collabAgentToolCall", "subAgentActivity", "plan":
-		if json.Unmarshal(raw, &item) != nil {
+		if json.Unmarshal(raw, &item) != nil || item == nil {
 			return nil
 		}
 		item["type"] = map[string]string{"collabAgentToolCall": "CollabAgentToolCall", "subAgentActivity": "SubAgentActivity", "plan": "Plan"}[kind]

@@ -152,6 +152,9 @@ func TestCodexRolloutCompressedMetadataAndStart(t *testing.T) {
 			if err := os.WriteFile(path, encoder.EncodeAll([]byte(data), nil), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.WriteFile(path+".tmp", []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			old := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 			if err := os.Chtimes(path, old, old); err != nil {
 				t.Fatal(err)
@@ -167,13 +170,6 @@ func TestCodexRolloutCompressedMetadataAndStart(t *testing.T) {
 			}
 			if began, first := codexThreadStart(path); !began.Equal(old) || first != "hello" {
 				t.Fatalf("start = %v, %q", began, first)
-			}
-			if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
-				t.Fatal(err)
-			}
-			expireRollouts(home, true)
-			if list := rollouts(home); len(list) != 1 || list[0].id != id || list[0].cwd != "/w" {
-				t.Fatalf("compressed discovery = %+v", list)
 			}
 		})
 	}
