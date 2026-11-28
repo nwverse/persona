@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -250,6 +249,16 @@ func TestInternalAsyncQuestionRestoresFromDurableRecord(t *testing.T) {
 		t.Run(terminal, func(t *testing.T) {
 			ctx := t.Context()
 			e := newRouteEnv(t, nil, true)
+			sending := make(chan struct{})
+			send, resume := context.WithCancel(ctx)
+			defer resume()
+			e.f.mu.Lock()
+			e.f.beforeAssistantSend = func() {
+				close(sending)
+				<-send.Done()
+			}
+			e.f.mu.Unlock()
+
 			if _, err := e.s.toolAskUser(ctx, "mac", "worker-1", json.RawMessage(`{"decision_scope":"internal","wait":false,"questions":[{"question":"Which shard after restart?","options":[{"label":"Affected"},{"label":"All"}]}]}`)); err != nil {
 				t.Fatal(err)
 			}
@@ -259,74 +268,115 @@ func TestInternalAsyncQuestionRestoresFromDurableRecord(t *testing.T) {
 			}
 			ix := qs[0]
 			t.Cleanup(func() { _ = e.s.resolve(ix.ID, proto.Resolution{Cancel: true}) })
+
+			select {
+			case <-sending:
+			case <-time.After(5 * time.Second):
+				t.Fatal("original supervisor wake did not reach the transport")
+			}
+			if msg, ok := storedInternalQuestionWake(t, e.st, ix.ID); !ok || msg.TriedAt.IsZero() {
+				t.Fatalf("no durable in-flight supervisor wake for %s", ix.ID)
+			}
+			inFlight := snapshotInternalQuestion(t, e.st, ix.ID)
+			resume()
 			e.noticeWith("lead1", "interaction_id="+ix.ID)
 			// Observing the send does not mean the durable queue head has left yet.
 			waitFor(t, "original supervisor wake durably dequeued", func() bool {
-				var state relayState
-				if found, err := e.st.Setting(ctx, relayKey, &state); err != nil || !found {
-					t.Fatalf("read persisted relay queue: found=%t, err=%v", found, err)
-				}
-				return !slices.ContainsFunc(state.Queue["lead1"], func(msg relayMsg) bool { return msg.Card == ix.ID })
+				_, queued := storedInternalQuestionWake(t, e.st, ix.ID)
+				return !queued
 			})
-			// Use a separate store containing the settings and the pending interaction at restart.
-			restarted := newFleetMem()
-			values, err := e.st.SettingsPrefix(ctx, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			for key, raw := range values {
-				restarted.setRawSetting(key, raw)
-			}
-			rec, err := e.st.InteractionRecord(ctx, ix.ID)
-			if err != nil || rec == nil || rec.Status != "pending" || !rec.Interaction.Resumable {
-				t.Fatalf("source question was not durable: %+v, %v", rec, err)
-			}
-			if err := restarted.InsertInteraction(ctx, rec.Interaction); err != nil {
-				t.Fatal(err)
-			}
-			next := &routeEnv{fleetTest: newFleetTestOn(t, &restoreMem{restarted})}
-			noDirectionsTimers(next.s)
-			next.f.withMachine()
-			next.f.known["conv1"], next.f.known["lead1"] = true, true
-			next.d.add("server", "Server")
-			for _, machine := range []string{"server", "mac"} {
-				list, _ := e.d.Sessions(machine)
-				next.d.setSessions(machine, list)
-				next.f.setSessions(machine, list...)
-			}
-			// fleetMem keeps to-dos in memory. Seed the existing task and its worker links before
-			// recovery, when a real manager can already read them from the database.
-			putTodo(next.s, todoNow(e.s, e.todo.ID))
-			next.s.restoreInteractions(ctx)
-			next.s.loadAskLater(ctx)
-			next.s.publish(ctx)
-			waitFor(t, "durable internal question restored", func() bool {
-				qs := next.s.pendingQuestions()
-				p, ok := next.s.pendingIx(ix.ID)
-				return len(qs) == 1 && qs[0].ID == ix.ID && qs[0].Resumable && ok && next.s.internalCard(p)
+			drained := snapshotInternalQuestion(t, e.st, ix.ID)
+			t.Run("in-flight", func(t *testing.T) {
+				checkRestoredInternalQuestion(t, e, inFlight, ix.ID, terminal)
 			})
-			next.noticeWith("lead1", "interaction_id="+ix.ID)
-			r := proto.Resolution{Answers: map[string]string{"Which shard after restart?": "Affected"}, AnsweredBy: proto.AnsweredByAssistant}
-			if terminal == "cancel" {
-				r = proto.Resolution{Cancel: true}
-			}
-			if terminal == "expire" {
-				r = proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
-			}
-			if err := next.s.resolve(ix.ID, r); err != nil {
-				t.Fatal(err)
-			}
-			waitFor(t, "restored terminal result returned", func() bool { return len(next.s.pendingQuestions()) == 0 })
-			next.s.askLaters.mu.Lock()
-			kept := len(next.s.askLaters.list)
-			next.s.askLaters.mu.Unlock()
-			if kept != 0 || next.pushesOf(ix.ID) != 0 {
-				t.Fatal("terminal question retained or pushed to owner")
-			}
-			if err := next.s.resolve(ix.ID, r); err == nil {
-				t.Fatal("terminal question accepted a second answer")
-			}
+			t.Run("drained", func(t *testing.T) {
+				checkRestoredInternalQuestion(t, e, drained, ix.ID, terminal)
+			})
 		})
+	}
+}
+
+func storedInternalQuestionWake(t *testing.T, store *fleetMem, id string) (relayMsg, bool) {
+	t.Helper()
+	var state relayState
+	if found, err := store.Setting(t.Context(), relayKey, &state); err != nil || !found {
+		t.Fatalf("read persisted relay queue: found=%t, err=%v", found, err)
+	}
+	for _, msg := range state.Queue["lead1"] {
+		if msg.Card == id {
+			return msg, true
+		}
+	}
+	return relayMsg{}, false
+}
+
+func snapshotInternalQuestion(t *testing.T, store *fleetMem, id string) *restoreMem {
+	t.Helper()
+	ctx := t.Context()
+	restarted := &restoreMem{newFleetMem()}
+	values, err := store.SettingsPrefix(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, raw := range values {
+		restarted.setRawSetting(key, raw)
+	}
+	rec, err := store.InteractionRecord(ctx, id)
+	if err != nil || rec == nil || rec.Status != "pending" || !rec.Interaction.Resumable {
+		t.Fatalf("source question was not durable: %+v, %v", rec, err)
+	}
+	if err := restarted.InsertInteraction(ctx, rec.Interaction); err != nil {
+		t.Fatal(err)
+	}
+	return restarted
+}
+
+func checkRestoredInternalQuestion(t *testing.T, e *routeEnv, restarted *restoreMem, id, terminal string) {
+	t.Helper()
+	ctx := t.Context()
+	next := &routeEnv{fleetTest: newFleetTestOn(t, restarted)}
+	noDirectionsTimers(next.s)
+	next.f.withMachine()
+	next.f.known["conv1"], next.f.known["lead1"] = true, true
+	next.d.add("server", "Server")
+	for _, machine := range []string{"server", "mac"} {
+		list, _ := e.d.Sessions(machine)
+		next.d.setSessions(machine, list)
+		next.f.setSessions(machine, list...)
+	}
+	// fleetMem keeps to-dos in memory. Seed the existing task and its worker links before
+	// recovery, when a real manager can already read them from the database.
+	putTodo(next.s, todoNow(e.s, e.todo.ID))
+	next.s.restoreInteractions(ctx)
+	next.s.loadAskLater(ctx)
+	next.s.publish(ctx)
+	waitFor(t, "durable internal question restored", func() bool {
+		qs := next.s.pendingQuestions()
+		p, ok := next.s.pendingIx(id)
+		return len(qs) == 1 && qs[0].ID == id && qs[0].Resumable && ok && next.s.internalCard(p)
+	})
+	// The idle supervisor should wake on startup, before the periodic recovery sweep.
+	next.noticeWith("lead1", "interaction_id="+id)
+
+	r := proto.Resolution{Answers: map[string]string{"Which shard after restart?": "Affected"}, AnsweredBy: proto.AnsweredByAssistant}
+	if terminal == "cancel" {
+		r = proto.Resolution{Cancel: true}
+	}
+	if terminal == "expire" {
+		r = proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
+	}
+	if err := next.s.resolve(id, r); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "restored terminal result returned", func() bool { return len(next.s.pendingQuestions()) == 0 })
+	next.s.askLaters.mu.Lock()
+	kept := len(next.s.askLaters.list)
+	next.s.askLaters.mu.Unlock()
+	if kept != 0 || next.pushesOf(id) != 0 {
+		t.Fatal("terminal question retained or pushed to owner")
+	}
+	if err := next.s.resolve(id, r); err == nil {
+		t.Fatal("terminal question accepted a second answer")
 	}
 }
 
