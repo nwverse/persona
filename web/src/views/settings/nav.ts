@@ -9,11 +9,12 @@ import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
 import { SUB } from "./href";
 import {
-  integrationsToLegacy,
+  integrationManager,
+  integrationQuery,
   isLegacyIntegrationTab,
-  legacyToIntegrations,
   parseSettingsPath,
-  type IntegrationFilter,
+  readIntegrationsAddress,
+  type IntegrationsRoute,
 } from "./integrations-route";
 
 export { settingsHref } from "./href";
@@ -114,25 +115,6 @@ export function navGroups(integrationsV2 = false): { key: NavGroup; tabs: Tab[] 
   });
 }
 
-/** Resolves a Settings tab+sub target for the active `integrations_v2` mode. */
-export function resolveSettingsTarget(
-  tab: Tab,
-  sub: string | null,
-  integrationsV2: boolean,
-  filter?: string | null,
-  manager?: string | null,
-): { tab: Tab; sub: string | null; filter?: IntegrationFilter; manager?: string } {
-  if (integrationsV2 && isLegacyIntegrationTab(tab)) {
-    const mapped = legacyToIntegrations(tab, sub, tab === "sources" ? manager : undefined);
-    return { tab: "integrations", sub: mapped.sub, ...(mapped.filter ? { filter: mapped.filter } : {}) };
-  }
-  if (!integrationsV2 && tab === "integrations") {
-    const mapped = integrationsToLegacy(sub, filter);
-    return { tab: mapped.tab, sub: mapped.sub, ...(mapped.manager ? { manager: mapped.manager } : {}) };
-  }
-  return { tab, sub };
-}
-
 /** The current assistant's group: its pages follow the pick, and an item opened in one goes back to its list when the
  *  pick changes (an item is one assistant's). */
 export const ASSISTANT_TABS: ReadonlySet<Tab> = new Set<Tab>(NAV_GROUPS[0].tabs);
@@ -163,8 +145,15 @@ export function redirectLegacySettings(
   hash: string,
   path = "/settings",
   integrationsV2: boolean | "loading" = false,
+  integration = readIntegrationsAddress(search, path),
 ): string | null {
+  if (integration?.route.view.kind === "unavailable") return null;
   const q = new URLSearchParams(search);
+  if (integration && integrationsV2 !== "loading" && integrationsV2 !== (integration.tab === "integrations")) {
+    for (const key of ["tab", "manager", "integration", "filter", "channel", "connector", "extension", "plugin", "state", "set", "purpose"]) q.delete(key);
+    integrationQuery(integration.route, integrationsV2).forEach((value, key) => q.set(key, value));
+    return `/settings?${q.toString()}${hash}`;
+  }
   const pathRoute = parseSettingsPath(path);
   let changed = false;
   if (pathRoute) {
@@ -209,42 +198,10 @@ export function redirectLegacySettings(
     }
   }
 
-  const normalizedTab = settingsTab(q.get("tab"));
-  if (integrationsV2 === true && isLegacyIntegrationTab(normalizedTab)) {
+  const owner = integration && integrationManager(integration.route.scope);
+  if (owner && !q.get("manager")) {
     changed = true;
-    const param = SUB[normalizedTab];
-    const currentSub = param ? (q.get(param) ?? (normalizedTab === "extensions" ? q.get("plugin") : null)) : null;
-    const mapped = legacyToIntegrations(normalizedTab, currentSub, normalizedTab === "sources" ? q.get("manager") : undefined);
-    q.set("tab", "integrations");
-    q.delete("channel");
-    q.delete("connector");
-    q.delete("extension");
-    q.delete("plugin");
-    q.delete("state");
-    q.delete("purpose");
-    if (mapped.sub) {
-      q.set("integration", mapped.sub);
-      q.delete("filter");
-    } else {
-      q.delete("integration");
-      if (mapped.filter && mapped.filter !== "all") q.set("filter", mapped.filter);
-      else q.delete("filter");
-    }
-  } else if (integrationsV2 === false && normalizedTab === "integrations") {
-    changed = true;
-    const mapped = integrationsToLegacy(q.get("integration"), q.get("filter"));
-    q.set("tab", mapped.tab);
-    q.delete("integration");
-    q.delete("filter");
-    q.delete("channel");
-    q.delete("connector");
-    q.delete("extension");
-    q.delete("plugin");
-    q.delete("state");
-    q.delete("purpose");
-    const targetParam = SUB[mapped.tab];
-    if (mapped.sub && targetParam) q.set(targetParam, mapped.sub);
-    if (mapped.manager && !q.get("manager")) q.set("manager", mapped.manager);
+    q.set("manager", owner);
   }
 
   if (!changed) return null;
@@ -270,6 +227,16 @@ export const FROM_LIST = "personaSettingsList";
 export const FROM_SUB = "personaSettingsSub";
 
 const marker = (state: unknown, key: string): unknown => (state && typeof state === "object" ? (state as Record<string, unknown>)[key] : undefined);
+const INTEGRATION_PARENT = "integrationParent";
+
+export function integrationParent(state: unknown): IntegrationsRoute | null {
+  const parent = marker(state, INTEGRATION_PARENT) as Partial<IntegrationsRoute> | undefined;
+  return parent?.scope && parent.view && parent.filter ? parent as IntegrationsRoute : null;
+}
+
+export function integrationChildState(state: unknown, parent: IntegrationsRoute): Record<string, unknown> {
+  return { ...itemState(state), [INTEGRATION_PARENT]: parent };
+}
 
 export function openedFromList(state: unknown): boolean {
   return Boolean(marker(state, FROM_LIST));
@@ -296,7 +263,7 @@ export function categoryState(state: unknown): Record<string, unknown> | null {
   if (!openedFromList(state)) return null;
   const rest = { ...(state as Record<string, unknown>) };
   delete rest[FROM_SUB];
-  delete rest.integrationParent;
+  delete rest[INTEGRATION_PARENT];
   return rest;
 }
 

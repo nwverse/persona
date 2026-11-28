@@ -69,3 +69,17 @@ Develop after the task was accepted. Words that only name what is read or used (
 - From words, take only a change asked for outright, outside conditional and negated sentences, and let a doubt read
   general: a missing strip costs nothing until the change appears; a strip on work that changes no code never moves.
 - Finished work needs an ending the strip can show without claiming a step: Done after the steps taken, not Verified.
+
+## A stage PR is a saved delivery link too (#17788)
+
+`setTaskStage` saves every stage PR as a repository link with the default role, and the store keeps an explicit
+`delivery` role as the same empty value. So on Postgres, "the task has a saved delivery PR" holds for every task with a
+stage PR. #17714 skipped closeout recovery whenever a saved delivery link existed. That turned recovery and the non-PR
+cleanup off on every real hub, and an issue number recorded as a PR blocked acceptance with a 404 again (#8248). The
+memory store has no repository store, so only the Postgres cases showed it, and the PR's `-run` filter selected tests by
+name and missed them.
+
+- A saved delivery PR that only repeats the stage's own record (its PR and earlier PRs) is the legacy record, not a
+  binding. Nothing saved tells it from an explicit binding of the same URL (#17792).
+- When a change reads saved links, run the Postgres cases of every test file that reaches that gate on the hub. A name
+  pattern such as `.*Delivery` is not enough.

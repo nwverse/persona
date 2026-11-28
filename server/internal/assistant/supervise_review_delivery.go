@@ -84,7 +84,11 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 	if err != nil {
 		return "", err
 	}
-	if !explicitLinkPR && len(repoPRs) == 0 && len(repoIssues) == 0 {
+	// Saved delivery bindings precede recovery from the closeout. setTaskStage mirrors every stage PR into a
+	// default-role saved link, so saved PRs that only repeat the stage's own record are still the legacy record.
+	legacyPR := !explicitLinkPR && len(repoIssues) == 0 &&
+		!slices.ContainsFunc(repoPRs, func(u string) bool { return !stageRecords(t.PRURL, t.PRs, u) })
+	if legacyPR {
 		replacement, noPR, err := s.reportedTaskPR(ctx, t, pr)
 		if err != nil {
 			return "", err
@@ -109,7 +113,6 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		}
 	}
 
-	legacyPR := len(repoPRs) == 0 && len(repoIssues) == 0 && !explicitLinkPR
 	prs := make([]string, 0, 1+len(repoPRs))
 	seenPR := map[string]bool{}
 	addPR := func(u string) {
@@ -127,10 +130,13 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		seenPR[key] = true
 		prs = append(prs, u)
 	}
+	if legacyPR && !referencePRs[normalizePRKey(pr)] {
+		addPR(pr) // the recovered stage PR first, so a disproved PR's leftover mirror cannot answer for it
+	}
 	for _, u := range repoPRs {
 		addPR(u)
 	}
-	if (legacyPR || explicitLinkPR) && !referencePRs[normalizePRKey(pr)] {
+	if explicitLinkPR && !referencePRs[normalizePRKey(pr)] {
 		addPR(pr)
 	}
 
