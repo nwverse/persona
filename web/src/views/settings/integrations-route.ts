@@ -3,7 +3,7 @@ import { isLegacyIntegrationTab, parseSettingsPath, splitSettingsOwner, type Leg
 import { decodeURIComponentSafe } from "../../lib/uri";
 import { SUB } from "./href";
 
-export { isLegacyIntegrationTab } from "../../lib/deep-links";
+export { isLegacyIntegrationTab, parseSettingsPath } from "../../lib/deep-links";
 
 export type IntegrationFilter = "all" | "channels" | "data" | "tools";
 export type IntegrationScope = { kind: "current" } | { kind: "owned"; manager: string };

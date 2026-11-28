@@ -6,13 +6,13 @@ import { registeredModules } from "../../core/module-host";
 import { enabledSettingsTabs } from "../../core/module-settings";
 import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
-import { parseSettingsPath } from "../../lib/deep-links";
 import type { IconName } from "../../ui/icons";
 import { SUB } from "./href";
 import {
   integrationManager,
   integrationQuery,
   isLegacyIntegrationTab,
+  parseSettingsPath,
   readIntegrationsAddress,
   type IntegrationsRoute,
 } from "./integrations-route";
