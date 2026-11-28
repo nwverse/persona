@@ -5414,6 +5414,7 @@ Editing the roster, creating codes and deleting require a full-permission device
 {"event":"managers","params":{"managers":[{"id":"assistant","name":"助手","role":"manager","online":false}]}}
 ```
 
+- The sender checks the encoded RPC line including its newline. An oversized request or event fails locally, and an oversized reply becomes a small RPC error. Both keep the connection available for subsequent messages. Logs include the operation name and encoded size.
 - Both sides ping every 30 seconds and disconnect after 20 seconds without a pong. If the handshake isn't done within 40 seconds of connecting, the hub closes with 4003.
 - A new connection for an identity replaces the old one **when its handshake succeeds**; the old one is closed with 4001.
 - Before the handshake and after being replaced, every call on the connection returns `stale_connection` and events sent are dropped; the hub never calls a connection that hasn't shaken hands.

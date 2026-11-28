@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -218,6 +220,26 @@ func TestLinkMachineComesOnlineThroughPersonaLink(t *testing.T) {
 		t.Fatal("still the old node connection")
 	}
 	waitStatus(t, statuses, "connected again", func(s link.Status) bool { return s.State == "connected" })
+}
+
+func TestOversizedManagerEventKeepsLinkMachineOnline(t *testing.T) {
+	h, manager, srv := newLinkHubManaged(t)
+	token, _ := linkToken(t, h, "laptop")
+	statuses, _, _ := runLink(t, linkConfig(h, srv, token), fakeResidentNode(t))
+	m := mirror(t, h, "laptop")
+	eventually(t, 10*time.Second, "machine online", func() bool { return m.snapshot().Online })
+	waitStatus(t, statuses, "node online", func(s link.Status) bool { return s.State == "connected" && s.Node == "online" })
+	before := pid(t, m)
+	client := manager.a.bh.Client()
+	peer := client.Peer()
+	payload := bytes.Repeat([]byte("x"), bus.MaxMessage)
+	payload[0], payload[len(payload)-1] = '"', '"'
+	if err := client.Notify("test.large", rpc.Marshaled(payload)); err == nil || !strings.Contains(err.Error(), "budget") {
+		t.Fatalf("oversized event should fail at the manager: %v", err)
+	}
+	if after := pid(t, m); after != before || client.Peer() != peer || !m.snapshot().Online {
+		t.Fatalf("node or manager reconnected after rejecting the event: node was %d and is %d", before, after)
+	}
 }
 
 func TestLinkWithoutResidentNode(t *testing.T) {

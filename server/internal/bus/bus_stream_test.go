@@ -169,6 +169,74 @@ func TestConnWriteSendsWholeLines(t *testing.T) {
 	}
 }
 
+func TestOversizedRPCPreservesBusConnection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cws, sws := wsPair(t, true)
+	const limit = 4 << 10
+	c, s := newConn(ctx, cws, limit), newConn(ctx, sws, limit)
+	diagnostics := make(chan string, 4)
+	logf := func(format string, args ...any) { diagnostics <- fmt.Sprintf(format, args...) }
+	client, server := c.NewPeer("c", logf), s.NewPeer("s", logf)
+	value := strings.Repeat("x", limit)
+	raw := rpc.Marshaled(`"` + value + `"`)
+	events := make(chan string, 2)
+	server.OnEvent = func(event string, _ json.RawMessage) { events <- event }
+	server.OnRequest = func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method == "large_reply" {
+			return value, nil
+		}
+		return "ok", nil
+	}
+	go func() { _ = client.Serve(ctx, c) }()
+	go func() { _ = server.Serve(ctx, s) }()
+
+	if err := client.Notify("large_event", raw); err == nil {
+		next := client.Call(ctx, "ping", nil, nil)
+		t.Fatalf("oversized notification was sent; next call on the same connection: %v", next)
+	}
+	appended := false
+	if err := client.Call(ctx, "large_request", rpc.Appended{
+		Size: len(raw),
+		Append: func(b []byte) []byte {
+			appended = true
+			return append(b, raw...)
+		},
+	}, nil); err == nil || appended {
+		t.Fatalf("oversized request was not rejected before building its line: %v", err)
+	}
+	var replyErr *rpc.Error
+	if err := client.Call(ctx, "large_reply", nil, nil); !errors.As(err, &replyErr) || !strings.Contains(replyErr.Message, "budget") {
+		t.Fatalf("oversized reply did not return a bounded RPC error: %v", err)
+	}
+	const eventEnvelope = `{"event":"fits","params":""}` + "\n"
+	if err := client.Notify("fits", strings.Repeat("x", limit-len(eventEnvelope))); err != nil {
+		t.Fatalf("notification at the line limit: %v", err)
+	}
+	select {
+	case event := <-events:
+		if event != "fits" {
+			t.Fatalf("got %q, want the notification that fits", event)
+		}
+	case <-ctx.Done():
+		t.Fatal("notification that fits did not arrive")
+	}
+	var reply string
+	if err := client.Call(ctx, "ping", nil, &reply); err != nil || reply != "ok" {
+		t.Fatalf("ping after the oversized messages: %q, %v", reply, err)
+	}
+	for _, operation := range []string{"large_event", "large_request", "large_reply"} {
+		select {
+		case line := <-diagnostics:
+			if !strings.Contains(line, fmt.Sprintf("%q", operation)) || !strings.Contains(line, "bytes, limit 4096") || strings.Contains(line, value) {
+				t.Errorf("missing size-only diagnostic for %s", operation)
+			}
+		default:
+			t.Errorf("missing diagnostic for %s", operation)
+		}
+	}
+}
+
 // tap tells each read's bytes.
 type tap struct {
 	r     io.Reader

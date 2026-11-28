@@ -246,7 +246,7 @@ func (c *Client) session(ctx context.Context) (helloed bool, err error) {
 			_ = ws.CloseNow()
 		}
 	}()
-	p := rpc.New("s", conn)
+	p := conn.NewPeer("s", c.logf)
 	p.OnRequest, p.OnEvent, p.Cancels = c.OnRequest, c.OnEvent, c.Cancels
 	served := make(chan error, 1)
 	go func() { served <- p.Serve(sctx, conn) }()

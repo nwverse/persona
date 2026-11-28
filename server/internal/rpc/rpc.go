@@ -10,6 +10,7 @@ package rpc
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,8 +33,9 @@ type message struct {
 	Params json.RawMessage `json:"params,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  *Error          `json:"error,omitempty"`
-	// line is the whole line, written already (Marshaled params); nothing else is set.
-	line []byte
+	// line is the pre-encoded wire line. Method and Event are still available for diagnostics.
+	line        []byte
+	replyMethod string // the original request's method, for diagnostics on a reply
 }
 
 type Error struct {
@@ -115,8 +117,7 @@ func WriteDelayRemaining(err error) (time.Duration, bool) {
 	return 0, false
 }
 
-// Limits are optional transport budgets for untrusted runtime peers. Zero preserves
-// existing process/node behavior; configure them before Serve or any concurrent call.
+// Limits are optional transport budgets. Configure them before Serve or any concurrent call.
 type Limits struct{ FrameBytes, ConcurrentRequests, PendingCalls int }
 
 type Peer struct {
@@ -151,6 +152,8 @@ type Peer struct {
 	// then (sorted; a method twice for two calls): they fail with ErrDropped or ErrClosed, which alone says nothing of
 	// what was cut off. Called from Close, outside the peer's lock; set it before Serve or any call.
 	OnClose func(err error, inflight []string)
+	// OnFrameTooLarge reports an outbound line rejected by FrameBytes. It can run for concurrent writes.
+	OnFrameTooLarge func(operation string, size, limit int)
 
 	// LineFilter, when set, rewrites each line this side writes, newline included, just before it goes out (the node
 	// hides the values handed to Agent starts, node/secretenv.go); it must keep the line one line. Once lanes are on,
@@ -452,7 +455,7 @@ func (p *Peer) handle(ctx context.Context, m message) {
 	} else {
 		res, err = p.OnRequest(ctx, m.Method, m.Params)
 	}
-	out := message{ID: m.ID}
+	out := message{ID: m.ID, replyMethod: m.Method}
 	var coded *Error
 	if errors.As(err, &coded) {
 		out.Error = coded
@@ -517,6 +520,16 @@ func (p *Peer) writeContext(ctx context.Context, m message, r route) error {
 	return err
 }
 
+func (p *Peer) checkFrameBudget(operation string, size int) error {
+	if limit := p.Limits.FrameBytes; limit > 0 && size > limit {
+		if p.OnFrameTooLarge != nil {
+			p.OnFrameTooLarge(operation, size, limit)
+		}
+		return errFrameBudget
+	}
+	return nil
+}
+
 type writeObservation struct {
 	delayed      bool
 	remaining    time.Duration
@@ -547,8 +560,8 @@ func (p *Peer) writeContextObserved(ctx context.Context, m message, r route) (wr
 	if err != nil {
 		return writeObservation{}, err
 	}
-	if p.Limits.FrameBytes > 0 && len(b) > p.Limits.FrameBytes {
-		return writeObservation{}, errFrameBudget
+	if err := p.checkFrameBudget(cmp.Or(m.Method, m.Event, m.replyMethod), len(b)); err != nil {
+		return writeObservation{}, err
 	}
 	if lw := p.out.Load(); lw != nil {
 		return p.writeFramed(ctx, lw, b, r)
@@ -647,10 +660,10 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 	var req message
 	if a, ok := params.(Appended); ok {
 		if size, ok := callSize(id, method, a); ok {
-			if p.Limits.FrameBytes > 0 && size > p.Limits.FrameBytes { // before the line is made
-				return errFrameBudget
+			if err := p.checkFrameBudget(method, size); err != nil { // before the line is made
+				return err
 			}
-			req.line = callLine(id, method, a, size)
+			req = message{Method: method, line: callLine(id, method, a, size)}
 		} else {
 			params = json.RawMessage(a.Append(make([]byte, 0, a.Size))) // the encoder writes the envelope
 		}
@@ -715,8 +728,11 @@ func (p *Peer) NotifyContext(ctx context.Context, event string, params any) erro
 
 func (p *Peer) notifyRoute(ctx context.Context, event string, params any, r route) error {
 	if raw, ok := params.(Marshaled); ok {
-		if line, ok := marshaledLine(event, raw); ok {
-			return p.writeContext(ctx, message{line: line}, r)
+		if size, ok := marshaledSize(event, raw); ok {
+			if err := p.checkFrameBudget(event, size); err != nil {
+				return err
+			}
+			return p.writeContext(ctx, message{Event: event, line: marshaledLine(event, raw, size)}, r)
 		}
 		params = json.RawMessage(raw)
 	}

@@ -6,17 +6,21 @@ package rpc
 // each time it changes). Bytes from anywhere else (a runtime's push, a file) go as json.RawMessage, checked as before.
 type Marshaled []byte
 
-// marshaledLine is the line the envelope's encoder and a newline give for event and params, in one buffer of its
-// size: {"event":<event>,"params":<params>}. False when event is empty (the envelope leaves it out) or has a byte the
-// encoder may escape, or params is empty (an error): the encoder writes those.
-func marshaledLine(event string, params Marshaled) ([]byte, bool) {
+const eventHead, eventParams, eventTail = `{"event":"`, `","params":`, "}\n"
+
+// marshaledSize returns the size of the pre-encoded event envelope. Events that need escaping go through the encoder.
+func marshaledSize(event string, params Marshaled) (int, bool) {
 	if !plain(event) || len(params) == 0 {
-		return nil, false
+		return 0, false
 	}
-	const head, mid, tail = `{"event":"`, `","params":`, "}\n"
-	b := make([]byte, 0, len(head)+len(event)+len(mid)+len(params)+len(tail))
-	b = append(append(append(b, head...), event...), mid...)
-	return append(append(b, params...), tail...), true
+	return len(eventHead) + len(event) + len(eventParams) + len(params) + len(eventTail), true
+}
+
+// marshaledLine builds the event in a buffer of its exact size.
+func marshaledLine(event string, params Marshaled, size int) []byte {
+	b := make([]byte, 0, size)
+	b = append(append(append(b, eventHead...), event...), eventParams...)
+	return append(append(b, params...), eventTail...)
 }
 
 // plain: json.Marshal writes s as it is between its quotes, and does not leave it out (it is not empty).
